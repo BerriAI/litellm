@@ -34,7 +34,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
+from litellm.types.llms.openai import (
+    CREATE_FILE_REQUESTS_PURPOSE,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
+)
 
 router = APIRouter()
 
@@ -147,6 +151,7 @@ async def create_file_for_each_model(
         responses.append(individual_response)
     response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
         file_objects=responses,
+        create_file_request=_create_file_request,
         purpose=purpose,
         internal_usage_cache=proxy_logging_obj.internal_usage_cache,
         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
@@ -232,7 +237,7 @@ async def create_file(
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
 
-        data = {"purpose": purpose}
+        data = {}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -258,7 +263,9 @@ async def create_file(
                     model=router_model, llm_router=llm_router
                 )
 
-        _create_file_request = CreateFileRequest(file=file_data, **data)
+        _create_file_request = CreateFileRequest(
+            file=file_data, purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose), **data
+        )
 
         response: Optional[OpenAIFileObject] = None
         if (

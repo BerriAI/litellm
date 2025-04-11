@@ -141,10 +141,12 @@ async def setup_db_connection(prisma_client):
 async def test_pod_lock_acquisition_when_no_active_lock():
     """Test if a pod can acquire a lock when no lock is active"""
     cronjob_id = str(uuid.uuid4())
-    lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # Attempt to acquire lock
-    result = await lock_manager.acquire_lock()
+    result = await lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     assert result == True, "Pod should be able to acquire lock when no lock exists"
 
@@ -161,13 +163,19 @@ async def test_pod_lock_acquisition_after_completion():
     """Test if a new pod can acquire lock after previous pod completes"""
     cronjob_id = str(uuid.uuid4())
     # First pod acquires and releases lock
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    await first_lock_manager.acquire_lock()
-    await first_lock_manager.release_lock()
+    first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    await first_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
+    await first_lock_manager.release_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # Second pod attempts to acquire lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    result = await second_lock_manager.acquire_lock()
+    second_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    result = await second_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     assert result == True, "Second pod should acquire lock after first pod releases it"
 
@@ -182,15 +190,21 @@ async def test_pod_lock_acquisition_after_expiry():
     """Test if a new pod can acquire lock after previous pod's lock expires"""
     cronjob_id = str(uuid.uuid4())
     # First pod acquires lock
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    await first_lock_manager.acquire_lock()
+    first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    await first_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # release the lock from the first pod
-    await first_lock_manager.release_lock()
+    await first_lock_manager.release_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # Second pod attempts to acquire lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    result = await second_lock_manager.acquire_lock()
+    second_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    result = await second_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     assert (
         result == True
@@ -206,11 +220,15 @@ async def test_pod_lock_acquisition_after_expiry():
 async def test_pod_lock_release():
     """Test if a pod can successfully release its lock"""
     cronjob_id = str(uuid.uuid4())
-    lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # Acquire and then release lock
-    await lock_manager.acquire_lock()
-    await lock_manager.release_lock()
+    await lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
+    await lock_manager.release_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # Verify in redis
     lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
@@ -224,15 +242,21 @@ async def test_concurrent_lock_acquisition():
 
     cronjob_id = str(uuid.uuid4())
     # Create multiple lock managers simulating different pods
-    lock_manager1 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    lock_manager2 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    lock_manager3 = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    lock_manager1 = PodLockManager(redis_cache=global_redis_cache)
+    lock_manager2 = PodLockManager(redis_cache=global_redis_cache)
+    lock_manager3 = PodLockManager(redis_cache=global_redis_cache)
 
     # Try to acquire locks concurrently
     results = await asyncio.gather(
-        lock_manager1.acquire_lock(),
-        lock_manager2.acquire_lock(),
-        lock_manager3.acquire_lock(),
+        lock_manager1.acquire_lock(
+            cronjob_id=cronjob_id,
+        ),
+        lock_manager2.acquire_lock(
+            cronjob_id=cronjob_id,
+        ),
+        lock_manager3.acquire_lock(
+            cronjob_id=cronjob_id,
+        ),
     )
 
     # Only one should succeed
@@ -254,7 +278,7 @@ async def test_concurrent_lock_acquisition():
 async def test_lock_acquisition_with_expired_ttl():
     """Test that a pod can acquire a lock when existing lock has expired TTL"""
     cronjob_id = str(uuid.uuid4())
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # First pod acquires lock with a very short TTL to simulate expiration
     short_ttl = 1  # 1 second
@@ -269,8 +293,10 @@ async def test_lock_acquisition_with_expired_ttl():
     await asyncio.sleep(short_ttl + 0.5)  # Wait slightly longer than the TTL
 
     # Second pod tries to acquire without explicit release
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    result = await second_lock_manager.acquire_lock()
+    second_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    result = await second_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     assert result == True, "Should acquire lock when existing lock has expired TTL"
 
@@ -286,7 +312,7 @@ async def test_release_expired_lock():
     cronjob_id = str(uuid.uuid4())
     
     # First pod acquires lock with a very short TTL
-    first_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
+    first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
     short_ttl = 1  # 1 second
     lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
     await global_redis_cache.async_set_cache(
@@ -299,11 +325,15 @@ async def test_release_expired_lock():
     await asyncio.sleep(short_ttl + 0.5)  # Wait slightly longer than the TTL
 
     # Second pod acquires the lock
-    second_lock_manager = PodLockManager(cronjob_id=cronjob_id, redis_cache=global_redis_cache)
-    await second_lock_manager.acquire_lock()
+    second_lock_manager = PodLockManager(redis_cache=global_redis_cache)
+    await second_lock_manager.acquire_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # First pod attempts to release its lock
-    await first_lock_manager.release_lock()
+    await first_lock_manager.release_lock(
+        cronjob_id=cronjob_id,
+    )
 
     # Verify that second pod's lock is still active
     lock_record = await global_redis_cache.async_get_cache(lock_key)

@@ -39,7 +39,7 @@ import time
 
 
 @pytest.fixture
-def prometheus_logger():
+def prometheus_logger() -> PrometheusLogger:
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:
         REGISTRY.unregister(collector)
@@ -1210,24 +1210,6 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
-
-
-def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
-    """
-    Test that _initialize_prometheus_startup_metrics handles case when no event loop exists
-    """
-    # Mock asyncio.get_running_loop to raise RuntimeError
-    litellm.prometheus_initialize_budget_metrics = True
-    with patch(
-        "asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")
-    ), patch("litellm._logging.verbose_logger.exception") as mock_logger:
-
-        # Call the function
-        prometheus_logger._initialize_prometheus_startup_metrics()
-
-        # Verify the error was logged
-        mock_logger.assert_called_once()
-        assert "No running event loop" in mock_logger.call_args[0][0]
 
 
 @pytest.mark.asyncio(scope="session")

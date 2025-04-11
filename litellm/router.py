@@ -2138,6 +2138,7 @@ class Router:
                 request_kwargs=kwargs,
             )
 
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items():
                 if (
@@ -2759,9 +2760,6 @@ class Router:
             stripped_model, custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"]
             )
-            # kwargs["file"] = replace_model_in_jsonl(
-            #     file_content=kwargs["file"], new_model_name=stripped_model
-            # )
 
             response = litellm.acreate_file(
                 **{
