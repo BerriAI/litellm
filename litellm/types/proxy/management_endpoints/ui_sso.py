@@ -33,24 +33,26 @@ class MicrosoftServicePrincipalTeam(TypedDict, total=False):
 
 class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
-    Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
+    Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups
     """
 
     models: List[str] = Field(
-        default=[], description="Default list of models that this team can access"
+        default=[],
+        description="Default list of models that new automatically created teams can access",
     )
     max_budget: Optional[float] = Field(
         default=None,
-        description="Default maximum budget (in USD) for this team",
+        description="Default maximum budget (in USD) for new automatically created teams",
     )
     budget_duration: Optional[str] = Field(
         default=None,
-        description="Default budget duration for this team (e.g. 'daily', 'weekly', 'monthly')",
+        description="Default budget duration for new automatically created teams (e.g. 'daily', 'weekly', 'monthly')",
     )
     tpm_limit: Optional[int] = Field(
         default=None,
-        description="Default tpm limit for this team",
+        description="Default tpm limit for new automatically created teams",
     )
     rpm_limit: Optional[int] = Field(
-        default=None, description="Default rpm limit for this team"
+        default=None,
+        description="Default rpm limit for new automatically created teams",
     )
