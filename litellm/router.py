@@ -732,6 +732,9 @@ class Router:
         self.afile_delete = self.factory_function(
             litellm.afile_delete, call_type="afile_delete"
         )
+        self.afile_content = self.factory_function(
+            litellm.afile_content, call_type="afile_content"
+        )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
@@ -3070,6 +3073,7 @@ class Router:
             "aresponses",
             "responses",
             "afile_delete",
+            "afile_content",
         ] = "assistants",
     ):
         """
@@ -3114,7 +3118,12 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
-            elif call_type in ("anthropic_messages", "aresponses", "afile_delete"):
+            elif call_type in (
+                "anthropic_messages",
+                "aresponses",
+                "afile_delete",
+                "afile_content",
+            ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,

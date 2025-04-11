@@ -336,7 +336,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
     async def afile_list(
-        self, custom_llm_provider: str, **data: Dict
+        self,
+        purpose: Optional[OpenAIFilesPurpose],
+        litellm_parent_otel_span: Optional[Span],
+        **data: Dict,
     ) -> List[OpenAIFileObject]:
         return []
 
@@ -347,6 +350,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
+        file_id = self.convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
         )
@@ -362,3 +366,34 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             return stored_file_object
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
+    async def afile_content(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
+    ) -> str:
+        """
+        Get the content of a file from first model that has it
+        """
+        initial_file_id = file_id
+        unified_file_id = self.convert_b64_uid_to_unified_uid(file_id)
+        model_file_id_mapping = await self.get_model_file_id_mapping(
+            [unified_file_id], litellm_parent_otel_span
+        )
+        specific_model_file_id_mapping = model_file_id_mapping.get(unified_file_id)
+        if specific_model_file_id_mapping:
+            exception_dict = {}
+            for model_id, file_id in specific_model_file_id_mapping.items():
+                try:
+                    return await llm_router.afile_content(model=model_id, file_id=file_id, **data)  # type: ignore
+                except Exception as e:
+                    exception_dict[model_id] = str(e)
+            raise Exception(
+                f"LiteLLM Managed File object with id={initial_file_id} not found. Checked model id's: {specific_model_file_id_mapping.keys()}. Errors: {exception_dict}"
+            )
+        else:
+            raise Exception(
+                f"LiteLLM Managed File object with id={initial_file_id} not found"
+            )
