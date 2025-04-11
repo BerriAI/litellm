@@ -10,6 +10,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 import asyncio
 import re
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Optional, cast
 
@@ -551,6 +552,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
         except Exception:
             verbose_logger.debug("api key not found in cache.")
+            valid_token = None
+
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.last_refreshed_at is not None
+            and user_api_key_cache.default_in_memory_ttl is not None
+            and time.time() - valid_token.last_refreshed_at > user_api_key_cache.default_in_memory_ttl
+        ):
+            user_api_key_cache.delete_cache(
+                key=hash_token(api_key)
+            )
             valid_token = None
 
         if (
