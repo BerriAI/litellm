@@ -205,15 +205,6 @@ Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41
 
 Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
-
-
-<br />
-<br />
-
-**Next steps**
-
-1. [Set default params for new teams auto-created from SSO](#set-default-params-for-new-teams)
-
 ### Debugging SSO JWT fields 
 
 If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
