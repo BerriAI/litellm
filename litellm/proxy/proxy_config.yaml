@@ -10,6 +10,36 @@ model_list:
       api_key: fake-key
 
 litellm_settings:
+  prometheus_initialize_budget_metrics: true
+  callbacks: ["prometheus"]
+
+mcp_tools:
+  - name: "get_current_time"
+    description: "Get the current time"
+    input_schema: {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "The format of the time to return",
+          "enum": ["short"]
+        }
+      }
+    }
+    handler: "mcp_tools.get_current_time"
+  - name: "get_current_date"
+    description: "Get the current date"
+    input_schema: {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "The format of the date to return",
+          "enum": ["short"]
+        }
+      }
+    }
+    handler: "mcp_tools.get_current_date"
   default_team_settings:
       - team_id: test_dev
         success_callback: ["langfuse", "s3"]
