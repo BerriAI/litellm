@@ -56,7 +56,7 @@ Sign into the LiteLLM UI via SSO. You should be redirected to the Entra ID SSO p
 
 On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production LLM Evals Group` auto-created on LiteLLM. 
 
-<Image img={require('../../img/msft_auto_team.png')}  style={{ width: '1050px', height: 'auto' }} />
+<Image img={require('../../img/msft_auto_team.png')}  style={{ width: '1000px', height: 'auto' }} />
 
 #### How this works
 
@@ -129,7 +129,7 @@ litellm_settings:
 - Navigate to `Teams` and you should see the new team `Default LiteLLM Prod Team` auto-created on LiteLLM
 - Note LiteLLM will set the default params for this new team. 
 
-<Image img={require('../../img/msft_default_settings.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('../../img/msft_default_settings.png')}  style={{ width: '1000', height: 'auto' }} />
 
 
 
