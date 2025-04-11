@@ -195,10 +195,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             "global_max_parallel_requests", None
         )
         tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
-        if tpm_limit is None:
+        if tpm_limit is None or tpm_limit == 0:  # Treat 0 as no limit
             tpm_limit = sys.maxsize
         rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
-        if rpm_limit is None:
+        if rpm_limit is None or rpm_limit == 0:  # Treat 0 as no limit
             rpm_limit = sys.maxsize
 
         values_to_update_in_cache: List[
@@ -310,9 +310,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if _model is not None:
                 if _tpm_limit_for_key_model:
                     tpm_limit_for_model = _tpm_limit_for_key_model.get(_model)
+                    if tpm_limit_for_model == 0:  # Treat 0 as no limit
+                        tpm_limit_for_model = sys.maxsize
 
                 if _rpm_limit_for_key_model:
                     rpm_limit_for_model = _rpm_limit_for_key_model.get(_model)
+                    if rpm_limit_for_model == 0:  # Treat 0 as no limit
+                        rpm_limit_for_model = sys.maxsize
 
             new_val = await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
@@ -350,9 +354,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if user_id is not None:
             user_tpm_limit = user_api_key_dict.user_tpm_limit
             user_rpm_limit = user_api_key_dict.user_rpm_limit
-            if user_tpm_limit is None:
+            if user_tpm_limit is None or user_tpm_limit == 0:  # Treat 0 as no limit
                 user_tpm_limit = sys.maxsize
-            if user_rpm_limit is None:
+            if user_rpm_limit is None or user_rpm_limit == 0:  # Treat 0 as no limit
                 user_rpm_limit = sys.maxsize
 
             request_count_api_key = f"{user_id}::{precise_minute}::request_count"
@@ -378,9 +382,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             team_tpm_limit = user_api_key_dict.team_tpm_limit
             team_rpm_limit = user_api_key_dict.team_rpm_limit
 
-            if team_tpm_limit is None:
+            if team_tpm_limit is None or team_tpm_limit == 0:  # Treat 0 as no limit
                 team_tpm_limit = sys.maxsize
-            if team_rpm_limit is None:
+            if team_rpm_limit is None or team_rpm_limit == 0:  # Treat 0 as no limit
                 team_rpm_limit = sys.maxsize
 
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
@@ -409,9 +413,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 user_api_key_dict, "end_user_rpm_limit", sys.maxsize
             )
 
-            if end_user_tpm_limit is None:
+            if (
+                end_user_tpm_limit is None or end_user_tpm_limit == 0
+            ):  # Treat 0 as no limit
                 end_user_tpm_limit = sys.maxsize
-            if end_user_rpm_limit is None:
+            if (
+                end_user_rpm_limit is None or end_user_rpm_limit == 0
+            ):  # Treat 0 as no limit
                 end_user_rpm_limit = sys.maxsize
 
             # now do the same tpm/rpm checks
