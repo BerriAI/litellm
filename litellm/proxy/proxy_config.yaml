@@ -9,8 +9,8 @@ model_list:
       model: openai/gpt-4o
       api_key: fake-key
 
-litellm_settings:
-  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
-    max_budget: 100                # Optional[float], optional): $100 budget for the team
-    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
-    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
+# litellm_settings:
+#   default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+#     max_budget: 100                # Optional[float], optional): $100 budget for the team
+#     budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+#     models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
