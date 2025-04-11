@@ -291,6 +291,9 @@ class OpenAIFileObject(BaseModel):
     _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
 
 
+CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -308,7 +311,7 @@ class CreateFileRequest(TypedDict, total=False):
     """
 
     file: Required[FileTypes]
-    purpose: Required[Literal["assistants", "batch", "fine-tune"]]
+    purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
