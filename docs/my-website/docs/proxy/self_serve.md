@@ -203,11 +203,9 @@ Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41
 
 ### Microsoft Entra ID SSO group assignment
 
-This walks through setting up sso auto-add for **Microsoft Entra ID**
+Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
-Follow along this video for a walkthrough of how to set this up with Microsoft Entra ID
 
-<iframe width="840" height="500" src="https://www.loom.com/embed/ea711323aa9a496d84a01fd7b2a12f54?sid=c53e238c-5bfd-4135-b8fb-b5b1a08632cf" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 <br />
 <br />
