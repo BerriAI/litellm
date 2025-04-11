@@ -1,0 +1,62 @@
+templateVersion: 2.0
+meta:
+  org: "systemengg"
+  pod: "devops"
+  name: "litellm"
+  tier: 1
+  version: "1.0"
+  frameworks:
+    - name: "python"
+      version: "3.10"
+pipeline:
+  stages:
+    - name: "test"
+      env: "ci"
+      actions:
+        - type: "build"
+          name: "Build"
+          params:
+            command: "echo 'building'"
+            uploadPackage:
+              - pkg: "docker"
+                clusterName: "litellm"
+                file: "Dockerfile"
+    - name: "prod-deployment"
+      env: "production"
+      location: "singapore"
+      actions:
+        - type: "deploy"
+          name: "deployment"
+          params:
+            strategy: "rolling"
+envVar:
+  config:
+    ref: "conf/"
+
+sos:
+  type: "core_tech_capability"
+  name: "rock"
+
+infra:
+  compute: # This is for prod. For QA and dev,we'll manage.
+    type: "Container" # could be VM or Container
+    cpu: 8 # Max 16 cores and Min 0.2 cores
+    memory: "16Gi" # Only Mi and Gi!  Example: 200Mi, 1Gi
+    appPort: 4000
+    appProtocol: "http"
+    healthCheck: true
+    healthProtocol: "http"
+    healthPort: 4000
+    healthURL: "/"
+    networkProxySideCar: false
+    startupTime: "50s"
+    gracePeriod: "100s"
+    requestTimeout: "10s"
+    logging:
+      backend: "sumologic"# supports only sumologic and s3
+    scaling: # We'll only support horizontal scaling right now
+      min: 2
+      max: 6
+      metric:
+        type: "cpu" # could be cpu, mem, latency or custom metric, you may multiple such metrics
+        target: 50
