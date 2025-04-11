@@ -203,13 +203,16 @@ Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41
 
 ### Microsoft Entra ID SSO group assignment
 
-This walks through setting up sso auto-add for **Microsoft Entra ID**
-
-Follow along this video for a walkthrough of how to set this up with Microsoft Entra ID
+Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
 
-<iframe width="840" height="500" src="https://www.loom.com/embed/ea711323aa9a496d84a01fd7b2a12f54?sid=c53e238c-5bfd-4135-b8fb-b5b1a08632cf" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+<br />
+<br />
+
+**Next steps**
+
+1. [Set default params for new teams auto-created from SSO](#set-default-params-for-new-teams)
 
 ### Debugging SSO JWT fields 
 
@@ -279,6 +282,26 @@ This budget does not apply to keys created under non-default teams.
 
 [**Go Here**](./team_budgets.md)
 
+### Set default params for new teams
+
+When you connect litellm to your SSO provider, litellm can auto-create teams. Use this to set the default `models`, `max_budget`, `budget_duration` for these auto-created teams. 
+
+**How it works**
+
+1. When litellm fetches `groups` from your SSO provider, it will check if the corresponding group_id exists as a `team_id` in litellm. 
+2. If the team_id does not exist, litellm will auto-create a team with the default params you've set. 
+3. If the team_id already exist, litellm will not apply any settings on the team. 
+
+**Usage**
+
+```yaml showLineNumbers title="Default Params for new teams"
+litellm_settings:
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
+```
+
 
 ### Restrict Users from creating personal keys 
 
@@ -290,7 +313,7 @@ This will also prevent users from using their session tokens on the test keys ch
 
 ## **All Settings for Self Serve / SSO Flow**
 
-```yaml
+```yaml showLineNumbers title="All Settings for Self Serve / SSO Flow"
 litellm_settings:
   max_internal_user_budget: 10        # max budget for internal users
   internal_user_budget_duration: "1mo" # reset every month
@@ -300,6 +323,11 @@ litellm_settings:
     max_budget: 100                # Optional[float], optional): $100 budget for a new SSO sign in user
     budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for a new SSO sign in user
     models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by a new SSO sign in user
+  
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
 
 
   upperbound_key_generate_params:    # Upperbound for /key/generate requests when self-serve flow is on

@@ -53,7 +53,7 @@ class DBSpendUpdateWriter:
     ):
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
-        self.pod_lock_manager = PodLockManager(cronjob_id=DB_SPEND_UPDATE_JOB_NAME)
+        self.pod_lock_manager = PodLockManager()
         self.spend_update_queue = SpendUpdateQueue()
         self.daily_spend_update_queue = DailySpendUpdateQueue()
 
@@ -383,7 +383,9 @@ class DBSpendUpdateWriter:
         )
 
         # Only commit from redis to db if this pod is the leader
-        if await self.pod_lock_manager.acquire_lock():
+        if await self.pod_lock_manager.acquire_lock(
+            cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
+        ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
             try:
@@ -411,7 +413,9 @@ class DBSpendUpdateWriter:
             except Exception as e:
                 verbose_proxy_logger.error(f"Error committing spend updates: {e}")
             finally:
-                await self.pod_lock_manager.release_lock()
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
+                )
 
     async def _commit_spend_updates_to_db_without_redis_buffer(
         self,
