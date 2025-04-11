@@ -311,6 +311,13 @@ async def create_file(
             )
         )
 
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+        if _response is not None and isinstance(_response, OpenAIFileObject):
+            response = _response
+
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -539,6 +546,8 @@ async def get_file(
             version=version,
             proxy_config=proxy_config,
         )
+
+        ## check if file_id is a litellm managed file
         response = await litellm.afile_retrieve(
             custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
         )
