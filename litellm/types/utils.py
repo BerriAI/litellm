@@ -34,6 +34,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     OpenAIChatCompletionChunk,
+    OpenAIFileObject,
     OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
@@ -2226,3 +2227,8 @@ class ExtractedFileData(TypedDict):
 class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
     LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+
+
+LLMResponseTypes = Union[
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+]

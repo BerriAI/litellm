@@ -311,6 +311,13 @@ async def create_file(
             )
         )
 
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+        if _response is not None and isinstance(_response, OpenAIFileObject):
+            response = _response
+
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -392,6 +399,7 @@ async def get_file_content(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -414,9 +422,40 @@ async def get_file_content(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-        response = await litellm.afile_content(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_content(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                llm_router=llm_router,
+                **data,
+            )
+        else:
+            response = await litellm.afile_content(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -539,9 +578,32 @@ async def get_file(
             version=version,
             proxy_config=proxy_config,
         )
-        response = await litellm.afile_retrieve(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_retrieve(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+        else:
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -634,6 +696,7 @@ async def delete_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -656,9 +719,40 @@ async def delete_file(
             proxy_config=proxy_config,
         )
 
-        response = await litellm.afile_delete(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_delete(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                llm_router=llm_router,
+                **data,
+            )
+        else:
+            response = await litellm.afile_delete(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(

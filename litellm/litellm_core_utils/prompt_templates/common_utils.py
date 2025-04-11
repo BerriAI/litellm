@@ -306,27 +306,6 @@ def get_completion_messages(
     return messages
 
 
-def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
-    """
-    Gets file ids from messages
-    """
-    file_ids = []
-    for message in messages:
-        if message.get("role") == "user":
-            content = message.get("content")
-            if content:
-                if isinstance(content, str):
-                    continue
-                for c in content:
-                    if c["type"] == "file":
-                        file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
-                        file_id = file_object_file_field.get("file_id")
-                        if file_id:
-                            file_ids.append(file_id)
-    return file_ids
-
-
 def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     """
     Gets format from file id
