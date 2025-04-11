@@ -117,6 +117,7 @@ from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
+from ..integrations.tinybird import TinybirdLogger
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
@@ -161,6 +162,7 @@ genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
+tinybirdLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -190,7 +192,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
 class Logging(LiteLLMLoggingBaseClass):
-    global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
+    global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app, tinybirdLogger
     custom_pricing: bool = False
     stream_options = None
 
@@ -1252,6 +1254,21 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "tinybird" and tinybirdLogger is not None:
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches tinybird for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
+                        print_verbose("reaches tinybird for logging!")
+                        tinybirdLogger.log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                     if callback == "supabase" and supabaseClient is not None:
                         print_verbose("reaches supabase for logging!")
                         kwargs = self.model_call_details
@@ -2067,6 +2084,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose(
                                 f"capture exception not initialized: {capture_exception}"
                             )
+                    elif callback == "tinybird" and tinybirdLogger is not None:
+                        print_verbose("reaches tinybird for logging!")
+                        print_verbose(f"tinybirdLogger: {tinybirdLogger}")
+                        tinybirdLogger.log_failure_event(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=result,
+                            kwargs=self.model_call_details,
+                        )
                     elif callback == "supabase" and supabaseClient is not None:
                         print_verbose("reaches supabase for logging!")
                         print_verbose(f"supabaseClient: {supabaseClient}")
@@ -2210,6 +2236,13 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    await callback.async_log_failure_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )  # type: ignore
+                elif callback == "tinybird" and tinybirdLogger is not None:
                     await callback.async_log_failure_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
@@ -2517,7 +2550,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, tinybirdLogger
 
     try:
         for callback in callback_list:
@@ -2600,6 +2633,9 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "supabase":
                 print_verbose("instantiating supabase")
                 supabaseClient = Supabase()
+            elif callback == "tinybird":
+                print_verbose("instantiating tinybird")
+                tinybirdLogger = TinybirdLogger()
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
@@ -2900,6 +2936,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             humanloop_logger = HumanloopLogger()
             _in_memory_loggers.append(humanloop_logger)
             return humanloop_logger  # type: ignore
+        elif logging_integration == "tinybird":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TinybirdLogger):
+                    return callback
+            tinybird_logger = TinybirdLogger()
+            _in_memory_loggers.append(tinybird_logger)
+            return tinybird_logger  # type: ignore
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
@@ -2918,6 +2961,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "openmeter":
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenMeterLogger):
+                    return callback
+        elif logging_integration == "tinybird":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TinybirdLogger):
                     return callback
         elif logging_integration == "braintrust":
             for callback in _in_memory_loggers:
