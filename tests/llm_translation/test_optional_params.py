@@ -1410,7 +1410,7 @@ def test_litellm_proxy_thinking_param():
         custom_llm_provider="litellm_proxy",
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
-    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 def test_gemini_modalities_param():
     optional_params = get_optional_params(
