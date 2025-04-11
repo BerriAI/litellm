@@ -111,34 +111,31 @@ async def delete_allowed_ip(ip_address: IPAddress):
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
 
 
-@router.get(
-    "/get/internal_user_settings",
-    tags=["SSO Settings"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def get_sso_settings():
+async def _get_settings_with_schema(
+    settings_key: str,
+    settings_class: Any,
+    config: dict,
+) -> dict:
     """
-    Get all SSO settings from the litellm_settings configuration.
-    Returns a structured object with values and descriptions for UI display.
+    Common utility function to get settings with schema information.
+
+    Args:
+        settings_key: The key in litellm_settings to get
+        settings_class: The Pydantic class to use for schema
+        config: The config dictionary
     """
     from pydantic import TypeAdapter
 
-    from litellm.proxy.proxy_server import proxy_config
-
-    # Load existing config
-    config = await proxy_config.get_config()
     litellm_settings = config.get("litellm_settings", {}) or {}
-    default_internal_user_params = (
-        litellm_settings.get("default_internal_user_params", {}) or {}
-    )
+    settings_data = litellm_settings.get(settings_key, {}) or {}
 
-    # Create the settings object first
-    sso_settings = DefaultInternalUserParams(**(default_internal_user_params))
-    # Get the schema for UISSOSettings
-    schema = TypeAdapter(DefaultInternalUserParams).json_schema(by_alias=True)
+    # Create the settings object
+    settings = settings_class(**(settings_data))
+    # Get the schema
+    schema = TypeAdapter(settings_class).json_schema(by_alias=True)
 
     # Convert to dict for response
-    settings_dict = sso_settings.model_dump()
+    settings_dict = settings.model_dump()
 
     # Add descriptions to the response
     result = {
@@ -164,6 +161,50 @@ async def get_sso_settings():
         }
 
     return result
+
+
+@router.get(
+    "/get/internal_user_settings",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_sso_settings():
+    """
+    Get all SSO settings from the litellm_settings configuration.
+    Returns a structured object with values and descriptions for UI display.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Load existing config
+    config = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="default_internal_user_params",
+        settings_class=DefaultInternalUserParams,
+        config=config,
+    )
+
+
+@router.get(
+    "/get/default_team_settings",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_default_team_settings():
+    """
+    Get all SSO settings from the litellm_settings configuration.
+    Returns a structured object with values and descriptions for UI display.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Load existing config
+    config = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="default_team_params",
+        settings_class=NewTeamRequest,
+        config=config,
+    )
 
 
 async def _update_litellm_setting(
