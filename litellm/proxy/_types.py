@@ -191,6 +191,28 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
 
+class KeyManagementRoutes(str, enum.Enum):
+    """
+    Enum for key management routes
+    """
+
+    # write routes
+    KEY_GENERATE = "/key/generate"
+    KEY_UPDATE = "/key/update"
+    KEY_DELETE = "/key/delete"
+    KEY_REGENERATE = "/key/regenerate"
+    KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
+    KEY_BLOCK = "/key/block"
+    KEY_UNBLOCK = "/key/unblock"
+
+    # info and health routes
+    KEY_INFO = "/key/info"
+    KEY_HEALTH = "/key/health"
+
+    # list routes
+    KEY_LIST = "/key/list"
+
+
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
         "chat_completion",
@@ -321,14 +343,19 @@ class LiteLLMRoutes(enum.Enum):
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
     master_key_only_routes = ["/global/spend/reset"]
 
-    management_routes = [  # key
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/info",
-        "/key/health",
-        "/key/list",
+    key_management_routes = [
+        KeyManagementRoutes.KEY_GENERATE,
+        KeyManagementRoutes.KEY_UPDATE,
+        KeyManagementRoutes.KEY_DELETE,
+        KeyManagementRoutes.KEY_INFO,
+        KeyManagementRoutes.KEY_REGENERATE,
+        KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
+        KeyManagementRoutes.KEY_LIST,
+        KeyManagementRoutes.KEY_BLOCK,
+        KeyManagementRoutes.KEY_UNBLOCK,
+    ]
+
+    management_routes = [
         # user
         "/user/new",
         "/user/update",
@@ -348,7 +375,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/model/info",
-    ]
+    ] + key_management_routes
 
     spend_tracking_routes = [
         # spend
