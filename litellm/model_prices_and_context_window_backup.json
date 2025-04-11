@@ -3149,7 +3149,7 @@
         "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
-    "grok-3-mini-fast-beta": {
+    "xai/grok-3-mini-fast-beta": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
@@ -3162,7 +3162,7 @@
         "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
-    "grok-3-mini-fast-latest": {
+    "xai/grok-3-mini-fast-latest": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
