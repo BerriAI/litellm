@@ -7780,6 +7780,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -7897,6 +7898,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-haiku-20240307-v1:0": {
