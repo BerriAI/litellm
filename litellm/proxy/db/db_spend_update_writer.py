@@ -140,6 +140,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                 )
             )
+
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
                     payload=payload,
@@ -158,7 +159,7 @@ class DBSpendUpdateWriter:
             )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
-        except Exception:
+        except Exception as e:
             verbose_proxy_logger.debug(
                 f"Error updating Prisma database: {traceback.format_exc()}"
             )
