@@ -729,6 +729,9 @@ class Router:
         self.aresponses = self.factory_function(
             litellm.aresponses, call_type="aresponses"
         )
+        self.afile_delete = self.factory_function(
+            litellm.afile_delete, call_type="afile_delete"
+        )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
@@ -2435,6 +2438,8 @@ class Router:
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
+            ### get custom
+
             response = original_function(
                 **{
                     **data,
@@ -2514,9 +2519,15 @@ class Router:
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
+            try:
+                _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            except Exception:
+                custom_llm_provider = None
+
             response = original_function(
                 **{
                     **data,
+                    "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
                 }
@@ -3058,6 +3069,7 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "responses",
+            "afile_delete",
         ] = "assistants",
     ):
         """
@@ -3102,7 +3114,7 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
-            elif call_type in ("anthropic_messages", "aresponses"):
+            elif call_type in ("anthropic_messages", "aresponses", "afile_delete"):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,

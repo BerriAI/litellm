@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from litellm import verbose_logger
+from litellm import Router, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
@@ -59,7 +59,7 @@ class BaseFileEndpoints(ABC):
         pass
 
 
-class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
+class _PROXY_LiteLLMManagedFiles(CustomLogger):
     # Class variables or attributes
     def __init__(
         self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient
@@ -91,6 +91,25 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             key=key,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
+
+    async def delete_unified_file_id(
+        self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
+    ) -> OpenAIFileObject:
+        key = f"litellm_proxy/{file_id}"
+        ## get old value
+        old_value = await self.internal_usage_cache.async_get_cache(
+            key=key,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        )
+        if old_value is None or not isinstance(old_value, OpenAIFileObject):
+            raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+        ## delete old value
+        await self.internal_usage_cache.async_set_cache(
+            key=key,
+            value=None,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        )
+        return old_value
 
     async def async_pre_call_hook(
         self,
@@ -322,6 +341,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return []
 
     async def afile_delete(
-        self, custom_llm_provider: str, file_id: str, **data: Dict
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
     ) -> OpenAIFileObject:
-        raise NotImplementedError("afile_delete not implemented")
+        model_file_id_mapping = await self.get_model_file_id_mapping(
+            [file_id], litellm_parent_otel_span
+        )
+        specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
+        if specific_model_file_id_mapping:
+            for model_id, file_id in specific_model_file_id_mapping.items():
+                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+
+        stored_file_object = await self.delete_unified_file_id(
+            file_id, litellm_parent_otel_span
+        )
+        if stored_file_object:
+            return stored_file_object
+        else:
+            raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
