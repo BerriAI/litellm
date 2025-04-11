@@ -8,7 +8,7 @@ from typing import List, Optional
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.llms.azure.common_utils import get_azure_ad_token_from_entrata_id
+from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -291,7 +291,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "Missing required environment variable: AZURE_STORAGE_CLIENT_SECRET"
             )
 
-        token_provider = get_azure_ad_token_from_entrata_id(
+        token_provider = get_azure_ad_token_from_entra_id(
             tenant_id=tenant_id,
             client_id=client_id,
             client_secret=client_secret,
