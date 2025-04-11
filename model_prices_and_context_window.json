@@ -3779,7 +3779,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-06-01",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "claude-3-7-sonnet-20250219": {
         "max_tokens": 128000,
@@ -3799,7 +3800,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2026-02-01",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "claude-3-5-sonnet-20241022": {
         "max_tokens": 8192,
@@ -5377,6 +5379,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "deprecation_date": "2025-06-01",
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "vertex_ai/claude-3-haiku": {
@@ -6869,6 +6872,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_reasoning": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
@@ -6884,6 +6888,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_reasoning": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_tool_choice": true
     },
@@ -7883,6 +7888,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
@@ -8000,7 +8006,8 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "us.anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -10585,7 +10592,8 @@
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Claude 3.7 conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."},
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
         "max_tokens": 128000,
