@@ -9,6 +9,14 @@ Sync Microsoft SSO Groups, Members with LiteLLM Teams.
 <br />
 <br />
 
+
+## Prerequisites
+
+- An Azure Entra ID account with administrative access
+- A LiteLLM Enterprise App set up in your Azure Portal
+- Access to Microsoft Entra ID (Azure AD)
+
+
 ## Overview of this tutorial
 
 1. Auto-Create Entra ID Groups on LiteLLM Teams 
