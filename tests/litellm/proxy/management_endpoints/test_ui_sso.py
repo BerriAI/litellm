@@ -21,12 +21,44 @@ from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
+    SSOAuthenticationHandler,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
 )
+
+
+def test_microsoft_sso_handler_openid_from_response_user_principal_name():
+    # Arrange
+    # Create a mock response similar to what Microsoft SSO would return
+    mock_response = {
+        "userPrincipalName": "test@example.com",
+        "displayName": "Test User",
+        "id": "user123",
+        "givenName": "Test",
+        "surname": "User",
+        "some_other_field": "value",
+    }
+    expected_team_ids = ["team1", "team2"]
+    # Act
+    # Call the method being tested
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response, team_ids=expected_team_ids
+    )
+
+    # Assert
+
+    # Check that the result is a CustomOpenID object with the expected values
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "test@example.com"
+    assert result.display_name == "Test User"
+    assert result.provider == "microsoft"
+    assert result.id == "user123"
+    assert result.first_name == "Test"
+    assert result.last_name == "User"
+    assert result.team_ids == expected_team_ids
 
 
 def test_microsoft_sso_handler_openid_from_response():
@@ -386,6 +418,54 @@ def test_get_group_ids_from_graph_api_response():
 
 
 @pytest.mark.asyncio
+async def test_upsert_sso_user_existing_user():
+    """
+    If a user_id is already in the LiteLLM DB and the user signed in with SSO. Ensure that the user_id is updated with the SSO user_email
+
+    SSO Test
+    """
+    # Arrange
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Create a mock existing user
+    mock_user = MagicMock()
+    mock_user.user_id = "existing_user_123"
+    mock_user.user_email = "old_email@example.com"
+
+    # Create mock SSO response
+    mock_sso_response = CustomOpenID(
+        email="new_email@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        id="existing_user_123",
+        first_name="Test",
+        last_name="User",
+        team_ids=[],
+    )
+
+    # Create mock user defined values
+    mock_user_defined_values = MagicMock()
+
+    # Act
+    result = await SSOAuthenticationHandler.upsert_sso_user(
+        result=mock_sso_response,
+        user_info=mock_user,
+        user_email="new_email@example.com",
+        user_defined_values=mock_user_defined_values,
+        prisma_client=mock_prisma,
+    )
+
+    # Assert
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once_with(
+        where={"user_id": "existing_user_123"},
+        data={"user_email": "new_email@example.com"},
+    )
+    assert result == mock_user
+
+
 async def test_default_team_params():
     """
     When litellm.default_team_params is set, it should be used to create a new team
