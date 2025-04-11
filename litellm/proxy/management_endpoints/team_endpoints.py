@@ -76,7 +76,6 @@ from litellm.proxy.utils import (
 )
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.team_endpoints import (
-    GetTeamMemberPermissionsRequest,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
 )
