@@ -2760,9 +2760,6 @@ class Router:
             stripped_model, custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"]
             )
-            # kwargs["file"] = replace_model_in_jsonl(
-            #     file_content=kwargs["file"], new_model_name=stripped_model
-            # )
 
             response = litellm.acreate_file(
                 **{
