@@ -19,6 +19,7 @@ from litellm.proxy._types import NewTeamRequest
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
@@ -421,8 +422,10 @@ def test_get_group_ids_from_graph_api_response():
 @pytest.mark.parametrize(
     "team_params",
     [
-        # Test case 1: Using NewTeamRequest
-        NewTeamRequest(max_budget=10, budget_duration="1d", models=["special-gpt-5"]),
+        # Test case 1: Using DefaultTeamSSOParams
+        DefaultTeamSSOParams(
+            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
+        ),
         # Test case 2: Using Dict
         {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
     ],

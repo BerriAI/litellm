@@ -27,6 +27,8 @@ import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
 import TeamInfoView from "@/components/team/team_info";
+import TeamSSOSettings from "@/components/TeamSSOSettings";
+import { isAdminRole } from "@/utils/roles";
 import {
   Table,
   TableBody,
@@ -354,6 +356,7 @@ const Teams: React.FC<TeamProps> = ({
         <div className="flex">
           <Tab>Your Teams</Tab>
           <Tab>Available Teams</Tab>
+          {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
           </div>
           <div className="flex items-center space-x-2">
             {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -797,6 +800,15 @@ const Teams: React.FC<TeamProps> = ({
           userID={userID}
         />
       </TabPanel>
+      {isAdminRole(userRole || "") && (
+        <TabPanel>
+          <TeamSSOSettings
+            accessToken={accessToken}
+            userID={userID || ""}
+            userRole={userRole || ""}
+          />
+        </TabPanel>
+      )}
       </TabPanels>
 
       </TabGroup>)}
