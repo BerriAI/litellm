@@ -288,7 +288,7 @@ class OpenAIFileObject(BaseModel):
     `error` field on `fine_tuning.job`.
     """
 
-    _hidden_params: dict = {}
+    _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
 
 
 # OpenAI Files Types
