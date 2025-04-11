@@ -99,13 +99,22 @@ class AsyncHTTPHandler:
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            concurrent_limit=concurrent_limit,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-        )
+        self.concurrent_limit = concurrent_limit
         self.client_alias = client_alias
+        self.ssl_verify = ssl_verify
+        self._client: Optional[httpx.AsyncClient] = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        # Optimization--lazy load the client. This is actually not super fast to create (10s of ms)
+        if self._client is None:
+            self._client = self.create_client(
+                timeout=self.timeout,
+                concurrent_limit=self.concurrent_limit,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+            )
+        return self._client
 
     def create_client(
         self,
@@ -485,27 +494,36 @@ class HTTPHandler:
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        if client is None:
+        self.timeout = timeout
+        self.concurrent_limit = concurrent_limit
+        self.ssl_verify = ssl_verify
+        self.cert = cert
+        self._client = client
+
+    @property
+    def client(self) -> httpx.Client:
+        # Optimization--lazy load the client
+        if self._client is None:
             transport = self._create_sync_transport()
 
             # Create a client with a connection pool
-            self.client = httpx.Client(
+            self._client = httpx.Client(
                 transport=transport,
-                timeout=timeout,
+                timeout=self.timeout,
                 limits=httpx.Limits(
-                    max_connections=concurrent_limit,
-                    max_keepalive_connections=concurrent_limit,
+                    max_connections=self.concurrent_limit,
+                    max_keepalive_connections=self.concurrent_limit,
                 ),
-                verify=ssl_verify,
-                cert=cert,
+                verify=self.ssl_verify,
+                cert=self.cert,
                 headers=headers,
             )
-        else:
-            self.client = client
+        return self._client
 
     def close(self):
         # Close the client when you're done with it
-        self.client.close()
+        if self._client is not None:
+            self._client.close()
 
     def get(
         self,

@@ -1,6 +1,7 @@
 import io
 import os
 import pathlib
+import respx
 import ssl
 import sys
 from unittest.mock import MagicMock
@@ -27,3 +28,29 @@ async def test_ssl_security_level(monkeypatch):
 
     # Verify that the SSL context exists and has the correct cipher string
     assert isinstance(ssl_context, ssl.SSLContext)
+
+@pytest.mark.asyncio
+async def test_basic_async_request(respx_mock: respx.MockRouter):
+    respx_mock.get("https://api.example.com").respond(
+        json={"message": "Hello, world!"}
+    )
+
+    # Create async client with SSL verification disabled to isolate SSL context testing
+    client = AsyncHTTPHandler(ssl_verify=False)
+
+    response = await client.get("https://api.example.com")
+    assert response.status_code == 200
+    assert response.json() == {"message": "Hello, world!"}
+
+
+def test_basic_sync_request(respx_mock: respx.MockRouter):
+    respx_mock.get("https://api.example.com").respond(
+        json={"message": "Hello, world!"}
+    )
+
+    # Create async client with SSL verification disabled to isolate SSL context testing
+    client = HTTPHandler(ssl_verify=False)
+
+    response = client.get("https://api.example.com")
+    assert response.status_code == 200
+    assert response.json() == {"message": "Hello, world!"}
