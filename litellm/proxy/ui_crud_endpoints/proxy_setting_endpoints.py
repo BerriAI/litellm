@@ -1,5 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import List
+from typing import Any, List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -166,6 +166,45 @@ async def get_sso_settings():
     return result
 
 
+async def _update_litellm_setting(
+    settings: Union[DefaultInternalUserParams, NewTeamRequest],
+    settings_key: str,
+    in_memory_var: Any,
+    success_message: str,
+):
+    """
+    Common utility function to update `litellm_settings` in both memory and config.
+
+    Args:
+        settings: The settings object to update
+        settings_key: The key in litellm_settings to update
+        in_memory_var: The in-memory variable to update
+        success_message: Message to return on success
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Update the in-memory settings
+    in_memory_var = settings.model_dump(exclude_none=True)
+
+    # Load existing config
+    config = await proxy_config.get_config()
+
+    # Update config with new settings
+    if "litellm_settings" not in config:
+        config["litellm_settings"] = {}
+
+    config["litellm_settings"][settings_key] = settings.model_dump(exclude_none=True)
+
+    # Save the updated config
+    await proxy_config.save_config(new_config=config)
+
+    return {
+        "message": success_message,
+        "status": "success",
+        "settings": in_memory_var,
+    }
+
+
 @router.patch(
     "/update/internal_user_settings",
     tags=["SSO Settings"],
@@ -176,27 +215,27 @@ async def update_internal_user_settings(settings: DefaultInternalUserParams):
     Update the default internal user parameters for SSO users.
     These settings will be applied to new users who sign in via SSO.
     """
-    from litellm.proxy.proxy_server import proxy_config
-
-    # Update the in-memory settings
-    litellm.default_internal_user_params = settings.model_dump(exclude_none=True)
-
-    # Load existing config
-    config = await proxy_config.get_config()
-
-    # Update config with new settings
-    if "litellm_settings" not in config:
-        config["litellm_settings"] = {}
-
-    config["litellm_settings"]["default_internal_user_params"] = settings.model_dump(
-        exclude_none=True
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key="default_internal_user_params",
+        in_memory_var=litellm.default_internal_user_params,
+        success_message="Internal user settings updated successfully",
     )
 
-    # Save the updated config
-    await proxy_config.save_config(new_config=config)
 
-    return {
-        "message": "Internal user settings updated successfully",
-        "status": "success",
-        "settings": litellm.default_internal_user_params,
-    }
+@router.patch(
+    "/update/default_team_settings",
+    tags=["SSO Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_default_team_settings(settings: NewTeamRequest):
+    """
+    Update the default team parameters for SSO users.
+    These settings will be applied to new teams created from SSO.
+    """
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key="default_team_params",
+        in_memory_var=litellm.default_team_params,
+        success_message="Default team settings updated successfully",
+    )
