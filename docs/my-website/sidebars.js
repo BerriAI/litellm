@@ -399,6 +399,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/agentops_integration",
         "observability/lunary_integration",
         "observability/mlflow",
         "observability/langfuse_integration",
