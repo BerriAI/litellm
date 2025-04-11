@@ -7,8 +7,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # For testing, make sure the COHERE_API_KEY or CO_API_KEY environment variable is set
-# You can set it before running the tests with: export COHERE_API_KEY=your_api_key
-
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../"))
 )  # Adds the parent directory to the system path
@@ -198,6 +196,11 @@ async def test_chat_completion_cohere_v2_citations(stream):
 
 
 def test_completion_cohere_v2_command_r_plus_function_call():
+    # Skip if no API key is available
+    api_key = os.environ.get("COHERE_API_KEY") or os.environ.get("CO_API_KEY")
+    if not api_key:
+        pytest.skip("No Cohere API key found, skipping test")
+        
     litellm.set_verbose = True
     tools = [
         {
@@ -274,6 +277,11 @@ def test_completion_cohere_v2_command_r_plus_function_call():
 
 @pytest.mark.flaky(retries=6, delay=1)
 def test_completion_cohere_v2():
+    # Skip if no API key is available
+    api_key = os.environ.get("COHERE_API_KEY") or os.environ.get("CO_API_KEY")
+    if not api_key:
+        pytest.skip("No Cohere API key found, skipping test")
+        
     try:
         # litellm.set_verbose=True
         messages = [
