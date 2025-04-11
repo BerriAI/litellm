@@ -15,6 +15,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_reasoning": true,
         "supports_web_search": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.0000,
@@ -3146,6 +3147,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
@@ -3159,6 +3161,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
@@ -3170,6 +3173,7 @@
         "output_cost_per_token": 0.000004,
         "litellm_provider": "xai",
         "mode": "chat",
+        "supports_reasoning": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
