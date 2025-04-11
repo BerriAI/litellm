@@ -66,6 +66,7 @@ from litellm.types.llms.openai import (
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
+    LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
@@ -617,6 +618,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -792,6 +794,25 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
+                elif call_type == CallTypes.arealtime.value and isinstance(
+                    completion_response, LiteLLMRealtimeStreamLoggingObject
+                ):
+                    if (
+                        cost_per_token_usage_object is None
+                        or custom_llm_provider is None
+                    ):
+                        raise ValueError(
+                            "usage object and custom_llm_provider must be provided for realtime stream cost calculation. Got cost_per_token_usage_object={}, custom_llm_provider={}".format(
+                                cost_per_token_usage_object,
+                                custom_llm_provider,
+                            )
+                        )
+                    return handle_realtime_stream_cost_calculation(
+                        results=completion_response.results,
+                        combined_usage_object=cost_per_token_usage_object,
+                        custom_llm_provider=custom_llm_provider,
+                        litellm_model_name=model,
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -921,6 +942,7 @@ def response_cost_calculator(
         HttpxBinaryResponseContent,
         RerankResponse,
         ResponsesAPIResponse,
+        LiteLLMRealtimeStreamLoggingObject,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1273,6 +1295,15 @@ class RealtimeAPITokenUsageProcessor:
             collected_usage_objects
         )
         return combined_usage_object
+
+    @staticmethod
+    def create_logging_realtime_object(
+        usage: Usage, results: OpenAIRealtimeStreamList
+    ) -> LiteLLMRealtimeStreamLoggingObject:
+        return LiteLLMRealtimeStreamLoggingObject(
+            usage=usage,
+            results=results,
+        )
 
 
 def handle_realtime_stream_cost_calculation(
