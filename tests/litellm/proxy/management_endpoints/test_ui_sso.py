@@ -386,14 +386,21 @@ def test_get_group_ids_from_graph_api_response():
 
 
 @pytest.mark.asyncio
-async def test_default_team_params():
+@pytest.mark.parametrize(
+    "team_params",
+    [
+        # Test case 1: Using NewTeamRequest
+        NewTeamRequest(max_budget=10, budget_duration="1d", models=["special-gpt-5"]),
+        # Test case 2: Using Dict
+        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+    ],
+)
+async def test_default_team_params(team_params):
     """
     When litellm.default_team_params is set, it should be used to create a new team
     """
     # Arrange
-    litellm.default_team_params = NewTeamRequest(
-        max_budget=10, budget_duration="1d", models=["special-gpt-5"]
-    )
+    litellm.default_team_params = team_params
 
     def mock_jsonify_team_object(db_data):
         return db_data
