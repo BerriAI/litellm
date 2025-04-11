@@ -21,7 +21,7 @@ from litellm.types.llms.bedrock import (
     CohereEmbeddingRequestWithModel,
 )
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
-from litellm.utils import is_base64_encoded
+from litellm.utils import is_base64_encoded, encode_base64_floats
 
 
 class CohereEmbeddingConfig:
@@ -40,7 +40,11 @@ class CohereEmbeddingConfig:
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
-                optional_params["embedding_types"] = v
+                if v == "base64":
+                    # cohere doesn't support this so we'll handle the conversion ourselves
+                    optional_params["embedding_types"] = ["float"]
+                else:
+                    optional_params["embedding_types"] = [v]
         return optional_params
 
     def _is_v3_model(self, model: str) -> bool:
@@ -109,6 +113,7 @@ class CohereEmbeddingConfig:
         model: str,
         encoding: Any,
         input: list,
+        litellm_params: dict,
     ) -> EmbeddingResponse:
         response_json = response.json()
         ## LOGGING
@@ -129,9 +134,19 @@ class CohereEmbeddingConfig:
                 'usage'
             }
         """
-        embeddings = response_json["embeddings"]
+        original_encoding_format = litellm_params.get("original_encoding_format", None)
+        should_output_base64 = original_encoding_format == "base64"
+        if original_encoding_format:
+            if should_output_base64:
+                # see map_openai_params; we asked cohere for float in this case
+                embeddings = response_json["embeddings"]["float"]
+            else:
+                embeddings = response_json["embeddings"][original_encoding_format]
+        else:
+            embeddings = response_json["embeddings"]
         output_data = []
-        for idx, embedding in enumerate(embeddings):
+        for idx, embedding_raw in enumerate(embeddings):
+            embedding = encode_base64_floats(embedding_raw) if should_output_base64 else embedding_raw
             output_data.append(
                 {"object": "embedding", "index": idx, "embedding": embedding}
             )

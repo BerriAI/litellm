@@ -477,4 +477,5 @@ class BedrockEmbedding(BaseAWSLLM):
             timeout=timeout,
             client=client,
             headers=prepped.headers,  # type: ignore
+            litellm_params=litellm_params,
         )

@@ -2102,3 +2102,17 @@ def test_get_provider_audio_transcription_config():
         config = ProviderConfigManager.get_provider_audio_transcription_config(
             model="whisper-1", provider=provider
         )
+
+
+def test_encode_base64_floats():
+    from litellm.utils import encode_base64_floats
+
+    assert(encode_base64_floats([1.0, 2.5, 3.75]) == "AACAPwAAIEAAAHBA")
+    assert(encode_base64_floats([]) == "")
+
+
+def test_decode_base64_floats():
+    from litellm.utils import decode_base64_floats
+
+    assert(decode_base64_floats("AACAPwAAIEAAAHBA") == [1.0, 2.5, 3.75])
+    assert(decode_base64_floats("") == [])

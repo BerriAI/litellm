@@ -54,6 +54,7 @@ async def async_embedding(
     api_key: Optional[str],
     headers: dict,
     encoding: Callable,
+    litellm_params: dict,
     client: Optional[AsyncHTTPHandler] = None,
 ):
     ## LOGGING
@@ -105,6 +106,7 @@ async def async_embedding(
         model=model,
         encoding=encoding,
         input=input,
+        litellm_params=litellm_params,
     )
 
 
@@ -116,6 +118,7 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
+    litellm_params: dict,
     data: Optional[Union[dict, CohereEmbeddingRequest]] = None,
     complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -150,6 +153,7 @@ def embedding(
                 if client is not None and isinstance(client, AsyncHTTPHandler)
                 else None
             ),
+            litellm_params=litellm_params,
         )
 
     ## LOGGING
@@ -174,4 +178,5 @@ def embedding(
         model=model,
         encoding=encoding,
         input=input,
+        litellm_params=litellm_params,
     )

@@ -60,6 +60,7 @@ def get_litellm_params(
     merge_reasoning_content_in_choices: Optional[bool] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
+    original_encoding_format: Optional[str] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -110,6 +111,7 @@ def get_litellm_params(
         "azure_password": kwargs.get("azure_password"),
         "max_retries": max_retries,
         "timeout": kwargs.get("timeout"),
+        "original_encoding_format": original_encoding_format,
         "bucket_name": kwargs.get("bucket_name"),
         "vertex_credentials": kwargs.get("vertex_credentials"),
         "vertex_project": kwargs.get("vertex_project"),

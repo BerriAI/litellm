@@ -288,7 +288,7 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     images: List[str]
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
-    embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+    embedding_types: List[Literal["float", "int8", "uint8", "binary", "ubinary"]]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):

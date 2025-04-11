@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import array
 import ast
 import asyncio
 import base64
@@ -2664,6 +2665,22 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "cohere":
+        if "embed-multilingual-v3.0" in model or "embed-english-v3.0" in model:
+            cohere_config = litellm.CohereEmbeddingConfig()
+        else:  # unmapped model
+            supported_params = []
+            _check_valid_arg(supported_params=supported_params)
+            final_params = {**kwargs}
+            return final_params
+
+        supported_params = cohere_config.get_supported_openai_params()
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = cohere_config.map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
         if "amazon.titan-embed-text-v1" in model:
@@ -2672,7 +2689,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
         elif "amazon.titan-embed-text-v2:0" in model:
             object = litellm.AmazonTitanV2Config()
-        elif "cohere.embed-multilingual-v3" in model:
+        elif "cohere.embed-multilingual-v3" in model or "cohere.embed-english-v3" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
@@ -6055,6 +6072,20 @@ def get_base64_str(s: str) -> str:
     if "," in s:
         return s.split(",")[1]
     return s
+
+
+def encode_base64_floats(values: List[float]) -> str:
+    """
+    Encodes a list of floats as a base64 string.
+    """
+    return base64.b64encode(array.array("f", values).tobytes()).decode("utf-8")
+
+
+def decode_base64_floats(s: str) -> List[float]:
+    """
+    Decodes a base64 string into a list of floats
+    """
+    return array.array("f", base64.b64decode(s)).tolist()
 
 
 def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
