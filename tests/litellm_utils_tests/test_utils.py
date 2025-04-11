@@ -2115,5 +2115,4 @@ def test_get_provider_audio_transcription_config():
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
     
-    assert supports_pdf_input("anthropic.claude-3-7-sonnet-20250219-v1:0") == True
-    assert supports_pdf_input("us.anthropic.claude-3-7-sonnet-20250219-v1:0") == True
+    assert supports_pdf_input(model) == expected_bool
