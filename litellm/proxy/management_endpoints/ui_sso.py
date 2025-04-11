@@ -941,7 +941,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _cast_and_deepcopy_litellm_default_team_params(
-        default_team_params: Union[NewTeamRequest, Dict],
+        default_team_params: Union[DefaultTeamSSOParams, Dict],
         team_request: NewTeamRequest,
         litellm_team_id: str,
         litellm_team_name: Optional[str] = None,
@@ -949,23 +949,20 @@ class SSOAuthenticationHandler:
         """
         Casts and deepcopies the litellm.default_team_params to a NewTeamRequest object
 
-        - Ensures we create a new NewTeamRequest object
-        - Handle the case where litellm.default_team_params is a dict or a NewTeamRequest object
-        - Adds the litellm_team_id and litellm_team_name to the NewTeamRequest object
+        - Ensures we create a new DefaultTeamSSOParams object
+        - Handle the case where litellm.default_team_params is a dict or a DefaultTeamSSOParams object
+        - Adds the litellm_team_id and litellm_team_name to the DefaultTeamSSOParams object
         """
         if isinstance(default_team_params, dict):
             _team_request = deepcopy(default_team_params)
             _team_request["team_id"] = litellm_team_id
             _team_request["team_alias"] = litellm_team_name
             team_request = NewTeamRequest(**_team_request)
-        elif isinstance(litellm.default_team_params, NewTeamRequest):
-            team_request = litellm.default_team_params.model_copy(
-                deep=True,
-                update={
-                    "team_id": litellm_team_id,
-                    "team_alias": litellm_team_name,
-                },
-            )
+        elif isinstance(litellm.default_team_params, DefaultTeamSSOParams):
+            _default_team_params = deepcopy(litellm.default_team_params)
+            _new_team_request = team_request.model_dump()
+            _new_team_request.update(_default_team_params)
+            team_request = NewTeamRequest(**_new_team_request)
         return team_request
 
 

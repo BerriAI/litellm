@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 
 router = APIRouter()
 
@@ -202,13 +203,13 @@ async def get_default_team_settings():
 
     return await _get_settings_with_schema(
         settings_key="default_team_params",
-        settings_class=NewTeamRequest,
+        settings_class=DefaultTeamSSOParams,
         config=config,
     )
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, NewTeamRequest],
+    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,
@@ -269,7 +270,7 @@ async def update_internal_user_settings(settings: DefaultInternalUserParams):
     tags=["SSO Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_default_team_settings(settings: NewTeamRequest):
+async def update_default_team_settings(settings: DefaultTeamSSOParams):
     """
     Update the default team parameters for SSO users.
     These settings will be applied to new teams created from SSO.
