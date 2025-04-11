@@ -147,6 +147,7 @@ async def create_file_for_each_model(
         responses.append(individual_response)
     response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
         file_objects=responses,
+        create_file_request=_create_file_request,
         purpose=purpose,
         internal_usage_cache=proxy_logging_obj.internal_usage_cache,
         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,

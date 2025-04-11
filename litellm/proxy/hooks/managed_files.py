@@ -9,10 +9,16 @@ from litellm import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_data,
     get_file_ids_from_messages,
 )
-from litellm.proxy._types import CallTypes, SpecialEnums, UserAPIKeyAuth
-from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
+from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.llms.openai import (
+    CreateFileRequest,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
+)
+from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -86,7 +92,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
-            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+            if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX):
                 litellm_managed_file_ids.append(file_id)
 
         if litellm_managed_file_ids:
@@ -106,14 +112,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
     @staticmethod
     async def return_unified_file_id(
         file_objects: List[OpenAIFileObject],
+        create_file_request: CreateFileRequest,
         purpose: OpenAIFilesPurpose,
         internal_usage_cache: InternalUsageCache,
         litellm_parent_otel_span: Span,
     ) -> OpenAIFileObject:
-        unified_file_id = SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value + str(
-            uuid.uuid4()
+        ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
+        file_data = extract_file_data(create_file_request["file"])
+
+        file_type = file_data["content_type"]
+
+        unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.format(
+            file_type, str(uuid.uuid4())
         )
 
+        ## CREATE RESPONSE OBJECT
         ## CREATE RESPONSE OBJECT
         response = OpenAIFileObject(
             id=unified_file_id,

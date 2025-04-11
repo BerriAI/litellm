@@ -307,8 +307,8 @@ class CreateFileRequest(TypedDict, total=False):
         timeout: Optional[float] = None
     """
 
-    file: FileTypes
-    purpose: Literal["assistants", "batch", "fine-tune"]
+    file: Required[FileTypes]
+    purpose: Required[Literal["assistants", "batch", "fine-tune"]]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
