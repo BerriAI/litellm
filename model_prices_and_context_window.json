@@ -3107,6 +3107,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "xai/grok-3-fast-beta": {
@@ -3119,6 +3120,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "xai/grok-3-fast-latest": {
@@ -3131,6 +3133,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "xai/grok-3-mini-beta": {
@@ -3143,6 +3146,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "grok-3-mini-fast-beta": {
@@ -3155,6 +3159,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "grok-3-mini-fast-latest": {
@@ -3167,6 +3172,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_response_schema": false,
         "source": "https://x.ai/api#pricing"
     },
     "xai/grok-vision-beta": {
