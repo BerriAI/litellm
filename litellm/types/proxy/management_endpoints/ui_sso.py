@@ -54,7 +54,3 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = Field(
         default=None, description="Default rpm limit for this team"
     )
-    metadata: Optional[dict] = Field(
-        default=None,
-        description="Default metadata for this team",
-    )
