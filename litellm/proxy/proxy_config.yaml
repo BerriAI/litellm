@@ -19,3 +19,6 @@ litellm_settings:
         success_callback: ["langfuse", "s3"]
         langfuse_secret: secret-workflows-key
         langfuse_public_key: public-workflows-key
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
