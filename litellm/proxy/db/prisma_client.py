@@ -10,7 +10,6 @@ import time
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
