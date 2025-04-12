@@ -46,7 +46,8 @@ v1.66.0-stable is live now, here are the key highlights of this release
 ## Key Highlights
 - **Microsoft SSO Auto-sync**: Auto-sync groups and group members from Azure Entra ID to LiteLLM
 - **Unified File IDs**: Use the same file id across LLM API providers. 
-- **New Models**: `xAI grok-3` support, `realtime api` cost tracking and logging
+- **Realtime API Cost Tracking**: Track cost of realtime api calls
+- **xAI grok-3**: Added support for `xai/grok-3` models
 - **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
 
 Let's dive in.
@@ -79,7 +80,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
     2. Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
 
 - Hugging Face
-    1. Hugging Face - Added inference providers support [PR](https://github.com/BerriAI/litellm/pull/9773)
+    1. Hugging Face - Added inference providers support [Getting Started](https://docs.litellm.ai/docs/providers/huggingface#serverless-inference-providers)
 
 - Azure
     1. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
@@ -109,13 +110,15 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
 
 ## Spend Tracking Improvements
-
-1. Realtime API Cost tracking with token usage metrics in spend logs [PR](https://github.com/BerriAI/litellm/pull/9795)
-2. Fixed Claude Haiku cache read pricing per token [PR](https://github.com/BerriAI/litellm/pull/9834)
-3. Added cost tracking for Claude responses with base_model [PR](https://github.com/BerriAI/litellm/pull/9897)
-4. Fixed Anthropic prompt caching cost calculation and trimmed logged message in db [PR](https://github.com/BerriAI/litellm/pull/9838)
-5. Added token tracking and log usage object in spend logs [PR](https://github.com/BerriAI/litellm/pull/9843)
-6. Handle custom pricing at deployment level [PR](https://github.com/BerriAI/litellm/pull/9855)
+- OpenAI, Azure
+    1. Realtime API Cost tracking with token usage metrics in spend logs [PR](https://github.com/BerriAI/litellm/pull/9795)
+- Anthropic
+    1. Fixed Claude Haiku cache read pricing per token [PR](https://github.com/BerriAI/litellm/pull/9834)
+    2. Added cost tracking for Claude responses with base_model [PR](https://github.com/BerriAI/litellm/pull/9897)
+    3. Fixed Anthropic prompt caching cost calculation and trimmed logged message in db [PR](https://github.com/BerriAI/litellm/pull/9838)
+- General
+    1. Added token tracking and log usage object in spend logs [PR](https://github.com/BerriAI/litellm/pull/9843)
+    2. Handle custom pricing at deployment level [PR](https://github.com/BerriAI/litellm/pull/9855)
 
 
 ## Management Endpoints / UI
