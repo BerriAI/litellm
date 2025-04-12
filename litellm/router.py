@@ -3121,11 +3121,16 @@ class Router:
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
-                "afile_delete",
-                "afile_content",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in ("afile_delete", "afile_content"):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
                     **kwargs,
                 )
 
