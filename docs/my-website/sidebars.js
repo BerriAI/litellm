@@ -340,7 +340,15 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        "files_endpoints",
+        
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
         "batches",
         "realtime",
         "fine_tuning",
