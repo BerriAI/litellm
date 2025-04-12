@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
