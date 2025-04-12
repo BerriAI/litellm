@@ -33,6 +33,8 @@ import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
+import { MessageType } from "./chat_ui/types";
+import ReasoningContent from "./chat_ui/ReasoningContent";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -65,7 +67,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   );
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string; isImage?: boolean }[]>([]);
+  const [chatHistory, setChatHistory] = useState<MessageType[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
@@ -138,10 +140,45 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
-          { role, content: lastMessage.content + chunk, model },
+          { 
+            ...lastMessage,
+            content: lastMessage.content + chunk, 
+            model 
+          },
         ];
       } else {
         return [...prevHistory, { role, content: chunk, model }];
+      }
+    });
+  };
+
+  const updateReasoningContent = (chunk: string) => {
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+      
+      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage) {
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          { 
+            ...lastMessage,
+            reasoningContent: (lastMessage.reasoningContent || "") + chunk 
+          },
+        ];
+      } else {
+        // If there's no assistant message yet, we'll create one with empty content
+        // but with reasoning content
+        if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
+          return [
+            ...prevHistory,
+            { 
+              role: "assistant", 
+              content: "", 
+              reasoningContent: chunk 
+            }
+          ];
+        }
+        
+        return prevHistory;
       }
     });
   };
@@ -206,7 +243,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedModel,
             effectiveApiKey,
             selectedTags,
-            signal
+            signal,
+            updateReasoningContent
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -410,6 +448,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </span>
                     )}
                   </div>
+                  {message.reasoningContent && (
+                    <ReasoningContent reasoningContent={message.reasoningContent} />
+                  )}
                   <div className="whitespace-pre-wrap break-words max-w-full message-content">
                     {message.isImage ? (
                       <img 

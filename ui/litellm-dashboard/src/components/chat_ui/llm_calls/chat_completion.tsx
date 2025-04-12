@@ -1,14 +1,16 @@
 import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { message } from "antd";
+import { processStreamingResponse } from "./process_stream";
 
 export async function makeOpenAIChatCompletionRequest(
     chatHistory: { role: string; content: string }[],
-    updateUI: (chunk: string, model: string) => void,
+    updateUI: (chunk: string, model?: string) => void,
     selectedModel: string,
     accessToken: string,
     tags?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onReasoningContent?: (content: string) => void
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -35,9 +37,11 @@ export async function makeOpenAIChatCompletionRequest(
   
       for await (const chunk of response) {
         console.log(chunk);
-        if (chunk.choices[0].delta.content) {
-          updateUI(chunk.choices[0].delta.content, chunk.model);
-        }
+        // Process the chunk using our utility
+        processStreamingResponse(chunk, {
+          onContent: updateUI,
+          onReasoningContent: onReasoningContent || (() => {})
+        });
       }
     } catch (error) {
       if (signal?.aborted) {
