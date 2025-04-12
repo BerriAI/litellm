@@ -138,6 +138,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 
 ## Additional Tag Features
+- [Sending tags in request headers](https://docs.litellm.ai/docs/proxy/tag_routing#calling-via-request-header)
 - [Tag based routing](https://docs.litellm.ai/docs/proxy/tag_routing)
 - [Track spend per tag](cost_tracking#-custom-tags)
 - [Setup Budgets per Virtual Key, Team](users)
