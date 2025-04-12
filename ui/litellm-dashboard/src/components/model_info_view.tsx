@@ -448,7 +448,7 @@ export default function ModelInfoView({
                     </div>
 
                     <div>
-                      <Text className="font-medium">RPM VVV(Requests per Minute)</Text>
+                      <Text className="font-medium">RPM (Requests per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="rpm" className="mb-0">
                           <NumericalInput placeholder="Enter RPM" />
