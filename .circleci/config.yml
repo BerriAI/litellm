@@ -2429,15 +2429,16 @@ jobs:
             # Find the downloaded file
             DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*.tar.gz)
             tar -xzf "$DOWNLOADED_FILE" -C /tmp
+            
             echo "Downloaded file: $DOWNLOADED_FILE"
             # Compare contents
-            if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
+            if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/src/litellm_proxy_extras ./litellm_proxy_extras; then
               if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
                 echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
                 echo "Current version: $CURRENT_VERSION"
                 echo "Last published version: $LAST_VERSION"
                 echo "Changes:"
-                diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras
+                diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/src/litellm_proxy_extras ./litellm_proxy_extras
                 exit 1
               fi
             else
