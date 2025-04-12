@@ -2390,6 +2390,62 @@ jobs:
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
+  publish_proxy_extras:
+    docker:
+      - image: cimg/python:3.8
+    working_directory: ~/project/litellm-proxy-extras
+    environment:
+      TWINE_USERNAME: __token__
+
+    steps:
+      - checkout:
+          path: ~/project
+
+      - run:
+          name: Check if litellm-proxy-extras dir or pyproject.toml was modified
+          command: |
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'litellm-proxy-extras/|litellm-proxy-extras/pyproject\.toml')" ]; then
+              echo "litellm-proxy-extras or its pyproject.toml updated"
+            else
+              echo "No changes to litellm-proxy-extras. Skipping PyPI publish."
+              circleci step halt
+            fi
+
+      - run:
+          name: Get new version
+          command: |
+            cd litellm-proxy-extras
+            NEW_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
+
+      - run:
+          name: Check if versions match
+          command: |
+            cd ~/project
+            # Check pyproject.toml
+            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras'].split('\"')[1])")
+            if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
+              echo "Error: Version in pyproject.toml ($CURRENT_VERSION) doesn't match new version ($NEW_VERSION)"
+              exit 1
+            fi
+
+            # Check requirements.txt
+            REQ_VERSION=$(grep -oP 'litellm-proxy-extras==\K[0-9.]+' requirements.txt)
+            if [ "$REQ_VERSION" != "$NEW_VERSION" ]; then
+              echo "Error: Version in requirements.txt ($REQ_VERSION) doesn't match new version ($NEW_VERSION)"
+              exit 1
+            fi
+
+      - run:
+          name: Publish to PyPI
+          command: |
+            cd litellm-proxy-extras
+            echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
+            python -m pip install --upgrade pip build twine setuptools wheel
+            rm -rf build dist
+            python -m build
+            twine upload --verbose dist/*
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -2785,6 +2841,16 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - publish_proxy_extras:
+          filters:
+                branches:
+                  only:
+                    - main
+                    - /litellm_.*/
+          # filters:
+          #   branches:
+          #     only:
+          #       - main
       - publish_to_pypi:
           requires:
             - local_testing
@@ -2819,7 +2885,5 @@ workflows:
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
-          filters:
-            branches:
-              only:
-                - main
+            - publish_proxy_extras
+      
