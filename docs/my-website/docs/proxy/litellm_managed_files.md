@@ -1,7 +1,8 @@
 import TabItem from '@theme/TabItem';
 import Tabs from '@theme/Tabs';
+import Image from '@theme/IdealImage';
 
-# LiteLLM Managed Files
+# [BETA] LiteLLM Managed Files
 
 Use this to reuse the same 'file id' across different providers.
 
@@ -14,7 +15,10 @@ Use this to reuse the same 'file id' across different providers.
 
 
 Limitations of LiteLLM Managed Files:
-- Only works for `/chat/completions` requests. Follow [here](https://github.com/BerriAI/litellm/discussions/9632) for batches support.
+- Only works for `/chat/completions` requests. 
+- Assumes just 1 model configured per model_name.
+
+Follow [here](https://github.com/BerriAI/litellm/discussions/9632) for multiple models, batches support.
 
 ### 1. Setup config.yaml
 
@@ -132,8 +136,6 @@ print(completion.choices[0].message)
 </TabItem>
 </Tabs>
 
-
-
 ### Complete Example
 
 ```python   
@@ -209,3 +211,69 @@ print(completion.choices[0].message)
 
 ```
 
+
+### Supported Endpoints
+
+#### Create a file - `/files`
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234", max_retries=0)
+
+# Download and save the PDF locally
+url = (
+    "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+)
+response = requests.get(url)
+response.raise_for_status()
+
+# Save the PDF locally
+with open("2403.05530.pdf", "wb") as f:
+    f.write(response.content)
+
+# Read the local PDF file
+file = client.files.create(
+    file=open("2403.05530.pdf", "rb"),
+    purpose="user_data", # can be any openai 'purpose' value
+    extra_body={"target_model_names": "gpt-4o-mini-openai, vertex_ai/gemini-2.0-flash"},
+)
+```
+
+#### Retrieve a file - `/files/{file_id}`
+
+```python
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234", max_retries=0)
+
+file = client.files.retrieve(file_id=file.id)
+```
+
+#### Delete a file - `/files/{file_id}/delete`
+
+```python
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234", max_retries=0)
+
+file = client.files.delete(file_id=file.id)
+```
+
+### FAQ
+
+**1. Does LiteLLM store the file?**
+
+No, LiteLLM does not store the file. It only stores the file id's in the postgres DB.
+
+**2. How does LiteLLM know which file to use for a given file id?**
+
+LiteLLM stores a mapping of the litellm file id to the model-specific file id in the postgres DB. When a request comes in, LiteLLM looks up the model-specific file id and uses it in the request to the provider.
+
+**3. How do file deletions work?**
+
+When a file is deleted, LiteLLM deletes the mapping from the postgres DB, and the files on each provider.
+
+### Architecture
+
+
+
+
+
+<Image img={require('../../img/managed_files_arch.png')}  style={{ width: '800px', height: 'auto' }} />
