@@ -128,37 +128,6 @@ async def _deprecated_loadbalanced_create_file(
     return response
 
 
-async def create_file_for_each_model(
-    llm_router: Optional[Router],
-    _create_file_request: CreateFileRequest,
-    target_model_names_list: List[str],
-    purpose: OpenAIFilesPurpose,
-    proxy_logging_obj: ProxyLogging,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> OpenAIFileObject:
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "LLM Router not initialized. Ensure models added to proxy."
-            },
-        )
-    responses = []
-    for model in target_model_names_list:
-        individual_response = await llm_router.acreate_file(
-            model=model, **_create_file_request
-        )
-        responses.append(individual_response)
-    response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
-        file_objects=responses,
-        create_file_request=_create_file_request,
-        purpose=purpose,
-        internal_usage_cache=proxy_logging_obj.internal_usage_cache,
-        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-    )
-    return response
-
-
 async def route_create_file(
     llm_router: Optional[Router],
     _create_file_request: CreateFileRequest,
@@ -181,13 +150,29 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     elif target_model_names_list:
-        response = await create_file_for_each_model(
+        managed_files_obj = cast(
+            Optional[_PROXY_LiteLLMManagedFiles],
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        if managed_files_obj is None:
+            raise ProxyException(
+                message="Managed files hook not found",
+                type="None",
+                param="None",
+                code=500,
+            )
+        if llm_router is None:
+            raise ProxyException(
+                message="LLM Router not found",
+                type="None",
+                param="None",
+                code=500,
+            )
+        response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
-            _create_file_request=_create_file_request,
+            create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
-            purpose=purpose,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_dict=user_api_key_dict,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
         )
     else:
         # get configs for custom_llm_provider
