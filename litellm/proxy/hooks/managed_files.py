@@ -77,9 +77,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         verbose_logger.info(
             f"Storing LiteLLM Managed File object with id={file_id} in cache"
         )
+        litellm_managed_file_object = LiteLLM_ManagedFileTable(
+            unified_file_id=file_id,
+            file_object=file_object,
+            model_mappings=model_mappings,
+        )
         await self.internal_usage_cache.async_set_cache(
             key=file_id,
-            value=file_object,
+            value=litellm_managed_file_object.model_dump(),
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
@@ -95,19 +100,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> Optional[LiteLLM_ManagedFileTable]:
         ## CHECK CACHE
-        result = await self.internal_usage_cache.async_get_cache(
-            key=file_id,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+        result = cast(
+            Optional[dict],
+            await self.internal_usage_cache.async_get_cache(
+                key=file_id,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            ),
         )
+
         if result:
-            return result
+            return LiteLLM_ManagedFileTable(**result)
 
         ## CHECK DB
         db_object = await self.prisma_client.db.litellm_managedfiletable.find_first(
             where={"unified_file_id": file_id}
         )
+
         if db_object:
-            return db_object
+            return LiteLLM_ManagedFileTable(**db_object.model_dump())
         return None
 
     async def delete_unified_file_id(
@@ -153,11 +163,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
-                file_ids = (
-                    self.get_file_ids_and_decode_b64_to_unified_uid_from_messages(
-                        messages
-                    )
-                )
+                file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
                     model_file_id_mapping = await self.get_model_file_id_mapping(
                         file_ids, user_api_key_dict.parent_otel_span
@@ -167,9 +173,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
         return data
 
-    def get_file_ids_and_decode_b64_to_unified_uid_from_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[str]:
+    def get_file_ids_from_messages(self, messages: List[AllMessageValues]) -> List[str]:
         """
         Gets file ids from messages
         """
@@ -187,11 +191,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
                             file_id = file_object_file_field.get("file_id")
                             if file_id:
                                 file_ids.append(file_id)
-                                file_object_file_field[
-                                    "file_id"
-                                ] = _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(
-                                    file_id
-                                )
         return file_ids
 
     @staticmethod
@@ -252,8 +251,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             is_base64_unified_file_id = self._is_base64_encoded_unified_file_id(file_id)
 
             if is_base64_unified_file_id:
-                litellm_managed_file_ids.append(is_base64_unified_file_id)
-            elif file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
                 litellm_managed_file_ids.append(file_id)
 
         if litellm_managed_file_ids:
