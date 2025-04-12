@@ -2431,6 +2431,11 @@ jobs:
             tar -xzf "$DOWNLOADED_FILE" -C /tmp
             
             echo "Downloaded file: $DOWNLOADED_FILE"
+            echo "Contents of extracted package:"
+            ls -R /tmp/litellm-proxy-extras-$LAST_VERSION
+            echo "Contents of current directory:"
+            ls -R .
+            
             # Compare contents
             if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/src/litellm_proxy_extras ./litellm_proxy_extras; then
               if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
