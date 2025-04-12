@@ -4412,3 +4412,78 @@ export const updateDefaultTeamSettings = async (accessToken: string, settings: R
     throw error;
   }
 };
+
+
+
+export const getTeamPermissionsCall = async (
+  accessToken: string,
+  teamId: string
+) => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/permissions_list?team_id=${teamId}`
+      : `/team/permissions_list?team_id=${teamId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get team permissions:", error);
+    throw error;
+  }
+};
+
+
+
+export const teamPermissionsUpdateCall = async (
+  accessToken: string,
+  teamId: string,
+  permissions: string[]
+) => {
+  try {
+    let url = proxyBaseUrl  
+      ? `${proxyBaseUrl}/team/permissions_update`
+      : `/team/permissions_update`;
+
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        team_member_permissions: permissions,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update team permissions:", error);
+    throw error;
+  }
+};
