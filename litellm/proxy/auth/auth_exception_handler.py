@@ -68,6 +68,7 @@ class UserAPIKeyAuthExceptionHandler:
                 key_name="failed-to-connect-to-db",
                 token="failed-to-connect-to-db",
                 user_id=litellm_proxy_admin_name,
+                request_route=route,
             )
         else:
             # raise the exception to the caller
