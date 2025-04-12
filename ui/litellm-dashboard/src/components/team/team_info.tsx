@@ -65,6 +65,7 @@ export interface TeamData {
 
 export interface TeamInfoProps {
   teamId: string;
+  onUpdate: (data: any) => void;
   onClose: () => void;
   accessToken: string | null;
   is_team_admin: boolean;
