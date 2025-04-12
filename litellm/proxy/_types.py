@@ -435,21 +435,19 @@ class LiteLLMRoutes(enum.Enum):
         "/get/litellm_model_cost_map",
     ] + info_routes
 
-    internal_user_routes = [
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/health",
-        "/key/info",
-        "/global/spend/tags",
-        "/global/spend/keys",
-        "/global/spend/models",
-        "/global/spend/provider",
-        "/global/spend/end_users",
-        "/global/activity",
-        "/global/activity/model",
-    ] + spend_tracking_routes
+    internal_user_routes = (
+        [
+            "/global/spend/tags",
+            "/global/spend/keys",
+            "/global/spend/models",
+            "/global/spend/provider",
+            "/global/spend/end_users",
+            "/global/activity",
+            "/global/activity/model",
+        ]
+        + spend_tracking_routes
+        + key_management_routes
+    )
 
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes

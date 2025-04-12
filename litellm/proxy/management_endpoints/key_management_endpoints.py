@@ -107,11 +107,6 @@ def _is_allowed_to_make_key_request(
             and user_api_key_dict.team_id == UI_TEAM_ID
         ):
             return True  # handle https://github.com/BerriAI/litellm/issues/7482
-        assert (
-            user_api_key_dict.team_id == team_id
-        ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
-            team_id, user_api_key_dict.team_id
-        )
 
     return True
 
@@ -1067,7 +1062,7 @@ async def info_key_fn(
             )
 
         if (
-            _can_user_query_key_info(
+            await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
                 key=key,
                 key_info=key_info,
@@ -2477,7 +2472,7 @@ async def key_health(
         )
 
 
-def _can_user_query_key_info(
+async def _can_user_query_key_info(
     user_api_key_dict: UserAPIKeyAuth,
     key: Optional[str],
     key_info: LiteLLM_VerificationToken,
@@ -2494,6 +2489,11 @@ def _can_user_query_key_info(
         return True
     # user can query their own key info
     elif key_info.user_id == user_api_key_dict.user_id:
+        return True
+    elif await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    ):
         return True
     return False
 
