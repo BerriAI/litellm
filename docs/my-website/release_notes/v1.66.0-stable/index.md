@@ -52,41 +52,41 @@ Let's dive in.
 
 ## New Models / Updated Models
 
-#### xAI
+- xAI
 
-1. Added cost tracking for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
-2. Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
+    1. Added cost tracking for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
+    2. Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
 
-#### Hugging Face
+- Hugging Face
 
-1. Hugging Face - Added inference providers support [PR](https://github.com/BerriAI/litellm/pull/9773)
+    1. Hugging Face - Added inference providers support [PR](https://github.com/BerriAI/litellm/pull/9773)
 
-#### Azure
+- Azure
 
-1. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+    1. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
 
-#### VertexAI
+- VertexAI
 
-1. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
-3. VertexAI - Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
+    1. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
+    3. VertexAI - Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
 
-#### Google AI Studio
+- Google AI Studio
 
-1. Google AI Studio - Added cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
-2. Google AI Studio - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
-3. Google AI Studio - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
+    1. Google AI Studio - Added cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
+    2. Google AI Studio - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
+    3. Google AI Studio - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
 
-#### Azure
+- Azure
 
-1. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
-2. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+    1. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
+    2. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
 
-#### Databricks
+- Databricks
 
-1. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
-2. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
+    1. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
+    2. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
 
-#### General
+- General
 
 1. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
 2. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
@@ -102,7 +102,7 @@ Let's dive in.
 4. Fixed Anthropic prompt caching cost calculation and trimmed logged message in db [PR](https://github.com/BerriAI/litellm/pull/9838)
 5. Added token tracking and log usage object in spend logs [PR](https://github.com/BerriAI/litellm/pull/9843)
 6. Handle custom pricing at deployment level [PR](https://github.com/BerriAI/litellm/pull/9855)
-7. Emit Key and Team Budget metrics on a cron job schedule [PR](https://github.com/BerriAI/litellm/pull/9528)
+
 
 ## Management Endpoints / UI
 
@@ -132,6 +132,11 @@ Let's dive in.
 5. Fixed MSFT SSO to use correct field for user email [PR](https://github.com/BerriAI/litellm/pull/9886)
 6. Added tutorial for using MSFT auto team assignment with LiteLLM [PR](https://github.com/BerriAI/litellm/pull/9898)
 7. Added UI support for setting Default Team setting when LiteLLM SSO auto creates teams [PR](https://github.com/BerriAI/litellm/pull/9918)
+
+## Logging / Guardrail Improvements
+
+1. Prometheus:
+    - Emit Key and Team Budget metrics on a cron job schedule [PR](https://github.com/BerriAI/litellm/pull/9528)
 
 ## Security Fixes
 
