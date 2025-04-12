@@ -3,7 +3,6 @@
 
 import base64
 import json
-import asyncio
 import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
@@ -20,7 +19,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.utils import LLMResponseTypes, SpecialEnums
+from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -428,4 +427,3 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             )
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
-
