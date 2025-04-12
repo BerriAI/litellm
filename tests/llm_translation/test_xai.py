@@ -18,6 +18,7 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
 from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
+from base_llm_unit_tests import BaseReasoningLLMTests
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
@@ -162,22 +163,9 @@ def test_xai_message_name_filtering():
     assert response.choices[0].message.content is not None
 
 
-def test_xai_reasoning_effort():
-    litellm._turn_on_debug()
-    messages = [
-        {
-            "role": "system",
-            "content": "*I press the green button*",
-            "name": "example_user"
-        },
-        {"role": "user", "content": "Hello", "name": "John"},
-        {"role": "assistant", "content": "Hello", "name": "Jane"},
-    ]
-    response = completion(
-        model="xai/grok-3",
-        messages=messages,
-        reasoning_effort="high",
-        stream=True,
-    )
-    for chunk in response:
-        print(chunk)
+class TestXAIReasoningEffort(BaseReasoningLLMTests):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "xai/grok-3-mini-beta",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
