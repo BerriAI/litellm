@@ -187,19 +187,38 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const updateTimingData = (timeToFirstToken: number) => {
+    console.log("updateTimingData called with:", timeToFirstToken);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
+      console.log("Current last message:", lastMessage);
       
       if (lastMessage && lastMessage.role === "assistant") {
-        return [
+        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
+        const updatedHistory = [
           ...prevHistory.slice(0, prevHistory.length - 1),
           { 
             ...lastMessage,
             timeToFirstToken
           },
         ];
+        console.log("Updated chat history:", updatedHistory);
+        return updatedHistory;
+      } 
+      // If the last message is a user message and no assistant message exists yet,
+      // create a new assistant message with empty content
+      else if (lastMessage && lastMessage.role === "user") {
+        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
+        return [
+          ...prevHistory,
+          { 
+            role: "assistant", 
+            content: "", 
+            timeToFirstToken 
+          }
+        ];
       }
       
+      console.log("No appropriate message found to update timing");
       return prevHistory;
     });
   };

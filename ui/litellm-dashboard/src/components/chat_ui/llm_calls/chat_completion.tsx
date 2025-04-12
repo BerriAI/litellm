@@ -42,18 +42,32 @@ export async function makeOpenAIChatCompletionRequest(
       const response = await client.chat.completions.create({
         model: selectedModel,
         stream: true,
+        stream_options: {
+          include_usage: true,
+        },
         messages: chatHistory as ChatCompletionMessageParam[],
       }, { signal });
   
       for await (const chunk of response) {
         console.log("Stream chunk:", chunk);
         
-        // Measure time to first token
-        if (!firstTokenReceived && chunk.choices[0]?.delta?.content) {
+        // Process content and measure time to first token
+        const delta = chunk.choices[0]?.delta as any;
+        
+        // Debug what's in the delta
+        console.log("Delta content:", chunk.choices[0]?.delta?.content);
+        console.log("Delta reasoning content:", delta?.reasoning_content);
+        
+        // Measure time to first token for either content or reasoning_content
+        if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
           firstTokenReceived = true;
           timeToFirstToken = Date.now() - startTime;
+          console.log("First token received! Time:", timeToFirstToken, "ms");
           if (onTimingData) {
+            console.log("Calling onTimingData with:", timeToFirstToken);
             onTimingData(timeToFirstToken);
+          } else {
+            console.log("onTimingData callback is not defined!");
           }
         }
         
@@ -65,7 +79,6 @@ export async function makeOpenAIChatCompletionRequest(
         }
         
         // Process reasoning content if present - using type assertion
-        const delta = chunk.choices[0]?.delta as any;
         if (delta && delta.reasoning_content) {
           const reasoningContent = delta.reasoning_content;
           if (onReasoningContent) {
@@ -90,27 +103,6 @@ export async function makeOpenAIChatCompletionRequest(
           }
           
           onUsageData(usageData);
-        }
-      }
-      
-      // Always create an estimated usage
-      if (onUsageData) {
-        try {
-          console.log("Creating estimated usage data");
-          // Create a simple usage estimate - approximately 4 characters per token
-          const estimatedUsage: TokenUsage = {
-            promptTokens: Math.ceil(JSON.stringify(chatHistory).length / 4), 
-            completionTokens: Math.ceil((fullResponseContent.length) / 4),
-            totalTokens: Math.ceil((JSON.stringify(chatHistory).length + fullResponseContent.length) / 4)
-          };
-          
-          if (fullReasoningContent) {
-            estimatedUsage.reasoningTokens = Math.ceil(fullReasoningContent.length / 4);
-          }
-          
-          onUsageData(estimatedUsage);
-        } catch (error) {
-          console.error("Error estimating usage data:", error);
         }
       }
     } catch (error) {
