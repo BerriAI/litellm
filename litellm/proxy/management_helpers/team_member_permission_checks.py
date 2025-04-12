@@ -10,7 +10,6 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
-    Span,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_team_object
@@ -57,7 +56,6 @@ class TeamMemberPermissionChecks:
         route: KeyManagementRoutes,
         prisma_client: PrismaClient,
         user_api_key_cache: DualCache,
-        parent_otel_span: Optional[Span],
         existing_key_row: LiteLLM_VerificationToken,
     ):
         """
@@ -129,7 +127,7 @@ class TeamMemberPermissionChecks:
             route=route, allowed_routes=team_member_permissions
         ):
             raise ProxyException(
-                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions}",
+                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}",
                 type=ProxyErrorTypes.team_member_permission_error,
                 param=route,
                 code=401,
