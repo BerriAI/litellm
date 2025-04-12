@@ -2429,9 +2429,11 @@ jobs:
             # Find the downloaded file
             DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*.tar.gz)
             tar -xzf "$DOWNLOADED_FILE" -C /tmp
-            
+
+            echo "Contents of /tmp:"
+            ls -R /tmp
             echo "Downloaded file: $DOWNLOADED_FILE"
-            echo "Contents of extracted package:"
+            echo "Contents of extracted package:"  
             ls -R /tmp/litellm-proxy-extras-$LAST_VERSION
             echo "Contents of current directory:"
             ls -R .
