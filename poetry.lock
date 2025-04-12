@@ -1778,14 +1778,14 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.1.5"
+version = "0.1.6"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.1.5.tar.gz", hash = "sha256:cef0c09ba62ab9892b7ef77ce29289b90088262301bc1c62859206d54f2328e3"},
+    {file = "litellm_proxy_extras-0.1.6.tar.gz", hash = "sha256:e663ef3b6a9f9f964fc467d1cf41b646589ec33789317dfcaef175b4399ab9ae"},
 ]
 
 [[package]]
@@ -4382,4 +4382,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "f5346d04625f898c806144f09cfc5b1486d1c87e5a2994c8d7ef18575a415b3b"
+content-hash = "c6b5ce983f5b2ade61a829a735eef608b9158ed8b488b3e9cbf75f8ad70fe274"
