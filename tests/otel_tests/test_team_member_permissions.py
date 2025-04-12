@@ -406,7 +406,6 @@ async def test_edit_delete_permissions():
         assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
 
 @pytest.mark.asyncio()
-@pytest.mark.skip(reason="Beta feature, this will be addressed in the next PR")
 async def test_create_permissions():
     """
     Test permissions - members allowed to create keys but not allowed to edit, delete keys
@@ -415,36 +414,75 @@ async def test_create_permissions():
         master_key = LITELLM_MASTER_KEY
         
         # Create a team with specific member permissions
-        team_data = await create_team(session, master_key, member_permissions=["/key/generate"])
+        team_data = await create_team(
+            session=session,
+            key=master_key,
+            member_permissions=["/key/generate"]
+        )
         team_id = team_data["team_id"]
         
-        # Create a member in the team
+        # Create a user in the team
         user_id = f"user_{uuid.uuid4().hex[:8]}"
-        await add_team_member(session, master_key, team_id, user_id, role="user")
+        await add_team_member(
+            session=session,
+            key=master_key,
+            team_id=team_id,
+            user_id=user_id,
+            role="user"
+        )
         
         # Generate an admin key for the team
-        admin_key_data = await generate_key(session, master_key, team_id)
+        admin_key_data = await generate_key(
+            session=session,
+            key=master_key,
+            team_id=team_id
+        )
         admin_key = admin_key_data["key"]
-        key_id = admin_key_data["key_id"]
+        key_id = admin_key_data["key"]
         
         # Create a user key
-        user_key_data = await generate_key(session, master_key)
+        user_key_data = await generate_key(
+            session=session,
+            key=master_key,
+            user_id=user_id
+        )
         user_key = user_key_data["key"]
         
         # Test valid permissions
         # User tries creating a key with team_id
-        create_result = await generate_key(session, user_key, team_id)
+        create_result = await generate_key(
+            session=session,
+            key=user_key,
+            team_id=team_id
+        )
+        print("success, user created key for team=", create_result)
+        assert "key" in create_result, "User should be able to create keys for team"
+        assert create_result["team_id"] == team_id, "User should be able to create keys for team"
         assert "status" not in create_result, "User should be able to create keys for team"
         
         # Test invalid permissions
         # User tries editing a key with team_id
-        update_result = await update_key(session, user_key, key_id, team_id)
+        update_result = await update_key(
+            session=session,
+            key=user_key,
+            key_id=key_id,
+            team_id=team_id
+        )
         assert "status" in update_result and update_result["status"] != 200, "User should not be able to update keys for team"
         
         # User tries deleting a key with team_id
-        delete_result = await delete_key(session, user_key, key_id)
+        delete_result = await delete_key(
+            session=session,
+            key=user_key,
+            key_id=key_id
+        )
         assert "status" in delete_result and delete_result["status"] != 200, "User should not be able to delete keys for team"
         
         # User tries regenerating a key with team_id
-        regenerate_result = await regenerate_key(session, user_key, key_id, team_id)
+        regenerate_result = await regenerate_key(
+            session=session,
+            key=user_key,
+            key_id=key_id,
+            team_id=team_id
+        )
         assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
