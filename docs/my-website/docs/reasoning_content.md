@@ -15,6 +15,7 @@ Supported Providers:
 - Bedrock (Anthropic + Deepseek) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
+- XAI (`xai/`)
 
 LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 
