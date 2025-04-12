@@ -981,6 +981,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
+    team_member_permissions: List[str] = []
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1136,7 +1137,6 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    team_member_permissions: Optional[List[str]] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     created_at: Optional[datetime] = None
 

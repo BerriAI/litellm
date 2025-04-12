@@ -127,7 +127,7 @@ class TeamMemberPermissionChecks:
             route=route, allowed_routes=team_member_permissions
         ):
             raise ProxyException(
-                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions}",
+                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}",
                 type=ProxyErrorTypes.team_member_permission_error,
                 param=route,
                 code=401,

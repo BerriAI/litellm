@@ -111,11 +111,12 @@ def _is_allowed_to_make_key_request(
     return True
 
 
-def _team_key_generation_team_member_check(
+def _team_key_operation_team_member_check(
     assigned_user_id: Optional[str],
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
     team_key_generation: TeamUIKeyGenerationConfig,
+    route: KeyManagementRoutes,
 ):
     if assigned_user_id is not None:
         key_assigned_user_in_team = _get_user_in_team(
@@ -157,7 +158,7 @@ def _team_key_generation_team_member_check(
     TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
         team_member_object=team_member_object,
         team_table=team_table,
-        route=KeyManagementRoutes.KEY_GENERATE,
+        route=route,
     )
     return True
 
@@ -182,6 +183,7 @@ def _team_key_generation_check(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
+    route: KeyManagementRoutes,
 ):
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
@@ -195,11 +197,12 @@ def _team_key_generation_check(
             allowed_team_member_roles=["admin", "user"],
         )
 
-    _team_key_generation_team_member_check(
+    _team_key_operation_team_member_check(
         assigned_user_id=data.user_id,
         team_table=team_table,
         user_api_key_dict=user_api_key_dict,
         team_key_generation=_team_key_generation,
+        route=route,
     )
     _key_generation_required_param_check(
         data,
@@ -256,6 +259,7 @@ def key_generation_check(
     team_table: Optional[LiteLLM_TeamTableCachedObj],
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
+    route: KeyManagementRoutes,
 ) -> bool:
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
@@ -275,6 +279,7 @@ def key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
             data=data,
+            route=route,
         )
     else:
         return _personal_key_generation_check(
@@ -429,6 +434,7 @@ async def generate_key_fn(  # noqa: PLR0915
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
             data=data,
+            route=KeyManagementRoutes.KEY_GENERATE,
         )
 
         common_key_access_checks(
@@ -1389,11 +1395,12 @@ async def _team_key_deletion_check(
             )
         # check if user is team admin
         if team_table is not None:
-            return _team_key_generation_team_member_check(
+            return _team_key_operation_team_member_check(
                 assigned_user_id=user_api_key_dict.user_id,
                 team_table=team_table,
                 user_api_key_dict=user_api_key_dict,
                 team_key_generation=_team_key_generation,
+                route=KeyManagementRoutes.KEY_DELETE,
             )
         else:
             raise HTTPException(

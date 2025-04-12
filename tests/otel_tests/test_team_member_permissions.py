@@ -57,9 +57,9 @@ async def create_team(session, key, member_permissions=None):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    data = {}
-    if member_permissions:
-        data["team_member_permissions"] = member_permissions
+    data = {
+        "team_member_permissions": member_permissions
+    }
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -332,7 +332,6 @@ async def test_default_member_permissions():
         assert "status" not in info_result, "Admin should be able to get key info"
 
 @pytest.mark.asyncio()
-@pytest.mark.skip(reason="Beta feature, this will be addressed in the next PR")
 async def test_edit_delete_permissions():
     """
     Test permissions - members allowed to edit, delete keys but not allowed to create keys
@@ -341,38 +340,69 @@ async def test_edit_delete_permissions():
         master_key = LITELLM_MASTER_KEY
         
         # Create a team with specific member permissions
-        team_data = await create_team(session, master_key, member_permissions=["/key/update", "/key/delete", "/key/info"])
+        team_data = await create_team(
+            session=session,
+            key=master_key,
+            member_permissions=["/key/update", "/key/delete", "/key/info"]
+        )
         team_id = team_data["team_id"]
         
-        # Create a member in the team
-        user_id = f"user_{uuid.uuid4().hex[:8]}"
-        await add_team_member(session, master_key, team_id, user_id, role="user")
+        # create a user in team=team_id
+        user_data = await create_user(
+            session=session,
+            key=master_key,
+            user_id=f"user_{uuid.uuid4().hex[:8]}",
+            team_id=team_id
+        )
+        user_id = user_data["user_id"]
         
         # Generate an admin key for the team
         admin_key_data = await generate_key(session, master_key, team_id)
         admin_key = admin_key_data["key"]
-        key_id = admin_key_data["key_id"]
+        key_id = admin_key_data["key"]
         
         # Create a user key
-        user_key_data = await generate_key(session, master_key)
+        user_key_data = await generate_key(
+            session=session,
+            key=master_key,
+            user_id=user_id
+        )
         user_key = user_key_data["key"]
         
         # Test valid permissions
         # User tries editing a key with team_id
-        update_result = await update_key(session, user_key, key_id, team_id)
+        update_result = await update_key(
+            session=session,
+            key=user_key,
+            key_id=key_id,
+            team_id=team_id
+        )
         assert "status" not in update_result, "User should be able to update keys for team"
         
         # User tries deleting a key with team_id - test this last
-        delete_result = await delete_key(session, user_key, key_id)
+        delete_result = await delete_key(
+            session=session,
+            key=user_key,
+            key_id=key_id
+        )
         assert "status" not in delete_result, "User should be able to delete keys for team"
         
         # Test invalid permissions
         # User tries creating a key with team_id
-        create_result = await generate_key(session, user_key, team_id)
+        create_result = await generate_key(
+            session=session,
+            key=user_key,
+            team_id=team_id
+        )
         assert "status" in create_result and create_result["status"] != 200, "User should not be able to create keys for team"
         
         # User tries regenerating a key with team_id
-        regenerate_result = await regenerate_key(session, user_key, key_id, team_id)
+        regenerate_result = await regenerate_key(
+            session=session,
+            key=user_key,
+            key_id=key_id,
+            team_id=team_id
+        )
         assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
 
 @pytest.mark.asyncio()
