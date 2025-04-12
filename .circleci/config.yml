@@ -2411,9 +2411,12 @@ jobs:
             
             # Get last published version from PyPI
             LAST_VERSION=$(curl -s https://pypi.org/pypi/litellm-proxy-extras/json | python -c "import json, sys; print(json.load(sys.stdin)['info']['version'])")
+            
             echo "Current version: $CURRENT_VERSION"
             echo "Last published version: $LAST_VERSION"
-            if [ "$CURRENT_VERSION" <= "$LAST_VERSION" ]; then
+            
+            # Compare versions using Python's packaging.version
+            if python -c "from packaging import version; exit(0 if version.parse('$CURRENT_VERSION') > version.parse('$LAST_VERSION') else 1)"; then
               # Download the last published version
               pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
               tar -xzf /tmp/litellm-proxy-extras-$LAST_VERSION.tar.gz -C /tmp
