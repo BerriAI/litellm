@@ -455,7 +455,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   {message.reasoningContent && (
                     <ReasoningContent reasoningContent={message.reasoningContent} />
                   )}
-                  <div className="whitespace-pre-wrap break-words max-w-full message-content">
+                  <div className="whitespace-pre-wrap break-words max-w-full message-content" 
+                       style={{ 
+                         wordWrap: 'break-word', 
+                         overflowWrap: 'break-word',
+                         wordBreak: 'break-word',
+                         hyphens: 'auto'
+                       }}>
                     {message.isImage ? (
                       <img 
                         src={message.content} 
@@ -477,16 +483,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 language={match[1]}
                                 PreTag="div"
                                 className="rounded-md my-2"
+                                wrapLines={true}
+                                wrapLongLines={true}
                                 {...props}
                               >
                                 {String(children).replace(/\n$/, '')}
                               </SyntaxHighlighter>
                             ) : (
-                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
                                 {children}
                               </code>
                             );
-                          }
+                          },
+                          pre: ({ node, ...props }) => (
+                            <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                          )
                         }}
                       >
                         {message.content}
