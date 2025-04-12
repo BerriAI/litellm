@@ -68,7 +68,7 @@ class DatabricksBase:
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
         if api_key is None and not headers:  # handle empty headers
-            if custom_endpoint is not None:
+            if custom_endpoint is True:
                 raise DatabricksException(
                     status_code=400,
                     message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
