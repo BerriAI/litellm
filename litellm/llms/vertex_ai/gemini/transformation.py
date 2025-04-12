@@ -106,6 +106,8 @@ def _get_media_mime_type_from_url(url: str) -> Optional[str]:
     See gemini mime types:
      - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
      - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/video-understanding#video-requirements
+     - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/audio-understanding#audio-requirements
+     - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/document-understanding#document-requirements
 
     Supported by Gemini:
      application/pdf
@@ -187,6 +189,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
                     for element_idx, element in enumerate(_message_content):
+                        format: Optional[str] = None
                         if (
                             element["type"] == "text"
                             and "text" in element
@@ -198,7 +201,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "image_url":
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
-                            format: Optional[str] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")

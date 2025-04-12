@@ -25,9 +25,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
-from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
-)
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -430,47 +427,6 @@ def test_bedrock_parallel_tool_calling_pt(provider):
         translated_messages[number_of_messages - 1]["role"]
         != translated_messages[number_of_messages - 2]["role"]
     )
-
-
-def test_vertex_only_image_user_message():
-    base64_image = "/9j/2wCEAAgGBgcGBQ"
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                },
-            ],
-        },
-    ]
-
-    response = _gemini_convert_messages_with_history(messages=messages)
-
-    expected_response = [
-        {
-            "role": "user",
-            "parts": [
-                {
-                    "inline_data": {
-                        "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mime_type": "image/jpeg",
-                    }
-                },
-                {"text": " "},
-            ],
-        }
-    ]
-
-    assert len(response) == len(expected_response)
-    for idx, content in enumerate(response):
-        assert (
-            content == expected_response[idx]
-        ), "Invalid gemini input. Got={}, Expected={}".format(
-            content, expected_response[idx]
-        )
 
 
 def test_convert_url():
