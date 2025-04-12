@@ -2427,6 +2427,8 @@ jobs:
             # If versions are equal or current is greater, check contents
             pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
             # Find the downloaded file
+            echo "Contents of /tmp directory:"
+            ls -R /tmp
             DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*.tar.gz)
             tar -xzf "$DOWNLOADED_FILE" -C /tmp
 
@@ -2446,14 +2448,6 @@ jobs:
               fi
             else
               echo "No changes detected in litellm-proxy-extras. Skipping PyPI publish."
-              circleci step halt
-            fi
-            
-            # Check if there are changes
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'litellm-proxy-extras/|litellm-proxy-extras/pyproject\.toml')" ]; then
-              echo "litellm-proxy-extras or its pyproject.toml updated"
-            else
-              echo "No changes to litellm-proxy-extras. Skipping PyPI publish."
               circleci step halt
             fi
 
