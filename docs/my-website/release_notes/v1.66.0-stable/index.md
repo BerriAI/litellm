@@ -44,38 +44,55 @@ pip install litellm==1.66.0.post1
 v1.66.0-stable is live now, here are the key highlights of this release
 
 ## Key Highlights
-- **Realtime API Cost Tracking**: Track API costs in real-time with token usage metrics in spend logs
-- **Team Member Permissions**: New CRUD endpoints for managing team member permissions
-- **Managed Files**: Support for CRUD endpoints for managing files across providers
-- **SSO Improvements**: Connect LiteLLM to Azure Entra ID and auto-assign users to teams
+- **Microsoft SSO Auto-sync**: Auto-sync groups and group members from Azure Entra ID to LiteLLM
+- **Unified File IDs**: Use the same file id across LLM API providers. 
 - **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
 
 Let's dive in.
 
 ## New Models / Updated Models
 
-1. xAI - Added support for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
-2. xAI - Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
-3. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
-4. Google - Cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
-5. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
-6. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
-7. Gemini - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
+#### xAI
 
-## LLM Translation
+1. Added cost tracking for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
+2. Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
+
+#### Hugging Face
 
 1. Hugging Face - Added inference providers support [PR](https://github.com/BerriAI/litellm/pull/9773)
-2. Gemini - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
+
+#### Azure
+
+1. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+
+#### VertexAI
+
+1. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
 3. VertexAI - Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
-4. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
-5. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
-6. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
-7. VertexAI - Non-jsonl file storage support [PR](https://github.com/BerriAI/litellm/pull/9781)
-8. Upload Files - Added support for UploadFile on LLM Pass through endpoints (OpenAI, Azure etc) [PR](https://github.com/BerriAI/litellm/pull/9853)
-9. Reasoning - Added litellm.supports_reasoning() util to track if an llm supports reasoning [PR](https://github.com/BerriAI/litellm/pull/9923)
-10. Fixed correctly translating 'thinking' param for litellm [PR](https://github.com/BerriAI/litellm/pull/9904)
-11. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
-12. Fixed indentation for message index increment in Ollama [PR](https://github.com/BerriAI/litellm/pull/9943)
+
+#### Google AI Studio
+
+1. Google AI Studio - Added cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
+2. Google AI Studio - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
+3. Google AI Studio - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
+
+#### Azure
+
+1. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
+2. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+
+#### Databricks
+
+1. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
+2. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
+
+#### General
+
+1. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
+2. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
+3. Reasoning - Added litellm.supports_reasoning() util to track if an llm supports reasoning [PR](https://github.com/BerriAI/litellm/pull/9923)
+4. Fixed correctly translating 'thinking' param for litellm [PR](https://github.com/BerriAI/litellm/pull/9904)
+
 
 ## Spend Tracking Improvements
 
