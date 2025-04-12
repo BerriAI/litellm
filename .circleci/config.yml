@@ -2889,14 +2889,9 @@ workflows:
                 - /litellm_.*/
       - publish_proxy_extras:
           filters:
-                branches:
-                  only:
-                    - main
-                    - /litellm_.*/
-          # filters:
-          #   branches:
-          #     only:
-          #       - main
+            branches:
+              only:
+                - main
       - publish_to_pypi:
           requires:
             - local_testing
