@@ -9,13 +9,17 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from unittest.mock import MagicMock
+
 from litellm.caching import DualCache
 from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.types.utils import SpecialEnums
 
 
 def test_get_file_ids_and_decode_b64_to_unified_uid_from_messages():
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
     messages = [
         {
             "role": "user",
