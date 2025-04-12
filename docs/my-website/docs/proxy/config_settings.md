@@ -433,6 +433,7 @@ router_settings:
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
+| LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
 | LITELLM_EMAIL | Email associated with LiteLLM account
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
