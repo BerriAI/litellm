@@ -1023,6 +1023,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           is_proxy_admin={userRole === "Proxy Admin"}
           userModels={all_models_on_proxy}
           editTeam={false}
+          onUpdate={handleRefreshClick}
         />
       </div>
     );
