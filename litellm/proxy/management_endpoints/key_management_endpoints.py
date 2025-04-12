@@ -133,7 +133,7 @@ def _team_key_generation_team_member_check(
                 detail=f"User={assigned_user_id} not assigned to team={team_table.team_id}",
             )
 
-    key_creating_user_in_team = _get_user_in_team(
+    team_member_object = _get_user_in_team(
         team_table=team_table, user_id=user_api_key_dict.user_id
     )
 
@@ -144,20 +144,26 @@ def _team_key_generation_team_member_check(
 
     if is_admin:
         return True
-    elif key_creating_user_in_team is None:
+    elif team_member_object is None:
         raise HTTPException(
             status_code=400,
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
         )
     elif (
         "allowed_team_member_roles" in team_key_generation
-        and key_creating_user_in_team.role
+        and team_member_object.role
         not in team_key_generation["allowed_team_member_roles"]
     ):
         raise HTTPException(
             status_code=400,
-            detail=f"Team member role {key_creating_user_in_team.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
+            detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
+
+    TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=team_member_object,
+        team_table=team_table,
+        route=KeyManagementRoutes.KEY_GENERATE,
+    )
     return True
 
 

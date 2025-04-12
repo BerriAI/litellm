@@ -10,7 +10,6 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
-    Span,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_team_object
