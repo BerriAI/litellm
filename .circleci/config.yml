@@ -2417,6 +2417,7 @@ jobs:
             
             # Compare versions using Python's packaging.version
             VERSION_COMPARE=$(python -c "from packaging import version; print(1 if version.parse('$CURRENT_VERSION') < version.parse('$LAST_VERSION') else 0)")
+            
             echo "Version compare: $VERSION_COMPARE"
             if [ "$VERSION_COMPARE" = "1" ]; then
               echo "Error: Current version ($CURRENT_VERSION) is less than last published version ($LAST_VERSION)"
@@ -2425,8 +2426,10 @@ jobs:
             
             # If versions are equal or current is greater, check contents
             pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
-            tar -xzf /tmp/litellm-proxy-extras-$LAST_VERSION.tar.gz -C /tmp
-            
+            # Find the downloaded file
+            DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*.tar.gz)
+            tar -xzf "$DOWNLOADED_FILE" -C /tmp
+            echo "Downloaded file: $DOWNLOADED_FILE"
             # Compare contents
             if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
               if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
