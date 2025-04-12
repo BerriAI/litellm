@@ -57,7 +57,6 @@ class TeamMemberPermissionChecks:
         route: KeyManagementRoutes,
         prisma_client: PrismaClient,
         user_api_key_cache: DualCache,
-        parent_otel_span: Optional[Span],
         existing_key_row: LiteLLM_VerificationToken,
     ):
         """
