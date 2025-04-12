@@ -772,6 +772,7 @@ from .utils import (
     supports_audio_input,
     supports_audio_output,
     supports_system_messages,
+    supports_reasoning,
     get_litellm_params,
     acreate,
     get_max_tokens,
