@@ -324,7 +324,7 @@ const Teams: React.FC<TeamProps> = ({
       {selectedTeamId ? (
         <TeamInfoView 
         teamId={selectedTeamId} 
-        onUpdate={data => {
+        onUpdate={(data) => {
             setTeams(teams => {
               if (teams == null) {
                 return teams;
