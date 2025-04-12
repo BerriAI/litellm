@@ -160,3 +160,24 @@ def test_xai_message_name_filtering():
     )
     assert response is not None
     assert response.choices[0].message.content is not None
+
+
+def test_xai_reasoning_effort():
+    litellm._turn_on_debug()
+    messages = [
+        {
+            "role": "system",
+            "content": "*I press the green button*",
+            "name": "example_user"
+        },
+        {"role": "user", "content": "Hello", "name": "John"},
+        {"role": "assistant", "content": "Hello", "name": "Jane"},
+    ]
+    response = completion(
+        model="xai/grok-3",
+        messages=messages,
+        reasoning_effort="high",
+        stream=True,
+    )
+    for chunk in response:
+        print(chunk)
