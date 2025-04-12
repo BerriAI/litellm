@@ -16,7 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     CallTypes,
@@ -144,6 +144,7 @@ class LitellmTableNames(str, enum.Enum):
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
+    MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -2795,3 +2796,9 @@ class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: Optional[float]
+
+
+class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
+    unified_file_id: str
+    file_object: OpenAIFileObject
+    model_mappings: Dict[str, str]
