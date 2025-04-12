@@ -2416,13 +2416,20 @@ jobs:
             echo "Last published version: $LAST_VERSION"
             
             # Compare versions using Python's packaging.version
-            if python -c "from packaging import version; exit(0 if version.parse('$CURRENT_VERSION') > version.parse('$LAST_VERSION') else 1)"; then
-              # Download the last published version
-              pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
-              tar -xzf /tmp/litellm-proxy-extras-$LAST_VERSION.tar.gz -C /tmp
-              
-              # Compare contents
-              if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
+            VERSION_COMPARE=$(python -c "from packaging import version; print(1 if version.parse('$CURRENT_VERSION') < version.parse('$LAST_VERSION') else 0)")
+            echo "Version compare: $VERSION_COMPARE"
+            if [ "$VERSION_COMPARE" = "1" ]; then
+              echo "Error: Current version ($CURRENT_VERSION) is less than last published version ($LAST_VERSION)"
+              exit 1
+            fi
+            
+            # If versions are equal or current is greater, check contents
+            pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
+            tar -xzf /tmp/litellm-proxy-extras-$LAST_VERSION.tar.gz -C /tmp
+            
+            # Compare contents
+            if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
+              if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
                 echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
                 echo "Current version: $CURRENT_VERSION"
                 echo "Last published version: $LAST_VERSION"
@@ -2430,7 +2437,7 @@ jobs:
                 diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras
                 exit 1
               fi
-              
+            else
               echo "No changes detected in litellm-proxy-extras. Skipping PyPI publish."
               circleci step halt
             fi
