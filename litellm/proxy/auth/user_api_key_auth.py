@@ -1023,6 +1023,7 @@ async def user_api_key_auth(
     """
 
     request_data = await _read_request_body(request=request)
+    route: str = get_request_route(request=request)
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
         request=request,
@@ -1037,6 +1038,8 @@ async def user_api_key_auth(
     end_user_id = get_end_user_id_from_request_body(request_data)
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
+
+    user_api_key_auth_obj.request_route = route
 
     return user_api_key_auth_obj
 
