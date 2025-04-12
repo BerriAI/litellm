@@ -34,6 +34,9 @@ This request will fail since we send `tags=private-data` but the model `gpt-4o` 
 
 <Image img={require('../../img/tag_invalid.png')}  style={{ width: '800px', height: 'auto' }} />
 
+<br />
+
+Here is an example sending the same request using the OpenAI Python SDK.
 <Tabs>
 <TabItem value="python" label="OpenAI Python SDK">
 
@@ -86,6 +89,8 @@ This request will succeed since we send `tags=private-data` and the model `us.an
 
 <Image img={require('../../img/tag_valid.png')}  style={{ width: '800px', height: 'auto' }} />
 
+Here is an example sending the same request using the OpenAI Python SDK.
+
 <Tabs>
 <TabItem value="python" label="OpenAI Python SDK">
 
@@ -131,4 +136,9 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 </Tabs>
 
 
+
+## Additional Tag Features
+- [Tag based routing](https://docs.litellm.ai/docs/proxy/tag_routing)
+- [Track spend per tag](cost_tracking#-custom-tags)
+- [Setup Budgets per Virtual Key, Team](users)
 
