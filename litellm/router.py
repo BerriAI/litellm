@@ -339,9 +339,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal[
-            "local", "redis", "redis-semantic", "s3", "disk"
-        ] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
+            "local"  # default to an in-memory cache
+        )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -562,9 +562,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
-        ] = model_group_retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -619,7 +619,7 @@ class Router:
 
     @staticmethod
     def _create_redis_cache(
-        cache_config: Dict[str, Any]
+        cache_config: Dict[str, Any],
     ) -> Union[RedisCache, RedisClusterCache]:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
@@ -1105,9 +1105,9 @@ class Router:
         """
         Adds default litellm params to kwargs, if set.
         """
-        self.default_litellm_params[
-            metadata_variable_name
-        ] = self.default_litellm_params.pop("metadata", {})
+        self.default_litellm_params[metadata_variable_name] = (
+            self.default_litellm_params.pop("metadata", {})
+        )
         for k, v in self.default_litellm_params.items():
             if (
                 k not in kwargs and v is not None
@@ -3243,11 +3243,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=context_window_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3279,11 +3279,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=content_policy_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -5046,6 +5046,11 @@ class Router:
                     and model_info["supports_web_search"] is True  # type: ignore
                 ):
                     model_group_info.supports_web_search = True
+                if (
+                    model_info.get("supports_reasoning", None) is not None
+                    and model_info["supports_reasoning"] is True  # type: ignore
+                ):
+                    model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None

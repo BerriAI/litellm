@@ -23,7 +23,7 @@ from litellm.utils import (
 )
 from litellm.main import stream_chunk_builder
 from typing import Union
-
+from litellm.types.utils import Usage, ModelResponse
 # test_example.py
 from abc import ABC, abstractmethod
 from openai import OpenAI
@@ -1399,3 +1399,76 @@ class BaseAnthropicChatTest(ABC):
         assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
         assert "reasoning_effort" not in optional_params
+
+
+class BaseReasoningLLMTests(ABC):
+    """
+    Base class for testing reasoning llms
+
+    - test that the responses contain reasoning_content
+    - test that the usage contains reasoning_tokens
+    """
+    @abstractmethod
+    def get_base_completion_call_args(self) -> dict:
+        """Must return the base completion call args"""
+        pass
+    
+    @property
+    def completion_function(self):
+        return litellm.completion
+
+
+    def test_non_streaming_reasoning_effort(self):
+        """
+        Base test for non-streaming reasoning effort
+
+        - Assert that `reasoning_content` is not None from response message
+        - Assert that `reasoning_tokens` is greater than 0 from usage
+        """
+        litellm._turn_on_debug()
+        base_completion_call_args = self.get_base_completion_call_args()
+        response: ModelResponse = self.completion_function(**base_completion_call_args, reasoning_effort="low")
+        
+        # user gets `reasoning_content` in the response message
+        assert response.choices[0].message.reasoning_content is not None
+        assert isinstance(response.choices[0].message.reasoning_content, str)
+
+        # user get `reasoning_tokens`
+        assert response.usage.completion_tokens_details.reasoning_tokens > 0
+    
+
+    def test_streaming_reasoning_effort(self):
+        """
+        Base test for streaming reasoning effort
+
+        - Assert that `reasoning_content` is not None from streaming response
+        - Assert that `reasoning_tokens` is greater than 0 from usage
+        """
+        #litellm._turn_on_debug()
+        base_completion_call_args = self.get_base_completion_call_args()
+        response: CustomStreamWrapper = self.completion_function(
+            **base_completion_call_args,
+            reasoning_effort="low",
+            stream=True,
+            stream_options={
+                "include_usage": True
+            }
+        )
+        
+        resoning_content: str = ""
+        usage: Usage = None
+        for chunk in response:
+            print(chunk)
+            if hasattr(chunk.choices[0].delta, "reasoning_content"):
+                resoning_content += chunk.choices[0].delta.reasoning_content
+            if hasattr(chunk, "usage"):
+                usage = chunk.usage
+
+        assert resoning_content is not None
+        assert len(resoning_content) > 0
+
+        print(f"usage: {usage}")
+        assert usage.completion_tokens_details.reasoning_tokens > 0
+
+    
+    

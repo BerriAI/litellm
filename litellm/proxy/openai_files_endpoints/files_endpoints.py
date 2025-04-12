@@ -189,6 +189,51 @@ async def route_create_file(
     return response
 
 
+async def route_create_file(
+    llm_router: Optional[Router],
+    _create_file_request: CreateFileRequest,
+    purpose: OpenAIFilesPurpose,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    target_model_names_list: List[str],
+    is_router_model: bool,
+    router_model: Optional[str],
+    custom_llm_provider: str,
+) -> OpenAIFileObject:
+    if (
+        litellm.enable_loadbalancing_on_batch_endpoints is True
+        and is_router_model
+        and router_model is not None
+    ):
+        response = await _deprecated_loadbalanced_create_file(
+            llm_router=llm_router,
+            router_model=router_model,
+            _create_file_request=_create_file_request,
+        )
+    elif target_model_names_list:
+        response = await create_file_for_each_model(
+            llm_router=llm_router,
+            _create_file_request=_create_file_request,
+            target_model_names_list=target_model_names_list,
+            purpose=purpose,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+        )
+    else:
+        # get configs for custom_llm_provider
+        llm_provider_config = get_files_provider_config(
+            custom_llm_provider=custom_llm_provider
+        )
+        if llm_provider_config is not None:
+            # add llm_provider_config to data
+            _create_file_request.update(llm_provider_config)
+        _create_file_request.pop("custom_llm_provider", None)  # type: ignore
+        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
+
+    return response
+
+
 @router.post(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],

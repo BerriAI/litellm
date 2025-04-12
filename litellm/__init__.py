@@ -65,8 +65,8 @@ from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
     LiteLLM_UpperboundKeyGenerateParams,
-    NewTeamRequest,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -277,7 +277,7 @@ default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 key_generation_settings: Optional[StandardKeyGenerationConfig] = None
 default_internal_user_params: Optional[Dict] = None
-default_team_params: Optional[Union[NewTeamRequest, Dict]] = None
+default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
@@ -772,6 +772,7 @@ from .utils import (
     supports_audio_input,
     supports_audio_output,
     supports_system_messages,
+    supports_reasoning,
     get_litellm_params,
     acreate,
     get_max_tokens,

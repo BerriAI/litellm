@@ -102,6 +102,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
+    supports_reasoning: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):

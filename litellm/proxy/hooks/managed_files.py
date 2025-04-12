@@ -1,9 +1,9 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
-
 import base64
 import json
+import asyncio
 import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
@@ -415,6 +415,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             [file_id], litellm_parent_otel_span
         )
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
+
         if specific_model_file_id_mapping:
             exception_dict = {}
             for model_id, file_id in specific_model_file_id_mapping.items():
@@ -427,3 +428,4 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             )
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
