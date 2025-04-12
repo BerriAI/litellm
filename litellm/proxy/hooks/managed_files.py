@@ -5,7 +5,6 @@ import asyncio
 import base64
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from litellm import Router, verbose_logger
@@ -301,7 +300,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
             purpose=cast(OpenAIFilesPurpose, purpose),
             created_at=file_objects[0].created_at,
             bytes=file_objects[0].bytes,
-            filename=str(datetime.now().timestamp()),
+            filename=file_objects[0].filename,
             status="uploaded",
         )
 

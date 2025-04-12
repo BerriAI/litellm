@@ -278,6 +278,7 @@ class ProxyLogging:
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
     def startup_event(
         self,
@@ -352,8 +353,6 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
-
-        self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
     def _add_proxy_hooks(self, llm_router: Optional[Router] = None):
         """

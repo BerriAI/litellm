@@ -159,7 +159,7 @@ class DBSpendUpdateWriter:
             )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
-        except Exception as e:
+        except Exception:
             verbose_proxy_logger.debug(
                 f"Error updating Prisma database: {traceback.format_exc()}"
             )
