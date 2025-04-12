@@ -98,32 +98,23 @@ Let's dive in.
 
 ## Management Endpoints / UI
 
-1. UI Bug Fixes:
-   - Fixed duplicate models on Team Admin models page [PR](https://github.com/BerriAI/litellm/pull/9775)
-   - Prevented team, key, org, model values changing on scroll [PR](https://github.com/BerriAI/litellm/pull/9776)
-   - Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
-   - Reflected key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
-   - Added rendering of Reasoning content, ttft, usage metrics on test key page [PR](https://github.com/BerriAI/litellm/pull/9931)
-   - Added Managing Team Member permissions on UI [PR](https://github.com/BerriAI/litellm/pull/9927)
-   - Fixed linting issues [PR](https://github.com/BerriAI/litellm/pull/9933)
-
-2. API Improvements:
-   - Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
-   - Added user alias to API endpoint [PR](https://github.com/BerriAI/litellm/pull/9859)
-   - Added support for CRUD endpoints for Managed Files [PR](https://github.com/BerriAI/litellm/pull/9924)
-   - Added Managed Files database support [PR](https://github.com/BerriAI/litellm/pull/9930)
-   - Added new column for team_member_permissions [PR](https://github.com/BerriAI/litellm/pull/9941)
-   - Added team member permissions fixes [PR](https://github.com/BerriAI/litellm/pull/9945)
-
-## SSO Improvements
-
-1. Added debug route to allow admins to debug SSO JWT fields [PR](https://github.com/BerriAI/litellm/pull/9835)
-2. Added ability to use MSFT Graph API to assign users to teams [PR](https://github.com/BerriAI/litellm/pull/9865)
-3. Connected LiteLLM to Azure Entra ID Enterprise Application [PR](https://github.com/BerriAI/litellm/pull/9872)
-4. Added ability for admins to set `default_team_params` for when litellm SSO creates default teams [PR](https://github.com/BerriAI/litellm/pull/9895)
-5. Fixed MSFT SSO to use correct field for user email [PR](https://github.com/BerriAI/litellm/pull/9886)
-6. Added tutorial for using MSFT auto team assignment with LiteLLM [PR](https://github.com/BerriAI/litellm/pull/9898)
-7. Added UI support for setting Default Team setting when LiteLLM SSO auto creates teams [PR](https://github.com/BerriAI/litellm/pull/9918)
+1. Redesigned Login Screen:
+    1. Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
+3. Test Key Tab:
+    1. Added rendering of Reasoning content, ttft, usage metrics on test key page [PR](https://github.com/BerriAI/litellm/pull/9931)
+3. Keys Page:
+    1. Reflected key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
+2. Microsoft SSO Auto-Sync:
+    1. Added debug route to allow admins to debug SSO JWT fields [PR](https://github.com/BerriAI/litellm/pull/9835)
+    2. Added ability to use MSFT Graph API to assign users to teams [PR](https://github.com/BerriAI/litellm/pull/9865)
+    3. Connected LiteLLM to Azure Entra ID Enterprise Application [PR](https://github.com/BerriAI/litellm/pull/9872)
+    4. Added ability for admins to set `default_team_params` for when litellm SSO creates default teams [PR](https://github.com/BerriAI/litellm/pull/9895)
+    5. Fixed MSFT SSO to use correct field for user email [PR](https://github.com/BerriAI/litellm/pull/9886)
+    6. Added UI support for setting Default Team setting when LiteLLM SSO auto creates teams [PR](https://github.com/BerriAI/litellm/pull/9918)
+4. Experimental Features:
+    1. Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
+5. UI Bug Fixes:
+    1. Prevented team, key, org, model numerical values changing on scrolling [PR](https://github.com/BerriAI/litellm/pull/9776)
 
 ## Logging / Guardrail Improvements
 
