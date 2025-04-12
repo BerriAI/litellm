@@ -339,9 +339,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal[
-            "local", "redis", "redis-semantic", "s3", "disk"
-        ] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
+            "local"  # default to an in-memory cache
+        )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -562,9 +562,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
-        ] = model_group_retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -619,7 +619,7 @@ class Router:
 
     @staticmethod
     def _create_redis_cache(
-        cache_config: Dict[str, Any]
+        cache_config: Dict[str, Any],
     ) -> Union[RedisCache, RedisClusterCache]:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
@@ -728,6 +728,12 @@ class Router:
         )
         self.aresponses = self.factory_function(
             litellm.aresponses, call_type="aresponses"
+        )
+        self.afile_delete = self.factory_function(
+            litellm.afile_delete, call_type="afile_delete"
+        )
+        self.afile_content = self.factory_function(
+            litellm.afile_content, call_type="afile_content"
         )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
 
@@ -1099,9 +1105,9 @@ class Router:
         """
         Adds default litellm params to kwargs, if set.
         """
-        self.default_litellm_params[
-            metadata_variable_name
-        ] = self.default_litellm_params.pop("metadata", {})
+        self.default_litellm_params[metadata_variable_name] = (
+            self.default_litellm_params.pop("metadata", {})
+        )
         for k, v in self.default_litellm_params.items():
             if (
                 k not in kwargs and v is not None
@@ -2138,6 +2144,7 @@ class Router:
                 request_kwargs=kwargs,
             )
 
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items():
                 if (
@@ -2434,6 +2441,8 @@ class Router:
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
+            ### get custom
+
             response = original_function(
                 **{
                     **data,
@@ -2513,9 +2522,15 @@ class Router:
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
+            try:
+                _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            except Exception:
+                custom_llm_provider = None
+
             response = original_function(
                 **{
                     **data,
+                    "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
                 }
@@ -2759,9 +2774,6 @@ class Router:
             stripped_model, custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"]
             )
-            # kwargs["file"] = replace_model_in_jsonl(
-            #     file_content=kwargs["file"], new_model_name=stripped_model
-            # )
 
             response = litellm.acreate_file(
                 **{
@@ -3060,6 +3072,8 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "responses",
+            "afile_delete",
+            "afile_content",
         ] = "assistants",
     ):
         """
@@ -3104,9 +3118,19 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
-            elif call_type in ("anthropic_messages", "aresponses"):
+            elif call_type in (
+                "anthropic_messages",
+                "aresponses",
+            ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in ("afile_delete", "afile_content"):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
                     **kwargs,
                 )
 
@@ -3219,11 +3243,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=context_window_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3255,11 +3279,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=content_policy_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -5022,6 +5046,11 @@ class Router:
                     and model_info["supports_web_search"] is True  # type: ignore
                 ):
                     model_group_info.supports_web_search = True
+                if (
+                    model_info.get("supports_reasoning", None) is not None
+                    and model_info["supports_reasoning"] is True  # type: ignore
+                ):
+                    model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None

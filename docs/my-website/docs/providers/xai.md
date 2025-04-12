@@ -18,13 +18,14 @@ os.environ['XAI_API_KEY']
 ```
 
 ## Sample Usage
-```python
+
+```python showLineNumbers title="LiteLLM python sdk usage - Non-streaming"
 from litellm import completion
 import os
 
 os.environ['XAI_API_KEY'] = ""
 response = completion(
-    model="xai/grok-2-latest",
+    model="xai/grok-3-mini-beta",
     messages=[
         {
             "role": "user",
@@ -45,13 +46,14 @@ print(response)
 ```
 
 ## Sample Usage - Streaming
-```python
+
+```python showLineNumbers title="LiteLLM python sdk usage - Streaming"
 from litellm import completion
 import os
 
 os.environ['XAI_API_KEY'] = ""
 response = completion(
-    model="xai/grok-2-latest",
+    model="xai/grok-3-mini-beta",
     messages=[
         {
             "role": "user",
@@ -75,7 +77,8 @@ for chunk in response:
 ```
 
 ## Sample Usage - Vision
-```python
+
+```python showLineNumbers title="LiteLLM python sdk usage - Vision"
 import os 
 from litellm import completion
 
@@ -110,7 +113,7 @@ Here's how to call a XAI model with the LiteLLM Proxy Server
 
 1. Modify the config.yaml 
 
-  ```yaml
+  ```yaml showLineNumbers
   model_list:
     - model_name: my-model
       litellm_params:
@@ -131,7 +134,7 @@ Here's how to call a XAI model with the LiteLLM Proxy Server
 
   <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
-  ```python
+  ```python showLineNumbers
   import openai
   client = openai.OpenAI(
       api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys

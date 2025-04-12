@@ -34,6 +34,8 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     OpenAIChatCompletionChunk,
+    OpenAIFileObject,
+    OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -100,6 +102,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
+    supports_reasoning: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -724,7 +727,7 @@ class Choices(OpenAIObject):
         finish_reason=None,
         index=0,
         message: Optional[Union[Message, dict]] = None,
-        logprobs=None,
+        logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
         enhancements=None,
         **params,
     ):
@@ -2152,6 +2155,31 @@ class LiteLLMBatch(Batch):
             return self.dict()
 
 
+class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
+    results: OpenAIRealtimeStreamList
+    usage: Usage
+    _hidden_params: dict = {}
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
 class RawRequestTypedDict(TypedDict, total=False):
     raw_request_api_base: Optional[str]
     raw_request_body: Optional[dict]
@@ -2195,3 +2223,13 @@ class ExtractedFileData(TypedDict):
     content: bytes
     content_type: Optional[str]
     headers: Mapping[str, str]
+
+
+class SpecialEnums(Enum):
+    LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
+    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+
+
+LLMResponseTypes = Union[
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+]

@@ -11,6 +11,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -468,9 +469,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 result=result,
                 user_info=user_info,
                 user_email=user_email,
-                user_id_models=user_id_models,
-                max_internal_user_budget=max_internal_user_budget,
-                internal_user_budget_duration=internal_user_budget_duration,
                 user_defined_values=user_defined_values,
                 prisma_client=prisma_client,
             )
@@ -831,37 +829,20 @@ class SSOAuthenticationHandler:
         result: Optional[Union[CustomOpenID, OpenID, dict]],
         user_info: Optional[Union[NewUserResponse, LiteLLM_UserTable]],
         user_email: Optional[str],
-        user_id_models: List[str],
-        max_internal_user_budget: Optional[float],
-        internal_user_budget_duration: Optional[str],
         user_defined_values: Optional[SSOUserDefinedValues],
         prisma_client: PrismaClient,
     ):
         """
         Connects the SSO Users to the User Table in LiteLLM DB
 
-        - If user on LiteLLM DB, update the user_id with the SSO user_id
+        - If user on LiteLLM DB, update the user_email with the SSO user_email
         - If user not on LiteLLM DB, insert the user into LiteLLM DB
         """
         try:
             if user_info is not None:
                 user_id = user_info.user_id
-                user_defined_values = SSOUserDefinedValues(
-                    models=getattr(user_info, "models", user_id_models),
-                    user_id=user_info.user_id or "",
-                    user_email=getattr(user_info, "user_email", user_email),
-                    user_role=getattr(user_info, "user_role", None),
-                    max_budget=getattr(
-                        user_info, "max_budget", max_internal_user_budget
-                    ),
-                    budget_duration=getattr(
-                        user_info, "budget_duration", internal_user_budget_duration
-                    ),
-                )
-
-                # update id
                 await prisma_client.db.litellm_usertable.update_many(
-                    where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
+                    where={"user_id": user_id}, data={"user_email": user_email}
                 )
             else:
                 verbose_proxy_logger.info(
@@ -895,6 +876,94 @@ class SSOAuthenticationHandler:
             return
         sso_teams = getattr(result, "team_ids", [])
         await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+
+    @staticmethod
+    async def create_litellm_team_from_sso_group(
+        litellm_team_id: str,
+        litellm_team_name: Optional[str] = None,
+    ):
+        """
+        Creates a Litellm Team from a SSO Group ID
+
+        Your SSO provider might have groups that should be created on LiteLLM
+
+        Use this helper to create a Litellm Team from a SSO Group ID
+
+        Args:
+            litellm_team_id (str): The ID of the Litellm Team
+            litellm_team_name (Optional[str]): The name of the Litellm Team
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise ProxyException(
+                message="Prisma client not found. Set it in the proxy_server.py file",
+                type=ProxyErrorTypes.auth_error,
+                param="prisma_client",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        try:
+            team_obj = await prisma_client.db.litellm_teamtable.find_first(
+                where={"team_id": litellm_team_id}
+            )
+            verbose_proxy_logger.debug(f"Team object: {team_obj}")
+
+            # only create a new team if it doesn't exist
+            if team_obj:
+                verbose_proxy_logger.debug(
+                    f"Team already exists: {litellm_team_id} - {litellm_team_name}"
+                )
+                return
+
+            team_request: NewTeamRequest = NewTeamRequest(
+                team_id=litellm_team_id,
+                team_alias=litellm_team_name,
+            )
+            if litellm.default_team_params:
+                team_request = SSOAuthenticationHandler._cast_and_deepcopy_litellm_default_team_params(
+                    default_team_params=litellm.default_team_params,
+                    litellm_team_id=litellm_team_id,
+                    litellm_team_name=litellm_team_name,
+                    team_request=team_request,
+                )
+
+            await new_team(
+                data=team_request,
+                # params used for Audit Logging
+                http_request=Request(scope={"type": "http", "method": "POST"}),
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="",
+                    key_alias=f"litellm.{MicrosoftSSOHandler.__name__}",
+                ),
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
+
+    @staticmethod
+    def _cast_and_deepcopy_litellm_default_team_params(
+        default_team_params: Union[DefaultTeamSSOParams, Dict],
+        team_request: NewTeamRequest,
+        litellm_team_id: str,
+        litellm_team_name: Optional[str] = None,
+    ) -> NewTeamRequest:
+        """
+        Casts and deepcopies the litellm.default_team_params to a NewTeamRequest object
+
+        - Ensures we create a new DefaultTeamSSOParams object
+        - Handle the case where litellm.default_team_params is a dict or a DefaultTeamSSOParams object
+        - Adds the litellm_team_id and litellm_team_name to the DefaultTeamSSOParams object
+        """
+        if isinstance(default_team_params, dict):
+            _team_request = deepcopy(default_team_params)
+            _team_request["team_id"] = litellm_team_id
+            _team_request["team_alias"] = litellm_team_name
+            team_request = NewTeamRequest(**_team_request)
+        elif isinstance(litellm.default_team_params, DefaultTeamSSOParams):
+            _default_team_params = deepcopy(litellm.default_team_params)
+            _new_team_request = team_request.model_dump()
+            _new_team_request.update(_default_team_params)
+            team_request = NewTeamRequest(**_new_team_request)
+        return team_request
 
 
 class MicrosoftSSOHandler:
@@ -983,7 +1052,7 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get("mail"),
+            email=response.get("userPrincipalName") or response.get("mail"),
             display_name=response.get("displayName"),
             provider="microsoft",
             id=response.get("id"),
@@ -1176,15 +1245,6 @@ class MicrosoftSSOHandler:
 
         When a user sets a `SERVICE_PRINCIPAL_ID` in the env, litellm will fetch groups under that service principal and create Litellm Teams from them
         """
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            raise ProxyException(
-                message="Prisma client not found. Set it in the proxy_server.py file",
-                type=ProxyErrorTypes.auth_error,
-                param="prisma_client",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
         verbose_proxy_logger.debug(
             f"Creating Litellm Teams from Service Principal Teams: {service_principal_teams}"
         )
@@ -1199,36 +1259,10 @@ class MicrosoftSSOHandler:
                 )
                 continue
 
-            try:
-                verbose_proxy_logger.debug(
-                    f"Creating Litellm Team: {litellm_team_id} - {litellm_team_name}"
-                )
-
-                team_obj = await prisma_client.db.litellm_teamtable.find_first(
-                    where={"team_id": litellm_team_id}
-                )
-                verbose_proxy_logger.debug(f"Team object: {team_obj}")
-
-                # only create a new team if it doesn't exist
-                if team_obj:
-                    verbose_proxy_logger.debug(
-                        f"Team already exists: {litellm_team_id} - {litellm_team_name}"
-                    )
-                    continue
-                await new_team(
-                    data=NewTeamRequest(
-                        team_id=litellm_team_id,
-                        team_alias=litellm_team_name,
-                    ),
-                    # params used for Audit Logging
-                    http_request=Request(scope={"type": "http", "method": "POST"}),
-                    user_api_key_dict=UserAPIKeyAuth(
-                        token="",
-                        key_alias=f"litellm.{MicrosoftSSOHandler.__name__}",
-                    ),
-                )
-            except Exception as e:
-                verbose_proxy_logger.exception(f"Error creating Litellm Team: {e}")
+            await SSOAuthenticationHandler.create_litellm_team_from_sso_group(
+                litellm_team_id=litellm_team_id,
+                litellm_team_name=litellm_team_name,
+            )
 
 
 class GoogleSSOHandler:
