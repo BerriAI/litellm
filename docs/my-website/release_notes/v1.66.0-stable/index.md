@@ -46,9 +46,31 @@ v1.66.0-stable is live now, here are the key highlights of this release
 ## Key Highlights
 - **Microsoft SSO Auto-sync**: Auto-sync groups and group members from Azure Entra ID to LiteLLM
 - **Unified File IDs**: Use the same file id across LLM API providers. 
+- **New Models**: `xAI grok-3` support, `realtime api` cost tracking and logging
 - **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
 
 Let's dive in.
+
+## Microsoft SSO Auto-sync
+
+<Image 
+  img={require('../../img/release_notes/sso_sync.png')}
+  style={{width: '100%', display: 'block'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  Auto-sync groups and members from Azure Entra ID to LiteLLM
+</p>
+
+This release adds support for auto-syncing groups and members on Microsoft Entra ID with LiteLLM. This means that litellm proxy administrators can spend less time managing teams and members and LiteLLM handles the following: 
+
+- Auto-create Teams that existing on Microsoft Entra ID 
+- Sync team members on Microsoft Entra ID with LiteLLM Teams
+
+Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
+
+## Unified File ID 
+
+
 
 ## New Models / Updated Models
 
@@ -110,10 +132,16 @@ Let's dive in.
     </p>
 2. Tag / Policy Management:
     1. Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
+
+    <Image 
+    img={require('../../img/release_notes/tag_management.png')}
+    style={{width: '100%', display: 'block'}}
+    />
+    <p style={{textAlign: 'left', color: '#666'}}>
+    Tag / Policy Management
+    </p>
 3. Redesigned Login Screen:
     1. Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
-4. Keys Page:
-    1. Reflected key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
 2. Microsoft SSO Auto-Sync:
     1. Added debug route to allow admins to debug SSO JWT fields [PR](https://github.com/BerriAI/litellm/pull/9835)
     2. Added ability to use MSFT Graph API to assign users to teams [PR](https://github.com/BerriAI/litellm/pull/9865)
@@ -121,10 +149,9 @@ Let's dive in.
     4. Added ability for admins to set `default_team_params` for when litellm SSO creates default teams [PR](https://github.com/BerriAI/litellm/pull/9895)
     5. Fixed MSFT SSO to use correct field for user email [PR](https://github.com/BerriAI/litellm/pull/9886)
     6. Added UI support for setting Default Team setting when LiteLLM SSO auto creates teams [PR](https://github.com/BerriAI/litellm/pull/9918)
-4. Experimental Features:
-    1. Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
 5. UI Bug Fixes:
     1. Prevented team, key, org, model numerical values changing on scrolling [PR](https://github.com/BerriAI/litellm/pull/9776)
+    2. Instantly reflect key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
 
 ## Logging / Guardrail Improvements
 
