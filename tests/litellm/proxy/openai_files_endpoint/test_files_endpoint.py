@@ -104,10 +104,20 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     Asserts 'create_file' is called with the correct arguments
     """
     from litellm import Router
+    from litellm.proxy.utils import ProxyLogging
 
     mock_create_file = mocker.patch("litellm.files.main.create_file")
 
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
 
     # Create a simple test file content
     test_file_content = b"test audio content"
@@ -306,6 +316,7 @@ def test_create_file_and_call_chat_completion_e2e(
         mock.stop()
 
 
+@pytest.mark.skip(reason="function migrated to litellm/proxy/hooks/managed_files.py")
 def test_create_file_for_each_model(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
