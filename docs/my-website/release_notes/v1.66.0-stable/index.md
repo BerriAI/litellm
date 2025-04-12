@@ -98,11 +98,21 @@ Let's dive in.
 
 ## Management Endpoints / UI
 
-1. Redesigned Login Screen:
-    1. Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
-3. Test Key Tab:
+1. Test Key Tab:
     1. Added rendering of Reasoning content, ttft, usage metrics on test key page [PR](https://github.com/BerriAI/litellm/pull/9931)
-3. Keys Page:
+
+    <Image 
+    img={require('../../img/release_notes/chat_metrics.png')}
+    style={{width: '100%', display: 'block'}}
+    />
+    <p style={{textAlign: 'left', color: '#666'}}>
+    View input, output, reasoning tokens, ttft metrics.
+    </p>
+2. Tag / Policy Management:
+    1. Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
+3. Redesigned Login Screen:
+    1. Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
+4. Keys Page:
     1. Reflected key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
 2. Microsoft SSO Auto-Sync:
     1. Added debug route to allow admins to debug SSO JWT fields [PR](https://github.com/BerriAI/litellm/pull/9835)
