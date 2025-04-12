@@ -113,21 +113,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
     async def delete_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> OpenAIFileObject:
-        key = f"litellm_proxy/{file_id}"
         ## get old value
-        old_value = await self.internal_usage_cache.async_get_cache(
-            key=key,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+        initial_value = await self.prisma_client.db.litellm_managedfiletable.find_first(
+            where={"unified_file_id": file_id}
         )
-        if old_value is None or not isinstance(old_value, OpenAIFileObject):
+        if initial_value is None:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         ## delete old value
         await self.internal_usage_cache.async_set_cache(
-            key=key,
+            key=file_id,
             value=None,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
-        return old_value
+        await self.prisma_client.db.litellm_managedfiletable.delete(
+            where={"unified_file_id": file_id}
+        )
+        return initial_value.file_object
 
     async def async_pre_call_hook(
         self,
