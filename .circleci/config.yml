@@ -2404,6 +2404,33 @@ jobs:
       - run:
           name: Check if litellm-proxy-extras dir or pyproject.toml was modified
           command: |
+            cd litellm-proxy-extras
+            # Get current version from pyproject.toml
+            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            
+            # Get last published version from PyPI
+            LAST_VERSION=$(curl -s https://pypi.org/pypi/litellm-proxy-extras/json | python -c "import json, sys; print(json.load(sys.stdin)['info']['version'])")
+            
+            if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
+              # Download the last published version
+              pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
+              tar -xzf /tmp/litellm-proxy-extras-$LAST_VERSION.tar.gz -C /tmp
+              
+              # Compare contents
+              if ! diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
+                echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
+                echo "Current version: $CURRENT_VERSION"
+                echo "Last published version: $LAST_VERSION"
+                echo "Changes:"
+                diff -r /tmp/litellm-proxy-extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras
+                exit 1
+              fi
+              
+              echo "No changes detected in litellm-proxy-extras. Skipping PyPI publish."
+              circleci step halt
+            fi
+            
+            # Check if there are changes
             if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'litellm-proxy-extras/|litellm-proxy-extras/pyproject\.toml')" ]; then
               echo "litellm-proxy-extras or its pyproject.toml updated"
             else
