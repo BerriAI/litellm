@@ -2426,24 +2426,36 @@ jobs:
             
             # If versions are equal or current is greater, check contents
             pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
-            # Find the downloaded file
+            
             echo "Contents of /tmp directory:"
-            ls -R /tmp
-            DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*.tar.gz)
-            tar -xzf "$DOWNLOADED_FILE" -C /tmp
-
+            ls -la /tmp
+            
+            # Find the downloaded file (could be .whl or .tar.gz)
+            DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*)
             echo "Downloaded file: $DOWNLOADED_FILE"
-            echo "Contents of extracted package:"  
-            ls -R /tmp/litellm_proxy_extras-$LAST_VERSION
+            
+            # Extract based on file extension
+            if [[ "$DOWNLOADED_FILE" == *.whl ]]; then
+                echo "Extracting wheel file..."
+                unzip -q "$DOWNLOADED_FILE" -d /tmp/extracted
+                EXTRACTED_DIR="/tmp/extracted"
+            else
+                echo "Extracting tar.gz file..."
+                tar -xzf "$DOWNLOADED_FILE" -C /tmp
+                EXTRACTED_DIR="/tmp/litellm_proxy_extras-$LAST_VERSION"
+            fi
+            
+            echo "Contents of extracted package:"
+            ls -R "$EXTRACTED_DIR"
             
             # Compare contents
-            if ! diff -r /tmp/litellm_proxy_extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras; then
+            if ! diff -r "$EXTRACTED_DIR/litellm_proxy_extras" ./litellm_proxy_extras; then
               if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
                 echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
                 echo "Current version: $CURRENT_VERSION"
                 echo "Last published version: $LAST_VERSION"
                 echo "Changes:"
-                diff -r /tmp/litellm_proxy_extras-$LAST_VERSION/litellm_proxy_extras ./litellm_proxy_extras
+                diff -r "$EXTRACTED_DIR/litellm_proxy_extras" ./litellm_proxy_extras
                 exit 1
               fi
             else
