@@ -23,7 +23,7 @@ from litellm.utils import (
 )
 from litellm.main import stream_chunk_builder
 from typing import Union
-
+from litellm.types.utils import Usage, ModelResponse
 # test_example.py
 from abc import ABC, abstractmethod
 from openai import OpenAI
@@ -1399,3 +1399,32 @@ class BaseAnthropicChatTest(ABC):
         assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
         assert "reasoning_effort" not in optional_params
+
+
+class BaseReasoningEffortTests(ABC):
+    @abstractmethod
+    def get_base_completion_call_args(self) -> dict:
+        """Must return the base completion call args"""
+        pass
+    
+    @property
+    def completion_function(self):
+        return litellm.completion
+
+
+    def test_non_streaming_reasoning_effort(self):
+        """
+        Base test for non-streaming reasoning effort
+        """
+        litellm._turn_on_debug()
+        base_completion_call_args = self.get_base_completion_call_args()
+        response: ModelResponse = self.completion_function(**base_completion_call_args, reasoning_effort="low")
+        
+        # user gets `reasoning_content` in the response message
+        assert response.choices[0].message.reasoning_content is not None
+        assert isinstance(response.choices[0].message.reasoning_content, str)
+
+        # user get `reasoning_tokens`
+        assert response.usage.completion_tokens_details.reasoning_tokens > 0
+    
+    
