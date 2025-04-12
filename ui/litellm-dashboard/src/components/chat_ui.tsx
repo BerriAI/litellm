@@ -23,7 +23,7 @@ import {
   Divider,
 } from "@tremor/react";
 
-import { message, Select, Spin, Typography, Tooltip } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
@@ -46,6 +46,8 @@ import {
   LoadingOutlined,
   TagsOutlined
 } from "@ant-design/icons";
+
+const { TextArea } = Input;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -190,10 +192,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     ]);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault(); // Prevent default to avoid newline
       handleSendMessage();
     }
+    // If Shift+Enter is pressed, the default behavior (inserting a newline) will occur
   };
 
   const handleCancelRequest = () => {
@@ -502,18 +506,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
           
           <div className="p-4 border-t border-gray-200 bg-white">
             <div className="flex items-center">
-              <TextInput
-                type="text"
+              <TextArea
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   endpointType === EndpointType.CHAT 
-                    ? "Type your message..." 
+                    ? "Type your message... (Shift+Enter for new line)" 
                     : "Describe the image you want to generate..."
                 }
                 disabled={isLoading}
                 className="flex-1"
+                autoSize={{ minRows: 1, maxRows: 6 }}
+                style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
               />
               {isLoading ? (
                 <Button
