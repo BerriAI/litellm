@@ -1,0 +1,137 @@
+---
+title: v1.66.0-stable
+slug: v1.66.0-stable
+date: 2025-04-12T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+
+tags: []
+hide_table_of_contents: false
+---
+
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Deploy this version
+
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+``` showLineNumbers title="docker run litellm"
+docker run
+-e STORE_MODEL_IN_DB=True
+-p 4000:4000
+ghcr.io/berriai/litellm:main-v1.66.0-stable
+```
+</TabItem>
+
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.66.0.post1
+```
+</TabItem>
+</Tabs>
+
+v1.66.0-stable is live now, here are the key highlights of this release
+
+## Key Highlights
+- **Realtime API Cost Tracking**: Track API costs in real-time with token usage metrics in spend logs
+- **Team Member Permissions**: New CRUD endpoints for managing team member permissions
+- **Managed Files**: Support for CRUD endpoints for managing files across providers
+- **SSO Improvements**: Connect LiteLLM to Azure Entra ID and auto-assign users to teams
+- **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
+
+Let's dive in.
+
+## New Models / Updated Models
+
+1. xAI - Added support for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
+2. xAI - Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
+3. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
+4. Google - Cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
+5. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
+6. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+7. Gemini - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
+
+## LLM Translation
+
+1. Hugging Face - Added inference providers support [PR](https://github.com/BerriAI/litellm/pull/9773)
+2. Gemini - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
+3. VertexAI - Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
+4. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
+5. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
+6. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
+7. VertexAI - Non-jsonl file storage support [PR](https://github.com/BerriAI/litellm/pull/9781)
+8. Upload Files - Added support for UploadFile on LLM Pass through endpoints (OpenAI, Azure etc) [PR](https://github.com/BerriAI/litellm/pull/9853)
+9. Reasoning - Added litellm.supports_reasoning() util to track if an llm supports reasoning [PR](https://github.com/BerriAI/litellm/pull/9923)
+10. Fixed correctly translating 'thinking' param for litellm [PR](https://github.com/BerriAI/litellm/pull/9904)
+11. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
+12. Fixed indentation for message index increment in Ollama [PR](https://github.com/BerriAI/litellm/pull/9943)
+
+## Spend Tracking Improvements
+
+1. Realtime API Cost tracking with token usage metrics in spend logs [PR](https://github.com/BerriAI/litellm/pull/9795)
+2. Fixed Claude Haiku cache read pricing per token [PR](https://github.com/BerriAI/litellm/pull/9834)
+3. Added cost tracking for Claude responses with base_model [PR](https://github.com/BerriAI/litellm/pull/9897)
+4. Fixed Anthropic prompt caching cost calculation and trimmed logged message in db [PR](https://github.com/BerriAI/litellm/pull/9838)
+5. Added token tracking and log usage object in spend logs [PR](https://github.com/BerriAI/litellm/pull/9843)
+6. Handle custom pricing at deployment level [PR](https://github.com/BerriAI/litellm/pull/9855)
+7. Emit Key and Team Budget metrics on a cron job schedule [PR](https://github.com/BerriAI/litellm/pull/9528)
+
+## Management Endpoints / UI
+
+1. UI Bug Fixes:
+   - Fixed duplicate models on Team Admin models page [PR](https://github.com/BerriAI/litellm/pull/9775)
+   - Prevented team, key, org, model values changing on scroll [PR](https://github.com/BerriAI/litellm/pull/9776)
+   - Polished login screen [PR](https://github.com/BerriAI/litellm/pull/9778)
+   - Reflected key and team updates in UI [PR](https://github.com/BerriAI/litellm/pull/9825)
+   - Added rendering of Reasoning content, ttft, usage metrics on test key page [PR](https://github.com/BerriAI/litellm/pull/9931)
+   - Added Managing Team Member permissions on UI [PR](https://github.com/BerriAI/litellm/pull/9927)
+   - Fixed linting issues [PR](https://github.com/BerriAI/litellm/pull/9933)
+
+2. API Improvements:
+   - Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
+   - Added user alias to API endpoint [PR](https://github.com/BerriAI/litellm/pull/9859)
+   - Added support for CRUD endpoints for Managed Files [PR](https://github.com/BerriAI/litellm/pull/9924)
+   - Added Managed Files database support [PR](https://github.com/BerriAI/litellm/pull/9930)
+   - Added new column for team_member_permissions [PR](https://github.com/BerriAI/litellm/pull/9941)
+   - Added team member permissions fixes [PR](https://github.com/BerriAI/litellm/pull/9945)
+
+## SSO Improvements
+
+1. Added debug route to allow admins to debug SSO JWT fields [PR](https://github.com/BerriAI/litellm/pull/9835)
+2. Added ability to use MSFT Graph API to assign users to teams [PR](https://github.com/BerriAI/litellm/pull/9865)
+3. Connected LiteLLM to Azure Entra ID Enterprise Application [PR](https://github.com/BerriAI/litellm/pull/9872)
+4. Added ability for admins to set `default_team_params` for when litellm SSO creates default teams [PR](https://github.com/BerriAI/litellm/pull/9895)
+5. Fixed MSFT SSO to use correct field for user email [PR](https://github.com/BerriAI/litellm/pull/9886)
+6. Added tutorial for using MSFT auto team assignment with LiteLLM [PR](https://github.com/BerriAI/litellm/pull/9898)
+7. Added UI support for setting Default Team setting when LiteLLM SSO auto creates teams [PR](https://github.com/BerriAI/litellm/pull/9918)
+
+## Security Fixes
+
+1. Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) - Leakage of Langfuse API keys in team exception handling [PR](https://github.com/BerriAI/litellm/pull/9830)
+2. Fixed [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) - Remote code execution in post call rules [PR](https://github.com/BerriAI/litellm/pull/9826)
+
+## Helm
+
+1. Added service annotations to litellm-helm chart [PR](https://github.com/BerriAI/litellm/pull/9840)
+2. Added extraEnvVars to the helm deployment [PR](https://github.com/BerriAI/litellm/pull/9292)
+
+## Demo
+
+Try this on the demo instance [today](https://docs.litellm.ai/docs/proxy/demo)
+
+## Complete Git Diff
+
+See the complete git diff since v1.65.4-stable, [here](https://github.com/BerriAI/litellm/releases/tag/v1.66.0-stable)
+
+
