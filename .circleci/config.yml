@@ -2404,7 +2404,6 @@ jobs:
       - run:
           name: Check if litellm-proxy-extras dir or pyproject.toml was modified
           command: |
-            cd litellm-proxy-extras
             # Get current version from pyproject.toml
             CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             
