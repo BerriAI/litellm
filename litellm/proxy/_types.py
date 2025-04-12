@@ -435,21 +435,19 @@ class LiteLLMRoutes(enum.Enum):
         "/get/litellm_model_cost_map",
     ] + info_routes
 
-    internal_user_routes = [
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
-        "/key/delete",
-        "/key/health",
-        "/key/info",
-        "/global/spend/tags",
-        "/global/spend/keys",
-        "/global/spend/models",
-        "/global/spend/provider",
-        "/global/spend/end_users",
-        "/global/activity",
-        "/global/activity/model",
-    ] + spend_tracking_routes
+    internal_user_routes = (
+        [
+            "/global/spend/tags",
+            "/global/spend/keys",
+            "/global/spend/models",
+            "/global/spend/provider",
+            "/global/spend/end_users",
+            "/global/activity",
+            "/global/activity/model",
+        ]
+        + spend_tracking_routes
+        + key_management_routes
+    )
 
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes
@@ -983,6 +981,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     admins: list = []
     members: list = []
     members_with_roles: List[Member] = []
+    team_member_permissions: Optional[List[str]] = None
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1138,7 +1137,6 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    team_member_permissions: Optional[List[str]] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     created_at: Optional[datetime] = None
 
