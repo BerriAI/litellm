@@ -85,7 +85,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.utils import CallTypes, LoggedLiteLLMParams
+from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -278,6 +278,7 @@ class ProxyLogging:
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.proxy_hook_mapping: Dict[str, CustomLogger] = {}
 
     def startup_event(
         self,
@@ -354,15 +355,31 @@ class ProxyLogging:
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
     def _add_proxy_hooks(self, llm_router: Optional[Router] = None):
+        """
+        Add proxy hooks to litellm.callbacks
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
             import inspect
 
             expected_args = inspect.getfullargspec(proxy_hook).args
+            passed_in_args: Dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
-                litellm.logging_callback_manager.add_litellm_callback(proxy_hook(self.internal_usage_cache))  # type: ignore
-            else:
-                litellm.logging_callback_manager.add_litellm_callback(proxy_hook())  # type: ignore
+                passed_in_args["internal_usage_cache"] = self.internal_usage_cache
+            if "prisma_client" in expected_args:
+                passed_in_args["prisma_client"] = prisma_client
+            proxy_hook_obj = cast(CustomLogger, proxy_hook(**passed_in_args))
+            litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
+
+            self.proxy_hook_mapping[hook] = proxy_hook_obj
+
+    def get_proxy_hook(self, hook: str) -> Optional[CustomLogger]:
+        """
+        Get a proxy hook from the proxy_hook_mapping
+        """
+        return self.proxy_hook_mapping.get(hook)
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         self._add_proxy_hooks(llm_router)
@@ -940,7 +957,7 @@ class ProxyLogging:
     async def post_call_success_hook(
         self,
         data: dict,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ):
         """
@@ -948,6 +965,9 @@ class ProxyLogging:
 
         Covers:
         1. /chat/completions
+        2. /embeddings
+        3. /image/generation
+        4. /files
         """
 
         for callback in litellm.callbacks:
