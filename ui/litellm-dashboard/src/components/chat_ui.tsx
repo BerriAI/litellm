@@ -35,6 +35,7 @@ import TagSelector from "./tag_management/TagSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
+import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -185,6 +186,47 @@ const ChatUI: React.FC<ChatUIProps> = ({
     });
   };
 
+  const updateTimingData = (timeToFirstToken: number) => {
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+      
+      if (lastMessage && lastMessage.role === "assistant") {
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          { 
+            ...lastMessage,
+            timeToFirstToken
+          },
+        ];
+      }
+      
+      return prevHistory;
+    });
+  };
+
+  const updateUsageData = (usage: TokenUsage) => {
+    console.log("Received usage data:", usage);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+      
+      if (lastMessage && lastMessage.role === "assistant") {
+        console.log("Updating message with usage data:", usage);
+        const updatedMessage = { 
+          ...lastMessage,
+          usage
+        };
+        console.log("Updated message:", updatedMessage);
+        
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          updatedMessage
+        ];
+      }
+      
+      return prevHistory;
+    });
+  };
+
   const updateImageUI = (imageUrl: string, model: string) => {
     setChatHistory((prevHistory) => [
       ...prevHistory,
@@ -248,7 +290,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal,
-            updateReasoningContent
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -502,6 +546,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       >
                         {message.content}
                       </ReactMarkdown>
+                    )}
+                                        
+                    {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
+                      <ResponseMetrics 
+                        timeToFirstToken={message.timeToFirstToken}
+                        usage={message.usage}
+                      />
                     )}
                   </div>
                 </div>

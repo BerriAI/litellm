@@ -1,7 +1,7 @@
 import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { message } from "antd";
-import { processStreamingResponse } from "./process_stream";
+import { TokenUsage } from "../ResponseMetrics";
 
 export async function makeOpenAIChatCompletionRequest(
     chatHistory: { role: string; content: string }[],
@@ -10,7 +10,9 @@ export async function makeOpenAIChatCompletionRequest(
     accessToken: string,
     tags?: string[],
     signal?: AbortSignal,
-    onReasoningContent?: (content: string) => void
+    onReasoningContent?: (content: string) => void,
+    onTimingData?: (timeToFirstToken: number) => void,
+    onUsageData?: (usage: TokenUsage) => void
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -22,13 +24,21 @@ export async function makeOpenAIChatCompletionRequest(
       ? "http://localhost:4000"
       : window.location.origin;
     const client = new openai.OpenAI({
-      apiKey: accessToken, // Replace with your OpenAI API key
-      baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
-      dangerouslyAllowBrowser: true, // using a temporary litellm proxy key
+      apiKey: accessToken,
+      baseURL: proxyBaseUrl,
+      dangerouslyAllowBrowser: true,
       defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
     });
   
     try {
+      const startTime = Date.now();
+      let firstTokenReceived = false;
+      let timeToFirstToken: number | undefined = undefined;
+      
+      // For collecting complete response text
+      let fullResponseContent = "";
+      let fullReasoningContent = "";
+
       const response = await client.chat.completions.create({
         model: selectedModel,
         stream: true,
@@ -36,12 +46,72 @@ export async function makeOpenAIChatCompletionRequest(
       }, { signal });
   
       for await (const chunk of response) {
-        console.log(chunk);
-        // Process the chunk using our utility
-        processStreamingResponse(chunk, {
-          onContent: updateUI,
-          onReasoningContent: onReasoningContent || (() => {})
-        });
+        console.log("Stream chunk:", chunk);
+        
+        // Measure time to first token
+        if (!firstTokenReceived && chunk.choices[0]?.delta?.content) {
+          firstTokenReceived = true;
+          timeToFirstToken = Date.now() - startTime;
+          if (onTimingData) {
+            onTimingData(timeToFirstToken);
+          }
+        }
+        
+        // Process content
+        if (chunk.choices[0]?.delta?.content) {
+          const content = chunk.choices[0].delta.content;
+          updateUI(content, chunk.model);
+          fullResponseContent += content;
+        }
+        
+        // Process reasoning content if present - using type assertion
+        const delta = chunk.choices[0]?.delta as any;
+        if (delta && delta.reasoning_content) {
+          const reasoningContent = delta.reasoning_content;
+          if (onReasoningContent) {
+            onReasoningContent(reasoningContent);
+          }
+          fullReasoningContent += reasoningContent;
+        }
+        
+        // Check for usage data using type assertion
+        const chunkWithUsage = chunk as any;
+        if (chunkWithUsage.usage && onUsageData) {
+          console.log("Usage data found:", chunkWithUsage.usage);
+          const usageData: TokenUsage = {
+            completionTokens: chunkWithUsage.usage.completion_tokens,
+            promptTokens: chunkWithUsage.usage.prompt_tokens,
+            totalTokens: chunkWithUsage.usage.total_tokens,
+          };
+          
+          // Check for reasoning tokens
+          if (chunkWithUsage.usage.completion_tokens_details?.reasoning_tokens) {
+            usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
+          }
+          
+          onUsageData(usageData);
+        }
+      }
+      
+      // Always create an estimated usage
+      if (onUsageData) {
+        try {
+          console.log("Creating estimated usage data");
+          // Create a simple usage estimate - approximately 4 characters per token
+          const estimatedUsage: TokenUsage = {
+            promptTokens: Math.ceil(JSON.stringify(chatHistory).length / 4), 
+            completionTokens: Math.ceil((fullResponseContent.length) / 4),
+            totalTokens: Math.ceil((JSON.stringify(chatHistory).length + fullResponseContent.length) / 4)
+          };
+          
+          if (fullReasoningContent) {
+            estimatedUsage.reasoningTokens = Math.ceil(fullReasoningContent.length / 4);
+          }
+          
+          onUsageData(estimatedUsage);
+        } catch (error) {
+          console.error("Error estimating usage data:", error);
+        }
       }
     } catch (error) {
       if (signal?.aborted) {
