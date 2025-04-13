@@ -2152,7 +2152,7 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
-    _model_cache.set_cached_model_info("openai", ["gpt-4o-mini"])
+    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
