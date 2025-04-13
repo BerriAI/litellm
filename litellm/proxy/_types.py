@@ -371,6 +371,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/block",
         "/team/unblock",
         "/team/available",
+        "/team/permissions_list",
+        "/team/permissions_update",
         # model
         "/model/new",
         "/model/update",
@@ -456,6 +458,8 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/permissions_list",
+        "/team/permissions_update",
         "/model/new",
         "/model/update",
         "/model/delete",
