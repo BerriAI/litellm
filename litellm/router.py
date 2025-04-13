@@ -339,9 +339,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -562,9 +562,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -1105,9 +1105,9 @@ class Router:
         """
         Adds default litellm params to kwargs, if set.
         """
-        self.default_litellm_params[metadata_variable_name] = (
-            self.default_litellm_params.pop("metadata", {})
-        )
+        self.default_litellm_params[
+            metadata_variable_name
+        ] = self.default_litellm_params.pop("metadata", {})
         for k, v in self.default_litellm_params.items():
             if (
                 k not in kwargs and v is not None
@@ -3243,11 +3243,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=context_window_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=context_window_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3279,11 +3279,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=content_policy_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -4856,7 +4856,7 @@ class Router:
         litellm_model_name_model_info: Optional[ModelInfo] = None
 
         try:
-            model_info = litellm.get_model_info(model=model_id)
+            model_info = litellm.model_cost.get(model_id)
         except Exception:
             pass
 
@@ -4870,9 +4870,11 @@ class Router:
                 ModelInfo,
                 _update_dictionary(
                     cast(dict, litellm_model_name_model_info).copy(),
-                    cast(dict, model_info),
+                    model_info,
                 ),
             )
+        elif litellm_model_name_model_info is not None:
+            model_info = litellm_model_name_model_info
 
         return model_info
 
