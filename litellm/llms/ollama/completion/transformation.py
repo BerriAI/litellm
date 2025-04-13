@@ -256,22 +256,41 @@ class OllamaConfig(BaseConfig):
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
-            function_call = json.loads(response_json["response"])
-            message = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{str(uuid.uuid4())}",
-                        "function": {
-                            "name": function_call["name"],
-                            "arguments": json.dumps(function_call["arguments"]),
-                        },
-                        "type": "function",
-                    }
-                ],
-            )
-            model_response.choices[0].message = message  # type: ignore
-            model_response.choices[0].finish_reason = "tool_calls"
+            try:
+                # Try to parse the response string as JSON
+                parsed_response_content = json.loads(response_json["response"])
+
+                # Check if the parsed content looks like the expected tool call format
+                if isinstance(parsed_response_content, dict) and "name" in parsed_response_content and "arguments" in parsed_response_content:
+                    # Looks like a tool call, proceed as before
+                    function_call = parsed_response_content
+                    message = litellm.Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": f"call_{str(uuid.uuid4())}",
+                                "function": {
+                                    "name": function_call["name"], # Now safe to access
+                                    "arguments": json.dumps(function_call["arguments"]),
+                                },
+                                "type": "function",
+                            }
+                        ],
+                    )
+                    model_response.choices[0].message = message
+                    model_response.choices[0].finish_reason = "tool_calls"
+                else:
+                    # Parsed JSON doesn't have "name"/"arguments" - treat as plain text
+                    # Fallback: Use the original JSON string as the text content
+                    print("\n--- DEBUG: Ollama JSON format received, but not a valid tool call. Treating as text. ---\n")
+                    model_response.choices[0].message.content = response_json["response"]
+                    model_response.choices[0].finish_reason = "stop"
+
+            except json.JSONDecodeError:
+                # If response_json["response"] wasn't valid JSON, treat as plain text
+                print("\n--- DEBUG: Ollama JSON format received, but failed to parse. Treating as text. ---\n")
+                model_response.choices[0].message.content = response_json["response"]
+                model_response.choices[0].finish_reason = "stop"
         else:
             model_response.choices[0].message.content = response_json["response"]  # type: ignore
         model_response.created = int(time.time())
