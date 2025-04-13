@@ -1264,6 +1264,14 @@ def client(original_function):  # noqa: PLR0915
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
+        # set up litellm_params, so that keys can be added (e.g. for tracking cache keys)
+        if "litellm_params" not in kwargs:
+            kwargs["litellm_params"] = {}
+            # without copying, something goes wrong deep in the cost logging,
+            # where metadata would be read from if litellm_params is None
+            if "metadata" in kwargs:
+                kwargs["litellm_params"]["metadata"] = kwargs["metadata"]
+
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
 
@@ -2794,23 +2802,33 @@ def _remove_additional_properties(schema):
 
 def _remove_strict_from_schema(schema):
     """
-    Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
+    Recursively removes 'strict' from schema. Returns a copy, in order to not break cache keys, (so you should update your reference)
+    
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088, 
     """
+    maybe_copy = None # make a copy to not break cache keys https://github.com/BerriAI/litellm/issues/9692
     if isinstance(schema, dict):
         # Remove the 'additionalProperties' key if it exists and is set to False
         if "strict" in schema:
-            del schema["strict"]
+            maybe_copy = schema.copy()
+            del maybe_copy["strict"]
 
         # Recursively process all dictionary values
         for key, value in schema.items():
-            _remove_strict_from_schema(value)
+            result = _remove_strict_from_schema(value)
+            if result is not value:
+                maybe_copy = maybe_copy or schema.copy()
+                maybe_copy[key] = result
 
     elif isinstance(schema, list):
         # Recursively process all items in the list
-        for item in schema:
-            _remove_strict_from_schema(item)
+        for i, item in enumerate(schema):
+            result = _remove_strict_from_schema(item)
+            if result is not item:
+                maybe_copy = maybe_copy or list(schema)
+                maybe_copy[i] = result
 
-    return schema
+    return maybe_copy or schema
 
 
 def _remove_unsupported_params(
