@@ -371,6 +371,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/block",
         "/team/unblock",
         "/team/available",
+        "/team/permissions_list",
+        "/team/permissions_update",
         # model
         "/model/new",
         "/model/update",
