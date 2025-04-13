@@ -232,7 +232,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <TabGroup defaultIndex={editTeam ? 2 : 0}>
+      <TabGroup defaultIndex={editTeam ? 3 : 0}>
         <TabList className="mb-4">
           {[
             <Tab key="overview">Overview</Tab>,
