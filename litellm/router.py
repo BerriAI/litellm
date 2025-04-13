@@ -4853,10 +4853,11 @@ class Router:
         from litellm.utils import _update_dictionary
 
         model_info: Optional[ModelInfo] = None
+        custom_model_info: Optional[dict] = None
         litellm_model_name_model_info: Optional[ModelInfo] = None
 
         try:
-            model_info = litellm.model_cost.get(model_id)
+            custom_model_info = litellm.model_cost.get(model_id)
         except Exception:
             pass
 
@@ -4865,12 +4866,12 @@ class Router:
         except Exception:
             pass
 
-        if model_info is not None and litellm_model_name_model_info is not None:
+        if custom_model_info is not None and litellm_model_name_model_info is not None:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
                     cast(dict, litellm_model_name_model_info).copy(),
-                    model_info,
+                    custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
