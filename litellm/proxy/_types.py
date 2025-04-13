@@ -458,6 +458,8 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/permissions_list",
+        "/team/permissions_update",
         "/model/new",
         "/model/update",
         "/model/delete",
