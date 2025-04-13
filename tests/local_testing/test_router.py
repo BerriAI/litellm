@@ -2767,3 +2767,24 @@ def test_router_dynamic_credentials():
     deployment = router.get_deployment(model_id=original_model_id)
     assert deployment is not None
     assert deployment.litellm_params.api_key == original_api_key
+
+
+def test_router_get_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+            },
+        ],
+    )
+
+    model_group_info = router.get_model_group_info(model_group="gpt-4")
+    assert model_group_info is not None
+    assert model_group_info.model_group == "gpt-4"
+    assert model_group_info.input_cost_per_token > 0
+    assert model_group_info.output_cost_per_token > 0
