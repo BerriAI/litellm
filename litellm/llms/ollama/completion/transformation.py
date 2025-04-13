@@ -282,13 +282,11 @@ class OllamaConfig(BaseConfig):
                 else:
                     # Parsed JSON doesn't have "name"/"arguments" - treat as plain text
                     # Fallback: Use the original JSON string as the text content
-                    print("\n--- DEBUG: Ollama JSON format received, but not a valid tool call. Treating as text. ---\n")
                     model_response.choices[0].message.content = response_json["response"]
                     model_response.choices[0].finish_reason = "stop"
 
             except json.JSONDecodeError:
                 # If response_json["response"] wasn't valid JSON, treat as plain text
-                print("\n--- DEBUG: Ollama JSON format received, but failed to parse. Treating as text. ---\n")
                 model_response.choices[0].message.content = response_json["response"]
                 model_response.choices[0].finish_reason = "stop"
         else:
