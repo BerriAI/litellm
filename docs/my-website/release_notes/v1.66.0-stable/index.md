@@ -1,5 +1,5 @@
 ---
-title: v1.66.0-stable
+title: v1.66.0-stable - Realtime API Cost Tracking
 slug: v1.66.0-stable
 date: 2025-04-12T10:00:00
 authors:
@@ -44,13 +44,30 @@ pip install litellm==1.66.0.post1
 v1.66.0-stable is live now, here are the key highlights of this release
 
 ## Key Highlights
+- **Realtime API Cost Tracking**: Track cost of realtime API calls
 - **Microsoft SSO Auto-sync**: Auto-sync groups and group members from Azure Entra ID to LiteLLM
 - **Unified File IDs**: Use the same file id across LLM API providers. 
-- **Realtime API Cost Tracking**: Track cost of realtime API calls
 - **xAI grok-3**: Added support for `xai/grok-3` models
 - **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
 
 Let's dive in.
+
+## Realtime API Cost Tracking
+
+<Image 
+  img={require('../../img/realtime_api.png')}
+  style={{width: '100%', display: 'block'}}
+/>
+
+
+This release adds Realtime API logging + cost tracking. 
+- **Logging**: LiteLLM now logs the complete response from realtime calls to all logging integrations (DB, S3, Langfuse, etc.) 
+- **Cost Tracking**: You can now set 'base_model' and custom pricing for realtime models. [Custom Pricing](../../docs/proxy/custom_pricing)
+- **Budgets**: Your key/user/team budgets now work for realtime models as well.
+
+Start [here](https://docs.litellm.ai/docs/realtime)
+
+
 
 ## Microsoft SSO Auto-sync
 
@@ -68,22 +85,6 @@ This release adds support for auto-syncing groups and members on Microsoft Entra
 - Sync team members on Microsoft Entra ID with LiteLLM teams
 
 Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
-
-## Realtime API Cost Tracking
-
-<Image 
-  img={require('../../img/realtime_api.png')}
-  style={{width: '100%', display: 'block'}}
-/>
-
-
-This release adds Realtime API logging + cost tracking. 
-- **Logging**: LiteLLM now logs the complete response from realtime calls to all logging integrations (DB, S3, Langfuse, etc.) 
-- **Cost Tracking**: You can now set 'base_model' and custom pricing for realtime models. [Custom Pricing](../../docs/proxy/custom_pricing)
-- **Budgets**: Your key/user/team budgets now work for realtime models as well.
-
-Start [here](https://docs.litellm.ai/docs/realtime)
-
 
 
 ## New Models / Updated Models
