@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.65.8"
+version = "1.66.0"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -118,7 +118,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.65.8"
+version = "1.66.0"
 version_files = [
     "pyproject.toml:^version"
 ]
