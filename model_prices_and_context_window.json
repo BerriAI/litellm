@@ -2182,6 +2182,32 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
         "supports_tool_choice": true
     },
+    "azure_ai/Llama-4-Scout-17B-16E-Instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.00000078,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
+        "supports_tool_choice": true
+    },
+    "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "max_tokens": 16384,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000141,
+        "output_cost_per_token": 0.00000035,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
+        "supports_tool_choice": true
+    },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
         "max_tokens": 2048,
         "max_input_tokens": 128000,
