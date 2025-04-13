@@ -5836,8 +5836,22 @@ class AvailableModelsCache(InMemoryCache):
             return True
         return current_hash != self._env_hash
 
+    def _get_cache_key(
+        self,
+        custom_llm_provider: Optional[str],
+        litellm_params: Optional[LiteLLM_Params],
+    ) -> str:
+        valid_str = ""
+        if litellm_params is not None:
+            valid_str = litellm_params.model_dump_json()
+        if custom_llm_provider is not None:
+            valid_str = f"{custom_llm_provider}:{valid_str}"
+        return hashlib.sha256(valid_str.encode()).hexdigest()
+
     def get_cached_model_info(
-        self, custom_llm_provider: Optional[str] = None
+        self,
+        custom_llm_provider: Optional[str] = None,
+        litellm_params: Optional[LiteLLM_Params] = None,
     ) -> Optional[List[str]]:
         """Get cached model info"""
         # Check if environment has changed
@@ -5845,17 +5859,23 @@ class AvailableModelsCache(InMemoryCache):
             self._cache.clear()
             return None
 
-        result = cast(Optional[List[str]], self.get_cache(custom_llm_provider))
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+
+        result = cast(Optional[List[str]], self.get_cache(cache_key))
 
         if result is not None:
             return copy.deepcopy(result)
         return result
 
     def set_cached_model_info(
-        self, custom_llm_provider: str, available_models: List[str]
+        self,
+        custom_llm_provider: str,
+        litellm_params: Optional[LiteLLM_Params],
+        available_models: List[str],
     ):
         """Set cached model info"""
-        self.set_cache(custom_llm_provider, copy.deepcopy(available_models))
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+        self.set_cache(cache_key, copy.deepcopy(available_models))
 
 
 # Global cache instance
@@ -5865,6 +5885,7 @@ _model_cache = AvailableModelsCache()
 def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
+    litellm_params: Optional[LiteLLM_Params] = None,
 ) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
@@ -5875,11 +5896,10 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
-    # Create cache key
-    cache_key = (check_provider_endpoint, custom_llm_provider)
-
     # Try to get from cache
-    cached_result = _model_cache.get_cached_model_info(custom_llm_provider)
+    cached_result = _model_cache.get_cached_model_info(
+        custom_llm_provider, litellm_params
+    )
     if cached_result is not None:
         return cached_result
 
@@ -5925,7 +5945,14 @@ def get_valid_models(
                 valid_models.append("Azure-LLM")
             elif provider_config is not None and check_provider_endpoint:
                 try:
-                    models = provider_config.get_models()
+                    models = provider_config.get_models(
+                        api_key=litellm_params.api_key
+                        if litellm_params is not None
+                        else None,
+                        api_base=litellm_params.api_base
+                        if litellm_params is not None
+                        else None,
+                    )
                     valid_models.extend(models)
                 except Exception as e:
                     verbose_logger.debug(f"Error getting valid models: {e}")
@@ -5935,7 +5962,9 @@ def get_valid_models(
                 )
                 valid_models.extend(models_for_provider)
         if custom_llm_provider:
-            _model_cache.set_cached_model_info(custom_llm_provider, valid_models)
+            _model_cache.set_cached_model_info(
+                custom_llm_provider, litellm_params, valid_models
+            )
         return valid_models
     except Exception as e:
         verbose_logger.debug(f"Error getting valid models: {e}")

@@ -2159,4 +2159,21 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
 
 
+def test_get_valid_models_from_dynamic_api_key():
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import get_valid_models
+    from litellm.types.router import CredentialLiteLLMParams
 
+    creds = CredentialLiteLLMParams(api_key="123")
+
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) == 0
+
+    creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) > 0
+    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    
+    
