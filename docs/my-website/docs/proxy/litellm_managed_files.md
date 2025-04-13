@@ -2,9 +2,9 @@ import TabItem from '@theme/TabItem';
 import Tabs from '@theme/Tabs';
 import Image from '@theme/IdealImage';
 
-# [BETA] LiteLLM Managed Files
+# [BETA] Unified File ID
 
-Use this to reuse the same 'file id' across different providers.
+Reuse the same 'file id' across different providers.
 
 | Feature | Description | Comments |
 | --- | --- | --- |
