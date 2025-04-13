@@ -2142,3 +2142,21 @@ def test_get_valid_models_from_provider():
     assert len(valid_models) > 0
     assert "gpt-4o-mini" in valid_models
 
+
+
+def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import _model_cache
+
+    monkeypatch.setenv("OPENAI_API_KEY", "123")
+
+    _model_cache.set_cached_model_info("openai", ["gpt-4o-mini"])
+    monkeypatch.delenv("OPENAI_API_KEY")
+
+    assert _model_cache.get_cached_model_info("openai") is None
+
+
+
+
