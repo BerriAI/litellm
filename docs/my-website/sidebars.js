@@ -340,7 +340,15 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        "files_endpoints",
+        
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
         "batches",
         "realtime",
         "fine_tuning",
@@ -436,6 +444,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/msft_sso",
+        "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
         {
           type: "category",
