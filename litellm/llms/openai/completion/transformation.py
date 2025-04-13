@@ -1,9 +1,13 @@
 """
-Support for gpt model family 
+Support for gpt model family
 """
 
 from typing import List, Optional, Union
 
+import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+)
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
@@ -150,7 +154,23 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = _transform_prompt(messages)
+        if model in litellm.custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = litellm.custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details.get("roles", {}),
+                initial_prompt_value=model_prompt_details.get(
+                    "initial_prompt_value", ""
+                ),
+                final_prompt_value=model_prompt_details.get(
+                    "final_prompt_value", ""
+                ),
+                bos_token=model_prompt_details.get("bos_token", ""),
+                eos_token=model_prompt_details.get("eos_token", ""),
+                messages=messages,
+            )
+        else:
+            prompt = _transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,
