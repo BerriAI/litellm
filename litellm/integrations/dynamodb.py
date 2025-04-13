@@ -3,10 +3,11 @@
 
 import os
 import traceback
-import uuid
-from typing import Any
+from decimal import Decimal
+from typing import Any, Optional, TypedDict, cast
 
 import litellm
+from litellm.types.utils import StandardLoggingPayload
 
 
 class DyanmoDBLogger:
@@ -25,6 +26,39 @@ class DyanmoDBLogger:
             )
         self.table_name = litellm.dynamodb_table_name
 
+    @classmethod
+    def convert_for_dynamodb(cls, value):
+        if value is None:
+            return None  # DynamoDB will reject this, but we'll filter None values later
+        elif isinstance(value, float):
+            return Decimal(str(value))
+        elif isinstance(value, (list, tuple)):
+            return [cls.convert_for_dynamodb(item) for item in value if item is not None]
+        elif isinstance(value, dict):
+            return {
+                k: cls.convert_for_dynamodb(v) 
+                for k, v in value.items() 
+                if v is not None
+            }
+        elif isinstance(value, str) and not value:
+            return None  # Empty strings aren't allowed in DynamoDB
+        return value
+
+    @classmethod
+    def prepare_for_dynamodb(cls, data) -> dict[str, Any]:
+        # First convert all floats to Decimal and handle nested structures
+        converted = {
+            k: cls.convert_for_dynamodb(v)
+            for k, v in data.items()
+            if v is not None  # Filter out None values
+        }
+        
+        # Remove any remaining empty lists, dicts, or None values
+        return {
+            k: v for k, v in converted.items()
+            if v is not None and not (isinstance(v, (list, dict)) and len(v) == 0)
+        }
+
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, print_verbose
     ):
@@ -42,41 +76,41 @@ class DyanmoDBLogger:
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "litellm.completion")
-            usage = response_obj["usage"]
-            id = response_obj.get("id", str(uuid.uuid4()))
 
-            # Build the initial payload
-            payload = {
-                "id": id,
-                "call_type": call_type,
-                "startTime": start_time,
-                "endTime": end_time,
-                "model": kwargs.get("model", ""),
-                "user": kwargs.get("user", ""),
-                "modelParameters": optional_params,
-                "messages": messages,
-                "response": response_obj,
-                "usage": usage,
-                "metadata": metadata,
-            }
+            # Clean Metadata before logging - never log raw metadata
+            # the raw metadata can contain circular references which leads to infinite recursion
+            # we clean out all extra litellm metadata params before logging
+            clean_metadata = {}
+            if isinstance(metadata, dict):
+                for key, value in metadata.items():
+                    # clean litellm metadata before logging
+                    if key in [
+                        "headers",
+                        "endpoint",
+                        "caching_groups",
+                        "previous_models",
+                    ]:
+                        continue
+                    else:
+                        clean_metadata[key] = value
+
 
             # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except Exception:
-                    # non blocking if it can't cast to a str
-                    pass
+            payload: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+
+            if payload is None:
+                return
 
             print_verbose(f"\nDynamoDB Logger - Logging payload = {payload}")
 
+            dynamodb_payload = self.prepare_for_dynamodb(payload)
+
             # put data in dyanmo DB
             table = self.dynamodb.Table(self.table_name)
-            # Assuming log_data is a dictionary with log information
-            response = table.put_item(Item=payload)
+            response = table.put_item(Item=dynamodb_payload)
 
             print_verbose(f"Response from DynamoDB:{str(response)}")
 
@@ -84,6 +118,7 @@ class DyanmoDBLogger:
                 f"DynamoDB Layer Logging - final response object: {response_obj}"
             )
             return response
+
         except Exception:
             print_verbose(f"DynamoDB Layer Error - {traceback.format_exc()}")
             pass
