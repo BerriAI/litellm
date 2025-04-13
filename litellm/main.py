@@ -58,6 +58,7 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
+from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
@@ -196,7 +197,6 @@ from .types.utils import (
     all_litellm_params,
 )
 
-encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     Choices,
     EmbeddingResponse,
@@ -1429,7 +1429,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
-                    encoding=encoding,
+                    encoding=encoding(),
                     stream=stream,
                 )
             except Exception as e:
@@ -1481,7 +1481,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     timeout=timeout,  # type: ignore
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     custom_llm_provider=custom_llm_provider,
-                    encoding=encoding,
+                    encoding=encoding(),
                     stream=stream,
                 )
             except Exception as e:
@@ -1635,7 +1635,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
+                encoding=encoding(),
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
@@ -1671,7 +1671,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
+                encoding=encoding(),
                 stream=stream,
             )
         elif (
@@ -1803,7 +1803,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
+                encoding=encoding(),  # for calculating input/output tokens
                 api_key=replicate_key,
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
@@ -1854,7 +1854,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="clarifai",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=clarifai_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
@@ -1889,7 +1889,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="anthropic_text",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
@@ -1925,7 +1925,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
+                encoding=encoding(),  # for calculating input/output tokens
                 api_key=api_key,
                 logging_obj=logging,
                 headers=headers,
@@ -1965,7 +1965,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=nlp_cloud_key,
                 logging_obj=logging,
             )
@@ -2013,7 +2013,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 default_max_tokens_to_sample=litellm.max_tokens,
                 api_key=aleph_alpha_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
@@ -2064,7 +2064,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="cohere",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
@@ -2104,7 +2104,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="cohere_chat",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
@@ -2132,7 +2132,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=maritalk_key,
                 logging_obj=logging,
                 custom_llm_provider="maritalk",
@@ -2163,7 +2163,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,  # type: ignore
                 client=client,
                 custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
+                encoding=encoding(),
                 stream=stream,
             )
         elif custom_llm_provider == "oobabooga":
@@ -2178,7 +2178,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 litellm_params=litellm_params,
                 api_key=None,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
             )
             if "stream" in optional_params and optional_params["stream"] is True:
@@ -2222,7 +2222,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider="databricks",
                     timeout=timeout,
                     headers=headers,
-                    encoding=encoding,
+                    encoding=encoding(),
                     api_key=api_key,
                     logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                     client=client,
@@ -2302,7 +2302,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="openrouter",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
@@ -2361,7 +2361,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=new_params,
                 litellm_params=litellm_params,  # type: ignore
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
                 vertex_credentials=vertex_credentials,
@@ -2412,7 +2412,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=new_params,
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
-                    encoding=encoding,
+                    encoding=encoding(),
                     api_base=api_base,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
@@ -2436,7 +2436,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=new_params,
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
-                    encoding=encoding,
+                    encoding=encoding(),
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
@@ -2459,7 +2459,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=new_params,
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
-                    encoding=encoding,
+                    encoding=encoding(),
                     api_base=api_base,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
@@ -2480,7 +2480,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=new_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
-                    encoding=encoding,
+                    encoding=encoding(),
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
@@ -2537,7 +2537,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 acompletion=acompletion,
                 api_base=api_base,
@@ -2577,7 +2577,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 acompletion=acompletion,
                 api_base=api_base,
@@ -2605,7 +2605,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
                 custom_prompt_dict=custom_prompt_dict,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 acompletion=acompletion,
                 client=client,
@@ -2625,7 +2625,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_prompt_dict=custom_prompt_dict,
                 hf_model_name=hf_model_name,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 acompletion=acompletion,
             )
@@ -2669,7 +2669,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=optional_params,
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
-                    encoding=encoding,
+                    encoding=encoding(),
                     logging_obj=logging,
                     extra_headers=extra_headers,
                     timeout=timeout,
@@ -2691,7 +2691,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider="bedrock",
                     timeout=timeout,
                     headers=headers,
-                    encoding=encoding,
+                    encoding=encoding(),
                     api_key=api_key,
                     logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                     client=client,
@@ -2709,7 +2709,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider="bedrock",
                     timeout=timeout,
                     headers=headers,
-                    encoding=encoding,
+                    encoding=encoding(),
                     api_key=api_key,
                     logging_obj=logging,
                     client=client,
@@ -2731,7 +2731,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
-                encoding=encoding,
+                encoding=encoding(),
                 custom_llm_provider="watsonx",
             )
         elif custom_llm_provider == "watsonx_text":
@@ -2792,7 +2792,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="watsonx_text",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
@@ -2808,7 +2808,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
             )
 
@@ -2845,7 +2845,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="ollama",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
@@ -2875,7 +2875,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 acompletion=acompletion,
                 model_response=model_response,
-                encoding=encoding,
+                encoding=encoding(),
                 client=client,
             )
             if acompletion is True or optional_params.get("stream", False) is True:
@@ -2897,7 +2897,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,
             )
@@ -2929,7 +2929,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="cloudflare",
                 timeout=timeout,
                 headers=headers,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
@@ -2953,7 +2953,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=baseten_key,
                 logging_obj=logging,
             )
@@ -2983,7 +2983,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 client=client,
             )
@@ -3017,7 +3017,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
-                    encoding=encoding,
+                    encoding=encoding(),
                     stream=stream,
                 )
 
@@ -3128,7 +3128,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
-                encoding=encoding,
+                encoding=encoding(),
             )
             if stream is True:
                 return CustomStreamWrapper(
@@ -3589,7 +3589,7 @@ def embedding(  # noqa: PLR0915
                 model=model,
                 input=input,
                 optional_params=optional_params,
-                encoding=encoding,
+                encoding=encoding(),
                 api_key=cohere_key,  # type: ignore
                 headers=headers,
                 logging_obj=logging,
@@ -3608,7 +3608,7 @@ def embedding(  # noqa: PLR0915
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,  # type: ignore
+                encoding=encoding(),  # type: ignore
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -3626,7 +3626,7 @@ def embedding(  # noqa: PLR0915
             response = bedrock_embedding.embeddings(
                 model=model,
                 input=transformed_input,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
@@ -3667,7 +3667,7 @@ def embedding(  # noqa: PLR0915
             response = google_batch_embeddings.batch_embeddings(  # type: ignore
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
@@ -3721,7 +3721,7 @@ def embedding(  # noqa: PLR0915
                 response = vertex_multimodal_embedding.multimodal_embedding(
                     model=model,
                     input=input,
-                    encoding=encoding,
+                    encoding=encoding(),
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params_dict,
@@ -3739,7 +3739,7 @@ def embedding(  # noqa: PLR0915
                 response = vertex_embedding.embedding(
                     model=model,
                     input=input,
-                    encoding=encoding,
+                    encoding=encoding(),
                     logging_obj=logging,
                     optional_params=optional_params,
                     model_response=EmbeddingResponse(),
@@ -3758,7 +3758,7 @@ def embedding(  # noqa: PLR0915
             response = oobabooga.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding(),
                 api_base=api_base,
                 logging_obj=logging,
                 optional_params=optional_params,
@@ -3790,7 +3790,7 @@ def embedding(  # noqa: PLR0915
                 api_base=api_base,
                 model=model,
                 prompts=input,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
@@ -3799,7 +3799,7 @@ def embedding(  # noqa: PLR0915
             response = sagemaker_llm.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding(),
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
