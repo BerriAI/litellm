@@ -5910,6 +5910,30 @@ def _infer_valid_provider_from_env_vars(
     return valid_providers
 
 
+def _get_valid_models_from_provider_api(
+    provider_config: BaseLLMModelInfo,
+    custom_llm_provider: str,
+    litellm_params: Optional[LiteLLM_Params] = None,
+) -> List[str]:
+    try:
+        cached_result = _model_cache.get_cached_model_info(
+            custom_llm_provider, litellm_params
+        )
+
+        if cached_result is not None:
+            return cached_result
+        models = provider_config.get_models(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+        )
+
+        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        return models
+    except Exception as e:
+        verbose_logger.debug(f"Error getting valid models: {e}")
+        return []
+
+
 def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5924,14 +5948,6 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
-
-    # Try to get from cache
-    cached_result = _model_cache.get_cached_model_info(
-        custom_llm_provider, litellm_params
-    )
-
-    if cached_result is not None:
-        return cached_result
 
     try:
         check_provider_endpoint = (
@@ -5959,28 +5975,24 @@ def get_valid_models(
 
             if provider == "azure":
                 valid_models.append("Azure-LLM")
-            elif provider_config is not None and check_provider_endpoint:
-                try:
-                    models = provider_config.get_models(
-                        api_key=litellm_params.api_key
-                        if litellm_params is not None
-                        else None,
-                        api_base=litellm_params.api_base
-                        if litellm_params is not None
-                        else None,
+            elif (
+                provider_config is not None
+                and check_provider_endpoint
+                and custom_llm_provider is not None
+            ):
+                valid_models.extend(
+                    _get_valid_models_from_provider_api(
+                        provider_config,
+                        custom_llm_provider,
+                        litellm_params,
                     )
-                    valid_models.extend(models)
-                except Exception as e:
-                    verbose_logger.debug(f"Error getting valid models: {e}")
+                )
             else:
                 models_for_provider = copy.deepcopy(
                     litellm.models_by_provider.get(provider, [])
                 )
                 valid_models.extend(models_for_provider)
-        if custom_llm_provider:
-            _model_cache.set_cached_model_info(
-                custom_llm_provider, litellm_params, valid_models
-            )
+
         return valid_models
     except Exception as e:
         verbose_logger.debug(f"Error getting valid models: {e}")
