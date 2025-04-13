@@ -46,7 +46,6 @@ v1.66.0-stable is live now, here are the key highlights of this release
 ## Key Highlights
 - **Realtime API Cost Tracking**: Track cost of realtime API calls
 - **Microsoft SSO Auto-sync**: Auto-sync groups and group members from Azure Entra ID to LiteLLM
-- **Unified File IDs**: Use the same file id across LLM API providers. 
 - **xAI grok-3**: Added support for `xai/grok-3` models
 - **Security Fixes**: Fixed [CVE-2025-0330](https://www.cve.org/CVERecord?id=CVE-2025-0330) and [CVE-2024-6825](https://www.cve.org/CVERecord?id=CVE-2024-6825) vulnerabilities
 
