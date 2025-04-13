@@ -76,36 +76,36 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
 ## New Models / Updated Models
 
 - xAI
-    1. Added cost tracking for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
-    2. Added reasoning_effort support for `xai/grok-3-mini-beta` model family [PR](https://github.com/BerriAI/litellm/pull/9932)
+    1. Added reasoning_effort support for `xai/grok-3-mini-beta` [Get Started](https://docs.litellm.ai/docs/providers/xai#reasoning-usage)
+    2. Added cost tracking for `xai/grok-3` models [PR](https://github.com/BerriAI/litellm/pull/9920)
 
 - Hugging Face
-    1. Hugging Face - Added inference providers support [Getting Started](https://docs.litellm.ai/docs/providers/huggingface#serverless-inference-providers)
+    1. Added inference providers support [Get Started](https://docs.litellm.ai/docs/providers/huggingface#serverless-inference-providers)
 
 - Azure
-    1. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+    1. Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
 
 - VertexAI
-    1. VertexAI - Added enterpriseWebSearch tool support [PR](https://github.com/BerriAI/litellm/pull/9856)
-    2. VertexAI - Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
+    1. Added enterpriseWebSearch tool support [Get Started](https://docs.litellm.ai/docs/providers/vertex#grounding---web-search)
+    2. Moved to only passing in accepted keys by vertex ai response schema [PR](https://github.com/BerriAI/litellm/pull/8992)
 
 - Google AI Studio
-    1. Google AI Studio - Added cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
-    2. Google AI Studio - Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
-    3. Google AI Studio - Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
+    1. Added cost tracking for `gemini-2.5-pro` [PR](https://github.com/BerriAI/litellm/pull/9837)
+    2. Fixed pricing for 'gemini/gemini-2.5-pro-preview-03-25' [PR](https://github.com/BerriAI/litellm/pull/9896)
+    3. Fixed handling file_data being passed in [PR](https://github.com/BerriAI/litellm/pull/9786)
 
 - Azure
-    1. Azure - Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
-    2. Azure - Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
+    1. Updated Azure Phi-4 pricing [PR](https://github.com/BerriAI/litellm/pull/9862)
+    2. Added azure/gpt-4o-realtime-audio cost tracking [PR](https://github.com/BerriAI/litellm/pull/9893)
 
 - Databricks
-    1. Databricks - Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
+    1. Removed reasoning_effort from parameters [PR](https://github.com/BerriAI/litellm/pull/9811)
     2. Fixed custom endpoint check for Databricks [PR](https://github.com/BerriAI/litellm/pull/9925)
 
 - General
-    1. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
-    2. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
-    3. Reasoning - Added litellm.supports_reasoning() util to track if an llm supports reasoning [PR](https://github.com/BerriAI/litellm/pull/9923)
+    1. Added litellm.supports_reasoning() util to track if an llm supports reasoning [Get Started](https://docs.litellm.ai/docs/providers/anthropic#reasoning)
+    2. Function Calling - Handle pydantic base model in message tool calls, handle tools = [], and support fake streaming on tool calls for meta.llama3-3-70b-instruct-v1:0 [PR](https://github.com/BerriAI/litellm/pull/9774)
+    3. LiteLLM Proxy - Allow passing `thinking` param to litellm proxy via client sdk [PR](https://github.com/BerriAI/litellm/pull/9386)
     4. Fixed correctly translating 'thinking' param for litellm [PR](https://github.com/BerriAI/litellm/pull/9904)
 
 
