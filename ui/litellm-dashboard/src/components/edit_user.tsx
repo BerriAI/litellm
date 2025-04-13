@@ -114,7 +114,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               tooltip="(float) - Spend of all LLM calls completed by this user"
               help="Across all keys (including keys with team_id)."
             >
-              <InputNumber min={0} step={1} />
+              <InputNumber min={0} step={0.01} />
             </Form.Item>
 
             <Form.Item
