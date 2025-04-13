@@ -18,6 +18,7 @@ import {
     Input,
     Select as Select2,
     message,
+    InputNumber,
   } from "antd";
 
 import NumericalInput from "./shared/numerical_input";
@@ -113,7 +114,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               tooltip="(float) - Spend of all LLM calls completed by this user"
               help="Across all keys (including keys with team_id)."
             >
-              <NumericalInput min={0} step={1} />
+              <InputNumber min={0} step={0.01} />
             </Form.Item>
 
             <Form.Item
@@ -122,7 +123,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               tooltip="(float) - Maximum budget of this user"
               help="Maximum budget of this user."
             >
-              <NumericalInput min={0} step={1} />
+              <NumericalInput min={0} step={0.01} />
             </Form.Item>
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
