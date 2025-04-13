@@ -111,7 +111,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
 ## Spend Tracking Improvements
 - OpenAI, Azure
-    1. Realtime API Cost tracking with token usage metrics in spend logs [PR](https://github.com/BerriAI/litellm/pull/9795)
+    1. Realtime API Cost tracking with token usage metrics in spend logs [Get Started](https://docs.litellm.ai/docs/realtime)
 - Anthropic
     1. Fixed Claude Haiku cache read pricing per token [PR](https://github.com/BerriAI/litellm/pull/9834)
     2. Added cost tracking for Claude responses with base_model [PR](https://github.com/BerriAI/litellm/pull/9897)
@@ -134,7 +134,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
     View input, output, reasoning tokens, ttft metrics.
     </p>
 2. Tag / Policy Management:
-    1. Added Tag/Policy Management [PR](https://github.com/BerriAI/litellm/pull/9813)
+    1. Added Tag/Policy Management. Create routing rules based on request metadata. This allows you to enforce requests with `tags="private"` only go to specific models. [Get Started](https://docs.litellm.ai/docs/tutorials/tag_management)
 
     <Image 
     img={require('../../img/release_notes/tag_management.png')}
@@ -159,7 +159,7 @@ Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
 ## Logging / Guardrail Improvements
 
 1. Prometheus:
-    - Emit Key and Team Budget metrics on a cron job schedule [PR](https://github.com/BerriAI/litellm/pull/9528)
+    - Emit Key and Team Budget metrics on a cron job schedule [Get Started](https://docs.litellm.ai/docs/proxy/prometheus#initialize-budget-metrics-on-startup)
 
 ## Security Fixes
 
