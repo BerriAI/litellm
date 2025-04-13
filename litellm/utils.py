@@ -5845,13 +5845,17 @@ class AvailableModelsCache(InMemoryCache):
             self._cache.clear()
             return None
 
-        return cast(Optional[List[str]], self.get_cache(custom_llm_provider))
+        result = cast(Optional[List[str]], self.get_cache(custom_llm_provider))
+
+        if result is not None:
+            return copy.deepcopy(result)
+        return result
 
     def set_cached_model_info(
         self, custom_llm_provider: str, available_models: List[str]
     ):
         """Set cached model info"""
-        self.set_cache(custom_llm_provider, available_models)
+        self.set_cache(custom_llm_provider, copy.deepcopy(available_models))
 
 
 # Global cache instance
