@@ -5842,6 +5842,7 @@ class AvailableModelsCache(InMemoryCache):
         litellm_params: Optional[LiteLLM_Params],
     ) -> str:
         valid_str = ""
+
         if litellm_params is not None:
             valid_str = litellm_params.model_dump_json()
         if custom_llm_provider is not None:
@@ -5882,6 +5883,33 @@ class AvailableModelsCache(InMemoryCache):
 _model_cache = AvailableModelsCache()
 
 
+def _infer_valid_provider_from_env_vars(
+    custom_llm_provider: Optional[str] = None,
+) -> List[str]:
+    valid_providers: List[str] = []
+    environ_keys = os.environ.keys()
+    for provider in litellm.provider_list:
+        if custom_llm_provider and provider != custom_llm_provider:
+            continue
+
+        # edge case litellm has together_ai as a provider, it should be togetherai
+        env_provider_1 = provider.replace("_", "")
+        env_provider_2 = provider
+
+        # litellm standardizes expected provider keys to
+        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
+        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
+        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
+        if (
+            expected_provider_key_1 in environ_keys
+            or expected_provider_key_2 in environ_keys
+        ):
+            # key is set
+            valid_providers.append(provider)
+
+    return valid_providers
+
+
 def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5896,10 +5924,12 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
+
     # Try to get from cache
     cached_result = _model_cache.get_cached_model_info(
         custom_llm_provider, litellm_params
     )
+
     if cached_result is not None:
         return cached_result
 
@@ -5908,29 +5938,15 @@ def get_valid_models(
             check_provider_endpoint or litellm.check_provider_endpoint
         )
         # get keys set in .env
-        environ_keys = os.environ.keys()
-        valid_providers = []
+
+        valid_providers: List[str] = []
+        valid_models: List[str] = []
         # for all valid providers, make a list of supported llms
-        valid_models = []
 
-        for provider in litellm.provider_list:
-            if custom_llm_provider and provider != custom_llm_provider:
-                continue
-
-            # edge case litellm has together_ai as a provider, it should be togetherai
-            env_provider_1 = provider.replace("_", "")
-            env_provider_2 = provider
-
-            # litellm standardizes expected provider keys to
-            # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-            expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-            expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-            if (
-                expected_provider_key_1 in environ_keys
-                or expected_provider_key_2 in environ_keys
-            ):
-                # key is set
-                valid_providers.append(provider)
+        if custom_llm_provider and litellm_params:
+            valid_providers = [custom_llm_provider]
+        else:
+            valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
 
         for provider in valid_providers:
             provider_config = ProviderConfigManager.get_provider_model_info(
