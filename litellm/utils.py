@@ -5813,11 +5813,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 class AvailableModelsCache(InMemoryCache):
     def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
         super().__init__(ttl_seconds, max_size)
-        self._cache = {}
-        self._ttl = ttl_seconds
-        self._max_size = max_size
-        self._env_hash = None
-        self._last_check_time = 0
+        self._env_hash: Optional[str] = None
 
     def _get_env_hash(self) -> str:
         """Create a hash of relevant environment variables"""
@@ -5856,8 +5852,8 @@ class AvailableModelsCache(InMemoryCache):
     ) -> Optional[List[str]]:
         """Get cached model info"""
         # Check if environment has changed
-        if self._check_env_changed():
-            self._cache.clear()
+        if litellm_params is None and self._check_env_changed():
+            self.cache_dict.clear()
             return None
 
         cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
