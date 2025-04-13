@@ -5807,6 +5807,57 @@ def trim_messages(
         return messages
 
 
+from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class AvailableModelsCache(InMemoryCache):
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
+        super().__init__(ttl_seconds, max_size)
+        self._cache = {}
+        self._ttl = ttl_seconds
+        self._max_size = max_size
+        self._env_hash = None
+        self._last_check_time = 0
+
+    def _get_env_hash(self) -> str:
+        """Create a hash of relevant environment variables"""
+        env_vars = {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith(("OPENAI", "ANTHROPIC", "AZURE", "AWS"))
+        }
+        return str(hash(frozenset(env_vars.items())))
+
+    def _check_env_changed(self) -> bool:
+        """Check if environment variables have changed"""
+        current_hash = self._get_env_hash()
+        if self._env_hash is None:
+            self._env_hash = current_hash
+            return True
+        return current_hash != self._env_hash
+
+    def get_cached_model_info(
+        self, custom_llm_provider: Optional[str] = None
+    ) -> Optional[List[str]]:
+        """Get cached model info"""
+        # Check if environment has changed
+        if self._check_env_changed():
+            self._cache.clear()
+            return None
+
+        return cast(Optional[List[str]], self.get_cache(custom_llm_provider))
+
+    def set_cached_model_info(
+        self, custom_llm_provider: str, available_models: List[str]
+    ):
+        """Set cached model info"""
+        self.set_cache(custom_llm_provider, available_models)
+
+
+# Global cache instance
+_model_cache = AvailableModelsCache()
+
+
 def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5820,6 +5871,14 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
+    # Create cache key
+    cache_key = (check_provider_endpoint, custom_llm_provider)
+
+    # Try to get from cache
+    cached_result = _model_cache.get_cached_model_info(custom_llm_provider)
+    if cached_result is not None:
+        return cached_result
+
     try:
         check_provider_endpoint = (
             check_provider_endpoint or litellm.check_provider_endpoint
@@ -5867,8 +5926,12 @@ def get_valid_models(
                 except Exception as e:
                     verbose_logger.debug(f"Error getting valid models: {e}")
             else:
-                models_for_provider = litellm.models_by_provider.get(provider, [])
+                models_for_provider = copy.deepcopy(
+                    litellm.models_by_provider.get(provider, [])
+                )
                 valid_models.extend(models_for_provider)
+        if custom_llm_provider:
+            _model_cache.set_cached_model_info(custom_llm_provider, valid_models)
         return valid_models
     except Exception as e:
         verbose_logger.debug(f"Error getting valid models: {e}")
