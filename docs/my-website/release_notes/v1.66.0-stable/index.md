@@ -12,7 +12,7 @@ authors:
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
 
-tags: []
+tags: ["sso", "unified_file_id", "cost_tracking", "security"]
 hide_table_of_contents: false
 ---
 
@@ -69,7 +69,20 @@ This release adds support for auto-syncing groups and members on Microsoft Entra
 
 Get started with this [here](https://docs.litellm.ai/docs/tutorials/msft_sso)
 
-## Unified File ID 
+## Realtime API Cost Tracking
+
+<Image 
+  img={require('../../img/realtime_api.png')}
+  style={{width: '100%', display: 'block'}}
+/>
+
+
+This release adds Realtime API logging + cost tracking. 
+- **Logging**: LiteLLM now logs the complete response from realtime calls to all logging integrations (DB, S3, Langfuse, etc.) 
+- **Cost Tracking**: You can now set 'base_model' and custom pricing for realtime models. [Custom Pricing](../../docs/proxy/custom_pricing)
+- **Budgets**: Your key/user/team budgets now work for realtime models as well.
+
+Start [here](https://docs.litellm.ai/docs/realtime)
 
 
 
