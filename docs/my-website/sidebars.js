@@ -188,7 +188,7 @@ const sidebars = {
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-        
+
         {
           type: "category",
           label: "Google AI Studio",
@@ -340,7 +340,7 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        
+
         {
           type: "category",
           label: "/files",
@@ -407,9 +407,9 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/langfuse_integration",
         "observability/lunary_integration",
         "observability/mlflow",
-        "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/literalai_integration",
