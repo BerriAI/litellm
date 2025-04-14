@@ -244,6 +244,8 @@ def test_watsonx_deployment(watsonx_chat_completion_call, model):
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
+
+    # nor space_id or project_id is required by wx.ai API when inferencing deployment
     assert "project_id" not in json_data and "space_id" not in json_data
 
 
@@ -255,4 +257,6 @@ def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_ca
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
-    assert "space_id" not in json_data
+
+    # nor space_id or project_id is required by wx.ai API when inferencing deployment
+    assert "project_id" not in json_data and "space_id" not in json_data
