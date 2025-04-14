@@ -400,6 +400,11 @@ async def generate_key_fn(  # noqa: PLR0915
             user_api_key_cache,
             user_custom_key_generate,
         )
+        from litellm.proxy.management_helpers.utils import validate_entity_exists
+
+        await validate_entity_exists(prisma_client, "user", data.user_id)
+        # await validate_entity_exists(prisma_client, "team", data.team_id) # TODO: causing substantial regressions in tests/proxy_admin_ui_tests/
+        await validate_entity_exists(prisma_client, "budget", data.budget_id)
 
         verbose_proxy_logger.debug("entered /key/generate")
 
