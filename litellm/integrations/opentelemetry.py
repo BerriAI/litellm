@@ -49,28 +49,37 @@ class OpenTelemetryConfig:
     exporter: Union[str, SpanExporter] = "console"
     endpoint: Optional[str] = None
     headers: Optional[str] = None
+    debug: Optional[str] = None
 
     @classmethod
     def from_env(cls):
         """
-        OTEL_HEADERS=x-honeycomb-team=B85YgLm9****
         OTEL_EXPORTER="otlp_http"
         OTEL_ENDPOINT="https://api.honeycomb.io/v1/traces"
+        OTEL_HEADERS=x-honeycomb-team=B85YgLm9****
+        DEBUG_OTEL="true"
 
         OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
         """
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-            InMemorySpanExporter,
-        )
 
-        if os.getenv("OTEL_EXPORTER") == "in_memory":
+        # Declare LiteLLM variables
+        exporter = os.getenv("OTEL_EXPORTER", "console")
+        endpoint = os.getenv("OTEL_ENDPOINT")
+        headers = os.getenv("OTEL_HEADERS")
+        debug = os.getenv("DEBUG_OTEL")
+
+        if exporter == "in_memory":
+            from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+                InMemorySpanExporter,
+            )
+
             return cls(exporter=InMemorySpanExporter())
+
         return cls(
-            exporter=os.getenv("OTEL_EXPORTER", "console"),
-            endpoint=os.getenv("OTEL_ENDPOINT"),
-            headers=os.getenv(
-                "OTEL_HEADERS"
-            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
+            exporter=exporter,
+            endpoint=endpoint,
+            headers=headers,
+            debug=str(debug).lower(),
         )
 
 
@@ -82,29 +91,20 @@ class OpenTelemetry(CustomLogger):
         **kwargs,
     ):
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
         if config is None:
             config = OpenTelemetryConfig.from_env()
 
         self.config = config
+        self.callback_name = callback_name
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
-        provider.add_span_processor(self._get_span_processor())
         self.callback_name = callback_name
-
-        trace.set_tracer_provider(provider)
-        self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
-
         self.span_kind = SpanKind
 
-        _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
-
-        if _debug_otel == "true":
+        if self.config.debug == "true":
             # Set up logging
             import logging
 
@@ -114,6 +114,16 @@ class OpenTelemetry(CustomLogger):
             # Enable OpenTelemetry logging
             otel_exporter_logger = logging.getLogger("opentelemetry.sdk.trace.export")
             otel_exporter_logger.setLevel(logging.DEBUG)
+
+        # Don't override the tracer provider set by `opentelemetry-instrument`
+        if trace.get_tracer_provider() is None:
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+
+            provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
+            provider.add_span_processor(self._get_span_processor())
+            trace.set_tracer_provider(provider)
+        self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
 
         # init CustomLogger params
         super().__init__(**kwargs)
@@ -816,12 +826,6 @@ class OpenTelemetry(CustomLogger):
             return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
     def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterGRPC,
-        )
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterHTTP,
-        )
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -843,22 +847,26 @@ class OpenTelemetry(CustomLogger):
             self.OTEL_EXPORTER, "export"
         ):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
-                "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
+                "OpenTelemetry: initializing SpanExporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
             return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
 
         if self.OTEL_EXPORTER == "console":
             verbose_logger.debug(
-                "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
+                "OpenTelemetry: initializing console exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
         elif self.OTEL_EXPORTER == "otlp_http":
             verbose_logger.debug(
-                "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
+                "OpenTelemetry: initializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter as OTLPSpanExporterHTTP,
+            )
+
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
@@ -866,9 +874,13 @@ class OpenTelemetry(CustomLogger):
             )
         elif self.OTEL_EXPORTER == "otlp_grpc":
             verbose_logger.debug(
-                "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
+                "OpenTelemetry: initializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter as OTLPSpanExporterGRPC,
+            )
+
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
@@ -876,7 +888,7 @@ class OpenTelemetry(CustomLogger):
             )
         else:
             verbose_logger.debug(
-                "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
+                "OpenTelemetry: initializing console exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
