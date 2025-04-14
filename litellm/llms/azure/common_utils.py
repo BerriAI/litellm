@@ -309,11 +309,17 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_ad_token_provider: Optional[Callable[[], str]] = None
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id")
-        client_id = litellm_params.get("client_id")
-        client_secret = litellm_params.get("client_secret")
-        azure_username = litellm_params.get("azure_username")
-        azure_password = litellm_params.get("azure_password")
+        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        client_secret = litellm_params.get(
+            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
+        )
+        azure_username = litellm_params.get(
+            "azure_username", os.getenv("AZURE_USERNAME")
+        )
+        azure_password = litellm_params.get(
+            "azure_password", os.getenv("AZURE_PASSWORD")
+        )
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if not api_key and tenant_id and client_id and client_secret:

@@ -78,6 +78,33 @@ def test_initialize_with_api_key(setup_mocks):
     assert result["azure_ad_token"] is None
 
 
+def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
+    monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
+
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_entrata_id was called
+    setup_mocks["entrata_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+    )
+
+    # Verify expected result
+    assert result["api_key"] is None
+    assert result["azure_endpoint"] == "https://test.openai.azure.com"
+    assert "azure_ad_token_provider" in result
+
+
 def test_initialize_with_tenant_credentials(setup_mocks):
     # Test with tenant_id, client_id, and client_secret provided
     result = BaseAzureLLM().initialize_azure_sdk_client(
