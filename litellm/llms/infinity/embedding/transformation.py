@@ -15,7 +15,7 @@ from ..common_utils import InfinityError
 
 class InfinityEmbeddingConfig(BaseEmbeddingConfig):
     """
-    Reference: #TODO
+    Reference: https://infinity.modal.michaelfeil.eu/docs
     """
 
     def __init__(self) -> None:
@@ -28,7 +28,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
             if not api_base.endswith("/embeddings"):
                 api_base = f"{api_base}/embeddings"
             return api_base
-        return "http://localhost:7997/"
+        return "https://infinity.modal.michaelfeil.eu"
     
     def validate_environment(
         self,
@@ -72,7 +72,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         """
         Map OpenAI params to Infinity params
 
-        Reference: #TODO
+        Reference: https://infinity.modal.michaelfeil.eu/docs
         """
         if "encoding_format" in non_default_params:
             optional_params["encoding_format"] = non_default_params["encoding_format"]
