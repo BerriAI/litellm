@@ -2725,6 +2725,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "infinity":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="infinity",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.InfinityEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -5099,6 +5114,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("VOYAGE_API_KEY")
+        elif custom_llm_provider == "infinity":
+            if "INFINITY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("INFINITY_API_KEY")
         elif custom_llm_provider == "fireworks_ai":
             if (
                 "FIREWORKS_AI_API_KEY" in os.environ
@@ -6406,6 +6426,8 @@ class ProviderConfigManager:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXEmbeddingConfig()
+        elif litellm.LlmProviders.INFINITY == provider:
+            return litellm.InfinityEmbeddingConfig()
         raise ValueError(f"Provider {provider.value} does not support embedding config")
 
     @staticmethod
