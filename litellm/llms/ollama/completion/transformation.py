@@ -270,8 +270,8 @@ class OllamaConfig(BaseConfig):
                             {
                                 "id": f"call_{str(uuid.uuid4())}",
                                 "function": {
-                                    "name": function_call["name"], # Now safe to access
-                                    "arguments": json.dumps(function_call["arguments"]),
+                                    "name": function_call["name"],  # type: ignore
+                                    "arguments": json.dumps(function_call["arguments"]),  # type: ignore
                                 },
                                 "type": "function",
                             }
