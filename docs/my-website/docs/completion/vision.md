@@ -6,10 +6,8 @@ import TabItem from '@theme/TabItem';
 ## Quick Start
 Example passing images to a model 
 
-
 <Tabs>
-
-<TabItem label="LiteLLMPython SDK" value="Python">
+<TabItem label="LiteLLM Python SDK" value="Python">
 
 ```python
 import os 
@@ -26,7 +24,7 @@ response = completion(
             "content": [
                             {
                                 "type": "text",
-                                "text": "What’s in this image?"
+                                "text": "What's in this image?"
                             },
                             {
                                 "type": "image_url",
@@ -38,14 +36,11 @@ response = completion(
         }
     ],
 )
-
 ```
-
 </TabItem>
 <TabItem label="LiteLLM Proxy Server" value="proxy">
 
 1. Define vision models on config.yaml
-
 ```yaml
 model_list:
   - model_name: gpt-4-vision-preview # OpenAI gpt-4-vision-preview
@@ -59,18 +54,14 @@ model_list:
       api_key: fake-key
     model_info:
       supports_vision: True        # set supports_vision to True so /model/info returns this attribute as True
-
 ```
 
 2. Run proxy server
-
 ```bash
 litellm --config config.yaml
 ```
 
 3. Test it using the OpenAI Python SDK
-
-
 ```python
 import os 
 from openai import OpenAI
@@ -87,7 +78,7 @@ response = client.chat.completions.create(
             "content": [
                             {
                                 "type": "text",
-                                "text": "What’s in this image?"
+                                "text": "What's in this image?"
                             },
                             {
                                 "type": "image_url",
@@ -99,23 +90,16 @@ response = client.chat.completions.create(
         }
     ],
 )
-
 ```
-
-
-
-
 </TabItem>
 </Tabs>
-
-
 
 ## Checking if a model supports `vision`
 
 <Tabs>
 <TabItem label="LiteLLM Python SDK" value="Python">
 
-Use `litellm.supports_vision(model="")` -> returns `True` if model supports `vision` and `False` if not
+Use litellm.supports_vision(model="") -> returns True if model supports vision and False if not
 
 ```python
 assert litellm.supports_vision(model="openai/gpt-4-vision-preview") == True
@@ -125,12 +109,9 @@ assert litellm.supports_vision(model="xai/grok-2-vision-latest") == True
 assert litellm.supports_vision(model="xai/grok-2-latest") == False
 ```
 </TabItem>
-
 <TabItem label="LiteLLM Proxy Server" value="proxy">
 
-
 1. Define vision models on config.yaml
-
 ```yaml
 model_list:
   - model_name: gpt-4-vision-preview # OpenAI gpt-4-vision-preview
@@ -147,13 +128,11 @@ model_list:
 ```
 
 2. Run proxy server
-
 ```bash
 litellm --config config.yaml
 ```
 
-3. Call `/model_group/info` to check if your model supports `vision`
-
+3. Call /model_group/info to check if your model supports vision
 ```shell
 curl -X 'GET' \
   'http://localhost:4000/model_group/info' \
@@ -161,8 +140,7 @@ curl -X 'GET' \
   -H 'x-api-key: sk-1234'
 ```
 
-Expected Response 
-
+Expected Response
 ```json
 {
   "data": [
@@ -187,14 +165,134 @@ Expected Response
   ]
 }
 ```
-
 </TabItem>
 </Tabs>
 
+## Image Analysis Using REST API
 
-## Explicitly specify image type 
+This section showcases how to use REST API for image analysis tasks, such as image description or extracting structured data.
 
-If you have images without a mime-type, or if litellm is incorrectly inferring the mime type of your image (e.g. calling `gs://` url's with vertex ai), you can set this explicity via the `format` param. 
+### Example: Describing an Image
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -d '{
+    "model": "azure_ai/phi35-vision-instruct",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Describe the given image."
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "https://www.imperial.ac.uk/media/migration/administration-and-support-services/03--tojpeg_1487001148545_x2.jpg"
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+### Input Parameters
+
+- **model**: `string`  
+  The model to use for image analysis.  
+  Example: `azure_ai/phi35-vision-instruct`
+
+- **messages**: `array`  
+  An array of message objects that form the conversation between the user and the assistant.
+
+  - **role**: `string`  
+    The role of the message sender.  
+    Can be `"system"`, `"user"`, or `"assistant"`.
+
+  - **content**: `array`  
+    An array of content items. Each content item can be either a text instruction or an image URL.
+
+    - **type**: `string`  
+      Specifies the type of content; either `"text"` or `"image_url"`.
+
+      - If type is `"text"`:  
+        - **text**: `string`  
+          The text instruction or message content (e.g., "Describe the image", "Extract information from this receipt").
+
+      - If type is `"image_url"`:  
+        - **image_url**: `object`  
+          An object containing:  
+          - **url**: `string`  
+            The URL of the image to be analyzed.
+
+### Example: Structured Data Extraction
+
+This example demonstrates how to use the API to extract structured data, such as fields from a receipt.
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -d '{
+    "model": "azure_ai/phi35-vision-instruct",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant. Your task is to extract data from payment receipts in JSON format following the schema: {\"date\": \"receipt date\", \"transaction\": \"transaction number\", \"location\": \"transaction location\", \"amount\": \"transaction amount\"}."
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Extract and provide the information from this receipt in JSON format."
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "https://www.imperial.ac.uk/media/migration/administration-and-support-services/03--tojpeg_1487001148545_x2.jpg"
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+### Required Fields
+
+- **model**: `string`  
+  The identifier of the model used for image analysis.  
+  Example: `azure_ai/phi35-vision-instruct`
+
+- **messages**: `array`  
+  The conversation messages, including the user's instructions and the image URL.
+
+### Example Model for Image Analysis
+
+In this example, the `Phi3.5 Vision Instruct` model was used to demonstrate image analysis tasks. This model supports structured JSON output by default for tasks such as image description and data extraction.
+
+However, other vision models can also be used for image analysis tasks, with the possibility of requiring additional configuration for structured outputs.
+
+### Supported Output Formats
+
+- **`JSON`**:  
+  Extracted structured data in JSON format (default support in `Phi3.5 Vision Instruct`).
+
+- **`Text Description`**:  
+  A descriptive text of the image content.
+
+## Explicitly Specify Image Type
+
+If you have images without a mime-type, or if litellm is incorrectly inferring the mime type of your image (e.g. calling gs:// url's with vertex ai), you can set this explicitly via the format param.
 
 ```python
 "image_url": {
@@ -203,9 +301,9 @@ If you have images without a mime-type, or if litellm is incorrectly inferring t
 }
 ```
 
-LiteLLM will use this for any API endpoint, which supports specifying mime-type (e.g. anthropic/bedrock/vertex ai). 
+LiteLLM will use this for any API endpoint which supports specifying mime-type (e.g. anthropic/bedrock/vertex ai).
 
-For others (e.g. openai), it will be ignored. 
+For others (e.g. openai), it will be ignored.
 
 <Tabs>
 <TabItem label="SDK" value="sdk">
@@ -225,7 +323,7 @@ response = completion(
             "content": [
                             {
                                 "type": "text",
-                                "text": "What’s in this image?"
+                                "text": "What's in this image?"
                             },
                             {
                                 "type": "image_url",
@@ -238,14 +336,11 @@ response = completion(
         }
     ],
 )
-
 ```
-
 </TabItem>
 <TabItem label="PROXY" value="proxy">
 
 1. Define vision models on config.yaml
-
 ```yaml
 model_list:
   - model_name: gpt-4-vision-preview # OpenAI gpt-4-vision-preview
@@ -259,18 +354,14 @@ model_list:
       api_key: fake-key
     model_info:
       supports_vision: True        # set supports_vision to True so /model/info returns this attribute as True
-
 ```
 
 2. Run proxy server
-
 ```bash
 litellm --config config.yaml
 ```
 
 3. Test it using the OpenAI Python SDK
-
-
 ```python
 import os 
 from openai import OpenAI
@@ -287,7 +378,7 @@ response = client.chat.completions.create(
             "content": [
                             {
                                 "type": "text",
-                                "text": "What’s in this image?"
+                                "text": "What's in this image?"
                             },
                             {
                                 "type": "image_url",
@@ -300,18 +391,11 @@ response = client.chat.completions.create(
         }
     ],
 )
-
 ```
-
-
-
-
 </TabItem>
 </Tabs>
 
-
-
-## Spec 
+## Spec
 
 ```
 "image_url": str
@@ -323,4 +407,3 @@ OR
   "detail": "openai-only param", 
   "format": "specify mime-type of image"
 }
-```
