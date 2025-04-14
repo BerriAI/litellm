@@ -56,12 +56,17 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
+class HttpxBlobType(TypedDict):
+    mimeType: str
+    data: str
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
-    inline_data: BlobType
-    file_data: FileDataType
+    inlineData: HttpxBlobType
+    fileData: FileDataType
     functionCall: HttpxFunctionCall
-    function_response: FunctionResponse
+    functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
 
@@ -82,12 +87,27 @@ class SystemInstructions(TypedDict):
 
 class Schema(TypedDict, total=False):
     type: Literal["STRING", "INTEGER", "BOOLEAN", "NUMBER", "ARRAY", "OBJECT"]
+    format: str
+    title: str
     description: str
-    enum: List[str]
-    items: List["Schema"]
-    properties: "Schema"
-    required: List[str]
     nullable: bool
+    default: Any
+    items: "Schema"
+    minItems: str
+    maxItems: str
+    enum: List[str]
+    properties: Dict[str, "Schema"]
+    propertyOrdering: List[str]
+    required: List[str]
+    minProperties: str
+    maxProperties: str
+    minimum: float
+    maximum: float
+    minLength: str
+    maxLength: str
+    pattern: str
+    example: Any
+    anyOf: List["Schema"]
 
 
 class FunctionDeclaration(TypedDict, total=False):
@@ -160,12 +180,14 @@ class GenerationConfig(TypedDict, total=False):
     seed: int
     responseLogprobs: bool
     logprobs: int
+    responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
 
 
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
     googleSearch: dict
     googleSearchRetrieval: dict
+    enterpriseWebSearch: dict
     code_execution: dict
     retrieval: Retrieval
 
@@ -474,6 +496,51 @@ class GcsDestination(TypedDict):
 class OutputConfig(TypedDict, total=False):
     predictionsFormat: str
     gcsDestination: GcsDestination
+
+
+class GcsBucketResponse(TypedDict):
+    """
+    TypedDict for GCS bucket upload response
+
+    Attributes:
+        kind: The kind of item this is. For objects, this is always storage#object
+        id: The ID of the object
+        selfLink: The link to this object
+        mediaLink: The link to download the object
+        name: The name of the object
+        bucket: The name of the bucket containing this object
+        generation: The content generation of this object
+        metageneration: The metadata generation of this object
+        contentType: The content type of the object
+        storageClass: The storage class of the object
+        size: The size of the object in bytes
+        md5Hash: The MD5 hash of the object
+        crc32c: The CRC32c checksum of the object
+        etag: The ETag of the object
+        timeCreated: The creation time of the object
+        updated: The last update time of the object
+        timeStorageClassUpdated: The time the storage class was last updated
+        timeFinalized: The time the object was finalized
+    """
+
+    kind: Literal["storage#object"]
+    id: str
+    selfLink: str
+    mediaLink: str
+    name: str
+    bucket: str
+    generation: str
+    metageneration: str
+    contentType: str
+    storageClass: str
+    size: str
+    md5Hash: str
+    crc32c: str
+    etag: str
+    timeCreated: str
+    updated: str
+    timeStorageClassUpdated: str
+    timeFinalized: str
 
 
 class VertexAIBatchPredictionJob(TypedDict):

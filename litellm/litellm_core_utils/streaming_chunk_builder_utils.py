@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -9,7 +9,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
+    Choices,
     CompletionTokensDetails,
+    CompletionTokensDetailsWrapper,
     Function,
     FunctionCall,
     ModelResponse,
@@ -203,14 +205,14 @@ class ChunkProcessor:
         )
 
     def get_combined_content(
-        self, chunks: List[Dict[str, Any]]
+        self, chunks: List[Dict[str, Any]], delta_key: str = "content"
     ) -> ChatCompletionAssistantContentValue:
         content_list: List[str] = []
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                content = delta.get("content", "")
+                content = delta.get(delta_key, "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
@@ -220,6 +222,11 @@ class ChunkProcessor:
 
         # Update the "content" field within the response dictionary
         return combined_content
+
+    def get_combined_reasoning_content(
+        self, chunks: List[Dict[str, Any]]
+    ) -> ChatCompletionAssistantContentValue:
+        return self.get_combined_content(chunks, delta_key="reasoning_content")
 
     def get_combined_audio_content(
         self, chunks: List[Dict[str, Any]]
@@ -296,12 +303,27 @@ class ChunkProcessor:
             "prompt_tokens_details": prompt_tokens_details,
         }
 
+    def count_reasoning_tokens(self, response: ModelResponse) -> int:
+        reasoning_tokens = 0
+        for choice in response.choices:
+            if (
+                hasattr(cast(Choices, choice).message, "reasoning_content")
+                and cast(Choices, choice).message.reasoning_content is not None
+            ):
+                reasoning_tokens += token_counter(
+                    text=cast(Choices, choice).message.reasoning_content,
+                    count_response_tokens=True,
+                )
+
+        return reasoning_tokens
+
     def calculate_usage(
         self,
         chunks: List[Union[Dict[str, Any], ModelResponse]],
         model: str,
         completion_output: str,
         messages: Optional[List] = None,
+        reasoning_tokens: Optional[int] = None,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -382,6 +404,19 @@ class ChunkProcessor:
             )  # for anthropic
         if completion_tokens_details is not None:
             returned_usage.completion_tokens_details = completion_tokens_details
+
+        if reasoning_tokens is not None:
+            if returned_usage.completion_tokens_details is None:
+                returned_usage.completion_tokens_details = (
+                    CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
+                )
+            elif (
+                returned_usage.completion_tokens_details is not None
+                and returned_usage.completion_tokens_details.reasoning_tokens is None
+            ):
+                returned_usage.completion_tokens_details.reasoning_tokens = (
+                    reasoning_tokens
+                )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 

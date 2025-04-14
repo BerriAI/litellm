@@ -347,7 +347,7 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding**
+### **Grounding - Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -358,7 +358,7 @@ See the grounding metadata with `response_obj._hidden_params["vertex_ai_groundin
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python 
+```python showLineNumbers
 from litellm import completion 
 
 ## SETUP ENVIRONMENT
@@ -377,14 +377,36 @@ print(resp)
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-```bash
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"googleSearchRetrieval": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "gemini-pro",
     "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
+      {"role": "user", "content": "Who won the world cup?"}
     ],
    "tools": [
         {
@@ -394,9 +416,81 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 
 ```
+</TabItem>
+</Tabs>
 
 </TabItem>
 </Tabs>
+
+You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"enterpriseWebSearch": {}}] # 👈 ADD GOOGLE ENTERPRISE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"enterpriseWebSearch": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-pro",
+    "messages": [
+      {"role": "user", "content": "Who won the world cup?"}
+    ],
+   "tools": [
+        {
+            "enterpriseWebSearch": {} 
+        }
+    ]
+  }'
+
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 

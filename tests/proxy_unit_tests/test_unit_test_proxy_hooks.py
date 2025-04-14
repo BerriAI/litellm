@@ -24,9 +24,10 @@ async def test_disable_spend_logs():
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
     ):
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        db_spend_update_writer = DBSpendUpdateWriter()
 
         # Call update_database with disable_spend_logs=True
-        await DBSpendUpdateWriter.update_database(
+        await db_spend_update_writer.update_database(
             token="fake-token",
             response_cost=0.1,
             user_id="user123",

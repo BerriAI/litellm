@@ -62,6 +62,7 @@ def assert_gcs_pubsub_request_matches_expected(
             actual_request_body[field] = expected_request_body[field]
 
     # Assert the entire request body matches
+    print("actual_request_body", actual_request_body)
     assert (
         actual_request_body == expected_request_body
     ), f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"

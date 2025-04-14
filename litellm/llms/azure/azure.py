@@ -7,7 +7,7 @@ import httpx  # type: ignore
 from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
-from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.custom_httpx.http_handler import (
@@ -857,7 +857,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             await response.aread()
 
-            timeout_secs: int = 120
+            timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
                 raise Exception(
@@ -955,7 +955,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             response.read()
 
-            timeout_secs: int = 120
+            timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
                 raise Exception(

@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
@@ -22,6 +21,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
@@ -250,7 +250,7 @@ def ollama_pt(
                     f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                 )
 
-            msg_i += 1
+                msg_i += 1
 
         if assistant_content_str:
             prompt += f"### Assistant:\n{assistant_content_str}\n\n"
@@ -747,7 +747,6 @@ def convert_to_anthropic_image_obj(
             data=base64_data,
         )
     except Exception as e:
-        traceback.print_exc()
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
@@ -1299,20 +1298,37 @@ def convert_to_anthropic_tool_invoke(
       ]
     }
     """
-    anthropic_tool_invoke = [
-        AnthropicMessagesToolUseParam(
+    anthropic_tool_invoke = []
+
+    for tool in tool_calls:
+        if not get_attribute_or_key(tool, "type") == "function":
+            continue
+
+        _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
             type="tool_use",
-            id=get_attribute_or_key(tool, "id"),
-            name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            id=cast(str, get_attribute_or_key(tool, "id")),
+            name=cast(
+                str,
+                get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            ),
             input=json.loads(
                 get_attribute_or_key(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
             ),
         )
-        for tool in tool_calls
-        if get_attribute_or_key(tool, "type") == "function"
-    ]
+
+        _content_element = add_cache_control_to_content(
+            anthropic_content_element=_anthropic_tool_use_param,
+            orignal_content_element=dict(tool),
+        )
+
+        if "cache_control" in _content_element:
+            _anthropic_tool_use_param["cache_control"] = _content_element[
+                "cache_control"
+            ]
+
+        anthropic_tool_invoke.append(_anthropic_tool_use_param)
 
     return anthropic_tool_invoke
 
@@ -1323,6 +1339,7 @@ def add_cache_control_to_content(
         AnthropicMessagesImageParam,
         AnthropicMessagesTextParam,
         AnthropicMessagesDocumentParam,
+        AnthropicMessagesToolUseParam,
         ChatCompletionThinkingBlock,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
@@ -1455,6 +1472,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                        elif m.get("type", "") == "file":
+                            file_message = cast(ChatCompletionFileObject, m)
+                            file_data = file_message["file"].get("file_data")
+                            if file_data:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=file_data,
+                                    format=file_message["file"].get("format"),
+                                )
+                                anthropic_document_param = (
+                                    AnthropicMessagesDocumentParam(
+                                        type="document",
+                                        source=AnthropicContentParamSource(
+                                            type="base64",
+                                            media_type=image_chunk["media_type"],
+                                            data=image_chunk["data"],
+                                        ),
+                                    )
+                                )
+                                user_content.append(anthropic_document_param)
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2885,6 +2921,11 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)  # type: ignore
+                            elif element["type"] == "file":
+                                _part = await BedrockConverseMessagesProcessor._async_process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -3054,6 +3095,45 @@ class BedrockConverseMessagesProcessor:
             reasoning_content_blocks.append(bedrock_content_block)
         return reasoning_content_blocks
 
+    @staticmethod
+    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        format = file_message.get("format")
+        return BedrockImageProcessor.process_image_sync(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
+    @staticmethod
+    async def _async_process_file_message(
+        message: ChatCompletionFileObject,
+    ) -> BedrockContentBlock:
+        file_message = message["file"]
+        file_data = file_message.get("file_data")
+        file_id = file_message.get("file_id")
+        format = file_message.get("format")
+        if file_data is None and file_id is None:
+            raise litellm.BadRequestError(
+                message="file_data and file_id cannot both be None. Got={}".format(
+                    message
+                ),
+                model="",
+                llm_provider="bedrock",
+            )
+        return await BedrockImageProcessor.process_image_async(
+            image_url=cast(str, file_id or file_data), format=format
+        )
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3126,6 +3206,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 format=format,
                             )
                             _parts.append(_part)  # type: ignore
+                        elif element["type"] == "file":
+                            _part = (
+                                BedrockConverseMessagesProcessor._process_file_message(
+                                    message=cast(ChatCompletionFileObject, element)
+                                )
+                            )
+                            _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -3353,6 +3440,8 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         }
     ]
     """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
         parameters = tool.get("function", {}).get(
@@ -3366,6 +3455,13 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         description = tool.get("function", {}).get(
             "description", name
         )  # converse api requires a description
+
+        defs = parameters.pop("$defs", {})
+        defs_copy = copy.deepcopy(defs)
+        # flatten the defs
+        for _, value in defs_copy.items():
+            unpack_defs(value, defs_copy)
+        unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description

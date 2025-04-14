@@ -4,7 +4,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import httpx  # type: ignore
 
@@ -21,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -32,13 +31,13 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -302,12 +301,17 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            litellm_params=litellm_params,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
+        if config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
 
         data = config.transform_request(
             model=model,
@@ -487,31 +491,10 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-        usage_block = AnthropicChatCompletionUsageBlock(
-            prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
-            completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
-            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
-            + anthropic_usage_chunk.get("output_tokens", 0),
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        return AnthropicConfig().calculate_usage(
+            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
-
-        cache_creation_input_tokens = anthropic_usage_chunk.get(
-            "cache_creation_input_tokens"
-        )
-        if cache_creation_input_tokens is not None and isinstance(
-            cache_creation_input_tokens, int
-        ):
-            usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
-
-        cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
-        if cache_read_input_tokens is not None and isinstance(
-            cache_read_input_tokens, int
-        ):
-            usage_block["cache_read_input_tokens"] = cache_read_input_tokens
-
-        return usage_block
 
     def _content_block_delta_helper(
         self, chunk: dict
@@ -581,7 +564,7 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
             thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None

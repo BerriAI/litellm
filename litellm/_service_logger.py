@@ -124,6 +124,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -229,6 +230,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:

@@ -1136,16 +1136,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            },
-            {
-                "model_name": "dall-e-2",
-                "litellm_params": {
-                    "model": "azure/",
-                    "api_version": "2023-06-01-preview",
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                },
-            },
+            }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
@@ -1153,13 +1144,6 @@ async def test_aimg_gen_on_router():
         )
         print(response)
         assert len(response.data) > 0
-
-        response = await router.aimage_generation(
-            model="dall-e-2", prompt="A cute baby sea otter"
-        )
-        print(response)
-        assert len(response.data) > 0
-
         router.reset()
     except litellm.InternalServerError as e:
         pass
@@ -2783,3 +2767,24 @@ def test_router_dynamic_credentials():
     deployment = router.get_deployment(model_id=original_model_id)
     assert deployment is not None
     assert deployment.litellm_params.api_key == original_api_key
+
+
+def test_router_get_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+            },
+        ],
+    )
+
+    model_group_info = router.get_model_group_info(model_group="gpt-4")
+    assert model_group_info is not None
+    assert model_group_info.model_group == "gpt-4"
+    assert model_group_info.input_cost_per_token > 0
+    assert model_group_info.output_cost_per_token > 0

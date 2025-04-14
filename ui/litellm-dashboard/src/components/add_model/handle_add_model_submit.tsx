@@ -34,6 +34,7 @@ export const prepareModelAddRequest = async (
       }
 
       // Create a deployment for each mapping
+      const deployments = [];
       for (const mapping of modelMappings) {
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
@@ -142,8 +143,10 @@ export const prepareModelAddRequest = async (
           }
         }
 
-        return { litellmParamsObj, modelInfoObj, modelName };
+        deployments.push({ litellmParamsObj, modelInfoObj, modelName });
       }
+
+      return deployments;
     } catch (error) {
       message.error("Failed to create model: " + error, 10);
     }
@@ -156,22 +159,25 @@ export const handleAddModelSubmit = async (
     callback?: () => void,
   ) => {
     try {
-      const result = await prepareModelAddRequest(values, accessToken, form);
+      const deployments = await prepareModelAddRequest(values, accessToken, form);
       
-      if (!result) {
-        return; // Exit if preparation failed
+      if (!deployments || deployments.length === 0) {
+        return; // Exit if preparation failed or no deployments
       }
       
-      const { litellmParamsObj, modelInfoObj, modelName } = result;
-      
-      const new_model: Model = {
-        model_name: modelName,
-        litellm_params: litellmParamsObj,
-        model_info: modelInfoObj,
-      };
-      
-      const response: any = await modelCreateCall(accessToken, new_model);
-      console.log(`response for model create call: ${response["data"]}`);
+      // Create each deployment
+      for (const deployment of deployments) {
+        const { litellmParamsObj, modelInfoObj, modelName } = deployment;
+        
+        const new_model: Model = {
+          model_name: modelName,
+          litellm_params: litellmParamsObj,
+          model_info: modelInfoObj,
+        };
+        
+        const response: any = await modelCreateCall(accessToken, new_model);
+        console.log(`response for model create call: ${response["data"]}`);
+      }
       
       callback && callback();
       form.resetFields();

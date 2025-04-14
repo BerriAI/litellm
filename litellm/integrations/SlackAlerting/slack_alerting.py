@@ -16,6 +16,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
@@ -649,10 +650,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += (
                     f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
                 )
-            elif percent_left <= 0.05:
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
                 event_message += "5% Threshold Crossed "
-            elif percent_left <= 0.15:
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
                 event_message += "15% Threshold Crossed"
         elif user_info.soft_budget is not None:
@@ -1718,7 +1719,7 @@ Model Info:
             await self.internal_usage_cache.async_set_cache(
                 key=_event_cache_key,
                 value="SENT",
-                ttl=(30 * 24 * 60 * 60),  # 1 month
+                ttl=(30 * HOURS_IN_A_DAY * 60 * 60),  # 1 month
             )
 
         except Exception as e:

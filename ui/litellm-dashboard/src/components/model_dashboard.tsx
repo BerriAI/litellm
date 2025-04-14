@@ -1023,6 +1023,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           is_proxy_admin={userRole === "Proxy Admin"}
           userModels={all_models_on_proxy}
           editTeam={false}
+          onUpdate={handleRefreshClick}
         />
       </div>
     );
@@ -1126,13 +1127,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </div>
               <ModelDataTable
                 columns={columns(
+                  userRole,
+                  userID,
                   premiumUser,
                   setSelectedModelId,
                   setSelectedTeamId,
                   getDisplayModelName,
                   handleEditClick,
                   handleRefreshClick,
-                  setEditModel
+                  setEditModel,
                 )}
                 data={modelData.data.filter(
                   (model: any) =>

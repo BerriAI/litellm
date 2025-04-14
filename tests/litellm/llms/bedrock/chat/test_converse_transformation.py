@@ -30,9 +30,7 @@ def test_transform_usage():
     openai_usage = config._transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
-        == usage["inputTokens"]
-        + usage["cacheWriteInputTokens"]
-        + usage["cacheReadInputTokens"]
+        == usage["inputTokens"] + usage["cacheReadInputTokens"]
     )
     assert openai_usage.completion_tokens == usage["outputTokens"]
     assert openai_usage.total_tokens == usage["totalTokens"]

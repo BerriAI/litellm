@@ -218,6 +218,10 @@ class BaseLLMAIOHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+        if provider_config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -225,11 +229,13 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -480,6 +486,7 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -492,6 +499,7 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=[{"role": "user", "content": "test"}],
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
@@ -519,7 +527,6 @@ class BaseLLMAIOHTTPHandler:
                 data=data,
                 headers=headers,
                 model_response=model_response,
-                api_key=api_key,
                 logging_obj=logging_obj,
                 model=model,
                 timeout=timeout,

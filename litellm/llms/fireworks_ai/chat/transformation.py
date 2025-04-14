@@ -2,7 +2,11 @@ from typing import List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    OpenAIChatCompletionToolParam,
+)
 from litellm.types.utils import ProviderSpecificModelInfo
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -150,6 +154,14 @@ class FireworksAIConfig(OpenAIGPTConfig):
             ] = f"{content['image_url']['url']}#transform=inline"
         return content
 
+    def _transform_tools(
+        self, tools: List[OpenAIChatCompletionToolParam]
+    ) -> List[OpenAIChatCompletionToolParam]:
+        for tool in tools:
+            if tool.get("type") == "function":
+                tool["function"].pop("strict", None)
+        return tools
+
     def _transform_messages_helper(
         self, messages: List[AllMessageValues], model: str, litellm_params: dict
     ) -> List[AllMessageValues]:
@@ -196,6 +208,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params
         )
+        if "tools" in optional_params and optional_params["tools"] is not None:
+            tools = self._transform_tools(tools=optional_params["tools"])
+            optional_params["tools"] = tools
         return super().transform_request(
             model=model,
             messages=messages,

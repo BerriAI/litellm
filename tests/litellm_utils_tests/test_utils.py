@@ -514,6 +514,26 @@ def test_supports_web_search(model, expected_bool):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("openai/o3-mini", True),
+        ("o3-mini", True),
+        ("xai/grok-3-mini-beta", True),
+        ("xai/grok-3-mini-fast-beta", True),
+        ("xai/grok-2", False),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_supports_reasoning(model, expected_bool):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert litellm.supports_reasoning(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_get_max_token_unit_test():
     """
     More complete testing in `test_completion_cost.py`

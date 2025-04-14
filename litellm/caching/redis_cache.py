@@ -304,12 +304,18 @@ class RedisCache(BaseCache):
 
         key = self.check_and_fix_namespace(key=key)
         ttl = self.get_ttl(**kwargs)
+        nx = kwargs.get("nx", False)
         print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
 
         try:
             if not hasattr(_redis_client, "set"):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
-            await _redis_client.set(name=key, value=json.dumps(value), ex=ttl)
+            result = await _redis_client.set(
+                name=key,
+                value=json.dumps(value),
+                nx=nx,
+                ex=ttl,
+            )
             print_verbose(
                 f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
@@ -326,6 +332,7 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
+            return result
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
@@ -931,7 +938,7 @@ class RedisCache(BaseCache):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
         # keys is str
-        await _redis_client.delete(key)
+        return await _redis_client.delete(key)
 
     def delete_cache(self, key):
         self.redis_client.delete(key)
