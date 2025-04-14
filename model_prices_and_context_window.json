@@ -72,7 +72,7 @@
         "output_cost_per_token": 8e-6,
         "input_cost_per_token_batches": 1e-6,
         "output_cost_per_token_batches": 4e-6,
-        "cache_read_input_token_cost": 1e-6,
+        "cache_read_input_token_cost": 0.5e-6,
         "litellm_provider": "openai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions", "/v1/batch", "/v1/responses"],
@@ -85,7 +85,13 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 30e-3,
+            "search_context_size_medium": 35e-3,
+            "search_context_size_high": 50e-3
+        }
     },
     "gpt-4.1-2025-04-14": {
         "max_tokens": 32768,
@@ -95,7 +101,7 @@
         "output_cost_per_token": 8e-6,
         "input_cost_per_token_batches": 1e-6,
         "output_cost_per_token_batches": 4e-6,
-        "cache_read_input_token_cost": 1e-6,
+        "cache_read_input_token_cost": 0.5e-6,
         "litellm_provider": "openai",
         "mode": "chat",
         "supported_endpoints": ["/v1/chat/completions", "/v1/batch", "/v1/responses"],
@@ -108,7 +114,13 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 30e-3,
+            "search_context_size_medium": 35e-3,
+            "search_context_size_high": 50e-3
+        }
     },
     "gpt-4.1-mini": {
         "max_tokens": 32768,
@@ -131,7 +143,13 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 25e-3,
+            "search_context_size_medium": 27.5e-3,
+            "search_context_size_high": 30e-3
+        }
     },
     "gpt-4.1-mini-2025-04-14": {
         "max_tokens": 32768,
@@ -154,7 +172,13 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 25e-3,
+            "search_context_size_medium": 27.5e-3,
+            "search_context_size_high": 30e-3
+        }
     },
     "gpt-4.1-nano": {
         "max_tokens": 32768,
