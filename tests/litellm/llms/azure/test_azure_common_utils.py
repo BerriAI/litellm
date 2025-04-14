@@ -33,7 +33,6 @@ def setup_mocks():
     ) as mock_logger, patch(
         "litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint"
     ) as mock_select_url:
-
         # Configure mocks
         mock_litellm.AZURE_DEFAULT_API_VERSION = "2023-05-15"
         mock_litellm.enable_azure_ad_token_refresh = False
@@ -302,6 +301,14 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
             "custom_llm_provider": "azure",
             "file": MagicMock(),
             "purpose": "assistants",
+        },
+        "afile_content": {
+            "custom_llm_provider": "azure",
+            "file_id": "123",
+        },
+        "afile_delete": {
+            "custom_llm_provider": "azure",
+            "file_id": "123",
         },
     }
 

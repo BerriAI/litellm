@@ -306,27 +306,6 @@ def get_completion_messages(
     return messages
 
 
-def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
-    """
-    Gets file ids from messages
-    """
-    file_ids = []
-    for message in messages:
-        if message.get("role") == "user":
-            content = message.get("content")
-            if content:
-                if isinstance(content, str):
-                    continue
-                for c in content:
-                    if c["type"] == "file":
-                        file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
-                        file_id = file_object_file_field.get("file_id")
-                        if file_id:
-                            file_ids.append(file_id)
-    return file_ids
-
-
 def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     """
     Gets format from file id
@@ -334,13 +313,20 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
+    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
     if not file_id:
         return None
     try:
-        if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+        transformed_file_id = (
+            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
+        )
+        if transformed_file_id.startswith(
+            SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
+        ):
             match = re.match(
                 f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
-                file_id,
+                transformed_file_id,
             )
             if match:
                 return match.group(1)
@@ -364,6 +350,7 @@ def update_messages_with_model_file_ids(
         }
     }
     """
+
     for message in messages:
         if message.get("role") == "user":
             content = message.get("content")

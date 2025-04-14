@@ -619,7 +619,7 @@ class Router:
 
     @staticmethod
     def _create_redis_cache(
-        cache_config: Dict[str, Any]
+        cache_config: Dict[str, Any],
     ) -> Union[RedisCache, RedisClusterCache]:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
@@ -728,6 +728,12 @@ class Router:
         )
         self.aresponses = self.factory_function(
             litellm.aresponses, call_type="aresponses"
+        )
+        self.afile_delete = self.factory_function(
+            litellm.afile_delete, call_type="afile_delete"
+        )
+        self.afile_content = self.factory_function(
+            litellm.afile_content, call_type="afile_content"
         )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
 
@@ -2435,6 +2441,8 @@ class Router:
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
+            ### get custom
+
             response = original_function(
                 **{
                     **data,
@@ -2514,9 +2522,15 @@ class Router:
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
+            try:
+                _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            except Exception:
+                custom_llm_provider = None
+
             response = original_function(
                 **{
                     **data,
+                    "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
                 }
@@ -3058,6 +3072,8 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "responses",
+            "afile_delete",
+            "afile_content",
         ] = "assistants",
     ):
         """
@@ -3102,9 +3118,19 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
-            elif call_type in ("anthropic_messages", "aresponses"):
+            elif call_type in (
+                "anthropic_messages",
+                "aresponses",
+            ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in ("afile_delete", "afile_content"):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
                     **kwargs,
                 )
 
@@ -4827,10 +4853,11 @@ class Router:
         from litellm.utils import _update_dictionary
 
         model_info: Optional[ModelInfo] = None
+        custom_model_info: Optional[dict] = None
         litellm_model_name_model_info: Optional[ModelInfo] = None
 
         try:
-            model_info = litellm.get_model_info(model=model_id)
+            custom_model_info = litellm.model_cost.get(model_id)
         except Exception:
             pass
 
@@ -4839,14 +4866,16 @@ class Router:
         except Exception:
             pass
 
-        if model_info is not None and litellm_model_name_model_info is not None:
+        if custom_model_info is not None and litellm_model_name_model_info is not None:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
                     cast(dict, litellm_model_name_model_info).copy(),
-                    cast(dict, model_info),
+                    custom_model_info,
                 ),
             )
+        elif litellm_model_name_model_info is not None:
+            model_info = litellm_model_name_model_info
 
         return model_info
 
@@ -5020,6 +5049,11 @@ class Router:
                     and model_info["supports_web_search"] is True  # type: ignore
                 ):
                     model_group_info.supports_web_search = True
+                if (
+                    model_info.get("supports_reasoning", None) is not None
+                    and model_info["supports_reasoning"] is True  # type: ignore
+                ):
+                    model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None

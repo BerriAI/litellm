@@ -478,7 +478,7 @@ response.stream_to_file(speech_file_path)
 ## **Authentication**
 
 
-### Entrata ID - use `azure_ad_token`
+### Entra ID - use `azure_ad_token`
 
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
@@ -545,7 +545,7 @@ model_list:
 </TabItem>
 </Tabs>
 
-### Entrata ID - use tenant_id, client_id, client_secret
+### Entra ID - use tenant_id, client_id, client_secret
 
 Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
 ```yaml
@@ -581,7 +581,7 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
-### Entrata ID - use client_id, username, password
+### Entra ID - use client_id, username, password
 
 Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
 ```yaml
