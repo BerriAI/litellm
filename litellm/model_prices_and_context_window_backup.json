@@ -89,6 +89,78 @@
             "search_context_size_high": 0.050
         }
     },
+    "gpt-4.1": {
+        "max_input_tokens": 1014808,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "input_cost_per_token_batches": 0.000001,
+        "output_cost_per_token_batches": 0.000004,
+        "cache_read_input_token_cost": 0.0000005,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.0275,
+            "search_context_size_high": 0.030
+        }
+    },
+    "gpt-4.1-mini": {
+        "max_input_tokens": 1014808,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000016,
+        "input_cost_per_token_batches": 0.0000002,
+        "output_cost_per_token_batches": 0.0000008,
+        "cache_read_input_token_cost": 0.0000001,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.0275,
+            "search_context_size_high": 0.030
+        }
+    },
+    "gpt-4.1-nano": {
+        "max_input_tokens": 1014808,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000004,
+        "input_cost_per_token_batches": 0.00000005,
+        "output_cost_per_token_batches": 0.00000020,
+        "cache_read_input_token_cost": 0.000000025,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.0275,
+            "search_context_size_high": 0.030
+        }
+    },
     "watsonx/ibm/granite-3-8b-instruct": {
         "max_tokens": 8192,  
         "max_input_tokens": 8192,  
