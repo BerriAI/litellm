@@ -9,7 +9,7 @@ import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
-import ViewUserDashboard from "@/components/view_users";
+import ViewUserDashboard, { fetchUsersData } from "@/components/view_users";
 import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
@@ -86,6 +86,7 @@ export default function CreateKeyPage() {
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
+  const [users, setUsers] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -179,6 +180,11 @@ export default function CreateKeyPage() {
       }
     }
   }, [token]);
+
+  const fetchUsers = async (accessToken: string, userRole: string) => {
+    const users = await fetchUsersData(accessToken, userRole, 1, 25);
+    setUsers(users.users);
+  }
   
   useEffect(() => {
     if (accessToken && userID && userRole) {
@@ -189,6 +195,9 @@ export default function CreateKeyPage() {
     }
     if (accessToken) {
       fetchOrganizations(accessToken, setOrganizations);
+    }
+    if (accessToken && userID && userRole) {
+      fetchUsers(accessToken, userRole);
     }
   }, [accessToken, userID, userRole]);
 
@@ -374,6 +383,8 @@ export default function CreateKeyPage() {
               (
                 <Usage
                   userID={userID}
+                  teams={teams}
+                  users={users}
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}

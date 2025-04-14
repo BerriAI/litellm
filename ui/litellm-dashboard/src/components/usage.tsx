@@ -1,6 +1,6 @@
-import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle, Flex } from "@tremor/react";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 
 import ViewUserSpend from "./view_user_spend";
 import { ProxySettings } from "./user_dashboard";
@@ -18,12 +18,6 @@ import {
 } from "@tremor/react";
 
 import {
-  Select as Select2
-} from "antd";
-
-import {
-  userSpendLogsCall,
-  keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
@@ -31,16 +25,15 @@ import {
   teamSpendLogsCall,
   tagsSpendLogsCall,
   allTagNamesCall,
-  modelMetricsCall,
-  modelAvailableCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
   getProxyUISettings
 } from "./networking";
-import { start } from "repl";
 import TopKeyView from "./top_key_view";
-console.log("process.env.NODE_ENV", process.env.NODE_ENV);
+import useKeyList, { Team } from "./key_team_helpers/key_list";
+import GeneralDropdown from "./common_components/general_dropdown";
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal !== true) {
@@ -52,6 +45,8 @@ interface UsagePageProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  teams: Team[] | null;
+  users: any[] | null;
   keys: any[] | null;
   premiumUser: boolean;
 }
@@ -124,7 +119,6 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
   spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
 
   const topKeys = spendKeys.slice(0, 5).map((k) => k.key);
-  console.log(`topKeys: ${Object.keys(topKeys[0])}`);
   return topKeys;
 }
 type DataDict = { [key: string]: unknown };
@@ -144,6 +138,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
   userRole,
   userID,
   keys,
+  teams,
+  users,
   premiumUser,
 }) => {
   const currentDate = new Date();
@@ -159,14 +155,27 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
-  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
   const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
+
+  // teams
+
+  const { keys: fetchedKeys, isLoading: keysLoading } = useKeyList({
+    selectedTeam: undefined,
+    currentOrg: null,
+    accessToken: accessToken || "",
+  });
+
+
+  const effectiveKeys = keys?.length ? keys : fetchedKeys;
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -182,7 +191,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
 
-  console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
 
   function valueFormatterNumbers(number: number) {
@@ -211,9 +219,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
   }, [dateValue, selectedTags]);
-  
 
-  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
+
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, keyToken: string | null) => {
     if (!startTime || !endTime || !accessToken) {
       return;
     }
@@ -224,13 +232,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
     // startTime put it to the first hour of the selected date
     startTime.setHours(0, 0, 0, 0);
 
-    console.log("uiSelectedKey", uiSelectedKey);
 
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
-      uiSelectedKey,
+      keyToken,
       startTime.toISOString(),
-      endTime.toISOString()
+      endTime.toISOString(),
     )
     console.log("End user data updated successfully", newTopUserData);
     setTopUsers(newTopUserData);
@@ -482,7 +489,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const fetchTopEndUsers = () => {
     if (!accessToken) return;
     fetchAndSetData(
-      () => adminTopEndUsersCall(accessToken, null, undefined, undefined),
+      () => adminTopEndUsersCall(accessToken, null, undefined, undefined, selectedTeam, selectedUser),
       setTopUsers,
       "Error fetching top end users"
     );
@@ -599,6 +606,31 @@ const UsagePage: React.FC<UsagePageProps> = ({
     );
   }
 
+  useEffect(() => {
+    const keyToken = effectiveKeys?.find((effectiveKey) => effectiveKey.key_alias === selectedKey)?.token;
+
+    updateEndUserData(dateValue.from, dateValue.to, keyToken);
+  }, [selectedKey, selectedTeam, selectedUser, effectiveKeys]);
+
+  const filteredKeys = useMemo(() => {
+    if (!effectiveKeys) return [];
+    return effectiveKeys.filter((key) => {
+      // If no team and no user selected, return all keys
+      if (!selectedTeam && !selectedUser) return true;
+      
+      // If team selected but key doesn't match, only filter if team is selected
+      if (selectedTeam && key.team_id !== selectedTeam) {
+        return false;
+      }
+      
+      // If user selected but key doesn't match, only filter if user is selected  
+      if (selectedUser && key.user_id !== selectedUser) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [effectiveKeys, selectedTeam, selectedUser]);
 
   return (
     <div style={{ width: "100%" }} className="p-8">      
@@ -837,59 +869,56 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </TabPanel>
             <TabPanel>
             <p className="mb-2 text-gray-500 italic text-[12px]">Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
-              <Grid numItems={2}>
+              <Grid numItems={1}>
                 <Col>
-                <Text>Select Time Range</Text>
-       
-              <DateRangePicker 
-                  enableSelect={true} 
-                  value={dateValue} 
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
-                  }}
-                />
-                         </Col>
-                         <Col>
-                  <Text>Select Key</Text>
-                  <Select defaultValue="all-keys">
-                  <SelectItem
-                    key="all-keys"
-                    value="all-keys"
-                    onClick={() => {
-                      updateEndUserData(dateValue.from, dateValue.to, null);
+                  <Text>Select Time Range</Text>
+        
+                  <DateRangePicker 
+                    enableSelect={true} 
+                    value={dateValue} 
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
                     }}
-                  >
-                    All Keys
-                  </SelectItem>
-                    {keys?.map((key: any, index: number) => {
-                      if (
-                        key &&
-                        key["key_alias"] !== null &&
-                        key["key_alias"].length > 0
-                      ) {
-                        return (
-                          
-                          <SelectItem
-                            key={index}
-                            value={String(index)}
-                            onClick={() => {
-                              updateEndUserData(dateValue.from, dateValue.to, key["token"]);
-                            }}
-                          >
-                            {key["key_alias"]}
-                          </SelectItem>
-                        );
-                      }
-                      return null; // Add this line to handle the case when the condition is not met
-                    })}
-                  </Select>
-                  </Col>
-
+                  />
+                </Col>
+                <br />
+                <Col style={{ width: "100%" }}>
+                  <Text>Select Key</Text>
+                  <Flex style={{ width: "100%" }}>
+                  <GeneralDropdown 
+                    id="team-dropdown"
+                    items={teams} 
+                    key_to_sort_by="team_id"
+                    onChange={(teamId) => {
+                      setSelectedTeam(teamId);
+                    }}
+                    placeholder="Team"
+                    style={{ width: '20%' }}
+                  />
+                  <GeneralDropdown 
+                    id="user-dropdown"
+                    items={users} 
+                    key_to_sort_by="user_id"
+                    onChange={(userId) => {
+                      setSelectedUser(userId);
+                    }}
+                    placeholder="User"
+                    style={{ width: '20%' }}
+                  />
+                  <GeneralDropdown
+                    id="key-dropdown"
+                    items={filteredKeys} 
+                    key_to_sort_by="key_alias"
+                    onChange={(key) => {
+                      setSelectedKey(key);
+                    }}
+                    style={{ width: '60%' }}
+                    placeholder="Search Key"
+                  />
+                  </Flex>
+                </Col>
               </Grid>
-            
-                
-                
               <Card className="mt-4">
 
 

@@ -2046,26 +2046,21 @@ export const adminTopKeysCall = async (accessToken: String) => {
 };
 
 export const adminTopEndUsersCall = async (
-  accessToken: String,
-  keyToken: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined
+  accessToken: string,
+  keyToken: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/global/spend/end_users`
       : `/global/spend/end_users`;
 
-    let body = "";
-    if (keyToken) {
-      body = JSON.stringify({
-        api_key: keyToken,
-        startTime: startTime,
-        endTime: endTime,
-      });
-    } else {
-      body = JSON.stringify({ startTime: startTime, endTime: endTime });
-    }
+    let body: Record<string, string> = {};
+    if (startTime) body.startTime = startTime;
+    if (endTime) body.endTime = endTime;
+    if (keyToken !== null) body.api_key = keyToken;
+    const bodyString = JSON.stringify(body);
 
     //message.info("Making top end users request");
 
@@ -2076,7 +2071,7 @@ export const adminTopEndUsersCall = async (
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: body,
+      body: bodyString,
     };
 
 
@@ -2088,7 +2083,7 @@ export const adminTopEndUsersCall = async (
     }
 
     const data = await response.json();
-    console.log(data);
+    console.log("adminTopEndUsersCall", data);
     //message.success("Top End users received");
     return data;
   } catch (error) {
