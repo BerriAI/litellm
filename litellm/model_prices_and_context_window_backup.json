@@ -90,6 +90,7 @@
         }
     },
     "gpt-4.1": {
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.000002,
@@ -114,6 +115,7 @@
         }
     },
     "gpt-4.1-2025-04-14": {
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.000002,
@@ -138,6 +140,7 @@
         }
     },
     "gpt-4.1-mini": {
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.0000004,
@@ -162,6 +165,7 @@
         }
     },
     "gpt-4.1-mini-2025-04-14":{
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.0000004,
@@ -186,6 +190,7 @@
         }
     },
     "gpt-4.1-nano": {
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.0000001,
@@ -210,6 +215,7 @@
         }
     },
     "gpt-4.1-nano-2025-04-14": {
+        "max_tokens": 1047576,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.0000001,
