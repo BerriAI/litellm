@@ -11,6 +11,12 @@ To call models hosted behind an openai proxy, make 2 changes:
 
 2. **Do NOT** add anything additional to the base url e.g. `/v1/embedding`. LiteLLM uses the openai-client to make these calls, and that automatically adds the relevant endpoints. 
 
+::warning
+
+API Base URLs need to include `/v1` postfix. e.g. `https://api.openai.com/v1`
+
+::
+
 
 ## Usage - completion
 ```python
