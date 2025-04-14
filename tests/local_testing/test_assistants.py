@@ -67,6 +67,7 @@ async def test_get_assistants(provider, sync_mode):
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_create_delete_assistants(provider, sync_mode):
+    litellm.ssl_verify = False
     model = "gpt-4-turbo"
     if provider == "azure":
         os.environ["AZURE_API_VERSION"] = "2024-05-01-preview"
@@ -233,7 +234,10 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
             assistants = await litellm.aget_assistants(custom_llm_provider=provider)
 
         ## get the first assistant ###
-        assistant_id = assistants.data[0].id
+        try:
+            assistant_id = assistants.data[0].id
+        except IndexError:
+            pytest.skip("No assistants found")
 
         new_thread = test_create_thread_litellm(sync_mode=sync_mode, provider=provider)
 

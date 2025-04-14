@@ -108,7 +108,7 @@ response = embedding(
 
 ### Usage
 
-
+LiteLLM supports the v1 and v2 clients for Cohere rerank. By default, the `rerank` endpoint uses the v2 client, but you can specify the v1 client by explicitly calling `v1/rerank`
 
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK Usage">

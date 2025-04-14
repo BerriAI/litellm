@@ -1,15 +1,24 @@
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
+      model: openai/fake
+      api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
-general_settings:
-  store_model_in_db: true
-
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
 
 litellm_settings:
-  callbacks: ["gcs_bucket"]
+  default_team_settings:
+      - team_id: test_dev
+        success_callback: ["langfuse", "s3"]
+        langfuse_secret: secret-test-key
+        langfuse_public_key: public-test-key
+      - team_id: my_workflows
+        success_callback: ["langfuse", "s3"]
+        langfuse_secret: secret-workflows-key
+        langfuse_public_key: public-workflows-key
 
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change

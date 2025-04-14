@@ -1,5 +1,5 @@
 """
-Handles embedding calls to Bedrock's `/invoke` endpoint 
+Handles embedding calls to Bedrock's `/invoke` endpoint
 """
 
 import copy
@@ -350,6 +350,11 @@ class BedrockEmbedding(BaseAWSLLM):
         ### TRANSFORMATION ###
         provider = model.split(".")[0]
         inference_params = copy.deepcopy(optional_params)
+        inference_params = {
+            k: v
+            for k, v in inference_params.items()
+            if k.lower() not in self.aws_authentication_params
+        }
         inference_params.pop(
             "user", None
         )  # make sure user is not passed in for bedrock call

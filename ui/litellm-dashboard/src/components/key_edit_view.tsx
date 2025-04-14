@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, InputNumber, Select } from "antd";
+import { Form, Input, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import { getTeamModels } from "../components/create_key_button";
+import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
-
+import NumericalInput from "./shared/numerical_input";
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -45,31 +45,36 @@ export function KeyEditView({
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
-  const availableModels = getTeamModels(team, userModels);
-  
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   useEffect(() => {
-    const fetchUserModels = async () => {
+    const fetchModels = async () => {
+      if (!userID || !userRole || !accessToken) return;
+
       try {
-        if (accessToken && userID && userRole) {
+        if (keyData.team_id === null) {
+          // Fetch user models if no team
           const model_available = await modelAvailableCall(
             accessToken,
-            userID,
+            userID, 
             userRole
           );
-          let available_model_names = model_available["data"].map(
+          const available_model_names = model_available["data"].map(
             (element: { id: string }) => element.id
           );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+          setAvailableModels(available_model_names);
+        } else if (team?.team_id) {
+          // Fetch team models if team exists
+          const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
+          setAvailableModels(Array.from(new Set([...team.models, ...models])));
         }
       } catch (error) {
-        console.error("Error fetching user models:", error);
+        console.error("Error fetching models:", error);
       }
     };
 
-    fetchUserModels();
-  }, []);
+    fetchModels();
+  }, [userID, userRole, accessToken, team, keyData.team_id]);
 
   // Convert API budget duration to form format
   const getBudgetDuration = (duration: string | null) => {
@@ -121,7 +126,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
-        <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
@@ -133,11 +138,23 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
-        <InputNumber style={{ width: "100%" }} />
+        <NumericalInput min={0}/>
       </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
-        <InputNumber style={{ width: "100%" }} />
+        <NumericalInput min={0}/>
+      </Form.Item>
+
+      <Form.Item label="Max Parallel Requests" name="max_parallel_requests">  
+        <NumericalInput min={0}/>
+      </Form.Item>
+
+      <Form.Item label="Model TPM Limit" name="model_tpm_limit">
+        <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
+      </Form.Item>
+
+      <Form.Item label="Model RPM Limit" name="model_rpm_limit">
+        <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">

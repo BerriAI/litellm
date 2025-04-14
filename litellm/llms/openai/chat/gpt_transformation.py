@@ -20,7 +20,13 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
@@ -121,6 +127,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "max_retries",
             "extra_headers",
             "parallel_tool_calls",
+            "audio",
         ]  # works across all models
 
         model_specific_params = []
@@ -178,6 +185,38 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
+        """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        for message in messages:
+            message_content = message.get("content")
+            if message_content and isinstance(message_content, list):
+                for content_item in message_content:
+                    litellm_specific_params = {"format"}
+                    if content_item.get("type") == "image_url":
+                        content_item = cast(ChatCompletionImageObject, content_item)
+                        if isinstance(content_item["image_url"], str):
+                            content_item["image_url"] = {
+                                "url": content_item["image_url"],
+                            }
+                        elif isinstance(content_item["image_url"], dict):
+                            new_image_url_obj = ChatCompletionImageUrlObject(
+                                **{  # type: ignore
+                                    k: v
+                                    for k, v in content_item["image_url"].items()
+                                    if k not in litellm_specific_params
+                                }
+                            )
+                            content_item["image_url"] = new_image_url_obj
+                    elif content_item.get("type") == "file":
+                        content_item = cast(ChatCompletionFileObject, content_item)
+                        file_obj = content_item["file"]
+                        new_file_obj = ChatCompletionFileObjectFile(
+                            **{  # type: ignore
+                                k: v
+                                for k, v in file_obj.items()
+                                if k not in litellm_specific_params
+                            }
+                        )
+                        content_item["file"] = new_file_obj
         return messages
 
     def transform_request(
@@ -263,9 +302,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -274,6 +315,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             str: The complete URL for the API call.
         """
+        if api_base is None:
+            api_base = "https://api.openai.com"
         endpoint = "chat/completions"
 
         # Remove trailing slash from api_base if present
@@ -291,6 +334,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -362,7 +406,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             return ModelResponseStream(

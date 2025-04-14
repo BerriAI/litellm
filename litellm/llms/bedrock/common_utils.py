@@ -314,9 +314,38 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 
 
 class BedrockModelInfo(BaseLLMModelInfo):
-
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
+
+    @staticmethod
+    def extract_model_name_from_arn(model: str) -> str:
+        """
+        Extract the model name from an AWS Bedrock ARN.
+        Returns the string after the last '/' if 'arn' is in the input string.
+
+        Args:
+            arn (str): The ARN string to parse
+
+        Returns:
+            str: The extracted model name if 'arn' is in the string,
+                otherwise returns the original string
+        """
+        if "arn" in model.lower():
+            return model.split("/")[-1]
+        return model
+
+    @staticmethod
+    def get_non_litellm_routing_model_name(model: str) -> str:
+        if model.startswith("bedrock/"):
+            model = model.split("/", 1)[1]
+
+        if model.startswith("converse/"):
+            model = model.split("/", 1)[1]
+
+        if model.startswith("invoke/"):
+            model = model.split("/", 1)[1]
+
+        return model
 
     @staticmethod
     def get_base_model(model: str) -> str:
@@ -326,14 +355,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
-        if model.startswith("bedrock/"):
-            model = model.split("/", 1)[1]
 
-        if model.startswith("converse/"):
-            model = model.split("/", 1)[1]
-
-        if model.startswith("invoke/"):
-            model = model.split("/", 1)[1]
+        model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
+        model = BedrockModelInfo.extract_model_name_from_arn(model)
 
         potential_region = model.split(".", 1)[0]
 
@@ -367,12 +391,16 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Get the bedrock route for the given model.
         """
         base_model = BedrockModelInfo.get_base_model(model)
+        alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if "invoke/" in model:
             return "invoke"
         elif "converse_like" in model:
             return "converse_like"
         elif "converse/" in model:
             return "converse"
-        elif base_model in litellm.bedrock_converse_models:
+        elif (
+            base_model in litellm.bedrock_converse_models
+            or alt_model in litellm.bedrock_converse_models
+        ):
             return "converse"
         return "invoke"

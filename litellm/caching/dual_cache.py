@@ -12,7 +12,7 @@ import asyncio
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -24,7 +24,7 @@ from .redis_cache import RedisCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

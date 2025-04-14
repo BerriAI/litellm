@@ -29,12 +29,17 @@ import {
 } from "antd";
 import {
   RefreshIcon,
+  CheckCircleIcon,
+  XCircleIcon,
 } from "@heroicons/react/outline";
 import {
     adminGlobalCacheActivity,
     cachingHealthCheckCall,
     healthCheckCall,
 } from "./networking";
+
+// Import the new component
+import { CacheHealthTab } from "./cache_health";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
     if (!date) return undefined;
@@ -82,7 +87,32 @@ interface uiData {
 
 }
 
+interface CacheHealthResponse {
+  status?: string;
+  cache_type?: string;
+  ping_response?: boolean;
+  set_cache_response?: string;
+  litellm_cache_params?: string;
+  error?: {
+    message: string;
+    type: string;
+    param: string;
+    code: string;
+  };
+}
 
+// Helper function to deep-parse a JSON string if possible
+const deepParse = (input: any) => {
+  let parsed = input;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return parsed;
+    }
+  }
+  return parsed;
+};
 
 const CacheDashboard: React.FC<CachePageProps> = ({
   accessToken,
@@ -105,7 +135,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   });
 
   const [lastRefreshed, setLastRefreshed] = useState("");
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
+  const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
   useEffect(() => {
     if (!accessToken || !dateValue) {
@@ -245,9 +275,25 @@ const runCachingHealthCheck = async () => {
     const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
     console.log("CACHING HEALTH CHECK RESPONSE", response);
     setHealthCheckResponse(response);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error running health check:", error);
-    setHealthCheckResponse("Error running health check");
+    let errorData;
+    if (error && error.message) {
+      try {
+        // Parse the error message which may contain a nested error layer.
+        let parsedData = JSON.parse(error.message);
+        // If the parsed object is wrapped (e.g. { error: { ... } }), unwrap it.
+        if (parsedData.error) {
+          parsedData = parsedData.error;
+        }
+        errorData = parsedData;
+      } catch (e) {
+        errorData = { message: error.message };
+      }
+    } else {
+      errorData = { message: "Unknown error occurred" };
+    }
+    setHealthCheckResponse({ error: errorData });
   }
 };
 
@@ -381,23 +427,11 @@ const runCachingHealthCheck = async () => {
       </Card>
           </TabPanel>
           <TabPanel>
-            <Card className="mt-4">
-              <Text>
-                Cache health will run a very small request through API /cache/ping
-                configured on litellm
-              </Text>
-
-              <Button onClick={runCachingHealthCheck} className="mt-4">Run cache health</Button>
-              {healthCheckResponse && (
-                <pre className="mt-4" style={{ 
-                  whiteSpace: 'pre-wrap',
-                  wordWrap: 'break-word',
-                  maxWidth: '100%'
-                }}>
-                  {JSON.stringify(healthCheckResponse, null, 2)}
-                </pre>
-              )}
-            </Card>
+            <CacheHealthTab 
+              accessToken={accessToken}
+              healthCheckResponse={healthCheckResponse}
+              runCachingHealthCheck={runCachingHealthCheck}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>

@@ -291,14 +291,15 @@ response = completion(
 )
 ```
 
-## Azure O1 Models
+## O-Series Models
 
-| Model Name          | Function Call                                      |
-|---------------------|----------------------------------------------------|
-| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
-| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+Azure OpenAI O-Series models are supported on LiteLLM. 
 
-Set `litellm.enable_preview_features = True` to use Azure O1 Models with streaming support. 
+LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
+
+To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
+
+**Automatic Routing**
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -306,60 +307,112 @@ Set `litellm.enable_preview_features = True` to use Azure O1 Models with streami
 ```python
 import litellm
 
-litellm.enable_preview_features = True # 👈 KEY CHANGE
-
-response = litellm.completion(
-    model="azure/<your deployment name>",
-    messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-    stream=True
-)
-
-for chunk in response:
-    print(chunk)
+litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
 ```
 </TabItem>
-<TabItem value="proxy" label="Proxy">
+<TabItem value="proxy" label="PROXY">
 
-1. Setup config.yaml
 ```yaml
 model_list:
-  - model_name: o1-mini
+  - model_name: o3-mini
     litellm_params:
-      model: azure/o1-mini
-      api_base: "os.environ/AZURE_API_BASE"
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "os.environ/AZURE_API_VERSION"
-
-litellm_settings:
-    enable_preview_features: true # 👈 KEY CHANGE
+      model: azure/o3-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
 ```
 
-2. Start proxy 
+</TabItem>
+</Tabs>
+
+**Explicit Routing**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o3-mini
+    litellm_params:
+      model: azure/o_series/my-random-deployment-name
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+</TabItem>
+</Tabs>
+
+
+## Azure Audio Model
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+response = completion(
+    model="azure/azure-openai-4o-audio",
+    messages=[
+      {
+        "role": "user",
+        "content": "I want to try out speech to speech"
+      }
+    ],
+    modalities=["text","audio"],
+    audio={"voice": "alloy", "format": "wav"}
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-openai-4o-audio
+    litellm_params:
+      model: azure/azure-openai-4o-audio
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: os.environ/AZURE_API_VERSION
+```
+
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it 
+3. Test it!
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
 
-response = client.chat.completions.create(model="o1-mini", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-],
-stream=True)
-
-for chunk in response:
-    print(chunk)
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-openai-4o-audio",
+    "messages": [{"role": "user", "content": "I want to try out speech to speech"}],
+    "modalities": ["text","audio"],
+    "audio": {"voice": "alloy", "format": "wav"}
+  }'
 ```
+
+
 </TabItem>
 </Tabs>
 
@@ -425,7 +478,7 @@ response.stream_to_file(speech_file_path)
 ## **Authentication**
 
 
-### Entrata ID - use `azure_ad_token`
+### Entra ID - use `azure_ad_token`
 
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
@@ -492,7 +545,7 @@ model_list:
 </TabItem>
 </Tabs>
 
-### Entrata ID - use tenant_id, client_id, client_secret
+### Entra ID - use tenant_id, client_id, client_secret
 
 Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
 ```yaml
@@ -528,7 +581,7 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
-### Entrata ID - use client_id, username, password
+### Entra ID - use client_id, username, password
 
 Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
 ```yaml
@@ -948,62 +1001,9 @@ Expected Response:
 {"data":[{"id":"batch_R3V...}
 ```
 
-## O-Series Models
 
-Azure OpenAI O-Series models are supported on LiteLLM. 
 
-LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
 
-To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
-
-**Automatic Routing**
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-
-litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-  - model_name: o3-mini
-    litellm_params:
-      model: azure/o3-model
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-```
-
-</TabItem>
-</Tabs>
-
-**Explicit Routing**
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-
-litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-  - model_name: o3-mini
-    litellm_params:
-      model: azure/o_series/my-random-deployment-name
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-```
-</TabItem>
-</Tabs>
 
 
 
@@ -1076,32 +1076,24 @@ print(response)
 ```
 
 
-### Parallel Function calling
+### Tool Calling / Function Calling
+
 See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 # set Azure env variables
 import os
+import litellm
+import json
+
 os.environ['AZURE_API_KEY'] = "" # litellm reads AZURE_API_KEY from .env and sends the request
 os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test-v-1.openai.azure.com/"
 os.environ['AZURE_API_VERSION'] = "2023-07-01-preview"
 
-import litellm
-import json
-# Example dummy function hard coded to return the same weather
-# In production, this could be your backend API or an external API
-def get_current_weather(location, unit="fahrenheit"):
-    """Get the current weather in a given location"""
-    if "tokyo" in location.lower():
-        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
-    elif "san francisco" in location.lower():
-        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
-    elif "paris" in location.lower():
-        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
-    else:
-        return json.dumps({"location": location, "temperature": "unknown"})
-
-## Step 1: send the conversation and available functions to the model
-messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
 tools = [
     {
         "type": "function",
@@ -1125,7 +1117,7 @@ tools = [
 
 response = litellm.completion(
     model="azure/chatgpt-functioncalling", # model = azure/<your-azure-deployment-name>
-    messages=messages,
+    messages=[{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}],
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
 )
@@ -1134,8 +1126,49 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 print("\nTool Choice:\n", tool_calls)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-functioncalling
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+```
+
+2. Start proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "azure-gpt-3.5",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how'\''s it going? Thinking long and hard before replying - what is the meaning of the world and life itself"
+        }
+    ]
+}'
+```
 
 
+
+
+</TabItem>
+</Tabs>
 ### Spend Tracking for Azure OpenAI Models (PROXY)
 
 Set base model for cost tracking azure image-gen call

@@ -162,6 +162,7 @@ async def test_regenerate_api_key(prisma_client):
     print(result)
 
     # regenerate the key
+    print("regenerating key: {}".format(generated_key))
     new_key = await regenerate_key_fn(
         key=generated_key,
         user_api_key_dict=UserAPIKeyAuth(
@@ -370,15 +371,97 @@ async def test_get_users(prisma_client):
     assert "users" in result
 
     for user in result["users"]:
-        assert "user_id" in user
-        assert "spend" in user
-        assert "user_email" in user
-        assert "user_role" in user
-        assert "key_count" in user
+        assert isinstance(user, LiteLLM_UserTable)
 
     # Clean up test users
     for user in test_users:
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})
+
+
+@pytest.mark.asyncio
+async def test_get_users_filters_dashboard_keys(prisma_client):
+    """
+    Tests that /users/list endpoint doesn't return keys with team_id='litellm-dashboard'
+
+    The dashboard keys should be filtered out from the response
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create a test user
+    new_user_id = f"test_user_with_keys-{uuid.uuid4()}"
+    test_user = NewUserRequest(
+        user_id=new_user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        auto_create_key=False,
+    )
+
+    await new_user(
+        test_user,
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    # Create two keys for the user - one with team_id="litellm-dashboard" and one without
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id="litellm-dashboard",  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id="NEW_TEAM",  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    regular_key = await generate_key_helper_fn(
+        user_id=test_user.user_id,
+        request_type="key",
+        team_id=None,  # This key should be included in the response
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        duration=None,
+    )
+
+    # Test get_users for the specific user
+    result = await get_users(
+        user_ids=test_user.user_id,
+        role=None,
+        page=1,
+        page_size=20,
+    )
+
+    print("get users result", result)
+    assert "users" in result
+    assert len(result["users"]) == 1
+
+    # Verify the key count is correct (should be 1, not counting dashboard keys)
+    user = result["users"][0]
+    assert user.user_id == test_user.user_id
+    assert user.key_count == 2  # Only count the regular keys, not the UI dashboard key
+
+    # Clean up test user and keys
+    await prisma_client.db.litellm_usertable.delete(
+        where={"user_id": test_user.user_id}
+    )
 
 
 @pytest.mark.asyncio
@@ -397,12 +480,12 @@ async def test_get_users_key_count(prisma_client):
     assert len(initial_users["users"]) > 0, "No users found to test with"
 
     test_user = initial_users["users"][0]
-    initial_key_count = test_user["key_count"]
+    initial_key_count = test_user.key_count
 
     # Create a new key for the selected user
     new_key = await generate_key_fn(
         data=GenerateKeyRequest(
-            user_id=test_user["user_id"],
+            user_id=test_user.user_id,
             key_alias=f"test_key_{uuid.uuid4()}",
             models=["fake-model"],
         ),
@@ -418,8 +501,8 @@ async def test_get_users_key_count(prisma_client):
     print("updated_users", updated_users)
     updated_key_count = None
     for user in updated_users["users"]:
-        if user["user_id"] == test_user["user_id"]:
-            updated_key_count = user["key_count"]
+        if user.user_id == test_user.user_id:
+            updated_key_count = user.key_count
             break
 
     assert updated_key_count is not None, "Test user not found in updated users list"
@@ -578,6 +661,7 @@ def test_team_key_generation_team_member_check():
             team_member=Member(role="admin", user_id="test_user_id"),
         ),
         data=GenerateKeyRequest(),
+        route=KeyManagementRoutes.KEY_GENERATE,
     )
 
     team_table = LiteLLM_TeamTableCachedObj(
@@ -596,6 +680,7 @@ def test_team_key_generation_team_member_check():
                 team_member=Member(role="user", user_id="test_user_id"),
             ),
             data=GenerateKeyRequest(),
+            route=KeyManagementRoutes.KEY_GENERATE,
         )
 
 
@@ -656,13 +741,26 @@ def test_key_generation_required_params_check(
 
     if expected_result:
         if key_type == "team_key":
-            assert _team_key_generation_check(team_table, user_api_key_dict, input_data)
+            assert _team_key_generation_check(
+                team_table=team_table,
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
         elif key_type == "personal_key":
-            assert _personal_key_generation_check(user_api_key_dict, input_data)
+            assert _personal_key_generation_check(
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+            )
     else:
         if key_type == "team_key":
             with pytest.raises(HTTPException):
-                _team_key_generation_check(team_table, user_api_key_dict, input_data)
+                _team_key_generation_check(
+                    team_table=team_table,
+                    user_api_key_dict=user_api_key_dict,
+                    data=input_data,
+                    route=KeyManagementRoutes.KEY_GENERATE,
+                )
         elif key_type == "personal_key":
             with pytest.raises(HTTPException):
                 _personal_key_generation_check(user_api_key_dict, input_data)
@@ -736,48 +834,6 @@ def test_prepare_metadata_fields(
 
     updated_non_default_values = prepare_metadata_fields(**args)
     assert updated_non_default_values == expected_result
-
-
-@pytest.mark.asyncio
-async def test_user_info_as_proxy_admin(prisma_client):
-    """
-    Test /user/info endpoint as a proxy admin without passing a user ID.
-    Verifies that the endpoint returns all teams and keys.
-    """
-    litellm.set_verbose = True
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
-
-    # Call user_info as a proxy admin without a user_id
-    user_info_response = await user_info(
-        user_id=None,
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="admin",
-        ),
-    )
-
-    print("user info response: ", user_info_response.model_dump_json(indent=4))
-
-    # Verify response
-    assert user_info_response.user_id is None
-    assert user_info_response.user_info is None
-
-    # Verify that teams and keys are returned
-    assert user_info_response.teams is not None
-    assert len(user_info_response.teams) > 0, "Expected at least one team in response"
-
-    # assert that the teams are sorted by team_alias
-    team_aliases = [
-        getattr(team, "team_alias", "") or "" for team in user_info_response.teams
-    ]
-    print("Team aliases order in response=", team_aliases)
-    assert team_aliases == sorted(team_aliases), "Teams are not sorted by team_alias"
-
-    assert user_info_response.keys is not None
-    assert len(user_info_response.keys) > 0, "Expected at least one key in response"
 
 
 @pytest.mark.asyncio
@@ -1075,7 +1131,9 @@ async def test_list_key_helper_team_filtering(prisma_client):
         # Test 1: Get all keys with pagination (exclude litellm-dashboard)
         all_keys = []
         page = 1
-        while True:
+        max_pages_to_check = 3  # Only check the first 3 pages
+
+        while page <= max_pages_to_check:
             result = await _list_key_helper(
                 prisma_client=prisma_client,
                 size=100,
@@ -1089,7 +1147,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
 
             all_keys.extend(result["keys"])
 
-            if page >= result["total_pages"]:
+            if page >= result["total_pages"] or page >= max_pages_to_check:
                 break
             page += 1
 

@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+import copy
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -30,7 +31,7 @@ def get_provider_models(provider: str) -> Optional[List[str]]:
         return get_valid_models()
 
     if provider in litellm.models_by_provider:
-        provider_models = litellm.models_by_provider[provider]
+        provider_models = copy.deepcopy(litellm.models_by_provider[provider])
         for idx, _model in enumerate(provider_models):
             if provider not in _model:
                 provider_models[idx] = f"{provider}/{_model}"
@@ -84,7 +85,7 @@ def get_key_models(
 
 
 def get_team_models(
-    user_api_key_dict: UserAPIKeyAuth,
+    team_models: List[str],
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
 ) -> List[str]:
@@ -95,10 +96,10 @@ def get_team_models(
     - If model_access_groups is provided, only return models that are in the access groups
     """
     all_models = []
-    if len(user_api_key_dict.team_models) > 0:
-        all_models = user_api_key_dict.team_models
+    if len(team_models) > 0:
+        all_models = team_models
         if SpecialModelNames.all_team_models.value in all_models:
-            all_models = user_api_key_dict.team_models
+            all_models = team_models
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = proxy_model_list
 
@@ -177,7 +178,6 @@ def _get_wildcard_models(
     all_wildcard_models = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
-
             if (
                 return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.

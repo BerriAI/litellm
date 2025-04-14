@@ -2,6 +2,7 @@ import json
 from abc import abstractmethod
 from typing import Optional, Union
 
+import litellm
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
@@ -33,6 +34,18 @@ class BaseModelResponseIterator:
         self, str_line: str
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
+
+        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
+            str_line
+        )
+        try:
+            if stripped_chunk is not None:
+                stripped_json_chunk: Optional[dict] = json.loads(stripped_chunk)
+            else:
+                stripped_json_chunk = None
+        except json.JSONDecodeError:
+            stripped_json_chunk = None
+
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",
@@ -42,9 +55,8 @@ class BaseModelResponseIterator:
                 index=0,
                 tool_use=None,
             )
-        elif str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
+        elif stripped_json_chunk:
+            return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(
                 text="",
@@ -85,6 +97,7 @@ class BaseModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
+
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
@@ -99,7 +112,9 @@ class BaseModelResponseIterator:
                     str_line = str_line[index:]
 
             # chunk is a str at this point
-            return self._handle_string_chunk(str_line=str_line)
+            chunk = self._handle_string_chunk(str_line=str_line)
+
+            return chunk
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:

@@ -3,7 +3,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 """
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict, Union
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
@@ -12,7 +12,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from typing import Optional
+from typing import Optional, cast, get_args
 
 import httpx
 from fastapi import (
@@ -27,10 +27,18 @@ from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
+from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.llms.openai import (
+    CREATE_FILE_REQUESTS_PURPOSE,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
+)
 
 router = APIRouter()
 
@@ -61,7 +69,7 @@ def get_files_provider_config(
     if custom_llm_provider == "vertex_ai":
         return None
     if files_config is None:
-        raise ValueError("files_config is not set, set it on your config.yaml file.")
+        raise ValueError("files_settings is not set, set it on your config.yaml file.")
     for setting in files_config:
         if setting.get("custom_llm_provider") == custom_llm_provider:
             return setting
@@ -103,6 +111,84 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
+async def _deprecated_loadbalanced_create_file(
+    llm_router: Optional[Router],
+    router_model: str,
+    _create_file_request: CreateFileRequest,
+) -> OpenAIFileObject:
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router not initialized. Ensure models added to proxy."
+            },
+        )
+
+    response = await llm_router.acreate_file(model=router_model, **_create_file_request)
+    return response
+
+
+async def route_create_file(
+    llm_router: Optional[Router],
+    _create_file_request: CreateFileRequest,
+    purpose: OpenAIFilesPurpose,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    target_model_names_list: List[str],
+    is_router_model: bool,
+    router_model: Optional[str],
+    custom_llm_provider: str,
+) -> OpenAIFileObject:
+    if (
+        litellm.enable_loadbalancing_on_batch_endpoints is True
+        and is_router_model
+        and router_model is not None
+    ):
+        response = await _deprecated_loadbalanced_create_file(
+            llm_router=llm_router,
+            router_model=router_model,
+            _create_file_request=_create_file_request,
+        )
+    elif target_model_names_list:
+        managed_files_obj = cast(
+            Optional[_PROXY_LiteLLMManagedFiles],
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        if managed_files_obj is None:
+            raise ProxyException(
+                message="Managed files hook not found",
+                type="None",
+                param="None",
+                code=500,
+            )
+        if llm_router is None:
+            raise ProxyException(
+                message="LLM Router not found",
+                type="None",
+                param="None",
+                code=500,
+            )
+        response = await managed_files_obj.acreate_file(
+            llm_router=llm_router,
+            create_file_request=_create_file_request,
+            target_model_names_list=target_model_names_list,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+    else:
+        # get configs for custom_llm_provider
+        llm_provider_config = get_files_provider_config(
+            custom_llm_provider=custom_llm_provider
+        )
+        if llm_provider_config is not None:
+            # add llm_provider_config to data
+            _create_file_request.update(llm_provider_config)
+        _create_file_request.pop("custom_llm_provider", None)  # type: ignore
+        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
+
+    return response
+
+
 @router.post(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -122,6 +208,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    target_model_names: str = Form(default=""),
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
@@ -145,7 +232,6 @@ async def create_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -162,9 +248,26 @@ async def create_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+
+        target_model_names_list = (
+            target_model_names.split(",") if target_model_names else []
+        )
+        target_model_names_list = [model.strip() for model in target_model_names_list]
         # Prepare the data for forwarding
 
-        data = {"purpose": purpose}
+        # Replace with:
+        valid_purposes = get_args(OpenAIFilesPurpose)
+        if purpose not in valid_purposes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+                },
+            )
+        # Cast purpose to OpenAIFilesPurpose type
+        purpose = cast(OpenAIFilesPurpose, purpose)
+
+        data = {}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -190,42 +293,40 @@ async def create_file(
                     model=router_model, llm_router=llm_router
                 )
 
-        _create_file_request = CreateFileRequest(file=file_data, **data)
+        _create_file_request = CreateFileRequest(
+            file=file_data, purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose), **data
+        )
 
-        if (
-            litellm.enable_loadbalancing_on_batch_endpoints is True
-            and is_router_model
-            and router_model is not None
-        ):
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "LLM Router not initialized. Ensure models added to proxy."
-                    },
-                )
+        response = await route_create_file(
+            llm_router=llm_router,
+            _create_file_request=_create_file_request,
+            purpose=purpose,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            target_model_names_list=target_model_names_list,
+            is_router_model=is_router_model,
+            router_model=router_model,
+            custom_llm_provider=custom_llm_provider,
+        )
 
-            response = await llm_router.acreate_file(
-                model=router_model, **_create_file_request
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Failed to create file. Please try again."},
             )
-        else:
-            # get configs for custom_llm_provider
-            llm_provider_config = get_files_provider_config(
-                custom_llm_provider=custom_llm_provider
-            )
-            if llm_provider_config is not None:
-                # add llm_provider_config to data
-                _create_file_request.update(llm_provider_config)
-            _create_file_request.pop("custom_llm_provider", None)  # type: ignore
-            # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-            response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
-
         ### ALERTING ###
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
         )
+
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+        if _response is not None and isinstance(_response, OpenAIFileObject):
+            response = _response
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -234,7 +335,7 @@ async def create_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -248,12 +349,11 @@ async def create_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -309,7 +409,7 @@ async def get_file_content(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -317,7 +417,6 @@ async def get_file_content(
 
     data: Dict = {}
     try:
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -333,9 +432,40 @@ async def get_file_content(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-        response = await litellm.afile_content(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_content(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                llm_router=llm_router,
+                **data,
+            )
+        else:
+            response = await litellm.afile_content(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -351,7 +481,7 @@ async def get_file_content(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -437,7 +567,6 @@ async def get_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -459,9 +588,32 @@ async def get_file(
             version=version,
             proxy_config=proxy_config,
         )
-        response = await litellm.afile_retrieve(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_retrieve(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+        else:
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -477,7 +629,7 @@ async def get_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -554,7 +706,7 @@ async def delete_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -577,9 +729,40 @@ async def delete_file(
             proxy_config=proxy_config,
         )
 
-        response = await litellm.afile_delete(
-            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+        ## check if file_id is a litellm managed file
+        is_base64_unified_file_id = (
+            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
         )
+
+        if is_base64_unified_file_id:
+            managed_files_obj = cast(
+                Optional[_PROXY_LiteLLMManagedFiles],
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            response = await managed_files_obj.afile_delete(
+                file_id=file_id,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                llm_router=llm_router,
+                **data,
+            )
+        else:
+            response = await litellm.afile_delete(
+                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -595,7 +778,7 @@ async def delete_file(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
@@ -671,7 +854,6 @@ async def list_files(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        get_custom_headers,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -712,7 +894,7 @@ async def list_files(
         api_base = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
-            get_custom_headers(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,

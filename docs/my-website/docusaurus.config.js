@@ -44,7 +44,7 @@ const config = {
         path: './release_notes',
         routeBasePath: 'release_notes',
         blogTitle: 'Release Notes',
-        blogSidebarTitle: 'All Releases',
+        blogSidebarTitle: 'Releases',
         blogSidebarCount: 'ALL',
         postsPerPage: 'ALL',
         showReadingTime: false,

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +23,11 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
-from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+    LiteLLMParamsTypedDict,
+    AllowedFailsPolicy,
+)
 
 
 @pytest.mark.asyncio
@@ -134,7 +138,7 @@ def test_single_deployment_no_cooldowns(num_deployments):
         )
         model_list.append(model)
 
-    router = Router(model_list=model_list, allowed_fails=0, num_retries=0)
+    router = Router(model_list=model_list, num_retries=0)
 
     with patch.object(
         router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
@@ -181,7 +185,6 @@ async def test_single_deployment_no_cooldowns_test_prod():
                 },
             },
         ],
-        allowed_fails=0,
         num_retries=0,
     )
 
@@ -200,6 +203,104 @@ async def test_single_deployment_no_cooldowns_test_prod():
         await asyncio.sleep(2)
 
         mock_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_cooldown_with_allowed_fails():
+    """
+    When `allowed_fails` is set, use the allowed_fails to determine cooldown for 1 deployment
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                },
+            },
+            {
+                "model_name": "gpt-12",
+                "litellm_params": {
+                    "model": "openai/gpt-12",
+                },
+            },
+        ],
+        allowed_fails=1,
+        num_retries=0,
+    )
+
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        for _ in range(2):
+            try:
+                await router.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                    timeout=0.0001,
+                )
+            except litellm.Timeout:
+                pass
+
+        await asyncio.sleep(2)
+
+        mock_client.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_cooldown_with_allowed_fail_policy():
+    """
+    When `allowed_fails_policy` is set, use the allowed_fails_policy to determine cooldown for 1 deployment
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                },
+            },
+            {
+                "model_name": "gpt-12",
+                "litellm_params": {
+                    "model": "openai/gpt-12",
+                },
+            },
+        ],
+        allowed_fails_policy=AllowedFailsPolicy(
+            TimeoutErrorAllowedFails=1,
+        ),
+        num_retries=0,
+    )
+
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        for _ in range(2):
+            try:
+                await router.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                    timeout=0.0001,
+                )
+            except litellm.Timeout:
+                pass
+
+        await asyncio.sleep(2)
+
+        mock_client.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -589,5 +690,52 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
 
     router.completion(
         model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+
+@pytest.mark.asyncio()
+async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
+    """
+    Ensure cooldown on credential 1 does not affect credential 2
+    """
+    from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+
+    litellm._turn_on_debug()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ]
+    )
+
+    ## trigger ratelimit
+    try:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="my-bad-key-1",
+            mock_response="litellm.RateLimitError",
+        )
+        pytest.fail("Expected RateLimitError")
+    except litellm.RateLimitError:
+        pass
+
+    await asyncio.sleep(1)
+
+    cooldown_list = await _async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    print("cooldown_list: ", cooldown_list)
+    assert len(cooldown_list) == 1
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        api_key=os.getenv("OPENAI_API_KEY"),
         messages=[{"role": "user", "content": "hi"}],
     )

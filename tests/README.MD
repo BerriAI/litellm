@@ -1,1 +1,9 @@
-**In total litellm runs 500+ tests** Most tests are in [/litellm/tests](https://github.com/BerriAI/litellm/tree/main/litellm/tests). These are just the tests for the proxy docker image, used for circle ci. 
+**In total litellm runs 1000+ tests** 
+
+[02/20/2025] Update:
+
+To make it easier to contribute and map what behavior is tested,
+
+we've started mapping the litellm directory in `tests/litellm` 
+
+This folder can only run mock tests.

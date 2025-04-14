@@ -50,12 +50,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_file_system: str = _azure_storage_file_system
 
             # Internal variables used for Token based authentication
-            self.azure_auth_token: Optional[str] = (
-                None  # the Azure AD token to use for Azure Storage API requests
-            )
-            self.token_expiry: Optional[datetime] = (
-                None  # the expiry time of the currentAzure AD token
-            )
+            self.azure_auth_token: Optional[
+                str
+            ] = None  # the Azure AD token to use for Azure Storage API requests
+            self.token_expiry: Optional[
+                datetime
+            ] = None  # the expiry time of the currentAzure AD token
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -153,7 +153,6 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         3. Flush the data
         """
         try:
-
             if self.azure_storage_account_key:
                 await self.upload_to_azure_data_lake_with_azure_account_key(
                     payload=payload

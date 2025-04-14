@@ -11,7 +11,9 @@ class TopazException(BaseLLMException):
 
 
 class TopazModelInfo(BaseLLMModelInfo):
-    def get_models(self) -> List[str]:
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
         return [
             "topaz/Standard V2",
             "topaz/Low Resolution V2",

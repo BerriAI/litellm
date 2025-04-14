@@ -11,6 +11,7 @@ from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
@@ -54,9 +55,9 @@ class AnthropicTextConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens_to_sample: Optional[int] = (
-        litellm.max_tokens
-    )  # anthropic requires a default
+    max_tokens_to_sample: Optional[
+        int
+    ] = litellm.max_tokens  # anthropic requires a default
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -65,7 +66,9 @@ class AnthropicTextConfig(BaseConfig):
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = 256,  # anthropic requires a default
+        max_tokens_to_sample: Optional[
+            int
+        ] = DEFAULT_MAX_TOKENS,  # anthropic requires a default
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -84,6 +87,7 @@ class AnthropicTextConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

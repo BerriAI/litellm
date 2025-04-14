@@ -67,6 +67,30 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
     assert len(optional_params) == expected_count
 
 
+
+
+def test_get_optional_params_with_allowed_openai_params():
+    """
+    Test if use can dynamically pass in allowed_openai_params to override default behavior
+    """
+    litellm.drop_params = True
+    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    response_format = {"type": "json"}
+    reasoning_effort = "low"
+    optional_params = get_optional_params(
+        model="cf/llama-3.1-70b-instruct", 
+        custom_llm_provider="cloudflare", 
+        allowed_openai_params=["tools", "reasoning_effort", "response_format"],
+        tools=tools,
+        response_format=response_format,
+        reasoning_effort=reasoning_effort,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tools"] == tools
+    assert optional_params["response_format"] == response_format
+    assert optional_params["reasoning_effort"] == reasoning_effort  
+
+
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
@@ -1069,7 +1093,6 @@ def test_gemini_frequency_penalty():
     assert optional_params["frequency_penalty"] == 0.5
 
 
-
 def test_azure_prediction_param():
     optional_params = get_optional_params(
         model="chatgpt-v2",
@@ -1084,6 +1107,7 @@ def test_azure_prediction_param():
         "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
     }
 
+
 def test_vertex_ai_ft_llama():
     optional_params = get_optional_params(
         model="1984786713414729728",
@@ -1093,3 +1117,335 @@ def test_vertex_ai_ft_llama():
     )
     assert optional_params["frequency_penalty"] == 0.5
     assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking",
+    [
+        ("claude-3-5-sonnet", False),
+        ("claude-3-7-sonnet", True),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_anthropic_thinking_param(model, expected_thinking):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider="anthropic",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    if expected_thinking:
+        assert "thinking" in optional_params
+    else:
+        assert "thinking" not in optional_params
+
+
+def test_bedrock_invoke_anthropic_max_tokens():
+    passed_params = {
+        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "functions": None,
+        "function_call": None,
+        "temperature": 0.8,
+        "top_p": None,
+        "n": 1,
+        "stream": False,
+        "stream_options": None,
+        "stop": None,
+        "max_tokens": None,
+        "max_completion_tokens": 1024,
+        "modalities": None,
+        "prediction": None,
+        "audio": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "logit_bias": None,
+        "user": None,
+        "custom_llm_provider": "bedrock",
+        "response_format": {"type": "text"},
+        "seed": None,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_plan",
+                    "description": "Generate a plan to execute the task using only the tools outlined in your context.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "type": "string",
+                                            "description": "The type of step to execute",
+                                        },
+                                        "tool_name": {
+                                            "type": "string",
+                                            "description": "The name of the tool to use for this step",
+                                        },
+                                        "tool_input": {
+                                            "type": "object",
+                                            "description": "The input to pass to the tool. Make sure this complies with the schema for the tool.",
+                                        },
+                                        "tool_output": {
+                                            "type": "object",
+                                            "description": "(Optional) The output from the tool if needed for future steps. Make sure this complies with the schema for the tool.",
+                                        },
+                                    },
+                                    "required": ["type"],
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_wire_tool",
+                    "description": "Create a wire transfer with complete wire instructions",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "company_id": {
+                                "type": "integer",
+                                "description": "The ID of the company receiving the investment",
+                            },
+                            "investment_id": {
+                                "type": "integer",
+                                "description": "The ID of the investment memo",
+                            },
+                            "dollar_amount": {
+                                "type": "number",
+                                "description": "The amount to wire in USD",
+                            },
+                            "wiring_instructions": {
+                                "type": "object",
+                                "description": "Complete bank account and routing information for the wire",
+                                "properties": {
+                                    "account_name": {
+                                        "type": "string",
+                                        "description": "Name on the bank account",
+                                    },
+                                    "address_1": {
+                                        "type": "string",
+                                        "description": "Primary address line",
+                                    },
+                                    "address_2": {
+                                        "type": "string",
+                                        "description": "Secondary address line (optional)",
+                                    },
+                                    "city": {"type": "string"},
+                                    "state": {"type": "string"},
+                                    "zip": {"type": "string"},
+                                    "country": {"type": "string", "default": "US"},
+                                    "bank_name": {"type": "string"},
+                                    "account_number": {"type": "string"},
+                                    "routing_number": {"type": "string"},
+                                    "account_type": {
+                                        "type": "string",
+                                        "enum": ["checking", "savings"],
+                                        "default": "checking",
+                                    },
+                                    "swift_code": {
+                                        "type": "string",
+                                        "description": "Required for international wires",
+                                    },
+                                    "iban": {
+                                        "type": "string",
+                                        "description": "Required for some international wires",
+                                    },
+                                    "bank_city": {"type": "string"},
+                                    "bank_state": {"type": "string"},
+                                    "bank_country": {"type": "string", "default": "US"},
+                                    "bank_to_bank_instructions": {
+                                        "type": "string",
+                                        "description": "Additional instructions for the bank (optional)",
+                                    },
+                                    "intermediary_bank_name": {
+                                        "type": "string",
+                                        "description": "Name of intermediary bank if required (optional)",
+                                    },
+                                },
+                                "required": [
+                                    "account_name",
+                                    "address_1",
+                                    "country",
+                                    "bank_name",
+                                    "account_number",
+                                    "routing_number",
+                                    "account_type",
+                                    "bank_country",
+                                ],
+                            },
+                        },
+                        "required": [
+                            "company_id",
+                            "investment_id",
+                            "dollar_amount",
+                            "wiring_instructions",
+                        ],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_companies",
+                    "description": "Search for companies by name or other criteria to get their IDs",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Name or part of name to search for",
+                            },
+                            "batch": {
+                                "type": "string",
+                                "description": 'Optional batch filter (e.g., "W21", "S22")',
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "live",
+                                    "dead",
+                                    "adrift",
+                                    "exited",
+                                    "went_public",
+                                    "all",
+                                ],
+                                "description": "Filter by company status",
+                                "default": "live",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 10,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "description": "Success or error status",
+                            },
+                            "results": {
+                                "type": "array",
+                                "description": "List of companies matching the search criteria",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "integer",
+                                            "description": "Company ID to use in other API calls",
+                                        },
+                                        "name": {"type": "string"},
+                                        "batch": {"type": "string"},
+                                        "status": {"type": "string"},
+                                        "valuation": {"type": "string"},
+                                        "url": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "founders": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "results_count": {
+                                "type": "integer",
+                                "description": "Number of companies returned",
+                            },
+                            "total_matches": {
+                                "type": "integer",
+                                "description": "Total number of matches found",
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+        "tool_choice": None,
+        "max_retries": 0,
+        "logprobs": None,
+        "top_logprobs": None,
+        "extra_headers": None,
+        "api_version": None,
+        "parallel_tool_calls": None,
+        "drop_params": True,
+        "reasoning_effort": None,
+        "additional_drop_params": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an AI assistant that helps prepare a wire for a pro rata investment.",
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        "thinking": None,
+        "kwargs": {},
+    }
+    optional_params = get_optional_params(**passed_params)
+    print(f"optional_params: {optional_params}")
+
+    assert "max_tokens_to_sample" not in optional_params
+    assert optional_params["max_tokens"] == 1024
+
+
+def test_azure_modalities_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        modalities=["text", "audio"],
+        audio={"type": "audio_input", "input": "test.wav"},
+    )
+    assert optional_params["modalities"] == ["text", "audio"]
+    assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+    
+
+
+
+def test_azure_response_format_param():
+    optional_params = litellm.get_optional_params(
+        model="azure/o_series/test-o3-mini",
+        custom_llm_provider="azure/o_series",
+        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    )
+
+    
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
+        ("claude-3-7-sonnet@20250219", "vertex_ai"),
+    ],
+)
+def test_anthropic_unified_reasoning_content(model, provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        reasoning_effort="high",
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+

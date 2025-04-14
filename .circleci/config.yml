@@ -3,6 +3,18 @@ orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0  # Add this line to declare the node orb
 
+commands:
+  setup_google_dns:
+    steps:
+      - run:
+          name: "Configure Google DNS"
+          command: |
+            # Backup original resolv.conf
+            sudo cp /etc/resolv.conf /etc/resolv.conf.backup
+            # Add both local and Google DNS servers
+            echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
+            echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+            echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
   local_testing:
@@ -15,7 +27,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -49,7 +61,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.68.2
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -66,12 +78,12 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
-            pip install "websockets==10.4"
+            pip install "websockets==13.1.0"
             pip uninstall posthog -y
       - save_cache:
           paths:
@@ -134,7 +146,7 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -168,7 +180,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.68.2
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -185,10 +197,11 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "websockets==13.1.0"
       - save_cache:
           paths:
             - ./venv
@@ -233,7 +246,13 @@ jobs:
 
     steps:
       - checkout
-
+      - setup_google_dns
+      - run:
+          name: DNS lookup for Redis host
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y dnsutils
+            dig redis-19899.c239.us-east-1-2.ec2.redns.redis-cloud.com +short
       - run:
           name: Show git commit hash
           command: |
@@ -267,7 +286,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.68.2
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -284,10 +303,11 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "websockets==13.1.0"
       - save_cache:
           paths:
             - ./venv
@@ -332,6 +352,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -386,6 +407,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -402,7 +424,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing tests/router_unit_tests --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing tests/router_unit_tests --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -427,6 +449,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -477,7 +500,13 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install postgresql postgresql-contrib
+            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
+      - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
@@ -511,7 +540,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0
+            pip install openai==1.68.2
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
@@ -528,10 +557,11 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "pytest-postgresql==7.0.1"
       - save_cache:
           paths:
             - ./venv
@@ -567,7 +597,7 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -575,10 +605,13 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            pip install wheel
+            pip install --upgrade pip wheel setuptools
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.21.1"
@@ -616,6 +649,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -623,7 +657,13 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      - run:
+          name: Show current pydantic version
+          command: |
+            python -m pip show pydantic
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -646,6 +686,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -662,7 +703,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -678,6 +719,141 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
+  mcp_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+            pip install "pydantic==2.10.2"
+            pip install "mcp==1.5.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml mcp_coverage.xml
+            mv .coverage mcp_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - mcp_coverage.xml
+            - mcp_coverage
+  llm_responses_api_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml llm_responses_api_coverage.xml
+            mv .coverage llm_responses_api_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - llm_responses_api_coverage.xml
+            - llm_responses_api_coverage
+  litellm_mapped_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+            pip install "hypercorn==0.17.3"
+            pip install "pydantic==2.10.2"
+            pip install "mcp==1.5.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_mapped_tests_coverage.xml
+            mv .coverage litellm_mapped_tests_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_mapped_tests_coverage.xml
+            - litellm_mapped_tests_coverage
   batches_testing:
     docker:
       - image: cimg/python:3.11
@@ -688,6 +864,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -732,10 +909,12 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            pip install numpydoc
             python -m pip install -r requirements.txt
             pip install "respx==0.21.1"
             pip install "pytest==7.3.1"
@@ -744,7 +923,6 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
-            pip install numpydoc
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -778,6 +956,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -820,6 +999,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -862,6 +1042,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -908,6 +1089,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -920,8 +1102,8 @@ jobs:
             pip install click
             pip install "boto3==1.34.34"
             pip install jinja2
-            pip install tokenizers=="0.20.0"
-            pip install uvloop==0.21.0
+            pip install "tokenizers==0.20.0"
+            pip install "uvloop==0.21.0"
             pip install jsonschema
       - run:
           name: Run tests
@@ -940,10 +1122,12 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            python -m pip install wheel setuptools
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
@@ -964,6 +1148,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       # Install Helm
       - run:
           name: Install Helm
@@ -1033,6 +1218,7 @@ jobs:
 
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Dependencies
           command: |
@@ -1046,6 +1232,7 @@ jobs:
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
+      - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
@@ -1068,6 +1255,24 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
       - run:
           name: Build Docker image
           command: |
@@ -1075,29 +1280,48 @@ jobs:
       - run:
           name: Run Docker container
           command: |
-            docker run --name my-app \
+            docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              --name my-app \
               myapp:latest \
               --config /app/config.yaml \
-              --port 4000 > docker_output.log 2>&1 || true
+              --port 4000
       - run:
-          name: Display Docker logs
-          command: cat docker_output.log
-      - run:
-          name: Check for expected error
+          name: Install curl and dockerize
           command: |
-            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.log; then
-              echo "Expected error found. Test passed."
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+
+      - run:
+          name: Wait for container to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 1m
+      - run:
+          name: Check container logs for expected message
+          command: |
+            echo "=== Printing Full Container Startup Logs ==="
+            docker logs my-app
+            echo "=== End of Full Container Startup Logs ==="
+            
+            if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
+              echo "Expected message found in logs. Test passed."
             else
-              echo "Expected error not found. Test failed."
-              cat docker_output.log
+              echo "Expected message not found in logs. Test failed."
               exit 1
             fi
+      - run:
+          name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
+          command: |
+            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+          no_output_timeout: 120m
+
 
   build_and_test:
     machine:
@@ -1106,6 +1330,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1153,7 +1378,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.68.2"
       - run:
           name: Install Grype
           command: |
@@ -1228,19 +1453,20 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
       - store_test_results:
           path: test-results
-  e2e_openai_misc_endpoints:
+  e2e_openai_endpoints:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1277,6 +1503,7 @@ jobs:
             pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
+            pip install "langchain_mcp_adapters==0.0.5"
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
@@ -1289,7 +1516,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.68.2"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -1351,7 +1578,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/openai_misc_endpoints_tests --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -1364,6 +1591,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1411,7 +1639,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
+            pip install "openai==1.68.2"
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -1518,6 +1746,96 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  proxy_spend_accuracy_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          # intentionally give bad redis credentials here
+          # the OTEL test - should get this as a trace
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/spend_tracking_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout:
+            120m
+            # Clean up first container
+      - run:
+          name: Stop and remove first container
+          command: |
+            docker stop my-app
+            docker rm my-app
 
   proxy_multi_instance_tests:
     machine:
@@ -1526,6 +1844,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1637,6 +1956,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1676,7 +1996,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DATABASE_URL=$CLEAN_STORE_MODEL_IN_DB_DATABASE_URL \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -1719,6 +2039,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - run:
           name: Install Python 3.13
@@ -1816,6 +2137,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
@@ -1840,10 +2162,10 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.54.0 "
+            pip install "openai==1.68.2"
             pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
@@ -1854,12 +2176,15 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
+            pip install "httpx==0.27.0"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install anthropic
+            pip install "anthropic==0.49.0"
+            pip install "langchain_mcp_adapters==0.0.5"
+            pip install "langchain_openai==0.2.1"
+            pip install "langgraph==0.3.18"
       # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -1901,11 +2226,44 @@ jobs:
       - run:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 5m
+      # Add Ruby installation and testing before the existing Node.js and Python tests
+      - run:
+          name: Install Ruby and Bundler
+          command: |
+            # Import GPG keys first
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
+              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+            }
+            
+            # Install Ruby version manager (RVM)
+            curl -sSL https://get.rvm.io | bash -s stable
+            
+            # Source RVM from the correct location
+            source $HOME/.rvm/scripts/rvm
+            
+            # Install Ruby 3.2.2
+            rvm install 3.2.2
+            rvm use 3.2.2 --default
+            
+            # Install latest Bundler
+            gem install bundler
+
+      - run:
+          name: Run Ruby tests
+          command: |
+            source $HOME/.rvm/scripts/rvm
+            cd tests/pass_through_tests/ruby_passthrough_tests
+            bundle install
+            bundle exec rspec
+          no_output_timeout: 30m
       # New steps to run Node.js test
       - run:
           name: Install Node.js
           command: |
+            export DEBIAN_FRONTEND=noninteractive
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get update
             sudo apt-get install -y nodejs
             node --version
             npm --version
@@ -1954,7 +2312,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2032,6 +2390,114 @@ jobs:
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
+  publish_proxy_extras:
+    docker:
+      - image: cimg/python:3.8
+    working_directory: ~/project/litellm-proxy-extras
+    environment:
+      TWINE_USERNAME: __token__
+
+    steps:
+      - checkout:
+          path: ~/project
+
+      - run:
+          name: Check if litellm-proxy-extras dir or pyproject.toml was modified
+          command: |
+            echo "Install TOML package."
+            python -m pip install toml
+            # Get current version from pyproject.toml
+            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            
+            # Get last published version from PyPI
+            LAST_VERSION=$(curl -s https://pypi.org/pypi/litellm-proxy-extras/json | python -c "import json, sys; print(json.load(sys.stdin)['info']['version'])")
+            
+            echo "Current version: $CURRENT_VERSION"
+            echo "Last published version: $LAST_VERSION"
+            
+            # Compare versions using Python's packaging.version
+            VERSION_COMPARE=$(python -c "from packaging import version; print(1 if version.parse('$CURRENT_VERSION') < version.parse('$LAST_VERSION') else 0)")
+            
+            echo "Version compare: $VERSION_COMPARE"
+            if [ "$VERSION_COMPARE" = "1" ]; then
+              echo "Error: Current version ($CURRENT_VERSION) is less than last published version ($LAST_VERSION)"
+              exit 1
+            fi
+            
+            # If versions are equal or current is greater, check contents
+            pip download --no-deps litellm-proxy-extras==$LAST_VERSION -d /tmp
+            
+            echo "Contents of /tmp directory:"
+            ls -la /tmp
+            
+            # Find the downloaded file (could be .whl or .tar.gz)
+            DOWNLOADED_FILE=$(ls /tmp/litellm_proxy_extras-*)
+            echo "Downloaded file: $DOWNLOADED_FILE"
+            
+            # Extract based on file extension
+            if [[ "$DOWNLOADED_FILE" == *.whl ]]; then
+                echo "Extracting wheel file..."
+                unzip -q "$DOWNLOADED_FILE" -d /tmp/extracted
+                EXTRACTED_DIR="/tmp/extracted"
+            else
+                echo "Extracting tar.gz file..."
+                tar -xzf "$DOWNLOADED_FILE" -C /tmp
+                EXTRACTED_DIR="/tmp/litellm_proxy_extras-$LAST_VERSION"
+            fi
+            
+            echo "Contents of extracted package:"
+            ls -R "$EXTRACTED_DIR"
+            
+            # Compare contents
+            if ! diff -r "$EXTRACTED_DIR/litellm_proxy_extras" ./litellm_proxy_extras; then
+              if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
+                echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
+                echo "Current version: $CURRENT_VERSION"
+                echo "Last published version: $LAST_VERSION"
+                echo "Changes:"
+                diff -r "$EXTRACTED_DIR/litellm_proxy_extras" ./litellm_proxy_extras
+                exit 1
+              fi
+            else
+              echo "No changes detected in litellm-proxy-extras. Skipping PyPI publish."
+              circleci step halt
+            fi
+
+      - run:
+          name: Get new version
+          command: |
+            cd litellm-proxy-extras
+            NEW_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
+
+      - run:
+          name: Check if versions match
+          command: |
+            cd ~/project
+            # Check pyproject.toml
+            CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['dependencies']['litellm-proxy-extras'].split('\"')[1])")
+            if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
+              echo "Error: Version in pyproject.toml ($CURRENT_VERSION) doesn't match new version ($NEW_VERSION)"
+              exit 1
+            fi
+
+            # Check requirements.txt
+            REQ_VERSION=$(grep -oP 'litellm-proxy-extras==\K[0-9.]+' requirements.txt)
+            if [ "$REQ_VERSION" != "$NEW_VERSION" ]; then
+              echo "Error: Version in requirements.txt ($REQ_VERSION) doesn't match new version ($NEW_VERSION)"
+              exit 1
+            fi
+
+      - run:
+          name: Publish to PyPI
+          command: |
+            cd litellm-proxy-extras
+            echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
+            python -m pip install --upgrade pip build twine setuptools wheel
+            rm -rf build dist
+            python -m build
+            twine upload --verbose dist/*
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -2039,6 +2505,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build UI
           command: |
@@ -2083,9 +2550,9 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.54.0 "
+            pip install "openai==1.68.2"
             python -m pip install --upgrade pip
-            pip install "pydantic==2.7.1"
+            pip install "pydantic==2.10.2"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
@@ -2153,6 +2620,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
@@ -2175,6 +2643,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - run:
           name: Build Docker image
           command: |
@@ -2273,13 +2742,19 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_openai_misc_endpoints:
+      - e2e_openai_endpoints:
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_spend_accuracy_tests:
           filters:
             branches:
               only:
@@ -2310,6 +2785,24 @@ workflows:
                 - main
                 - /litellm_.*/
       - llm_translation_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - mcp_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - llm_responses_api_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests:
           filters:
             branches:
               only:
@@ -2348,6 +2841,9 @@ workflows:
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - mcp_testing
+            - llm_responses_api_testing
+            - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
@@ -2397,14 +2893,22 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - publish_proxy_extras:
+          filters:
+            branches:
+              only:
+                - main
       - publish_to_pypi:
           requires:
             - local_testing
             - build_and_test
-            - e2e_openai_misc_endpoints
+            - e2e_openai_endpoints
             - load_testing
             - test_bad_database_url
             - llm_translation_testing
+            - mcp_testing
+            - llm_responses_api_testing
+            - litellm_mapped_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
@@ -2422,12 +2926,11 @@ workflows:
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
+            - proxy_spend_accuracy_tests
             - proxy_multi_instance_tests
             - proxy_store_model_in_db_tests
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
-          filters:
-            branches:
-              only:
-                - main
+            - publish_proxy_extras
+      

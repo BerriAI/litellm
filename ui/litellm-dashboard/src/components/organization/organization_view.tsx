@@ -3,6 +3,7 @@ import {
   Card,
   Title,
   Text,
+  TextInput,
   Tab,
   TabList,
   TabGroup,
@@ -19,11 +20,12 @@ import {
   Button as TremorButton,
   Icon
 } from "@tremor/react";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
+import NumericalInput from "../shared/numerical_input";
+import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall } from "../networking";
+import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall, organizationUpdateCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
 
@@ -146,20 +148,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           rpm_limit: values.rpm_limit,
           max_budget: values.max_budget,
           budget_duration: values.budget_duration,
-        }
+        },
+        metadata: values.metadata ? JSON.parse(values.metadata) : null,
       };
       
-      const response = await fetch('/organization/update', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updateData),
-      });
+      const response = await organizationUpdateCall(accessToken, updateData);
 
-      if (!response.ok) throw new Error('Failed to update organization');
-      
       message.success("Organization settings updated successfully");
       setIsEditing(false);
       fetchOrgInfo();
@@ -337,6 +331,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     rpm_limit: orgData.litellm_budget_table.rpm_limit,
                     max_budget: orgData.litellm_budget_table.max_budget,
                     budget_duration: orgData.litellm_budget_table.budget_duration,
+                    metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
                   }}
                   layout="vertical"
                 >
@@ -345,7 +340,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     name="organization_alias"
                     rules={[{ required: true, message: "Please input an organization name" }]}
                   >
-                    <Input />
+                    <TextInput />
                   </Form.Item>
                   
                   <Form.Item label="Models" name="models">
@@ -365,7 +360,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -377,11 +372,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Metadata" name="metadata">  
+                    <Input.TextArea rows={4} />
                   </Form.Item>
 
                   <div className="flex justify-end gap-2 mt-6">

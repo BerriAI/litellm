@@ -2,11 +2,11 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Sambanova
-https://community.sambanova.ai/t/create-chat-completion-api/
+https://cloud.sambanova.ai/
 
 :::tip
 
-**We support ALL Sambanova models, just set `model=sambanova/<any-model-on-sambanova>` as a prefix when sending litellm requests. For the complete supported model list, visit https://sambanova.ai/technology/models **
+**We support ALL Sambanova models, just set `model=sambanova/<any-model-on-sambanova>` as a prefix when sending litellm requests. For the complete supported model list, visit https://docs.sambanova.ai/cloud/docs/get-started/supported-models **
 
 :::
 
@@ -27,12 +27,11 @@ response = completion(
     messages=[
         {
             "role": "user",
-            "content": "What do you know about sambanova.ai",
+            "content": "What do you know about sambanova.ai. Give your response in json format",
         }
     ],
     max_tokens=10,
     response_format={ "type": "json_object" },
-    seed=123,
     stop=["\n\n"],
     temperature=0.2,
     top_p=0.9,
@@ -54,13 +53,12 @@ response = completion(
     messages=[
         {
             "role": "user",
-            "content": "What do you know about sambanova.ai",
+            "content": "What do you know about sambanova.ai. Give your response in json format",
         }
     ],
     stream=True,
     max_tokens=10,
     response_format={ "type": "json_object" },
-    seed=123,
     stop=["\n\n"],
     temperature=0.2,
     top_p=0.9,

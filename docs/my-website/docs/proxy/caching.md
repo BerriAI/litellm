@@ -2,7 +2,6 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Caching 
-Cache LLM Responses
 
 :::note 
 
@@ -10,14 +9,19 @@ For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
 
 :::
 
-LiteLLM supports:
+Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to save costs and reduce latency. When you make the same request twice, the cached response is returned instead of calling the LLM API again.
+
+
+
+### Supported Caches
+
 - In Memory Cache
 - Redis Cache 
 - Qdrant Semantic Cache
 - Redis Semantic Cache
 - s3 Bucket Cache 
 
-## Quick Start - Redis, s3 Cache, Semantic Cache
+## Quick Start
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
@@ -369,9 +373,9 @@ $ litellm --config /path/to/config.yaml
 </Tabs>
 
 
+## Usage
 
-
-## Using Caching - /chat/completions
+### Basic
 
 <Tabs>
 <TabItem value="chat_completions" label="/chat/completions">
@@ -415,6 +419,239 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 ```
 </TabItem>
 </Tabs>
+
+### Dynamic Cache Controls
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `ttl` | *Optional(int)* | Will cache the response for the user-defined amount of time (in seconds) |
+| `s-maxage` | *Optional(int)* | Will only accept cached responses that are within user-defined range (in seconds) |
+| `no-cache` | *Optional(bool)* | Will not store the response in cache. |
+| `no-store` | *Optional(bool)* | Will not cache the response |
+| `namespace` | *Optional(str)* | Will cache the response under a user-defined namespace |
+
+Each cache parameter can be controlled on a per-request basis. Here are examples for each parameter:
+
+### `ttl`
+
+Set how long (in seconds) to cache a response.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "ttl": 300  # Cache response for 5 minutes
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"ttl": 300},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `s-maxage`
+
+Only accept cached responses that are within the specified age (in seconds).
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "s-maxage": 600  # Only use cache if less than 10 minutes old
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"s-maxage": 600},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `no-cache`
+Force a fresh response, bypassing the cache.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "no-cache": True  # Skip cache check, get fresh response
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-cache": true},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `no-store`
+
+Will not store the response in cache.
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "no-store": True  # Don't cache this response
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-store": true},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `namespace`
+Store the response under a specific cache namespace.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "namespace": "my-custom-namespace"  # Store in custom namespace
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"namespace": "my-custom-namespace"},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+
 
 ## Set cache for proxy, but not on the actual llm api call
 
@@ -499,253 +736,6 @@ litellm_settings:
     # Optional configurations
     supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
                       # /chat/completions, /completions, /embeddings, /audio/transcriptions
-```
-
-### **Turn on / off caching per request. **
-
-The proxy support 4 cache-controls:
-
-- `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
-- `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
-- `no-cache`: *Optional(bool)* Will not return a cached response, but instead call the actual endpoint. 
-- `no-store`: *Optional(bool)* Will not cache the response. 
-
-[Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
-
-**Turn off caching**
-
-Set `no-cache=True`, this will not return a cached response
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python SDK">
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "no-cache": True # will not return a cached response 
-      }
-    }
-)
-```
-</TabItem>
-
-<TabItem value="curl" label="curl">
-
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "cache": {"no-cache": True},
-    "messages": [
-      {"role": "user", "content": "Say this is a test"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-**Turn on caching**
-
-By default cache is always on
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python SDK">
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo"
-)
-```
-</TabItem>
-
-<TabItem value="curl on" label="curl">
-
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {"role": "user", "content": "Say this is a test"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-**Set `ttl`**
-
-Set `ttl=600`, this will caches response for 10 minutes (600 seconds)
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python SDK">
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "ttl": 600 # caches response for 10 minutes 
-      }
-    }
-)
-```
-</TabItem>
-
-<TabItem value="curl on" label="curl">
-
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "cache": {"ttl": 600},
-    "messages": [
-      {"role": "user", "content": "Say this is a test"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-
-
-**Set `s-maxage`**
-
-Set `s-maxage`, this will only get responses cached within last 10 minutes 
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python SDK">
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "s-maxage": 600 # only get responses cached within last 10 minutes 
-      }
-    }
-)
-```
-</TabItem>
-
-<TabItem value="curl on" label="curl">
-
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "cache": {"s-maxage": 600},
-    "messages": [
-      {"role": "user", "content": "Say this is a test"}
-    ]
-  }'
-```
-
-</TabItem>
-
-</Tabs>
-
-
-### Turn on / off caching per Key.
-
-1. Add cache params when creating a key [full list](#turn-on--off-caching-per-key)
-
-```bash 
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "user_id": "222",
-    "metadata": {
-        "cache": {
-            "no-cache": true
-        }
-    }
-}'
-```
-
-2. Test it! 
-
-```bash 
-curl -X POST 'http://localhost:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer <YOUR_NEW_KEY>' \
--d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 

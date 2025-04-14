@@ -28,7 +28,6 @@ LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
 
 class KeyManagementEventHooks:
-
     @staticmethod
     async def async_key_generated_hook(
         data: GenerateKeyRequest,

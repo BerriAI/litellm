@@ -303,6 +303,24 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders(custom_llm_provider),
+    )
+    assert provider_config is not None
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+    assert provider_config.get_models() == valid_models
+
+
 # test_get_valid_models()
 
 
@@ -473,6 +491,45 @@ def test_token_counter():
 def test_supports_function_calling(model, expected_bool):
     try:
         assert litellm.supports_function_calling(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-4o-mini-search-preview", True),
+        ("openai/gpt-4o-mini-search-preview", True),
+        ("gpt-4o-search-preview", True),
+        ("openai/gpt-4o-search-preview", True),
+        ("groq/deepseek-r1-distill-llama-70b", False),
+        ("groq/llama-3.3-70b-versatile", False),
+        ("codestral/codestral-latest", False),
+    ],
+)
+def test_supports_web_search(model, expected_bool):
+    try:
+        assert litellm.supports_web_search(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("openai/o3-mini", True),
+        ("o3-mini", True),
+        ("xai/grok-3-mini-beta", True),
+        ("xai/grok-3-mini-fast-beta", True),
+        ("xai/grok-2", False),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_supports_reasoning(model, expected_bool):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert litellm.supports_reasoning(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1099,6 +1156,26 @@ def test_is_base64_encoded_2():
                 {
                     "role": "user",
                     "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "123",
+                                "file_name": "test.txt",
+                                "file_size": 100,
+                                "file_type": "text/plain",
+                                "file_url": "https://example.com/test.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "image_url", "url": "https://example.com/image.png"}
                     ],
                 }
@@ -1165,6 +1242,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1966,3 +2046,79 @@ def test_get_applied_guardrails(test_case):
 
     # Assert
     assert sorted(result) == sorted(test_case["expected"])
+
+
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+        (
+            "localhost:4000/v1/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            True,
+        ),
+        (
+            "localhost:4000/v2/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            False,
+        ),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }
+
+
+def test_message_object():
+    from litellm.types.utils import Message
+
+    message = Message(content="Hello, world!", role="user")
+    assert message.content == "Hello, world!"
+    assert message.role == "user"
+    assert not hasattr(message, "audio")
+    assert not hasattr(message, "thinking_blocks")
+    assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")
+
+
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )

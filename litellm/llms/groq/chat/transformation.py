@@ -18,7 +18,6 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class GroqChatConfig(OpenAIGPTConfig):
-
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None

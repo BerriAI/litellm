@@ -14,7 +14,6 @@ class PromptManagementClient(TypedDict):
 
 
 class PromptManagementBase(ABC):
-
     @property
     @abstractmethod
     def integration_name(self) -> str:
@@ -83,11 +82,7 @@ class PromptManagementBase(ABC):
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+    ) -> Tuple[str, List[AllMessageValues], dict,]:
         if not self.should_run_prompt_management(
             prompt_id=prompt_id, dynamic_callback_params=dynamic_callback_params
         ):

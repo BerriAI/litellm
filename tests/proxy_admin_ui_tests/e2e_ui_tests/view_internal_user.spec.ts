@@ -38,9 +38,9 @@ test('view internal user page', async ({ page }) => {
   expect(hasNonZeroKeys).toBe(true);
 
   // test pagination
-  const prevButton = page.locator('button.bg-blue-500.hover\\:bg-blue-700.text-white.font-bold.py-2.px-4.rounded-l.focus\\:outline-none', { hasText: 'Prev' });
+  const prevButton = page.locator('button.px-3.py-1.text-sm.border.rounded-md.hover\\:bg-gray-50.disabled\\:opacity-50.disabled\\:cursor-not-allowed', { hasText: 'Previous' });
   await expect(prevButton).toBeDisabled();
 
-  const nextButton = page.locator('button.bg-blue-500.hover\\:bg-blue-700.text-white.font-bold.py-2.px-4.rounded-r.focus\\:outline-none', { hasText: 'Next' });
+  const nextButton = page.locator('button.px-3.py-1.text-sm.border.rounded-md.hover\\:bg-gray-50.disabled\\:opacity-50.disabled\\:cursor-not-allowed', { hasText: 'Next' });
   await expect(nextButton).toBeEnabled();
 });
