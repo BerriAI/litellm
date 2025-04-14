@@ -2669,7 +2669,7 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000008,
         "input_cost_per_audio_token": 0.000004,
-        "output_cost_per_token": 0.00032,
+        "output_cost_per_token": 0.00000032,
         "litellm_provider": "azure_ai",
         "mode": "chat",
         "supports_audio_input": true,
