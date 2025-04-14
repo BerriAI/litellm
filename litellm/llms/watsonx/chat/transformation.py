@@ -25,7 +25,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             "seed",  # equivalent to random_seed
             "stream",  # equivalent to stream
             "tools",
-            "tool_choice",  # equivalent to tool_choice + tool_choice_options
+            "tool_choice",  # equivalent to tool_choice + tool_choice_option
             "logprobs",
             "top_logprobs",
             "n",
@@ -61,7 +61,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
         _tool_choice = non_default_params.pop("tool_choice", None)
         if self.is_tool_choice_option(_tool_choice):
-            optional_params["tool_choice_options"] = _tool_choice
+            optional_params["tool_choice_option"] = _tool_choice
         elif _tool_choice is not None:
             optional_params["tool_choice"] = _tool_choice
         return super().map_openai_params(
