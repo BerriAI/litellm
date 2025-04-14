@@ -13,10 +13,11 @@ from litellm.utils import executor as thread_pool_executor
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
-from .llm_provider_handlers.cohere_passthrough_logging_handler import (
-    CoherePassthroughLoggingHandler,
 from .llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
+)
+from .llm_provider_handlers.cohere_passthrough_logging_handler import (
+    CoherePassthroughLoggingHandler,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -198,10 +199,12 @@ class PassThroughEndpointLogging:
             if route in url_route:
                 return True
         return False
+
     def is_cohere_route(self, url_route: str):
         for route in self.TRACKED_COHERE_ROUTES:
             if route in url_route:
                 return True
+
     def is_assemblyai_route(self, url_route: str):
         parsed_url = urlparse(url_route)
         if parsed_url.hostname == "api.assemblyai.com":
