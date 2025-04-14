@@ -115,7 +115,7 @@ class OpenTelemetry(CustomLogger):
             otel_exporter_logger = logging.getLogger("opentelemetry.sdk.trace.export")
             otel_exporter_logger.setLevel(logging.DEBUG)
 
-        # Don't override the tracer provider set by `opentelemetry-instrument`
+        # Don't override a tracer provider already set by the user
         if trace.get_tracer_provider() is None:
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
