@@ -956,7 +956,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ## PROMPT MANAGEMENT HOOKS ##
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
-            prompt_id=prompt_id, kwargs=kwargs
+            prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
         (

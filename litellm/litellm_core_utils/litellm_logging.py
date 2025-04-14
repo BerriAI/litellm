@@ -458,14 +458,14 @@ class Logging(LiteLLMLoggingBaseClass):
     def should_run_prompt_management_hooks(
         self,
         prompt_id: str,
-        kwargs: Dict,
+        non_default_params: Dict,
     ) -> bool:
         """
         Return True if prompt management hooks should be run
         """
         if prompt_id:
             return True
-        if kwargs.get("inject_cache_control_breakpoints_locations", None):
+        if non_default_params.get("cache_control_injection_points", None):
             return True
         return False
 
