@@ -2149,7 +2149,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"APIError: {exception_provider} - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
-                            request=original_exception.request,
+                            request=getattr(original_exception, "request", None),
                             litellm_debug_info=extra_information,
                         )
                 else:
