@@ -132,8 +132,8 @@ class ProxyInitializationHelpers:
             print(f"Using log_config: {log_config}")  # noqa
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
-            uvicorn_args["log_config"] = None
+            from litellm.proxy.json_logging import uvicorn_json_log_config
+            uvicorn_args["log_config"] = uvicorn_json_log_config()
         return uvicorn_args
 
     @staticmethod
