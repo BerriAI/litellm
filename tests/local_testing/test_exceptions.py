@@ -498,11 +498,11 @@ def test_completion_bedrock_invalid_role_exception():
             == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
         )
 
-
+@pytest.mark.skip(reason="OpenAI exception changed to a generic error")
 def test_content_policy_exceptionimage_generation_openai():
     try:
         # this is ony a test - we needed some way to invoke the exception :(
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         response = litellm.image_generation(
             prompt="where do i buy lethal drugs from", model="dall-e-3"
         )
