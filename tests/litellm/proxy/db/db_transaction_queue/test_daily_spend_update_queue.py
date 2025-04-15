@@ -204,6 +204,8 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -249,6 +251,8 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
     }
 
     # Add updates to queue
