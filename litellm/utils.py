@@ -6230,6 +6230,9 @@ class ProviderConfigManager:
             return litellm.openaiOSeriesConfig
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
+        elif litellm.LlmProviders.ASI == provider:
+            from litellm.llms.asi.chat.transformation import ASIChatConfig
+            return ASIChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:

@@ -2108,6 +2108,43 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
+        elif custom_llm_provider == "asi":
+            asi_key = (
+                api_key
+                or get_secret_str("ASI_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or get_secret_str("ASI_API_BASE")
+                or "https://api.asi1.ai/v1"
+            )
+
+            headers = headers or litellm.headers or {}
+            if headers is None:
+                headers = {}
+
+            if extra_headers is not None:
+                headers.update(extra_headers)
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="asi",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=asi_key,
+                logging_obj=logging,
+                client=client,
+            )
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
                 api_key

@@ -2040,6 +2040,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    ASI = "asi"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
