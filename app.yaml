@@ -64,6 +64,6 @@ infra:
     - type: "postgres"
       name: "psqldblitellm"
       params:
-        database: "litellmdb"
+        database: "litellm-backend"
         disk: 80
         grant: "SELECT,INSERT,UPDATE,CREATE,ALTER,DELETE"
