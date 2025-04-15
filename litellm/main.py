@@ -954,7 +954,11 @@ def completion(  # type: ignore # noqa: PLR0915
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
+    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+        litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id, non_default_params=non_default_params
+        )
+    ):
         (
             model,
             messages,
@@ -2654,9 +2658,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4363,9 +4367,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5785,9 +5789,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5798,9 +5802,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk
