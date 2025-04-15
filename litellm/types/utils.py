@@ -1713,6 +1713,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
+    cache_read_input_tokens: Optional[int]
+    cache_creation_input_tokens: Optional[int]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
