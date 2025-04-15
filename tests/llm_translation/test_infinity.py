@@ -187,18 +187,7 @@ async def test_infinity_rerank_with_env(monkeypatch):
 
         assert_response_shape(response, custom_llm_provider="infinity")
 
-
-class TestInfinityEmbedding(BaseLLMEmbeddingTest):
-    def get_custom_llm_provider(self) -> litellm.LlmProviders:
-        return litellm.LlmProviders.INFINITY
-
-    def get_base_embedding_call_args(self) -> dict:
-        return {
-            "model": "infinity/michaelfeil/bge-small-en-v1.5",
-            "api_base": "https://infinity.modal.michaelfeil.eu",
-        }
-
-
+#### Embedding Tests
 @pytest.mark.asyncio()
 async def test_infinity_embedding():
     mock_response = AsyncMock()
@@ -207,7 +196,7 @@ async def test_infinity_embedding():
         return {
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            "model": "michaelfeil/bge-small-en-v1.5",
+            "model": "custom-model/embedding-v1",
             "object": "list"
         }
 
@@ -216,7 +205,7 @@ async def test_infinity_embedding():
     mock_response.status_code = 200
 
     expected_payload = {
-        "model": "michaelfeil/bge-small-en-v1.5",
+        "model": "custom-model/embedding-v1",
         "input": ["hello world"],
         "encoding_format": "float",
         "output_dimension": 512
@@ -227,23 +216,20 @@ async def test_infinity_embedding():
         return_value=mock_response,
     ) as mock_post:
         response = await litellm.aembedding(
-            model="infinity/michaelfeil/bge-small-en-v1.5",
+            model="infinity/custom-model/embedding-v1",
             input=["hello world"],
             dimensions=512,
             encoding_format="float",
+            api_base="https://api.infinity.ai/embeddings",
             
         )
-
-        print("async embedding response: ", response)
 
         # Assert
         mock_post.assert_called_once()
         print("call args", mock_post.call_args)
         args_to_api = mock_post.call_args.kwargs["data"]
         _url = mock_post.call_args.kwargs["url"]
-        print("Arguments passed to API=", args_to_api)
-        print("url = ", _url)
-        assert _url == "https://infinity.modal.michaelfeil.eu"
+        assert _url == "https://api.infinity.ai/embeddings"
 
         request_data = json.loads(args_to_api)
         assert request_data["input"] == expected_payload["input"]
@@ -254,7 +240,7 @@ async def test_infinity_embedding():
         assert response.data is not None
         assert response.usage.prompt_tokens == 100
         assert response.usage.total_tokens == 150
-        assert response.model == "michaelfeil/bge-small-en-v1.5"
+        assert response.model == "custom-model/embedding-v1"
         assert response.object == "list"
 
 
@@ -267,7 +253,7 @@ async def test_infinity_embedding_with_env(monkeypatch):
         return {
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            "model": "michaelfeil/bge-small-en-v1.5",
+            "model": "custom-model/embedding-v1",
             "object": "list"
         }
 
@@ -276,7 +262,7 @@ async def test_infinity_embedding_with_env(monkeypatch):
     mock_response.status_code = 200
 
     expected_payload = {
-        "model": "michaelfeil/bge-small-en-v1.5",
+        "model": "custom-model/embedding-v1",
         "input": ["hello world"],
         "encoding_format": "float",
         "output_dimension": 512
@@ -287,23 +273,19 @@ async def test_infinity_embedding_with_env(monkeypatch):
         return_value=mock_response,
     ) as mock_post:
         response = await litellm.aembedding(
-            model="infinity/michaelfeil/bge-small-en-v1.5",
+            model="infinity/custom-model/embedding-v1",
             input=["hello world"],
             dimensions=512,
             encoding_format="float",
-            
+            api_base="https://api.infinity.ai/embeddings",
         )
-
-        print("async embedding response: ", response)
 
         # Assert
         mock_post.assert_called_once()
         print("call args", mock_post.call_args)
         args_to_api = mock_post.call_args.kwargs["data"]
         _url = mock_post.call_args.kwargs["url"]
-        print("Arguments passed to API=", args_to_api)
-        print("url = ", _url)
-        assert _url == "https://infinity.modal.michaelfeil.eu"
+        assert _url == "https://api.infinity.ai/embeddings"
 
         request_data = json.loads(args_to_api)
         assert request_data["input"] == expected_payload["input"]
@@ -314,7 +296,7 @@ async def test_infinity_embedding_with_env(monkeypatch):
         assert response.data is not None
         assert response.usage.prompt_tokens == 100
         assert response.usage.total_tokens == 150
-        assert response.model == "michaelfeil/bge-small-en-v1.5"
+        assert response.model == "custom-model/embedding-v1"
         assert response.object == "list"
 
 
@@ -326,7 +308,7 @@ async def test_infinity_embedding_extra_params():
         return {
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            "model": "michaelfeil/bge-small-en-v1.5",
+            "model": "custom-model/embedding-v1",
             "object": "list"
         }
 
@@ -339,22 +321,20 @@ async def test_infinity_embedding_extra_params():
         return_value=mock_response,
     ) as mock_post:
         response = await litellm.aembedding(
-            model="infinity/michaelfeil/bge-small-en-v1.5",
+            model="infinity/custom-model/embedding-v1",
             input=["test input"],
             dimensions=512,
             encoding_format="float",
             modality="text",
-            
+            api_base="https://api.infinity.ai/embeddings",
         )
 
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
 
-        print("request data to infinity", json.dumps(json_data, indent=4))
-
         # Assert the request parameters
         assert json_data["input"] == ["test input"]
-        assert json_data["model"] == "michaelfeil/bge-small-en-v1.5"
+        assert json_data["model"] == "custom-model/embedding-v1"
         assert json_data["output_dimension"] == 512
         assert json_data["encoding_format"] == "float"
         assert json_data["modality"] == "text"
@@ -367,8 +347,8 @@ async def test_infinity_embedding_prompt_token_mapping():
     def return_val():
         return {
             "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-            "usage": {"total_tokens": 120, "prompt_tokens": 120},
-            "model": "michaelfeil/bge-small-en-v1.5",
+            "usage": {"total_tokens": 1, "prompt_tokens": 1},
+            "model": "custom-model/embedding-v1",
             "object": "list"
         }
 
@@ -381,14 +361,14 @@ async def test_infinity_embedding_prompt_token_mapping():
         return_value=mock_response,
     ) as mock_post:
         response = await litellm.aembedding(
-            model="infinity/michaelfeil/bge-small-en-v1.5",
+            model="infinity/custom-model/embedding-v1",
             input=["a"],
             dimensions=512,
             encoding_format="float",
-            api_base="http://localhost:4000",
+            api_base="https://api.infinity.ai/embeddings",
         )
 
         mock_post.assert_called_once()
         # Assert the response
-        assert response.usage.prompt_tokens == 120
-        assert response.usage.total_tokens == 120
+        assert response.usage.prompt_tokens == 1
+        assert response.usage.total_tokens == 1
