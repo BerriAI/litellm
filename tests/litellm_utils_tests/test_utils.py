@@ -41,8 +41,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
-
-
+@pytest.fixture(autouse=True)
+def reset_mock_cache():
+    from litellm.utils import _model_cache
+    _model_cache.flush_cache()
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
     messages = [
@@ -1539,6 +1541,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
+        print("valid_models", valid_models)
         mock_post.assert_called_once()
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"

@@ -5974,12 +5974,12 @@ def get_valid_models(
             elif (
                 provider_config is not None
                 and check_provider_endpoint
-                and custom_llm_provider is not None
+                and provider is not None
             ):
                 valid_models.extend(
                     _get_valid_models_from_provider_api(
                         provider_config,
-                        custom_llm_provider,
+                        provider,
                         litellm_params,
                     )
                 )
