@@ -1,6 +1,9 @@
 import React from "react";
-import { Form, Switch, Select, Input, Button } from "antd";
-import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { Form, Switch, Select, Input, Typography } from "antd";
+import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import NumericalInput from "../shared/numerical_input";
+
+const { Text } = Typography;
 
 interface CacheControlInjectionPoint {
   location: "message";
@@ -41,17 +44,22 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   return (
     <>
       <Form.Item
-        label="Cache Control Injection Points"
+        label="Cache Control"
         name="cache_control"
         valuePropName="checked"
         className="mb-4"
-        tooltip="Tell litellm where to inject cache control checkpoints. This is useful for reducing costs by caching responses."
+        tooltip="Tell litellm where to inject cache control checkpoints. You can specify either by role (to apply to all messages of that role) or by specific message index."
       >
         <Switch onChange={onCacheControlChange} className="bg-gray-600" />
       </Form.Item>
 
       {showCacheControl && (
         <div className="ml-6 pl-4 border-l-2 border-gray-200">
+          <Text className="text-sm text-gray-500 block mb-4">
+            Specify either a role (to cache all messages of that role) or a specific message index. 
+            If both are provided, the index takes precedence.
+          </Text>
+          
           <Form.List
             name="cache_control_points"
             initialValue={[{ location: "message" }]}
@@ -59,22 +67,28 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
             {(fields, { add, remove }) => (
               <>
                 {fields.map((field, index) => (
-                  <div key={field.key} style={{ display: 'flex', marginBottom: 8, gap: 8, alignItems: 'baseline' }}>
+                  <div key={field.key} className="flex items-center mb-4 gap-4">
                     <Form.Item
                       {...field}
+                      label="Type"
                       name={[field.name, 'location']}
                       initialValue="message"
-                      style={{ marginBottom: 0, width: '120px' }}
+                      className="mb-0"
+                      style={{ width: '180px' }}
                     >
                       <Select disabled options={[{ value: 'message', label: 'Message' }]} />
                     </Form.Item>
+                    
                     <Form.Item
                       {...field}
+                      label="Role"
                       name={[field.name, 'role']}
-                      style={{ marginBottom: 0, width: '120px' }}
+                      className="mb-0"
+                      style={{ width: '180px' }}
+                      tooltip="Select a role to cache all messages of this type"
                     >
                       <Select
-                        placeholder="Select role"
+                        placeholder="Select a role"
                         allowClear
                         options={[
                           { value: 'user', label: 'User' },
@@ -87,39 +101,49 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                         }}
                       />
                     </Form.Item>
+                    
                     <Form.Item
                       {...field}
+                      label="Index"
                       name={[field.name, 'index']}
-                      style={{ marginBottom: 0, width: '120px' }}
+                      className="mb-0"
+                      style={{ width: '180px' }}
+                      tooltip="Specify a specific message index (optional)"
                     >
-                      <Input
+                      <NumericalInput
                         type="number"
-                        placeholder="Index (optional)"
+                        placeholder="Optional"
                         onChange={() => {
                           const values = form.getFieldValue('cache_control_points');
                           updateCacheControlPoints(values);
                         }}
                       />
                     </Form.Item>
+                    
                     {fields.length > 1 && (
-                      <MinusCircleOutlined onClick={() => {
-                        remove(field.name);
-                        setTimeout(() => {
-                          const values = form.getFieldValue('cache_control_points');
-                          updateCacheControlPoints(values);
-                        }, 0);
-                      }} />
+                      <MinusCircleOutlined 
+                        className="text-red-500 cursor-pointer text-lg mt-8" 
+                        onClick={() => {
+                          remove(field.name);
+                          setTimeout(() => {
+                            const values = form.getFieldValue('cache_control_points');
+                            updateCacheControlPoints(values);
+                          }, 0);
+                        }}
+                      />
                     )}
                   </div>
                 ))}
-                <Form.Item style={{ marginTop: 8 }}>
-                  <Button
-                    type="dashed"
+                
+                <Form.Item>
+                  <button
+                    type="button"
+                    className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded"
                     onClick={() => add()}
-                    icon={<PlusOutlined />}
                   >
+                    <PlusOutlined className="mr-2" />
                     Add Injection Point
-                  </Button>
+                  </button>
                 </Form.Item>
               </>
             )}
