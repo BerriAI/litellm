@@ -113,12 +113,12 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["completion_tokens"] += payload[
                         "completion_tokens"
                     ]
-                    daily_transaction["cache_read_input_tokens"] += payload[
-                        "cache_read_input_tokens"
-                    ]
-                    daily_transaction["cache_creation_input_tokens"] += payload[
-                        "cache_creation_input_tokens"
-                    ]
+                    daily_transaction["cache_read_input_tokens"] += (
+                        payload.get("cache_read_input_tokens", 0) or 0
+                    )
+                    daily_transaction["cache_creation_input_tokens"] += (
+                        payload.get("cache_creation_input_tokens", 0) or 0
+                    )
                     daily_transaction["api_requests"] += payload["api_requests"]
                     daily_transaction["successful_requests"] += payload[
                         "successful_requests"
