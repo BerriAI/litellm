@@ -62,7 +62,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               total_tokens: 0,
               api_requests: 0,
               successful_requests: 0,
-              failed_requests: 0
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {}
           };
@@ -74,6 +76,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
         modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
         modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -104,7 +108,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               total_tokens: 0,
               api_requests: 0,
               successful_requests: 0,
-              failed_requests: 0
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {}
           };
@@ -116,6 +122,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
         providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
         providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -145,6 +153,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               api_requests: 0,
               successful_requests: 0,
               failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {
               key_alias: metrics.metadata.key_alias
@@ -158,6 +168,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
         keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
         keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -323,6 +335,45 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                       );
                     }}
                   />
+                </Card>
+              </Col>
+
+              {/* Prompt Caching Usage */}
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Prompt Caching Usage</Title>
+                  <Grid numItems={2} className="gap-4 mt-4">
+                    <Card>
+                      <Title>Cache Read Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2 text-purple-600">
+                        {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                      </Text>
+                      <Text className="text-sm text-gray-500">
+                        Tokens retrieved from cache
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Cache Creation Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2 text-amber-600">
+                        {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                      </Text>
+                      <Text className="text-sm text-gray-500">
+                        Tokens stored in cache for future use
+                      </Text>
+                    </Card>
+                  </Grid>
+                  <div className="mt-4">
+                    <AreaChart
+                      data={[...userSpendData.results].sort((a, b) => 
+                        new Date(a.date).getTime() - new Date(b.date).getTime()
+                      )}
+                      index="date"
+                      categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+                      colors={["purple", "amber"]}
+                      valueFormatter={(number: number) => number.toLocaleString()}
+                      showLegend={true}
+                    />
+                  </div>
                 </Card>
               </Col>
 

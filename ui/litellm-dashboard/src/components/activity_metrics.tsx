@@ -79,6 +79,21 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             stack
           />
         </Card>
+        
+        <Card>
+          <Title>Prompt Caching Metrics</Title>
+          <div className="mb-2">
+            <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
+            <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+          </div>
+          <AreaChart
+            data={metrics.daily_data}
+            index="date"
+            categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+            colors={["purple", "amber"]}
+            valueFormatter={(number: number) => number.toLocaleString()}
+          />
+        </Card>
       </Grid>
     </div>
   );
@@ -97,6 +112,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
     total_successful_requests: 0,
     total_tokens: 0,
     total_spend: 0,
+    total_cache_read_input_tokens: 0,
+    total_cache_creation_input_tokens: 0,
     daily_data: {} as Record<string, {
       prompt_tokens: number;
       completion_tokens: number;
@@ -105,6 +122,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
       spend: number;
       successful_requests: number;
       failed_requests: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
     }>
   };
 
@@ -114,6 +133,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
     totalMetrics.total_successful_requests += model.total_successful_requests;
     totalMetrics.total_tokens += model.total_tokens;
     totalMetrics.total_spend += model.total_spend;
+    totalMetrics.total_cache_read_input_tokens += model.total_cache_read_input_tokens || 0;
+    totalMetrics.total_cache_creation_input_tokens += model.total_cache_creation_input_tokens || 0;
 
     // Aggregate daily data
     model.daily_data.forEach(day => {
@@ -125,7 +146,9 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
           api_requests: 0,
           spend: 0,
           successful_requests: 0,
-          failed_requests: 0
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         };
       }
       totalMetrics.daily_data[day.date].prompt_tokens += day.metrics.prompt_tokens;
@@ -135,6 +158,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
       totalMetrics.daily_data[day.date].spend += day.metrics.spend;
       totalMetrics.daily_data[day.date].successful_requests += day.metrics.successful_requests;
       totalMetrics.daily_data[day.date].failed_requests += day.metrics.failed_requests;
+      totalMetrics.daily_data[day.date].cache_read_input_tokens += day.metrics.cache_read_input_tokens || 0;
+      totalMetrics.daily_data[day.date].cache_creation_input_tokens += day.metrics.cache_creation_input_tokens || 0;
     });
   });
 
@@ -189,6 +214,20 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               stack
             />
           </Card>
+          <Card>
+            <Title>Prompt Caching Usage</Title>
+            <div className="mb-2">
+              <Text>Cache Read: {totalMetrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
+              <Text>Cache Creation: {totalMetrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+            </div>
+            <AreaChart
+              data={sortedDailyData}
+              index="date"
+              categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+              colors={["purple", "amber"]}
+              valueFormatter={(number: number) => number.toLocaleString()}
+            />
+          </Card>
         </Grid>
       </div>
 
@@ -233,6 +272,8 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
           prompt_tokens: 0,
           completion_tokens: 0,
           total_spend: 0,
+          total_cache_read_input_tokens: 0,
+          total_cache_creation_input_tokens: 0,
           daily_data: []
         };
       }
@@ -245,6 +286,8 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
       modelMetrics[model].total_spend += modelData.metrics.spend;
       modelMetrics[model].total_successful_requests += modelData.metrics.successful_requests;
       modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
+      modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
+      modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -256,7 +299,9 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
           api_requests: modelData.metrics.api_requests,
           spend: modelData.metrics.spend,
           successful_requests: modelData.metrics.successful_requests,
-          failed_requests: modelData.metrics.failed_requests
+          failed_requests: modelData.metrics.failed_requests,
+          cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
+          cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0
         }
       });
     });
