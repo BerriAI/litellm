@@ -317,6 +317,8 @@ class LiteLLMRoutes(enum.Enum):
         "/openai",
         "/assemblyai",
         "/eu.assemblyai",
+        "/vllm",
+        "/mistral",
     ]
 
     anthropic_routes = [
