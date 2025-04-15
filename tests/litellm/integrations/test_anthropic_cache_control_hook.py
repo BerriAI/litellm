@@ -149,3 +149,43 @@ async def test_anthropic_cache_control_hook_user_message():
         assert request_body["messages"][1]["content"][1]["cachePoint"] == {
             "type": "default"
         }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_specific_index():
+    """Test injecting cache control at a specific message index"""
+    anthropic_cache_control_hook = AnthropicCacheControlHook()
+    litellm.callbacks = [anthropic_cache_control_hook]
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "output": {"message": {"role": "assistant", "content": "Test response"}},
+        "stopReason": "stop_sequence",
+        "usage": {"inputTokens": 100, "outputTokens": 200, "totalTokens": 300},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        response = await litellm.acompletion(
+            model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+            messages=[
+                {"role": "system", "content": "System message"},
+                {"role": "user", "content": "User message"},
+                {"role": "assistant", "content": "Assistant message"},
+            ],
+            cache_control_injection_points=[
+                {
+                    "location": "message",
+                    "index": 1,  # Target the second message specifically
+                }
+            ],
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        # Verify cache control was added only to the second message
+        assert "cache_control" not in request_body["messages"][0]
+        assert request_body["messages"][1]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in request_body["messages"][2]
