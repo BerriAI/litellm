@@ -60,3 +60,10 @@ infra:
       metric:
         type: "cpu" # could be cpu, mem, latency or custom metric, you may multiple such metrics
         target: 50
+  storage:
+    - type: "postgres"
+      name: "psqldblitellm"
+      params:
+        database: "litellmdb"
+        disk: 80
+        grant: "SELECT,INSERT,UPDATE,CREATE,ALTER,DELETE"
