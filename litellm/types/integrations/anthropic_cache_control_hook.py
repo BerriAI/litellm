@@ -10,7 +10,7 @@ class CacheControlMessageInjectionPoint(TypedDict):
     role: Optional[
         Literal["user", "system", "assistant"]
     ]  # Optional: target by role (user, system, assistant)
-    index: Optional[int]  # Optional: target by specific index
+    index: Optional[Union[int, str]]  # Optional: target by specific index
     control: Optional[ChatCompletionCachedContent]
 
 
