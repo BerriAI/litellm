@@ -1453,8 +1453,7 @@ async def test_openai_env_on_router(monkeypatch, env_base):
             }
         ],
     )
-    print(response)
-    assert len(response.choices[0].message.content) > 0
+    assert response.choices[0].message.content == "hello back at ya!"
 
 
 def test_openai_completion_on_router():
