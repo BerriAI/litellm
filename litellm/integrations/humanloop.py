@@ -164,6 +164,9 @@ class HumanloopLogger(CustomLogger):
             "humanloop_api_key"
         ) or get_secret_str("HUMANLOOP_API_KEY")
 
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Humanloop integration")
+
         if humanloop_api_key is None:
             return super().get_chat_completion_prompt(
                 model=model,
@@ -173,9 +176,6 @@ class HumanloopLogger(CustomLogger):
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=dynamic_callback_params,
             )
-
-        if prompt_id is None:
-            raise ValueError("prompt_id is required for Humanloop integration")
 
         prompt_template = prompt_manager._get_prompt_from_id(
             humanloop_prompt_id=prompt_id, humanloop_api_key=humanloop_api_key
