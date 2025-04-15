@@ -243,6 +243,8 @@ async def cohere_proxy_route(
 
 @router.api_route(
     "/vllm/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["VLLM Pass-through", "pass-through"],
 )
 async def vllm_proxy_route(
     endpoint: str,
