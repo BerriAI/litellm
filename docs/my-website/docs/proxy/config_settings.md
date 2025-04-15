@@ -323,6 +323,9 @@ router_settings:
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CLIENT_ID | Client ID for Azure services
 | AZURE_CLIENT_SECRET | Client secret for Azure services
+| AZURE_TENANT_ID | Tenant ID for Azure Active Directory
+| AZURE_USERNAME | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow
+| AZURE_PASSWORD | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow
 | AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
 | AZURE_KEY_VAULT_URI | URI for Azure Key Vault
 | AZURE_STORAGE_ACCOUNT_KEY | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging
@@ -331,7 +334,7 @@ router_settings:
 | AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
-| AZURE_TENANT_ID | Tenant ID for Azure Active Directory
+
 | BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
@@ -433,6 +436,7 @@ router_settings:
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
+| LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
 | LITELLM_EMAIL | Email associated with LiteLLM account
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
@@ -446,6 +450,8 @@ router_settings:
 | LITELLM_TOKEN | Access token for LiteLLM integration
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| MISTRAL_API_BASE | Base URL for Mistral API
+| MISTRAL_API_KEY | API key for Mistral API
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
 | MICROSOFT_TENANT | Tenant ID for Microsoft Azure

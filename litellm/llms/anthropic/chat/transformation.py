@@ -44,7 +44,7 @@ from litellm.utils import (
     token_counter,
 )
 
-from ..common_utils import AnthropicError, process_anthropic_headers
+from ..common_utils import AnthropicError, AnthropicModelInfo, process_anthropic_headers
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -54,7 +54,7 @@ else:
     LoggingClass = Any
 
 
-class AnthropicConfig(BaseConfig):
+class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 
@@ -126,41 +126,6 @@ class AnthropicConfig(BaseConfig):
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "prompt-caching-2024-07-31",
         }
-
-    def get_anthropic_headers(
-        self,
-        api_key: str,
-        anthropic_version: Optional[str] = None,
-        computer_tool_used: bool = False,
-        prompt_caching_set: bool = False,
-        pdf_used: bool = False,
-        is_vertex_request: bool = False,
-        user_anthropic_beta_headers: Optional[List[str]] = None,
-    ) -> dict:
-        betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
-        if computer_tool_used:
-            betas.add("computer-use-2024-10-22")
-        if pdf_used:
-            betas.add("pdfs-2024-09-25")
-        headers = {
-            "anthropic-version": anthropic_version or "2023-06-01",
-            "x-api-key": api_key,
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-
-        if user_anthropic_beta_headers is not None:
-            betas.update(user_anthropic_beta_headers)
-
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
-        if is_vertex_request is True:
-            pass
-        elif len(betas) > 0:
-            headers["anthropic-beta"] = ",".join(betas)
-
-        return headers
 
     def _map_tool_choice(
         self, tool_choice: Optional[str], parallel_tool_use: Optional[bool]
@@ -445,49 +410,6 @@ class AnthropicConfig(BaseConfig):
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
         )
         return _tool
-
-    def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
-        """
-        Return if {"cache_control": ..} in message content block
-
-        Used to check if anthropic prompt caching headers need to be set.
-        """
-        for message in messages:
-            if message.get("cache_control", None) is not None:
-                return True
-            _message_content = message.get("content")
-            if _message_content is not None and isinstance(_message_content, list):
-                for content in _message_content:
-                    if "cache_control" in content:
-                        return True
-
-        return False
-
-    def is_computer_tool_used(
-        self, tools: Optional[List[AllAnthropicToolsValues]]
-    ) -> bool:
-        if tools is None:
-            return False
-        for tool in tools:
-            if "type" in tool and tool["type"].startswith("computer_"):
-                return True
-        return False
-
-    def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
-        """
-        Set to true if media passed into messages.
-
-        """
-        for message in messages:
-            if (
-                "content" in message
-                and message["content"] is not None
-                and isinstance(message["content"], list)
-            ):
-                for content in message["content"]:
-                    if "type" in content and content["type"] != "text":
-                        return True
-        return False
 
     def translate_system_message(
         self, messages: List[AllMessageValues]
@@ -862,47 +784,3 @@ class AnthropicConfig(BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
-
-    def _get_user_anthropic_beta_headers(
-        self, anthropic_beta_header: Optional[str]
-    ) -> Optional[List[str]]:
-        if anthropic_beta_header is None:
-            return None
-        return anthropic_beta_header.split(",")
-
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
-        if api_key is None:
-            raise litellm.AuthenticationError(
-                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
-                llm_provider="anthropic",
-                model=model,
-            )
-
-        tools = optional_params.get("tools")
-        prompt_caching_set = self.is_cache_control_set(messages=messages)
-        computer_tool_used = self.is_computer_tool_used(tools=tools)
-        pdf_used = self.is_pdf_used(messages=messages)
-        user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
-        )
-        anthropic_headers = self.get_anthropic_headers(
-            computer_tool_used=computer_tool_used,
-            prompt_caching_set=prompt_caching_set,
-            pdf_used=pdf_used,
-            api_key=api_key,
-            is_vertex_request=optional_params.get("is_vertex_request", False),
-            user_anthropic_beta_headers=user_anthropic_beta_headers,
-        )
-
-        headers = {**headers, **anthropic_headers}
-
-        return headers

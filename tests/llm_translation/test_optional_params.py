@@ -1449,3 +1449,13 @@ def test_anthropic_unified_reasoning_content(model, provider):
     )
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
+
+
+def test_azure_response_format(monkeypatch):
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
+    optional_params = get_optional_params(
+        model="azure/gpt-4o-mini",
+        custom_llm_provider="azure",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params["response_format"] == {"type": "json_object"}
