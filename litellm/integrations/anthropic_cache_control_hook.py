@@ -61,9 +61,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         """Process message-level cache control injection."""
-        control = point.get("control", {}) or ChatCompletionCachedContent(
-            type="ephemeral"
+        _control = point.get("control", {}) or {}
+        control: ChatCompletionCachedContent = ChatCompletionCachedContent(
+            type=_control.get("type", "ephemeral")
         )
+        targetted_index = point.get("index", None)
         targetted_index = point.get("index", None)
         targetted_role = point.get("role", None)
 
@@ -81,7 +83,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if msg.get("role") == targetted_role:
                     msg = (
                         AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                            msg, control
+                            message=msg, control=control
                         )
                     )
         return messages
