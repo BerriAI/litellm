@@ -458,8 +458,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def should_run_prompt_management_hooks(
         self,
-        prompt_id: str,
         non_default_params: Dict,
+        prompt_id: Optional[str] = None,
     ) -> bool:
         """
         Return True if prompt management hooks should be run
@@ -476,8 +476,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         messages: List[AllMessageValues],
-        non_default_params: dict,
-        prompt_id: str,
+        non_default_params: Dict,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -496,7 +496,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ) = custom_logger.get_chat_completion_prompt(
                 model=model,
                 messages=messages,
-                non_default_params=non_default_params,
+                non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
