@@ -772,12 +772,12 @@ class DBSpendUpdateWriter:
                                         "completion_tokens": transaction[
                                             "completion_tokens"
                                         ],
-                                        "cache_read_input_tokens": transaction[
-                                            "cache_read_input_tokens"
-                                        ],
-                                        "cache_creation_input_tokens": transaction[
-                                            "cache_creation_input_tokens"
-                                        ],
+                                        "cache_read_input_tokens": transaction.get(
+                                            "cache_read_input_tokens", 0
+                                        ),
+                                        "cache_creation_input_tokens": transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        ),
                                         "spend": transaction["spend"],
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction[
@@ -797,14 +797,14 @@ class DBSpendUpdateWriter:
                                             ]
                                         },
                                         "cache_read_input_tokens": {
-                                            "increment": transaction[
-                                                "cache_read_input_tokens"
-                                            ]
+                                            "increment": transaction.get(
+                                                "cache_read_input_tokens", 0
+                                            )
                                         },
                                         "cache_creation_input_tokens": {
-                                            "increment": transaction[
-                                                "cache_creation_input_tokens"
-                                            ]
+                                            "increment": transaction.get(
+                                                "cache_creation_input_tokens", 0
+                                            )
                                         },
                                         "spend": {"increment": transaction["spend"]},
                                         "api_requests": {
