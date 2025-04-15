@@ -7,7 +7,7 @@ It avoids overly specific pattern matching and focuses on core extraction capabi
 
 import json
 import re
-from typing import Optional, Any, Dict, Union
+from typing import Optional
 
 def extract_json(content: str) -> Optional[str]:
     """

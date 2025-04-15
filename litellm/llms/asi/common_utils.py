@@ -4,8 +4,7 @@ ASI Common Utilities Module
 This module provides common utilities for the ASI provider integration.
 """
 
-from typing import Optional, Dict, Any, List
-import re
+from typing import Optional
 
 def is_asi_model(model: str) -> bool:
     """
@@ -67,7 +66,7 @@ def validate_environment(api_key: Optional[str] = None) -> None:
             # Try to convert to string if possible
             try:
                 api_key = str(api_key_value)
-            except:
+            except Exception:
                 api_key = None
         
         if api_key is None:

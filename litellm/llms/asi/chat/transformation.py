@@ -2,20 +2,15 @@
 Translate from OpenAI's `/v1/chat/completions` to ASI's `/v1/chat/completions`
 """
 
-import json
-import re
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union, cast, Iterator, AsyncIterator, TypeVar, Type
+from typing import Any, List, Optional, Union, Iterator, AsyncIterator
 
 import httpx
-from pydantic import BaseModel
+
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
 )
 from litellm.utils import ModelResponse, ModelResponseStream
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -39,8 +34,8 @@ class ASIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 choices=chunk.get("choices", []),
             )
         except Exception as e:
-            # Log the error but don't crash
-            print(f"Error parsing ASI streaming chunk: {str(e)}")
+            # Log the error but don't crash - silently continue
+            # We don't have access to logging_obj here, so we can't log the error
             # Return a minimal valid response
             return ModelResponseStream(
                 id="",
@@ -103,7 +98,7 @@ class ASIChatConfig(OpenAIGPTConfig):
         
         if json_requested:
             if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                print("ASI: JSON response format requested, applying extraction")
+                logging_obj.debug("ASI: JSON response format requested, applying extraction")
             
             try:
                 # For ModelResponse objects, directly access the choices
@@ -145,11 +140,11 @@ class ASIChatConfig(OpenAIGPTConfig):
                                             # Update content safely
                                             setattr(delta, "content", extracted_json)
                                             if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                                                print(f"ASI: Successfully extracted JSON from streaming: {extracted_json[:100]}...")
+                                                logging_obj.debug(f"ASI: Successfully extracted JSON from streaming: {extracted_json[:100]}...")
                         except Exception as attr_error:
                             # Log attribute access errors but continue processing
                             if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                                print(f"ASI: Error accessing attributes: {str(attr_error)}")
+                                logging_obj.debug(f"ASI: Error accessing attributes: {str(attr_error)}")
                 
                 # For streaming responses, handle delta content
                 elif isinstance(response, dict) and "choices" in response:
@@ -173,7 +168,7 @@ class ASIChatConfig(OpenAIGPTConfig):
             except Exception as e:
                 # Log the error but don't fail the request
                 if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                    print(f"Error extracting JSON from ASI response: {str(e)}")
+                    logging_obj.debug(f"Error extracting JSON from ASI response: {str(e)}")
         
         return response
     
