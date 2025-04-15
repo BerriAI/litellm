@@ -60,7 +60,7 @@ export const prepareModelAddRequest = async (
             continue;
           }
           // Skip the custom_pricing and pricing_model fields as they're only used for UI control
-          if (key === 'custom_pricing' || key === 'pricing_model') {
+          if (key === 'custom_pricing' || key === 'pricing_model' || key === 'cache_control') {
             continue;
           }
           if (key == "model_name") {

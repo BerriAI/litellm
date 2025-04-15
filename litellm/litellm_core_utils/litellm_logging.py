@@ -36,6 +36,7 @@ from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     _select_model_name_for_cost_calc,
 )
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -457,15 +458,17 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def should_run_prompt_management_hooks(
         self,
-        prompt_id: str,
         non_default_params: Dict,
+        prompt_id: Optional[str] = None,
     ) -> bool:
         """
         Return True if prompt management hooks should be run
         """
         if prompt_id:
             return True
-        if non_default_params.get("cache_control_injection_points", None):
+        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
+            non_default_params
+        ):
             return True
         return False
 
@@ -473,15 +476,18 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         messages: List[AllMessageValues],
-        non_default_params: dict,
-        prompt_id: str,
+        non_default_params: Dict,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
-            or self.get_custom_logger_for_prompt_management(model)
+            or self.get_custom_logger_for_prompt_management(
+                model=model, non_default_params=non_default_params
+            )
         )
+
         if custom_logger:
             (
                 model,
@@ -490,7 +496,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ) = custom_logger.get_chat_completion_prompt(
                 model=model,
                 messages=messages,
-                non_default_params=non_default_params,
+                non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
@@ -499,7 +505,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return model, messages, non_default_params
 
     def get_custom_logger_for_prompt_management(
-        self, model: str
+        self, model: str, non_default_params: Dict
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -534,6 +540,26 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 
+        if anthropic_cache_control_logger := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(
+            non_default_params
+        ):
+            self.model_call_details["prompt_integration"] = (
+                anthropic_cache_control_logger.__class__.__name__
+            )
+            return anthropic_cache_control_logger
+
+        return None
+
+    def get_custom_logger_for_anthropic_cache_control_hook(
+        self, non_default_params: Dict
+    ) -> Optional[CustomLogger]:
+        if non_default_params.get("cache_control_injection_points", None):
+            custom_logger = _init_custom_logger_compatible_class(
+                logging_integration="anthropic_cache_control_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            return custom_logger
         return None
 
     def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
@@ -2922,6 +2948,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger  # type: ignore
+        elif logging_integration == "anthropic_cache_control_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+            anthropic_cache_control_hook = AnthropicCacheControlHook()
+            _in_memory_loggers.append(anthropic_cache_control_hook)
+            return anthropic_cache_control_hook  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -3059,6 +3092,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
+                    return callback
+        elif logging_integration == "anthropic_cache_control_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicCacheControlHook):
                     return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
