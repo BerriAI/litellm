@@ -116,7 +116,7 @@ On the 2nd response - expect to see the following exception
 ```shell
 {
  "error": {
-   "message": "Budget has been exceeded! Current cost: 3.5e-06, Max budget: 1e-09",
+   "message": "Budget has been exceeded! Current cost: 3.5e-06, Max budget: 1e-09, Budget resets at: 2025-01-01T00:00:00Z",
    "type": "auth_error",
    "param": null,
    "code": 400

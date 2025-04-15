@@ -1035,6 +1035,7 @@ def client(original_function):  # noqa: PLR0915
                     raise BudgetExceededError(
                         current_cost=litellm._current_cost,
                         max_budget=litellm.max_budget,
+                        budget_reset_at=litellm.budget_reset_at,
                     )
 
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
@@ -1283,6 +1284,7 @@ def client(original_function):  # noqa: PLR0915
                     raise BudgetExceededError(
                         current_cost=litellm._current_cost,
                         max_budget=litellm.max_budget,
+                        budget_reset_at=litellm.budget_reset_at,
                     )
 
             # [OPTIONAL] CHECK CACHE

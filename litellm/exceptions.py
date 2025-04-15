@@ -9,6 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -740,13 +741,18 @@ LITELLM_EXCEPTION_TYPES = [
 
 class BudgetExceededError(Exception):
     def __init__(
-        self, current_cost: float, max_budget: float, message: Optional[str] = None
+        self,
+        current_cost: float,
+        max_budget: float,
+        budget_reset_at: datetime | None,
+        message: Optional[str] = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
+        self.budget_reset_at = budget_reset_at
         message = (
             message
-            or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
+            or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}, Budget resets at: {str(budget_reset_at)}."
         )
         self.message = message
         super().__init__(message)

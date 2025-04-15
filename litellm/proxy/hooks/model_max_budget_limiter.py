@@ -79,6 +79,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
+                    budget_reset_at=_current_model_budget_info.budget_reset_at,
                 )
 
         return True

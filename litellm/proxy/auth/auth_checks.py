@@ -138,6 +138,7 @@ async def common_checks(
             raise litellm.BudgetExceededError(
                 current_cost=user_object.spend,
                 max_budget=user_budget,
+                budget_reset_at=user_object.budget_reset_at,
                 message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
 
@@ -173,7 +174,9 @@ async def common_checks(
     ):
         if global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend, max_budget=litellm.max_budget
+                current_cost=global_proxy_spend,
+                max_budget=litellm.max_budget,
+                budget_reset_at=getattr(litellm, "budget_reset_at", None),
             )
 
     _request_metadata: dict = request_body.get("metadata", {}) or {}
@@ -440,7 +443,9 @@ async def get_end_user_object(
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_obj.spend > end_user_budget:
             raise litellm.BudgetExceededError(
-                current_cost=end_user_obj.spend, max_budget=end_user_budget
+                current_cost=end_user_obj.spend,
+                max_budget=end_user_budget,
+                budget_reset_at=end_user_obj.litellm_budget_table.budget_reset_at,
             )
 
     # check if in cache
@@ -1365,7 +1370,8 @@ async def _team_max_budget_check(
         raise litellm.BudgetExceededError(
             current_cost=team_object.spend,
             max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+            budget_reset_at=team_object.budget_reset_at,
+            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}, Budget resets at: {team_object.budget_reset_at}.",
         )
 
 
