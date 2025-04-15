@@ -22,13 +22,13 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         pass 
 
     def get_complete_url(self, api_base: str | None, api_key: str | None, model: str, optional_params: dict, litellm_params: dict, stream: bool | None = None) -> str:
-        if api_base:
-            # Remove trailing slashes and ensure clean base URL
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/embeddings"):
-                api_base = f"{api_base}/embeddings"
-            return api_base
-        return "https://infinity.modal.michaelfeil.eu"
+        if api_base is None:
+            raise ValueError("api_base is required for Infinity embeddings")
+        # Remove trailing slashes and ensure clean base URL
+        api_base = api_base.rstrip("/")
+        if not api_base.endswith("/embeddings"):
+            api_base = f"{api_base}/embeddings"
+        return api_base
     
     def validate_environment(
         self,
