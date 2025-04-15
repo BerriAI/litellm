@@ -90,7 +90,7 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             data={metrics.daily_data}
             index="date"
             categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-            colors={["purple", "amber"]}
+            colors={["cyan", "purple"]}
             valueFormatter={(number: number) => number.toLocaleString()}
           />
         </Card>
