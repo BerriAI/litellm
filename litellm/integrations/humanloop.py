@@ -152,10 +152,14 @@ class HumanloopLogger(CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[str, List[AllMessageValues], dict,]:
+    ) -> Tuple[
+        str,
+        List[AllMessageValues],
+        dict,
+    ]:
         humanloop_api_key = dynamic_callback_params.get(
             "humanloop_api_key"
         ) or get_secret_str("HUMANLOOP_API_KEY")
@@ -169,6 +173,9 @@ class HumanloopLogger(CustomLogger):
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=dynamic_callback_params,
             )
+
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Humanloop integration")
 
         prompt_template = prompt_manager._get_prompt_from_id(
             humanloop_prompt_id=prompt_id, humanloop_api_key=humanloop_api_key
