@@ -177,8 +177,12 @@ def test_initialize_with_oidc_token(setup_mocks):
     assert result["azure_ad_token"] == "mock-oidc-token"
 
 
-def test_initialize_with_enable_token_refresh(setup_mocks):
+def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
+    litellm._turn_on_debug()
     # Enable token refresh
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
     setup_mocks["litellm"].enable_azure_ad_token_refresh = True
 
     # Test with token refresh enabled

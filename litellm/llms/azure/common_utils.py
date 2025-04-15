@@ -323,13 +323,16 @@ class BaseAzureLLM(BaseOpenAILLM):
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if not api_key and tenant_id and client_id and client_secret:
-            verbose_logger.debug("Using Azure AD Token Provider for Azure Auth")
+            verbose_logger.debug(
+                "Using Azure AD Token Provider from Entrata ID for Azure Auth"
+            )
             azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
             )
         if azure_username and azure_password and client_id:
+            verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
                 azure_password=azure_password,
@@ -337,12 +340,16 @@ class BaseAzureLLM(BaseOpenAILLM):
             )
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+            verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
             azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
         elif (
             not api_key
             and azure_ad_token_provider is None
             and litellm.enable_azure_ad_token_refresh is True
         ):
+            verbose_logger.debug(
+                "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+            )
             try:
                 azure_ad_token_provider = get_azure_ad_token_provider()
             except ValueError:
