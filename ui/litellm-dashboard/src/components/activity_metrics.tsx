@@ -214,20 +214,6 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               stack
             />
           </Card>
-          <Card>
-            <Title>Prompt Caching Usage</Title>
-            <div className="mb-2">
-              <Text>Cache Read: {totalMetrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
-              <Text>Cache Creation: {totalMetrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
-            </div>
-            <AreaChart
-              data={sortedDailyData}
-              index="date"
-              categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-              colors={["purple", "amber"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
-            />
-          </Card>
         </Grid>
       </div>
 
