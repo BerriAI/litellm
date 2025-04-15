@@ -772,6 +772,12 @@ class DBSpendUpdateWriter:
                                         "completion_tokens": transaction[
                                             "completion_tokens"
                                         ],
+                                        "cache_read_input_tokens": transaction[
+                                            "cache_read_input_tokens"
+                                        ],
+                                        "cache_creation_input_tokens": transaction[
+                                            "cache_creation_input_tokens"
+                                        ],
                                         "spend": transaction["spend"],
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction[
@@ -788,6 +794,16 @@ class DBSpendUpdateWriter:
                                         "completion_tokens": {
                                             "increment": transaction[
                                                 "completion_tokens"
+                                            ]
+                                        },
+                                        "cache_read_input_tokens": {
+                                            "increment": transaction[
+                                                "cache_read_input_tokens"
+                                            ]
+                                        },
+                                        "cache_creation_input_tokens": {
+                                            "increment": transaction[
+                                                "cache_creation_input_tokens"
                                             ]
                                         },
                                         "spend": {"increment": transaction["spend"]},
