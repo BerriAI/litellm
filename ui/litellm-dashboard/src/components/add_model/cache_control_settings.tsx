@@ -44,7 +44,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   return (
     <>
       <Form.Item
-        label="Cache Control"
+        label="Cache Control Injection Points"
         name="cache_control"
         valuePropName="checked"
         className="mb-4"
