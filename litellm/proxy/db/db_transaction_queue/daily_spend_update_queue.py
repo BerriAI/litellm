@@ -113,17 +113,21 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["completion_tokens"] += payload[
                         "completion_tokens"
                     ]
-                    daily_transaction["cache_read_input_tokens"] += (
-                        payload.get("cache_read_input_tokens", 0) or 0
-                    )
-                    daily_transaction["cache_creation_input_tokens"] += (
-                        payload.get("cache_creation_input_tokens", 0) or 0
-                    )
                     daily_transaction["api_requests"] += payload["api_requests"]
                     daily_transaction["successful_requests"] += payload[
                         "successful_requests"
                     ]
                     daily_transaction["failed_requests"] += payload["failed_requests"]
+
+                    # Add optional metrics cache_read_input_tokens and cache_creation_input_tokens
+                    daily_transaction["cache_read_input_tokens"] = (
+                        payload.get("cache_read_input_tokens", 0) or 0
+                    ) + daily_transaction.get("cache_read_input_tokens", 0)
+
+                    daily_transaction["cache_creation_input_tokens"] = (
+                        payload.get("cache_creation_input_tokens", 0) or 0
+                    ) + daily_transaction.get("cache_creation_input_tokens", 0)
+
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions
