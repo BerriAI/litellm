@@ -276,6 +276,39 @@ def test_optional_combine_thinking_block_in_choices(
     assert not hasattr(final_response.choices[0].delta, "reasoning_content")
 
 
+def test_missing_role_in_not_first_delta(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.sent_first_chunk = False
+    delta_json = {"content": "Hello world"}
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [MagicMock()]
+    mock_chunk.choices[0].delta = MagicMock()
+    mock_chunk.choices[0].delta.model_dump.return_value = delta_json
+
+    with patch.object(initialized_custom_stream_wrapper, 'return_processed_chunk_logic', return_value=None):
+        initialized_custom_stream_wrapper.chunk_creator(mock_chunk)
+
+    assert delta_json["role"] == "assistant"
+
+
+def test_missing_role_in_first_delta(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.sent_first_chunk = True
+    delta_json = {"content": "Hello world", "role": None}
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [MagicMock()]
+    mock_chunk.choices[0].delta = MagicMock()
+    mock_chunk.choices[0].delta.model_dump.return_value = delta_json
+
+    with patch.object(initialized_custom_stream_wrapper, 'return_processed_chunk_logic', return_value=None):
+        initialized_custom_stream_wrapper.chunk_creator(mock_chunk)
+
+    assert delta_json["role"] is None
+
+
 def test_multi_chunk_reasoning_and_content(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):

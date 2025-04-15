@@ -1326,7 +1326,10 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
-                            if "role" not in _json_delta or _json_delta["role"] is None:
+                            if not self.sent_first_chunk and (
+                                "role" not in _json_delta
+                                or _json_delta["role"] is None
+                            ):
                                 _json_delta[
                                     "role"
                                 ] = "assistant"  # mistral's api returns role as None
