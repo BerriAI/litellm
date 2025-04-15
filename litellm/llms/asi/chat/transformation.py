@@ -33,7 +33,7 @@ class ASIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk.get("model", ""),  # Use empty string as fallback
                 choices=chunk.get("choices", []),
             )
-        except Exception as e:
+        except Exception:
             # Log the error but don't crash - silently continue
             # We don't have access to logging_obj here, so we can't log the error
             # Return a minimal valid response
@@ -63,6 +63,60 @@ class ASIChatConfig(OpenAIGPTConfig):
         """Get the API base URL for ASI"""
         return api_base or get_secret_str("ASI_API_BASE") or "https://api.asi1.ai/v1"
     
+    def _extract_json_from_message_content(self, content: str) -> Optional[str]:
+        """Extract JSON from message content if possible"""
+        if content and isinstance(content, str):
+            return extract_json(content)
+        return None
+
+    def _process_model_response_choices(self, choices, logging_obj: Any) -> None:
+        """Process choices from a ModelResponse object"""
+        for choice in choices:
+            try:
+                # For non-streaming responses (message)
+                if hasattr(choice, "message"):
+                    message = getattr(choice, "message")
+                    if hasattr(message, "content"):
+                        content = getattr(message, "content")
+                        extracted_json = self._extract_json_from_message_content(content)
+                        if extracted_json:
+                            setattr(message, "content", extracted_json)
+                
+                # For streaming responses (delta)
+                elif hasattr(choice, "delta"):
+                    delta = getattr(choice, "delta")
+                    if hasattr(delta, "content"):
+                        content = getattr(delta, "content")
+                        extracted_json = self._extract_json_from_message_content(content)
+                        if extracted_json:
+                            setattr(delta, "content", extracted_json)
+                            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
+                                logging_obj.debug("ASI: Successfully extracted JSON from streaming")
+            except Exception as attr_error:
+                # Log attribute access errors but continue processing
+                if hasattr(logging_obj, "verbose") and logging_obj.verbose:
+                    logging_obj.debug(f"ASI: Error accessing attributes: {str(attr_error)}")
+
+    def _process_dict_response_choices(self, choices, logging_obj: Any) -> None:
+        """Process choices from a dictionary response"""
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+                
+            # Handle delta for streaming
+            if "delta" in choice and isinstance(choice["delta"], dict) and "content" in choice["delta"]:
+                content = choice["delta"]["content"]
+                extracted_json = self._extract_json_from_message_content(content)
+                if extracted_json:
+                    choice["delta"]["content"] = extracted_json
+            
+            # Handle message for non-streaming
+            elif "message" in choice and isinstance(choice["message"], dict) and "content" in choice["message"]:
+                content = choice["message"]["content"]
+                extracted_json = self._extract_json_from_message_content(content)
+                if extracted_json:
+                    choice["message"]["content"] = extracted_json
+
     def transform_response(
         self,
         model: str,
@@ -96,79 +150,25 @@ class ASIChatConfig(OpenAIGPTConfig):
         # Check if JSON extraction is requested
         json_requested = optional_params.get("json_response_requested", False) or json_mode
         
-        if json_requested:
-            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                logging_obj.debug("ASI: JSON response format requested, applying extraction")
+        if not json_requested:
+            return response
             
-            try:
-                # For ModelResponse objects, directly access the choices
-                if isinstance(response, ModelResponse) and hasattr(response, "choices"):
-                    choices = response.choices
-                    
-                    # Process each choice
-                    for choice in choices:
-                        # Use type-safe attribute access with proper guards
-                        try:
-                            # Try to extract content from message or delta
-                            content = None
-                            
-                            # For non-streaming responses (message)
-                            if hasattr(choice, "message"):
-                                message = getattr(choice, "message")
-                                if hasattr(message, "content"):
-                                    content = getattr(message, "content")
-                                    
-                                    # Apply JSON extraction if content exists
-                                    if content and isinstance(content, str):
-                                        extracted_json = extract_json(content)
-                                        if extracted_json:
-                                            # Update content safely
-                                            setattr(message, "content", extracted_json)
-                                            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                                                print(f"ASI: Successfully extracted JSON: {extracted_json[:100]}...")
-                            
-                            # For streaming responses (delta)
-                            elif hasattr(choice, "delta"):
-                                delta = getattr(choice, "delta")
-                                if hasattr(delta, "content"):
-                                    content = getattr(delta, "content")
-                                    
-                                    # Apply JSON extraction if content exists
-                                    if content and isinstance(content, str):
-                                        extracted_json = extract_json(content)
-                                        if extracted_json:
-                                            # Update content safely
-                                            setattr(delta, "content", extracted_json)
-                                            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                                                logging_obj.debug(f"ASI: Successfully extracted JSON from streaming: {extracted_json[:100]}...")
-                        except Exception as attr_error:
-                            # Log attribute access errors but continue processing
-                            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                                logging_obj.debug(f"ASI: Error accessing attributes: {str(attr_error)}")
+        if hasattr(logging_obj, "verbose") and logging_obj.verbose:
+            logging_obj.debug("ASI: JSON response format requested, applying extraction")
+        
+        try:
+            # For ModelResponse objects, directly access the choices
+            if isinstance(response, ModelResponse) and hasattr(response, "choices"):
+                self._process_model_response_choices(response.choices, logging_obj)
+            
+            # For streaming responses, handle delta content
+            elif isinstance(response, dict) and "choices" in response:
+                self._process_dict_response_choices(response["choices"], logging_obj)
                 
-                # For streaming responses, handle delta content
-                elif isinstance(response, dict) and "choices" in response:
-                    for choice in response["choices"]:
-                        if isinstance(choice, dict):
-                            # Handle delta for streaming
-                            if "delta" in choice and isinstance(choice["delta"], dict) and "content" in choice["delta"]:
-                                content = choice["delta"]["content"]
-                                if content:
-                                    extracted_json = extract_json(content)
-                                    if extracted_json:
-                                        choice["delta"]["content"] = extracted_json
-                            
-                            # Handle message for non-streaming
-                            elif "message" in choice and isinstance(choice["message"], dict) and "content" in choice["message"]:
-                                content = choice["message"]["content"]
-                                if content:
-                                    extracted_json = extract_json(content)
-                                    if extracted_json:
-                                        choice["message"]["content"] = extracted_json
-            except Exception as e:
-                # Log the error but don't fail the request
-                if hasattr(logging_obj, "verbose") and logging_obj.verbose:
-                    logging_obj.debug(f"Error extracting JSON from ASI response: {str(e)}")
+        except Exception as e:
+            # Log the error but don't fail the request
+            if hasattr(logging_obj, "verbose") and logging_obj.verbose:
+                logging_obj.debug(f"Error extracting JSON from ASI response: {str(e)}")
         
         return response
     
