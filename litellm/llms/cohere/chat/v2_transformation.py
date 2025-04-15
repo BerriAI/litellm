@@ -98,6 +98,7 @@ class CohereV2ChatConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -163,7 +164,6 @@ class CohereV2ChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-
         ## Load Config
         for k, v in litellm.CohereChatConfig.get_config().items():
             if (
@@ -205,7 +205,6 @@ class CohereV2ChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             raw_response_json = raw_response.json()
         except Exception:
