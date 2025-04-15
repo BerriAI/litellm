@@ -516,9 +516,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1202,9 +1202,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -3013,16 +3013,16 @@ def get_optional_params(  # noqa: PLR0915
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -3045,10 +3045,10 @@ def get_optional_params(  # noqa: PLR0915
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -4064,9 +4064,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -4458,14 +4458,14 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
                 key = model
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
@@ -4475,21 +4475,21 @@ def _get_model_info_helper(  # noqa: PLR0915
                 and combined_stripped_model_name in litellm.model_cost
             ):
                 key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
                 key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
                 key = split_model
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
@@ -5807,8 +5807,133 @@ def trim_messages(
         return messages
 
 
+from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class AvailableModelsCache(InMemoryCache):
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
+        super().__init__(ttl_seconds, max_size)
+        self._env_hash: Optional[str] = None
+
+    def _get_env_hash(self) -> str:
+        """Create a hash of relevant environment variables"""
+        env_vars = {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith(("OPENAI", "ANTHROPIC", "AZURE", "AWS"))
+        }
+        return str(hash(frozenset(env_vars.items())))
+
+    def _check_env_changed(self) -> bool:
+        """Check if environment variables have changed"""
+        current_hash = self._get_env_hash()
+        if self._env_hash is None:
+            self._env_hash = current_hash
+            return True
+        return current_hash != self._env_hash
+
+    def _get_cache_key(
+        self,
+        custom_llm_provider: Optional[str],
+        litellm_params: Optional[LiteLLM_Params],
+    ) -> str:
+        valid_str = ""
+
+        if litellm_params is not None:
+            valid_str = litellm_params.model_dump_json()
+        if custom_llm_provider is not None:
+            valid_str = f"{custom_llm_provider}:{valid_str}"
+        return hashlib.sha256(valid_str.encode()).hexdigest()
+
+    def get_cached_model_info(
+        self,
+        custom_llm_provider: Optional[str] = None,
+        litellm_params: Optional[LiteLLM_Params] = None,
+    ) -> Optional[List[str]]:
+        """Get cached model info"""
+        # Check if environment has changed
+        if litellm_params is None and self._check_env_changed():
+            self.cache_dict.clear()
+            return None
+
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+
+        result = cast(Optional[List[str]], self.get_cache(cache_key))
+
+        if result is not None:
+            return copy.deepcopy(result)
+        return result
+
+    def set_cached_model_info(
+        self,
+        custom_llm_provider: str,
+        litellm_params: Optional[LiteLLM_Params],
+        available_models: List[str],
+    ):
+        """Set cached model info"""
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+        self.set_cache(cache_key, copy.deepcopy(available_models))
+
+
+# Global cache instance
+_model_cache = AvailableModelsCache()
+
+
+def _infer_valid_provider_from_env_vars(
+    custom_llm_provider: Optional[str] = None,
+) -> List[str]:
+    valid_providers: List[str] = []
+    environ_keys = os.environ.keys()
+    for provider in litellm.provider_list:
+        if custom_llm_provider and provider != custom_llm_provider:
+            continue
+
+        # edge case litellm has together_ai as a provider, it should be togetherai
+        env_provider_1 = provider.replace("_", "")
+        env_provider_2 = provider
+
+        # litellm standardizes expected provider keys to
+        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
+        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
+        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
+        if (
+            expected_provider_key_1 in environ_keys
+            or expected_provider_key_2 in environ_keys
+        ):
+            # key is set
+            valid_providers.append(provider)
+
+    return valid_providers
+
+
+def _get_valid_models_from_provider_api(
+    provider_config: BaseLLMModelInfo,
+    custom_llm_provider: str,
+    litellm_params: Optional[LiteLLM_Params] = None,
+) -> List[str]:
+    try:
+        cached_result = _model_cache.get_cached_model_info(
+            custom_llm_provider, litellm_params
+        )
+
+        if cached_result is not None:
+            return cached_result
+        models = provider_config.get_models(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+        )
+
+        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        return models
+    except Exception as e:
+        verbose_logger.debug(f"Error getting valid models: {e}")
+        return []
+
+
 def get_valid_models(
-    check_provider_endpoint: bool = False, custom_llm_provider: Optional[str] = None
+    check_provider_endpoint: Optional[bool] = None,
+    custom_llm_provider: Optional[str] = None,
+    litellm_params: Optional[LiteLLM_Params] = None,
 ) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
@@ -5819,31 +5944,21 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
+
     try:
+        check_provider_endpoint = (
+            check_provider_endpoint or litellm.check_provider_endpoint
+        )
         # get keys set in .env
-        environ_keys = os.environ.keys()
-        valid_providers = []
+
+        valid_providers: List[str] = []
+        valid_models: List[str] = []
         # for all valid providers, make a list of supported llms
-        valid_models = []
 
-        for provider in litellm.provider_list:
-            if custom_llm_provider and provider != custom_llm_provider:
-                continue
-
-            # edge case litellm has together_ai as a provider, it should be togetherai
-            env_provider_1 = provider.replace("_", "")
-            env_provider_2 = provider
-
-            # litellm standardizes expected provider keys to
-            # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-            expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-            expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-            if (
-                expected_provider_key_1 in environ_keys
-                or expected_provider_key_2 in environ_keys
-            ):
-                # key is set
-                valid_providers.append(provider)
+        if custom_llm_provider:
+            valid_providers = [custom_llm_provider]
+        else:
+            valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
 
         for provider in valid_providers:
             provider_config = ProviderConfigManager.get_provider_model_info(
@@ -5856,15 +5971,24 @@ def get_valid_models(
 
             if provider == "azure":
                 valid_models.append("Azure-LLM")
-            elif provider_config is not None and check_provider_endpoint:
-                try:
-                    models = provider_config.get_models()
-                    valid_models.extend(models)
-                except Exception as e:
-                    verbose_logger.debug(f"Error getting valid models: {e}")
+            elif (
+                provider_config is not None
+                and check_provider_endpoint
+                and provider is not None
+            ):
+                valid_models.extend(
+                    _get_valid_models_from_provider_api(
+                        provider_config,
+                        provider,
+                        litellm_params,
+                    )
+                )
             else:
-                models_for_provider = litellm.models_by_provider.get(provider, [])
+                models_for_provider = copy.deepcopy(
+                    litellm.models_by_provider.get(provider, [])
+                )
                 valid_models.extend(models_for_provider)
+
         return valid_models
     except Exception as e:
         verbose_logger.debug(f"Error getting valid models: {e}")
@@ -6510,7 +6634,12 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.common_utils import (
+                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
+            )
 
+            return VLLMModelInfo()
         return None
 
     @staticmethod
