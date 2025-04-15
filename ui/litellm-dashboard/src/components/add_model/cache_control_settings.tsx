@@ -61,7 +61,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
           </Text>
           
           <Form.List
-            name="cache_control_points"
+            name="cache_control_injection_points"
             initialValue={[{ location: "message" }]}
           >
             {(fields, { add, remove }) => (
