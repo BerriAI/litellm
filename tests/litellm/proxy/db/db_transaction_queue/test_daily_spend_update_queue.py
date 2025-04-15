@@ -369,6 +369,48 @@ async def test_aggregate_queue_updates_accuracy(daily_spend_update_queue):
 
 
 @pytest.mark.asyncio
+async def test_cache_token_fields_aggregation(daily_spend_update_queue):
+    """Test that cache_read_input_tokens and cache_creation_input_tokens are handled and aggregated correctly."""
+    test_key = "user1_2023-01-01_key123_gpt-4_openai"
+    transaction1 = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "cache_read_input_tokens": 7,
+        "cache_creation_input_tokens": 3,
+    }
+    transaction2 = {
+        "spend": 2.0,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 4,
+    }
+    # Add both updates
+    await daily_spend_update_queue.add_update({test_key: transaction1})
+    await daily_spend_update_queue.add_update({test_key: transaction2})
+    # Aggregate
+    await daily_spend_update_queue.aggregate_queue_updates()
+    updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+    assert len(updates) == 1
+    agg = updates[0][test_key]
+    assert agg["cache_read_input_tokens"] == 12  # 7 + 5
+    assert agg["cache_creation_input_tokens"] == 7  # 3 + 4
+    assert agg["spend"] == 3.0
+    assert agg["prompt_tokens"] == 30
+    assert agg["completion_tokens"] == 15
+    assert agg["api_requests"] == 2
+    assert agg["successful_requests"] == 2
+    assert agg["failed_requests"] == 0
+
+
+@pytest.mark.asyncio
 async def test_queue_size_reduction_with_large_volume(
     monkeypatch, daily_spend_update_queue
 ):
