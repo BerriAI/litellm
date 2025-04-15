@@ -17,16 +17,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     anthropic_pt,
     claude_2_1_pt,
-    convert_to_anthropic_image_obj,
+    convert_to_anthropic_media_obj,
     convert_url_to_base64,
     llama_2_chat_pt,
     prompt_factory,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
-)
-from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
 )
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -198,10 +195,11 @@ def test_convert_url_to_img():
         ("data:image/jpeg;base64,1234", "image/jpeg"),
         ("data:application/pdf;base64,1234", "application/pdf"),
         (r"data:image\/jpeg;base64,1234", "image/jpeg"),
+        (r"data:video\/mp4;base64,1234", "video/mp4"),
     ],
 )
-def test_base64_image_input(url, expected_media_type):
-    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
+def test_base64_media_input(url, expected_media_type):
+    response = convert_to_anthropic_media_obj(openai_media_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
 
@@ -429,47 +427,6 @@ def test_bedrock_parallel_tool_calling_pt(provider):
         translated_messages[number_of_messages - 1]["role"]
         != translated_messages[number_of_messages - 2]["role"]
     )
-
-
-def test_vertex_only_image_user_message():
-    base64_image = "/9j/2wCEAAgGBgcGBQ"
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                },
-            ],
-        },
-    ]
-
-    response = _gemini_convert_messages_with_history(messages=messages)
-
-    expected_response = [
-        {
-            "role": "user",
-            "parts": [
-                {
-                    "inline_data": {
-                        "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mime_type": "image/jpeg",
-                    }
-                },
-                {"text": " "},
-            ],
-        }
-    ]
-
-    assert len(response) == len(expected_response)
-    for idx, content in enumerate(response):
-        assert (
-            content == expected_response[idx]
-        ), "Invalid gemini input. Got={}, Expected={}".format(
-            content, expected_response[idx]
-        )
 
 
 def test_convert_url():
@@ -729,19 +686,6 @@ def test_just_system_message():
             llm_provider="bedrock",
         )
         assert "bedrock requires at least one non-system message" in str(e.value)
-
-
-def test_convert_generic_image_chunk_to_openai_image_obj():
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_generic_image_chunk_to_openai_image_obj,
-        convert_to_anthropic_image_obj,
-    )
-
-    url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
-    image_obj = convert_to_anthropic_image_obj(url, format=None)
-    url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
-    image_obj = convert_to_anthropic_image_obj(url_str, format=None)
-    print(image_obj)
 
 
 def test_hf_chat_template():

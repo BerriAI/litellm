@@ -2,8 +2,8 @@ from typing import Dict, List, Optional
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_generic_image_chunk_to_openai_image_obj,
-    convert_to_anthropic_image_obj,
+    convert_generic_media_chunk_to_openai_media_obj,
+    convert_to_anthropic_media_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType, PartType
@@ -121,11 +121,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(
+                            image_obj = convert_to_anthropic_media_obj(
                                 _image_url, format=format
                             )
                             img_element["image_url"] = (  # type: ignore
-                                convert_generic_image_chunk_to_openai_image_obj(
+                                convert_generic_media_chunk_to_openai_media_obj(
                                     image_obj
                                 )
                             )
