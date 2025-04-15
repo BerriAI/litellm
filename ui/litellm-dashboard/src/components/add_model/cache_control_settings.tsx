@@ -56,8 +56,8 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
       {showCacheControl && (
         <div className="ml-6 pl-4 border-l-2 border-gray-200">
           <Text className="text-sm text-gray-500 block mb-4">
-            Specify either a role (to cache all messages of that role) or a specific message index. 
-            If both are provided, the index takes precedence.
+            Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, 
+            litellm can automatically add them for you as a cost saving feature.
           </Text>
           
           <Form.List
