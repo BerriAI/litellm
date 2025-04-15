@@ -85,7 +85,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                       name={[field.name, 'role']}
                       className="mb-0"
                       style={{ width: '180px' }}
-                      tooltip="Select a role to cache all messages of this type"
+                      tooltip="LiteLLM will mark all messages of this role as cacheable"
                     >
                       <Select
                         placeholder="Select a role"
@@ -108,7 +108,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                       name={[field.name, 'index']}
                       className="mb-0"
                       style={{ width: '180px' }}
-                      tooltip="Specify a specific message index (optional)"
+                      tooltip="(Optional) If set litellm will mark the message at this index as cacheable"
                     >
                       <NumericalInput
                         type="number"
@@ -124,7 +124,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     
                     {fields.length > 1 && (
                       <MinusCircleOutlined 
-                        className="text-red-500 cursor-pointer text-lg mt-8" 
+                        className="text-red-500 cursor-pointer text-lg ml-12"
                         onClick={() => {
                           remove(field.name);
                           setTimeout(() => {
