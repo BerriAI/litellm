@@ -446,6 +446,8 @@ router_settings:
 | LITELLM_TOKEN | Access token for LiteLLM integration
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| MISTRAL_API_BASE | Base URL for Mistral API
+| MISTRAL_API_KEY | API key for Mistral API
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
 | MICROSOFT_TENANT | Tenant ID for Microsoft Azure
