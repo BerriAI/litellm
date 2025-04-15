@@ -10,16 +10,7 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.anthropic import (
-    AllAnthropicToolsValues,
-    AnthropicComputerTool,
-    AnthropicHostedTools,
-    AnthropicInputSchema,
-    AnthropicMessagesTool,
-    AnthropicMessagesToolChoice,
-    AnthropicSystemMessageContent,
-    AnthropicThinkingParam,
-)
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.openai import AllMessageValues
 
 

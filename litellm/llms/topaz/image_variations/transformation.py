@@ -10,10 +10,7 @@ from litellm.llms.base_llm.chat.transformation import (
     BaseLLMException,
     LiteLLMLoggingObj,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIImageVariationOptionalParams,
-)
+from litellm.types.llms.openai import OpenAIImageVariationOptionalParams
 from litellm.types.utils import (
     FileTypes,
     HttpHandlerRequestFields,
