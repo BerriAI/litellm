@@ -1,6 +1,5 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-import copy
 from typing import Dict, List, Optional, Set
 
 import litellm
