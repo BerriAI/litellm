@@ -337,46 +337,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   />
                 </Card>
               </Col>
-
-              {/* Prompt Caching Usage */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Prompt Caching Usage</Title>
-                  <Grid numItems={2} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Cache Read Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2 text-purple-600">
-                        {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                      </Text>
-                      <Text className="text-sm text-gray-500">
-                        Tokens retrieved from cache
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Cache Creation Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2 text-amber-600">
-                        {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
-                      </Text>
-                      <Text className="text-sm text-gray-500">
-                        Tokens stored in cache for future use
-                      </Text>
-                    </Card>
-                  </Grid>
-                  <div className="mt-4">
-                    <AreaChart
-                      data={[...userSpendData.results].sort((a, b) => 
-                        new Date(a.date).getTime() - new Date(b.date).getTime()
-                      )}
-                      index="date"
-                      categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-                      colors={["purple", "amber"]}
-                      valueFormatter={(number: number) => number.toLocaleString()}
-                      showLegend={true}
-                    />
-                  </div>
-                </Card>
-              </Col>
-
               {/* Top API Keys */}
               <Col numColSpan={1}>
                 <Card className="h-full">
