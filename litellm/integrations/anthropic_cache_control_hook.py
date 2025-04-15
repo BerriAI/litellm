@@ -7,8 +7,9 @@ Users can define
 """
 
 import copy
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, Tuple, Union, cast
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.integrations.anthropic_cache_control_hook import (
     CacheControlInjectionPoint,
@@ -24,7 +25,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -64,8 +65,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         control: ChatCompletionCachedContent = point.get(
             "control", None
         ) or ChatCompletionCachedContent(type="ephemeral")
-        targetted_index = point.get("index", None)
-        targetted_index = point.get("index", None)
+
+        _targetted_index: Optional[Union[int, str]] = point.get("index", None)
+        targetted_index: Optional[int] = None
+        if isinstance(_targetted_index, str):
+            if _targetted_index.isdigit():
+                targetted_index = int(_targetted_index)
+        else:
+            targetted_index = _targetted_index
+
         targetted_role = point.get("role", None)
 
         # Case 1: Target by specific index
@@ -115,4 +123,28 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @property
     def integration_name(self) -> str:
         """Return the integration name for this hook."""
-        return "anthropic-cache-control-hook"
+        return "anthropic_cache_control_hook"
+
+    @staticmethod
+    def should_use_anthropic_cache_control_hook(non_default_params: Dict) -> bool:
+        if non_default_params.get("cache_control_injection_points", None):
+            return True
+        return False
+
+    @staticmethod
+    def get_custom_logger_for_anthropic_cache_control_hook(
+        non_default_params: Dict,
+    ) -> Optional[CustomLogger]:
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
+        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
+            non_default_params
+        ):
+            return _init_custom_logger_compatible_class(
+                logging_integration="anthropic_cache_control_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+        return None
