@@ -5955,7 +5955,7 @@ def get_valid_models(
         valid_models: List[str] = []
         # for all valid providers, make a list of supported llms
 
-        if custom_llm_provider and litellm_params:
+        if custom_llm_provider:
             valid_providers = [custom_llm_provider]
         else:
             valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
