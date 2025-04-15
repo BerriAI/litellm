@@ -7,7 +7,7 @@ Users can define
 """
 
 import copy
-from typing import List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.integrations.anthropic_cache_control_hook import (
@@ -61,10 +61,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         """Process message-level cache control injection."""
-        _control = point.get("control", {}) or {}
-        control: ChatCompletionCachedContent = ChatCompletionCachedContent(
-            type=_control.get("type", "ephemeral")
-        )
+        control: ChatCompletionCachedContent = point.get(
+            "control", None
+        ) or ChatCompletionCachedContent(type="ephemeral")
         targetted_index = point.get("index", None)
         targetted_index = point.get("index", None)
         targetted_role = point.get("role", None)
