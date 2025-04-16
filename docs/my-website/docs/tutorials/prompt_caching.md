@@ -2,7 +2,6 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-
 # Auto-Inject Prompt Caching Checkpoints
 
 Reduce costs by up to 90% by using LiteLLM to auto-inject prompt caching checkpoints.
@@ -14,9 +13,8 @@ Reduce costs by up to 90% by using LiteLLM to auto-inject prompt caching checkpo
 
 LiteLLM can automatically inject prompt caching checkpoints into your requests to LLM providers. This allows:
 
-- **Cached Processing**: Long, static parts of your prompts can be cached to avoid repeated processing
-- **Cost Reduction**: Only process the dynamic parts of your prompts, significantly reducing API costs
-- **Seamless Integration**: No need to modify your application code
+- **Cost Reduction**: Long, static parts of your prompts can be cached to avoid repeated processing
+- **No need to modify your application code**: You can configure the auto-caching behavior in the LiteLLM UI or in the `litellm config.yaml` file.
 
 ## Configuration
 
