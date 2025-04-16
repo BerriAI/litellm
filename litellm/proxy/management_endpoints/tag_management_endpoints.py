@@ -12,14 +12,20 @@ All /tag management endpoints
 
 import datetime
 import json
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+    get_daily_activity,
+)
+from litellm.proxy.utils import PrismaClient
 from litellm.types.tag_management import (
     TagConfig,
     TagDeleteRequest,
@@ -354,3 +360,48 @@ async def delete_tag(
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/tag/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],
+)
+async def get_tag_daily_activity(
+    tag: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+):
+    """
+    Get daily activity for a specific tag or all tags.
+
+    Args:
+        tag (Optional[str]): The tag to filter by. If not provided, returns data for all tags.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=tag,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )
