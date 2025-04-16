@@ -13,6 +13,7 @@ from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
     REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
 )
@@ -68,11 +69,41 @@ class RedisUpdateBuffer:
             return False
         return _use_redis_transaction_buffer
 
+    async def _store_transactions_in_redis(
+        self,
+        transactions: Any,
+        redis_key: str,
+        service_type: ServiceTypes,
+    ) -> None:
+        """
+        Helper method to store transactions in Redis and emit an event
+
+        Args:
+            transactions: The transactions to store
+            redis_key: The Redis key to store under
+            service_type: The service type for event emission
+        """
+        if transactions is None or len(transactions) == 0:
+            return
+
+        list_of_transactions = [safe_dumps(transactions)]
+        if self.redis_cache is None:
+            return
+        current_redis_buffer_size = await self.redis_cache.async_rpush(
+            key=redis_key,
+            values=list_of_transactions,
+        )
+        await self._emit_new_item_added_to_redis_buffer_event(
+            queue_size=current_redis_buffer_size,
+            service=service_type,
+        )
+
     async def store_in_memory_spend_updates_in_redis(
         self,
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
         daily_team_spend_update_queue: DailySpendUpdateQueue,
+        daily_tag_spend_update_queue: DailySpendUpdateQueue,
     ):
         """
         Stores the in-memory spend updates to Redis
@@ -124,17 +155,22 @@ class RedisUpdateBuffer:
             )
             return
 
+        # Get all transactions
         db_spend_update_transactions = (
             await spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
-        )
-        verbose_proxy_logger.debug(
-            "ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions
         )
         daily_spend_update_transactions = (
             await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
         daily_team_spend_update_transactions = (
             await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        )
+        daily_tag_spend_update_transactions = (
+            await daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        )
+
+        verbose_proxy_logger.debug(
+            "ALL DB SPEND UPDATE TRANSACTIONS: %s", db_spend_update_transactions
         )
         verbose_proxy_logger.debug(
             "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
@@ -147,40 +183,29 @@ class RedisUpdateBuffer:
         ):
             return
 
-        list_of_transactions = [safe_dumps(db_spend_update_transactions)]
-        current_redis_buffer_size = await self.redis_cache.async_rpush(
-            key=REDIS_UPDATE_BUFFER_KEY,
-            values=list_of_transactions,
-        )
-        await self._emit_new_item_added_to_redis_buffer_event(
-            queue_size=current_redis_buffer_size,
-            service=ServiceTypes.REDIS_SPEND_UPDATE_QUEUE,
+        # Store all transaction types using the helper method
+        await self._store_transactions_in_redis(
+            transactions=db_spend_update_transactions,
+            redis_key=REDIS_UPDATE_BUFFER_KEY,
+            service_type=ServiceTypes.REDIS_SPEND_UPDATE_QUEUE,
         )
 
-        list_of_daily_spend_update_transactions = [
-            safe_dumps(daily_spend_update_transactions)
-        ]
-
-        current_redis_buffer_size = await self.redis_cache.async_rpush(
-            key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-            values=list_of_daily_spend_update_transactions,
-        )
-        await self._emit_new_item_added_to_redis_buffer_event(
-            queue_size=current_redis_buffer_size,
-            service=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
+        await self._store_transactions_in_redis(
+            transactions=daily_spend_update_transactions,
+            redis_key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+            service_type=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
         )
 
-        list_of_daily_team_spend_update_transactions = [
-            safe_dumps(daily_team_spend_update_transactions)
-        ]
-
-        current_redis_buffer_size = await self.redis_cache.async_rpush(
-            key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
-            values=list_of_daily_team_spend_update_transactions,
+        await self._store_transactions_in_redis(
+            transactions=daily_team_spend_update_transactions,
+            redis_key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+            service_type=ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
         )
-        await self._emit_new_item_added_to_redis_buffer_event(
-            queue_size=current_redis_buffer_size,
-            service=ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
+
+        await self._store_transactions_in_redis(
+            transactions=daily_tag_spend_update_transactions,
+            redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+            service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
         )
 
     @staticmethod
