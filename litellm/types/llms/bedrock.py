@@ -125,8 +125,19 @@ class ConverseResponseBlock(TypedDict):
     usage: ConverseTokenUsageBlock
 
 
+class ToolJsonArgsBlock(TypedDict, total=False):
+    type: str
+    description: str
+
+
+class ToolJsonSchemaBlock(TypedDict, total=False):
+    type: Literal["object"]
+    properties: dict
+    required: List[str]
+
+
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[dict]
+    json: Optional[ToolJsonSchemaBlock]
 
 
 class ToolSpecBlock(TypedDict, total=False):

@@ -2226,6 +2226,28 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         """
         pass
 
+class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.amazon.nova-lite-v1:0",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_multilingual_requests(self):
+        """
+        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
+
 
 class TestBedrockRerank(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
