@@ -1020,7 +1020,7 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug(
                 f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
             )
-            return
+            return None
 
         request_status = prisma_client.get_request_status(payload)
         verbose_proxy_logger.info(f"Logged request status: {request_status}")
@@ -1033,7 +1033,7 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug(
                 f"Invalid start time: {payload['startTime']}, skipping from daily_user_spend_transactions"
             )
-            return
+            return None
         try:
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
