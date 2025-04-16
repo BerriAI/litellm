@@ -2777,8 +2777,14 @@ class BaseDailySpendTransaction(TypedDict):
     model: str
     model_group: Optional[str]
     custom_llm_provider: Optional[str]
+
+    # token count metrics
     prompt_tokens: int
     completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+    # request level metrics
     spend: float
     api_requests: int
     successful_requests: int
