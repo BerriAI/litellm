@@ -324,9 +324,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         timeout = litellm_params.get("timeout")
         if not api_key and tenant_id and client_id and client_secret:
             verbose_logger.debug(
-                "Using Azure AD Token Provider from Entrata ID for Azure Auth"
+                "Using Azure AD Token Provider from Entra ID for Azure Auth"
             )
-            azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+            azure_ad_token_provider = get_azure_ad_token_from_entra_id(
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
