@@ -9,6 +9,7 @@ Docs: https://docs.together.ai/reference/completions-1
 from typing import Optional
 
 from litellm import get_model_info, verbose_logger
+from litellm.utils import supports_function_calling
 
 from ..openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -20,18 +21,12 @@ class TogetherAIConfig(OpenAIGPTConfig):
 
         Docs: https://docs.together.ai/docs/json-mode
         """
-        supports_function_calling: Optional[bool] = None
-        try:
-            model_info = get_model_info(model, custom_llm_provider="together_ai")
-            supports_function_calling = model_info.get(
-                "supports_function_calling", False
-            )
-        except Exception as e:
-            verbose_logger.debug(f"Error getting supported openai params: {e}")
-            pass
+        function_calling: Optional[bool] = supports_function_calling(model, custom_llm_provider = "together_ai")
+
 
         optional_params = super().get_supported_openai_params(model)
-        if supports_function_calling is not True:
+
+        if function_calling is not True:
             verbose_logger.debug(
                 "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
             )
