@@ -1145,7 +1145,7 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
   }
 };
 
-export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: List<string> | null = null) => {
+export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: string[] | null = null) => {
   /**
    * Get daily user activity on proxy
    */
