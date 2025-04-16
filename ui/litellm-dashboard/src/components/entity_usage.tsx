@@ -124,12 +124,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       .slice(0, 5);
   };
 
-  const getProviderSpend = () => {
-    const providerSpend: { [key: string]: any } = {};
+  const getTopApiKeys = () => {
+    const apiKeySpend: { [key: string]: any } = {};
     spendData.results.forEach(day => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpend[provider]) {
-          providerSpend[provider] = {
+      Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
+        if (!apiKeySpend[key]) {
+          apiKeySpend[key] = {
+            key: key,
             spend: 0,
             requests: 0,
             successful_requests: 0,
@@ -137,19 +138,48 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             tokens: 0
           };
         }
-        providerSpend[provider].spend += metrics.metrics.spend;
-        providerSpend[provider].requests += metrics.metrics.api_requests;
-        providerSpend[provider].successful_requests += metrics.metrics.successful_requests;
-        providerSpend[provider].failed_requests += metrics.metrics.failed_requests;
-        providerSpend[provider].tokens += metrics.metrics.total_tokens;
+        apiKeySpend[key].spend += metrics.metrics.spend;
+        apiKeySpend[key].requests += metrics.metrics.api_requests;
+        apiKeySpend[key].successful_requests += metrics.metrics.successful_requests;
+        apiKeySpend[key].failed_requests += metrics.metrics.failed_requests;
+        apiKeySpend[key].tokens += metrics.metrics.total_tokens;
       });
     });
     
-    return Object.entries(providerSpend)
-      .map(([provider, metrics]) => ({
-        provider,
-        ...metrics
-      }));
+    return Object.values(apiKeySpend)
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 5);
+  };
+
+  const getProviderSpend = () => {
+    const providerSpend: { [key: string]: any } = {};
+    spendData.results.forEach(day => {
+      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+        if (!providerSpend[provider]) {
+          providerSpend[provider] = {
+            provider,
+            spend: 0,
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            tokens: 0
+          };
+        }
+        try {
+          providerSpend[provider].spend += metrics.metrics.spend;
+          providerSpend[provider].requests += metrics.metrics.api_requests;
+          providerSpend[provider].successful_requests += metrics.metrics.successful_requests;
+          providerSpend[provider].failed_requests += metrics.metrics.failed_requests;
+          providerSpend[provider].tokens += metrics.metrics.total_tokens;
+        } catch (e) {
+          console.log(`Error processing provider ${provider}: ${e}`);
+        }
+      });
+    });
+    
+    return Object.values(providerSpend)
+      .filter(provider => provider.spend > 0)
+      .sort((a, b) => b.spend - a.spend);
   };
 
   const getEntityBreakdown = () => {
@@ -296,53 +326,70 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </Card>
         </Col>
 
-        {/* Spend by Provider */}
+        {/* Top API Keys */}
         <Col numColSpan={1}>
           <Card>
-            <Title>Spend by Provider</Title>
-            <DonutChart
+            <Title>Top API Keys</Title>
+            <BarChart
               className="mt-4 h-40"
-              data={getProviderSpend()}
-              index="provider"
-              category="spend"
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
+              data={getTopApiKeys()}
+              index="key"
+              categories={["spend"]}
               colors={["cyan"]}
+              valueFormatter={(value) => `$${value.toFixed(2)}`}
+              layout="vertical"
+              yAxisWidth={200}
+              showLegend={false}
             />
           </Card>
         </Col>
 
-        {/* Provider Details Table */}
+        {/* Spend by Provider */}
         <Col numColSpan={2}>
           <Card>
-            <Title>Provider Details</Title>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Provider</TableHeaderCell>
-                  <TableHeaderCell>Spend</TableHeaderCell>
-                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                  <TableHeaderCell>Tokens</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {getProviderSpend()
-                  .filter(provider => provider.spend > 0)
-                  .map((provider) => (
-                    <TableRow key={provider.provider}>
-                      <TableCell>{provider.provider}</TableCell>
-                      <TableCell>${provider.spend.toFixed(2)}</TableCell>
-                      <TableCell className="text-green-600">
-                        {provider.successful_requests.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-red-600">
-                        {provider.failed_requests.toLocaleString()}
-                      </TableCell>
-                      <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                    </TableRow>
-                  ))}
-              </TableBody>
-            </Table>
+            <div className="flex flex-col space-y-4">
+              <Title>Provider Usage</Title>
+              <Grid numItems={2}>
+                <Col numColSpan={1}>
+                  <DonutChart
+                    className="mt-4 h-40"
+                    data={getProviderSpend()}
+                    index="provider"
+                    category="spend"
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                  />
+                </Col>
+                <Col numColSpan={1}>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>Provider</TableHeaderCell>
+                        <TableHeaderCell>Spend</TableHeaderCell>
+                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                        <TableHeaderCell>Tokens</TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {getProviderSpend().map((provider) => (
+                        <TableRow key={provider.provider}>
+                          <TableCell>{provider.provider}</TableCell>
+                          <TableCell>${provider.spend.toFixed(2)}</TableCell>
+                          <TableCell className="text-green-600">
+                            {provider.successful_requests.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-red-600">
+                            {provider.failed_requests.toLocaleString()}
+                          </TableCell>
+                          <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Col>
+              </Grid>
+            </div>
           </Card>
         </Col>
       </Grid>
