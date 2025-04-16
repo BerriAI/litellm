@@ -212,7 +212,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   return (
-    <div style={{ width: "100%" }} className="p-8">
+    <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
         <Col>
           <Text>Select Time Range</Text>
@@ -283,28 +283,64 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         </Col>
 
         {/* Entity Breakdown Section */}
-        <Col numColSpan={1}>
+        <Col numColSpan={2}>
           <Card>
-            <div className="flex flex-col space-y-2">
-              <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
-              <div className="flex items-center text-sm text-gray-500">
-                <span>Get Started Tracking cost per {entityType} </span>
-                <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
-                  here
-                </a>
+            <div className="flex flex-col space-y-4">
+              <div className="flex flex-col space-y-2">
+                <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
+                <div className="flex items-center text-sm text-gray-500">
+                  <span>Get Started Tracking cost per {entityType} </span>
+                  <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
+                    here
+                  </a>
+                </div>
               </div>
+              <Grid numItems={2}>
+                <Col numColSpan={1}>
+                  <BarChart
+                    className="mt-4 h-52"
+                    data={getEntityBreakdown()}
+                    index="entity"
+                    categories={["spend"]}
+                    colors={["cyan"]}
+                    valueFormatter={(value) => `$${value.toFixed(4)}`}
+                    layout="vertical"
+                    showLegend={false}
+                    yAxisWidth={100}
+                  />
+                </Col>
+                <Col numColSpan={1}>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>{entityType === 'tag' ? 'Tag' : 'Team'}</TableHeaderCell>
+                        <TableHeaderCell>Spend</TableHeaderCell>
+                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                        <TableHeaderCell>Tokens</TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {getEntityBreakdown()
+                        .filter(entity => entity.spend > 0)
+                        .map((entity) => (
+                          <TableRow key={entity.entity}>
+                            <TableCell>{entity.entity}</TableCell>
+                            <TableCell>${entity.spend.toFixed(4)}</TableCell>
+                            <TableCell className="text-green-600">
+                              {entity.successful_requests.toLocaleString()}
+                            </TableCell>
+                            <TableCell className="text-red-600">
+                              {entity.failed_requests.toLocaleString()}
+                            </TableCell>
+                            <TableCell>{entity.tokens.toLocaleString()}</TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </Col>
+              </Grid>
             </div>
-            <BarChart
-              className="mt-4 h-52"
-              data={getEntityBreakdown()}
-              index="entity"
-              categories={["spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => value.toFixed(4)}
-              layout="horizontal"
-              showLegend={true}
-              yAxisWidth={100}
-            />
           </Card>
         </Col>
 
