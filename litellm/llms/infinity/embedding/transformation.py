@@ -1,7 +1,6 @@
 from typing import List, Optional, Union
 
 import httpx
-import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
