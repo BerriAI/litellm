@@ -3,7 +3,7 @@ from copy import deepcopy
 from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import BaseDailySpendTransaction, DailyUserSpendTransaction
+from litellm.proxy._types import BaseDailySpendTransaction
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     BaseUpdateQueue,
     service_logger_obj,
