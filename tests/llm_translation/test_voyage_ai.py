@@ -27,58 +27,58 @@ class TestVoyageAI(BaseLLMEmbeddingTest):
         }
 
 
-# def test_voyage_ai_embedding_extra_params():
-#     try:
+def test_voyage_ai_embedding_extra_params():
+    try:
 
-#         client = HTTPHandler()
-#         litellm.set_verbose = True
+        client = HTTPHandler()
+        litellm.set_verbose = True
 
-#         with patch.object(client, "post") as mock_client:
-#             response = litellm.embedding(
-#                 model="voyage/voyage-3-lite",
-#                 input=["a"],
-#                 dimensions=512,
-#                 input_type="document",
-#                 client=client,
-#             )
+        with patch.object(client, "post") as mock_client:
+            response = litellm.embedding(
+                model="voyage/voyage-3-lite",
+                input=["a"],
+                dimensions=512,
+                input_type="document",
+                client=client,
+            )
 
-#             mock_client.assert_called_once()
-#             json_data = json.loads(mock_client.call_args.kwargs["data"])
+            mock_client.assert_called_once()
+            json_data = json.loads(mock_client.call_args.kwargs["data"])
 
-#             print("request data to voyage ai", json.dumps(json_data, indent=4))
+            print("request data to voyage ai", json.dumps(json_data, indent=4))
 
-#             # Assert the request parameters
-#             assert json_data["input"] == ["a"]
-#             assert json_data["model"] == "voyage-3-lite"
-#             assert json_data["output_dimension"] == 512
-#             assert json_data["input_type"] == "document"
+            # Assert the request parameters
+            assert json_data["input"] == ["a"]
+            assert json_data["model"] == "voyage-3-lite"
+            assert json_data["output_dimension"] == 512
+            assert json_data["input_type"] == "document"
 
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
-# def test_voyage_ai_embedding_prompt_token_mapping():
-#     try:
+def test_voyage_ai_embedding_prompt_token_mapping():
+    try:
 
-#         client = HTTPHandler()
-#         litellm.set_verbose = True
+        client = HTTPHandler()
+        litellm.set_verbose = True
 
-#         with patch.object(client, "post", return_value=MagicMock(status_code=200, json=lambda: {"usage": {"total_tokens": 120}})) as mock_client:
-#             response = litellm.embedding(
-#                 model="voyage/voyage-3-lite",
-#                 input=["a"],
-#                 dimensions=512,
-#                 input_type="document",
-#                 client=client,
-#             )
+        with patch.object(client, "post", return_value=MagicMock(status_code=200, json=lambda: {"usage": {"total_tokens": 120}})) as mock_client:
+            response = litellm.embedding(
+                model="voyage/voyage-3-lite",
+                input=["a"],
+                dimensions=512,
+                input_type="document",
+                client=client,
+            )
 
-#             mock_client.assert_called_once()
-#             # Assert the response
-#             assert response.usage.prompt_tokens == 120
-#             assert response.usage.total_tokens == 120
+            mock_client.assert_called_once()
+            # Assert the response
+            assert response.usage.prompt_tokens == 120
+            assert response.usage.total_tokens == 120
 
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 ### Rerank Tests
