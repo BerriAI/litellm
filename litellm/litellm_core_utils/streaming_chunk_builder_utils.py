@@ -161,7 +161,6 @@ class ChunkProcessor:
                             name=tool_call_data["name"],
                         ),
                         type=tool_call_data["type"] or "function",
-                        index=index,
                     )
                 )
 

@@ -135,7 +135,6 @@ def test_get_combined_tool_content():
                 name="get_current_weather",
             ),
             type="function",
-            index=0,
         ),
         ChatCompletionMessageToolCall(
             id="call_rrns",
@@ -144,7 +143,6 @@ def test_get_combined_tool_content():
                 name="get_current_weather",
             ),
             type="function",
-            index=1,
         ),
         ChatCompletionMessageToolCall(
             id="call_0k29",
@@ -153,6 +151,5 @@ def test_get_combined_tool_content():
                 name="get_current_weather",
             ),
             type="function",
-            index=2,
         ),
     ]
