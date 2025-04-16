@@ -68,3 +68,15 @@ class SCIMListResponse(BaseModel):
     startIndex: Optional[int] = 1
     itemsPerPage: Optional[int] = 10
     Resources: List[Union[SCIMUser, SCIMGroup]]
+
+
+# SCIM PATCH Operation Models
+class SCIMPatchOperation(BaseModel):
+    op: str  # add, remove, replace
+    path: Optional[str] = None
+    value: Optional[Any] = None
+
+
+class SCIMPatchOp(BaseModel):
+    schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
+    Operations: List[SCIMPatchOperation]
