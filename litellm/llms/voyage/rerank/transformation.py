@@ -10,6 +10,7 @@ from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResp
 from litellm.llms.voyage.common_utils import VoyageError
 from litellm.types.rerank import (
     RerankBilledUnits,
+    RerankResponse,
     RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
@@ -52,6 +53,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             "documents",
             "top_k",
             "return_documents",
+            "truncation"
         ]
     
     def map_cohere_rerank_params(
@@ -98,6 +100,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             documents=optional_rerank_params["documents"],
             # Voyage API uses top_k instead of top_n
             top_k=optional_rerank_params.get("top_k", None),
+            truncation=optional_rerank_params.get("truncation", None),
             return_documents=optional_rerank_params.get("return_documents", None),
         )
         return rerank_request.model_dump(exclude_none=True)
