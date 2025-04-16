@@ -62,7 +62,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               total_tokens: 0,
               api_requests: 0,
               successful_requests: 0,
-              failed_requests: 0
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {}
           };
@@ -74,6 +76,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
         modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
         modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -104,7 +108,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               total_tokens: 0,
               api_requests: 0,
               successful_requests: 0,
-              failed_requests: 0
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {}
           };
@@ -116,6 +122,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
         providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
         providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -145,6 +153,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               api_requests: 0,
               successful_requests: 0,
               failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
             },
             metadata: {
               key_alias: metrics.metadata.key_alias
@@ -158,6 +168,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
         keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
         keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
@@ -325,7 +337,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   />
                 </Card>
               </Col>
-
               {/* Top API Keys */}
               <Col numColSpan={1}>
                 <Card className="h-full">

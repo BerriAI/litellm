@@ -6,6 +6,7 @@ Module responsible for
 """
 
 import asyncio
+import json
 import os
 import time
 import traceback
@@ -24,6 +25,7 @@ from litellm.proxy._types import (
     DBSpendUpdateTransactions,
     Litellm_EntityType,
     LiteLLM_UserTable,
+    SpendLogsMetadata,
     SpendLogsPayload,
     SpendUpdateQueueItem,
 )
@@ -806,6 +808,12 @@ class DBSpendUpdateWriter:
                                         "completion_tokens": transaction[
                                             "completion_tokens"
                                         ],
+                                        "cache_read_input_tokens": transaction.get(
+                                            "cache_read_input_tokens", 0
+                                        ),
+                                        "cache_creation_input_tokens": transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        ),
                                         "spend": transaction["spend"],
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction[
@@ -823,6 +831,16 @@ class DBSpendUpdateWriter:
                                             "increment": transaction[
                                                 "completion_tokens"
                                             ]
+                                        },
+                                        "cache_read_input_tokens": {
+                                            "increment": transaction.get(
+                                                "cache_read_input_tokens", 0
+                                            )
+                                        },
+                                        "cache_creation_input_tokens": {
+                                            "increment": transaction.get(
+                                                "cache_creation_input_tokens", 0
+                                            )
                                         },
                                         "spend": {"increment": transaction["spend"]},
                                         "api_requests": {
@@ -1024,6 +1042,8 @@ class DBSpendUpdateWriter:
 
         request_status = prisma_client.get_request_status(payload)
         verbose_proxy_logger.info(f"Logged request status: {request_status}")
+        _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
+        usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):
             start_time = payload["startTime"].isoformat()
             date = start_time.split("T")[0]
@@ -1047,6 +1067,12 @@ class DBSpendUpdateWriter:
                 api_requests=1,
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
+                cache_read_input_tokens=usage_obj.get("cache_read_input_tokens", 0)
+                or 0,
+                cache_creation_input_tokens=usage_obj.get(
+                    "cache_creation_input_tokens", 0
+                )
+                or 0,
             )
             return daily_transaction
         except Exception as e:
