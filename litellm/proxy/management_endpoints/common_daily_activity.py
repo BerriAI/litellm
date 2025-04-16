@@ -7,51 +7,16 @@ from pydantic import BaseModel, Field
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.utils import PrismaClient
-
-
-class SpendMetrics(BaseModel):
-    spend: float = Field(default=0.0)
-    prompt_tokens: int = Field(default=0)
-    completion_tokens: int = Field(default=0)
-    cache_read_input_tokens: int = Field(default=0)
-    cache_creation_input_tokens: int = Field(default=0)
-    total_tokens: int = Field(default=0)
-    successful_requests: int = Field(default=0)
-    failed_requests: int = Field(default=0)
-    api_requests: int = Field(default=0)
-
-
-class BreakdownMetrics(BaseModel):
-    models: Dict[str, SpendMetrics] = Field(default_factory=dict)
-    api_keys: Dict[str, SpendMetrics] = Field(default_factory=dict)
-    providers: Dict[str, SpendMetrics] = Field(default_factory=dict)
-    entities: Dict[str, SpendMetrics] = Field(default_factory=dict)
-
-
-class DailySpendData(BaseModel):
-    date: date
-    metrics: SpendMetrics
-    breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
-
-
-class DailySpendMetadata(BaseModel):
-    total_spend: float = Field(default=0.0)
-    total_prompt_tokens: int = Field(default=0)
-    total_completion_tokens: int = Field(default=0)
-    total_tokens: int = Field(default=0)
-    total_api_requests: int = Field(default=0)
-    total_successful_requests: int = Field(default=0)
-    total_failed_requests: int = Field(default=0)
-    total_cache_read_input_tokens: int = Field(default=0)
-    total_cache_creation_input_tokens: int = Field(default=0)
-    page: int = Field(default=1)
-    total_pages: int = Field(default=1)
-    has_more: bool = Field(default=False)
-
-
-class SpendAnalyticsPaginatedResponse(BaseModel):
-    results: List[DailySpendData]
-    metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    BreakdownMetrics,
+    DailySpendData,
+    DailySpendMetadata,
+    KeyMetadata,
+    KeyMetricWithMetadata,
+    MetricWithMetadata,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
+)
 
 
 def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
@@ -76,25 +41,45 @@ def update_breakdown_metrics(
     api_key_metadata: Dict[str, Dict[str, Any]],
     entity_id_field: Optional[str] = None,
 ) -> BreakdownMetrics:
-    """Update breakdown metrics with new record data."""
-    # Update model metrics
-    model_key = record.model
-    if model_key not in breakdown.models:
-        breakdown.models[model_key] = SpendMetrics()
-    breakdown.models[model_key] = update_metrics(breakdown.models[model_key], record)
+    """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
-    # Update API key metrics
-    api_key = record.api_key
-    if api_key not in breakdown.api_keys:
-        breakdown.api_keys[api_key] = SpendMetrics()
-    breakdown.api_keys[api_key] = update_metrics(breakdown.api_keys[api_key], record)
+    # Update model breakdown
+    if record.model not in breakdown.models:
+        breakdown.models[record.model] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=model_metadata.get(
+                record.model, {}
+            ),  # Add any model-specific metadata here
+        )
+    breakdown.models[record.model].metrics = update_metrics(
+        breakdown.models[record.model].metrics, record
+    )
 
-    # Update provider metrics
-    provider = record.custom_llm_provider or "default"
+    # Update provider breakdown
+    provider = record.custom_llm_provider or "unknown"
     if provider not in breakdown.providers:
-        breakdown.providers[provider] = SpendMetrics()
-    breakdown.providers[provider] = update_metrics(
-        breakdown.providers[provider], record
+        breakdown.providers[provider] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=provider_metadata.get(
+                provider, {}
+            ),  # Add any provider-specific metadata here
+        )
+    breakdown.providers[provider].metrics = update_metrics(
+        breakdown.providers[provider].metrics, record
+    )
+
+    # Update api key breakdown
+    if record.api_key not in breakdown.api_keys:
+        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=KeyMetadata(
+                key_alias=api_key_metadata.get(record.api_key, {}).get(
+                    "key_alias", None
+                )
+            ),  # Add any api_key-specific metadata here
+        )
+    breakdown.api_keys[record.api_key].metrics = update_metrics(
+        breakdown.api_keys[record.api_key].metrics, record
     )
 
     # Update entity-specific metrics if entity_id_field is provided
@@ -102,9 +87,11 @@ def update_breakdown_metrics(
         entity_value = getattr(record, entity_id_field, None)
         if entity_value:
             if entity_value not in breakdown.entities:
-                breakdown.entities[entity_value] = SpendMetrics()
-            breakdown.entities[entity_value] = update_metrics(
-                breakdown.entities[entity_value], record
+                breakdown.entities[entity_value] = MetricWithMetadata(
+                    metrics=SpendMetrics(), metadata={}
+                )
+            breakdown.entities[entity_value].metrics = update_metrics(
+                breakdown.entities[entity_value].metrics, record
             )
 
     return breakdown
