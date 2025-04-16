@@ -11,11 +11,12 @@ from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
     separate_cached_messages,
 )
-
+import litellm
+from litellm import completion
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "gemini/gemini-1.5-flash-002"}
+        return {"model": "gemini/gemini-2.0-flash"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -72,3 +73,15 @@ def test_gemini_context_caching_separate_messages():
     print(non_cached_messages)
     assert len(cached_messages) > 0, "Cached messages should be present"
     assert len(non_cached_messages) > 0, "Non-cached messages should be present"
+
+
+def test_gemini_image_generation():
+    # litellm._turn_on_debug()
+    response = completion(
+        model="gemini/gemini-2.0-flash-exp-image-generation",
+        messages=[{"role": "user", "content": "Generate an image of a cat"}],
+        modalities=["image", "text"],
+    )
+    assert response.choices[0].message.content is not None
+
+

@@ -1,7 +1,7 @@
 """
 TEAM MANAGEMENT
 
-All /team management endpoints 
+All /team management endpoints
 
 /team/new
 /team/info
@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
+    SpecialModelNames,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -57,7 +58,13 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _set_object_metadata_field,
+)
+from litellm.proxy.management_helpers.team_member_permission_checks import (
+    TeamMemberPermissionChecks,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -66,6 +73,11 @@ from litellm.proxy.utils import (
     PrismaClient,
     _premium_user_check,
     handle_exception_on_proxy,
+)
+from litellm.router import Router
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    GetTeamMemberPermissionsResponse,
+    UpdateTeamMemberPermissionsRequest,
 )
 
 router = APIRouter()
@@ -130,6 +142,7 @@ async def new_team(  # noqa: PLR0915
     - team_alias: Optional[str] - User defined team alias
     - team_id: Optional[str] - The team id of the user. If none passed, we'll generate it.
     - members_with_roles: List[{"role": "admin" or "user", "user_id": "<user-id>"}] - A list of users and their roles in the team. Get user_id when making a new user via `/user/new`.
+    - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
@@ -283,8 +296,8 @@ async def new_team(  # noqa: PLR0915
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
             if getattr(data, field) is not None:
-                _set_team_metadata_field(
-                    team_data=complete_team_data,
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
                     field_name=field,
                     value=getattr(data, field),
                 )
@@ -408,6 +421,7 @@ async def update_team(
     Parameters:
     - team_id: str - The team id of the user. Required param.
     - team_alias: Optional[str] - User defined team alias
+    - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
@@ -465,7 +479,7 @@ async def update_team(
 
     if existing_team_row is None:
         raise HTTPException(
-            status_code=400,
+            status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
@@ -1132,14 +1146,16 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: BaseModel = (
+            team_row_base: Optional[BaseModel] = (
                 await prisma_client.db.litellm_teamtable.find_unique(
                     where={"team_id": team_id}
                 )
             )
+            if team_row_base is None:
+                raise Exception
         except Exception:
             raise HTTPException(
-                status_code=400,
+                status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
@@ -1235,6 +1251,23 @@ def validate_membership(
         )
 
 
+def _unfurl_all_proxy_models(
+    team_info: LiteLLM_TeamTable, llm_router: Router
+) -> LiteLLM_TeamTable:
+    if (
+        SpecialModelNames.all_proxy_models.value in team_info.models
+        and llm_router is not None
+    ):
+        team_models: set[str] = set()  # make set to avoid duplicates
+        for model in team_info.models:
+            if model != SpecialModelNames.all_proxy_models.value:
+                team_models.add(model)
+        for model in llm_router.get_model_names():
+            team_models.add(model)
+        team_info.models = list(team_models)
+    return team_info
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1274,9 +1307,13 @@ async def team_info(
             )
 
         try:
-            team_info: BaseModel = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
+            if team_info is None:
+                raise Exception
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1326,6 +1363,9 @@ async def team_info(
         else:
             _team_info = LiteLLM_TeamTable()
 
+        # ## UNFURL 'all-proxy-models' into the team_info.models list ##
+        # if llm_router is not None:
+        #     _team_info = _unfurl_all_proxy_models(_team_info, llm_router)
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -1673,23 +1713,6 @@ def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _set_team_metadata_field(
-    team_data: LiteLLM_TeamTable, field_name: str, value: Any
-) -> None:
-    """
-    Helper function to set metadata fields that require premium user checks
-
-    Args:
-        team_data: The team data object to modify
-        field_name: Name of the metadata field to set
-        value: Value to set for the field
-    """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
-    team_data.metadata = team_data.metadata or {}
-    team_data.metadata[field_name] = value
-
-
 @router.get(
     "/team/filter/ui",
     tags=["team management"],
@@ -1909,6 +1932,150 @@ async def team_model_delete(
     # Update team
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"models": updated_models}
+    )
+
+    return updated_team
+
+
+@router.get(
+    "/team/permissions_list",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def team_member_permissions(
+    team_id: str = fastapi.Query(
+        default=None, description="Team ID in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> GetTeamMemberPermissionsResponse:
+    """
+    Get the team member permissions for a team
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+    existing_team_row = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_cache_only=False,
+        check_db_only=True,
+    )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found for team_id={team_id}"},
+        )
+
+    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+
+    if (
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+        and not _is_available_team(
+            team_id=complete_team_data.team_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_add",
+                    complete_team_data.team_id,
+                )
+            },
+        )
+
+    if existing_team_row.team_member_permissions is None:
+        existing_team_row.team_member_permissions = (
+            TeamMemberPermissionChecks.default_team_member_permissions()
+        )
+
+    return GetTeamMemberPermissionsResponse(
+        team_id=team_id,
+        team_member_permissions=existing_team_row.team_member_permissions,
+        all_available_permissions=TeamMemberPermissionChecks.get_all_available_team_member_permissions(),
+    )
+
+
+@router.post(
+    "/team/permissions_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_team_member_permissions(
+    data: UpdateTeamMemberPermissionsRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> LiteLLM_TeamTable:
+    """
+    Update the team member permissions for a team
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+    existing_team_row = await get_team_object(
+        team_id=data.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_cache_only=False,
+        check_db_only=True,
+    )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found for team_id={data.team_id}"},
+        )
+
+    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+
+    if (
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+        and not _is_available_team(
+            team_id=complete_team_data.team_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_add",
+                    complete_team_data.team_id,
+                )
+            },
+        )
+    # Update the team member permissions
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"team_member_permissions": data.team_member_permissions},
     )
 
     return updated_team

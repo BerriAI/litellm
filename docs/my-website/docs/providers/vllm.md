@@ -157,6 +157,98 @@ curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
 </TabItem>
 </Tabs>
 
+## Send Video URL to VLLM
+
+Example Implementation from VLLM [here](https://github.com/vllm-project/vllm/pull/10020)
+
+There are two ways to send a video url to VLLM:
+
+1. Pass the video url directly
+
+```
+{"type": "video_url", "video_url": {"url": video_url}},
+```
+
+2. Pass the video data as base64
+
+```
+{"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{video_data_base64}"}}
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+            model="hosted_vllm/qwen", # pass the vllm model name
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Summarize the following video"
+                        },
+                        {
+                            "type": "video_url",
+                            "video_url": {
+                                "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                            }
+                        }
+                    ]
+                }
+            ],
+            api_base="https://hosted-vllm-api.co")
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: my-model
+      litellm_params:
+        model: hosted_vllm/qwen  # add hosted_vllm/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST http://0.0.0.0:4000/chat/completions \
+-H "Authorization: Bearer sk-1234" \
+-H "Content-Type: application/json" \
+-d '{
+    "model": "my-model",
+    "messages": [
+        {"role": "user", "content": 
+            [
+                {"type": "text", "text": "Summarize the following video"},
+                {"type": "video_url", "video_url": {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}}
+            ]
+        }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
 ## (Deprecated) for `vllm pip package` 
 ### Using - `litellm.completion`
 

@@ -451,6 +451,12 @@ class ProxyInitializationHelpers:
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
     envvar="SSL_CERTFILE_PATH",
 )
+@click.option(
+    "--use_prisma_migrate",
+    is_flag=True,
+    default=False,
+    help="Use prisma migrate instead of prisma db push for database schema updates",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(  # noqa: PLR0915
     host,
@@ -486,6 +492,7 @@ def run_server(  # noqa: PLR0915
     ssl_keyfile_path,
     ssl_certfile_path,
     log_config,
+    use_prisma_migrate,
 ):
     args = locals()
     if local:
@@ -665,7 +672,7 @@ def run_server(  # noqa: PLR0915
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout",
+                "database_connection_pool_timeout",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):
@@ -715,7 +722,10 @@ def run_server(  # noqa: PLR0915
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
-                from litellm.proxy.db.prisma_client import should_update_prisma_schema
+                from litellm.proxy.db.prisma_client import (
+                    PrismaManager,
+                    should_update_prisma_schema,
+                )
 
                 if (
                     should_update_prisma_schema(
@@ -725,26 +735,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    for _ in range(4):
-                        # run prisma db push, before starting server
-                        # Save the current working directory
-                        original_dir = os.getcwd()
-                        # set the working directory to where this script is
-                        abspath = os.path.abspath(__file__)
-                        dname = os.path.dirname(abspath)
-                        os.chdir(dname)
-                        try:
-                            subprocess.run(
-                                ["prisma", "db", "push", "--accept-data-loss"]
-                            )
-                            break  # Exit the loop if the subprocess succeeds
-                        except subprocess.CalledProcessError as e:
-                            import time
-
-                            print(f"Error: {e}")  # noqa
-                            time.sleep(random.randrange(start=1, stop=5))
-                        finally:
-                            os.chdir(original_dir)
+                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

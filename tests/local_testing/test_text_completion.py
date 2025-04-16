@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import traceback
@@ -4285,3 +4286,25 @@ def test_text_completion_with_echo(stream):
             print(chunk)
     else:
         assert isinstance(response, TextCompletionResponse)
+
+
+def test_text_completion_ollama():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_call:
+        try:
+            response = litellm.text_completion(
+                model="ollama/llama3.1:8b",
+                prompt="hello",
+                client=client,
+            )
+            print(response)
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+        print(mock_call.call_args.kwargs)
+        json_data = json.loads(mock_call.call_args.kwargs["data"])
+        assert json_data["prompt"] == "hello"

@@ -6,12 +6,27 @@ import { CountryCell } from "./country_cell";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
+import { Button } from "@tremor/react";
+
+// Helper to get the appropriate logo URL
+const getLogoUrl = (
+  row: LogEntry,
+  provider: string
+) => {
+  // Check if mcp_tool_call_metadata exists and contains mcp_server_logo_url
+  if (row.metadata?.mcp_tool_call_metadata?.mcp_server_logo_url) {
+    return row.metadata.mcp_tool_call_metadata.mcp_server_logo_url;
+  }
+  // Fall back to default provider logo
+  return provider ? getProviderLogoAndName(provider).logo : '';
+};
 
 export type LogEntry = {
   request_id: string;
   api_key: string;
   team_id: string;
   model: string;
+  model_id: string;
   api_base?: string;
   call_type: string;
   spend: number;
@@ -30,6 +45,7 @@ export type LogEntry = {
   requester_ip_address?: string;
   messages: string | any[] | Record<string, any>;
   response: string | any[] | Record<string, any>;
+  onKeyHashClick?: (keyHash: string) => void;
 };
 
 export const columns: ColumnDef<LogEntry>[] = [
@@ -37,18 +53,47 @@ export const columns: ColumnDef<LogEntry>[] = [
     id: "expander",
     header: () => null,
     cell: ({ row }) => {
-      return row.getCanExpand() ? (
-        <button
-          {...{
-            onClick: row.getToggleExpandedHandler(),
-            style: { cursor: "pointer" },
-          }}
-        >
-          {row.getIsExpanded() ? "▼" : "▶"}
-        </button>
-      ) : (
-        "●"
-      );
+      // Convert the cell function to a React component to properly use hooks
+      const ExpanderCell = () => {
+        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
+
+        // Memoize the toggle handler to prevent unnecessary re-renders
+        const toggleHandler = React.useCallback(() => {
+          setLocalExpanded((prev) => !prev);
+          row.getToggleExpandedHandler()();
+        }, [row]);
+
+        return row.getCanExpand() ? (
+          <button
+            onClick={toggleHandler}
+            style={{ cursor: "pointer" }}
+            aria-label={localExpanded ? "Collapse row" : "Expand row"}
+            className="w-6 h-6 flex items-center justify-center focus:outline-none"
+          >
+            <svg
+              className={`w-4 h-4 transform transition-transform duration-75 ${
+                localExpanded ? 'rotate-90' : ''
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+          </button>
+        ) : (
+          <span className="w-6 h-6 flex items-center justify-center">●</span>
+        );
+      };
+
+      // Return the component
+      return <ExpanderCell />;
     },
   },
   {
@@ -57,11 +102,29 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
+    header: "Status",
+    accessorKey: "metadata.status",
+    cell: (info: any) => {
+      const status = info.getValue() || "Success";
+      const isSuccess = status.toLowerCase() !== "failure";
+      
+      return (
+        <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
+          isSuccess 
+            ? 'bg-green-100 text-green-800' 
+            : 'bg-red-100 text-red-800'
+        }`}>
+          {isSuccess ? "Success" : "Failure"}
+        </span>
+      );
+    },
+  },
+  {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[100px] truncate block">
+        <span className="font-mono text-xs max-w-[15ch] truncate block">
           {String(info.getValue() || "")}
         </span>
       </Tooltip>
@@ -82,16 +145,27 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Key Hash",
     accessorKey: "metadata.user_api_key",
     cell: (info: any) => {
       const value = String(info.getValue() || "-");
+      const onKeyHashClick = info.row.original.onKeyHashClick;
+
       return (
         <Tooltip title={value}>
-          <span className="font-mono">{value.slice(0, 5)}...</span>
+          <span 
+            className="font-mono max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
+            onClick={() => onKeyHashClick?.(value)}
+          >
+            {value}
+          </span>
         </Tooltip>
       );
     },
@@ -99,7 +173,11 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Key Name",
     accessorKey: "metadata.user_api_key_alias",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Model",
@@ -112,7 +190,7 @@ export const columns: ColumnDef<LogEntry>[] = [
         <div className="flex items-center space-x-2">
           {provider && (
             <img
-              src={getProviderLogoAndName(provider).logo}
+              src={getLogoUrl(row, provider)}
               alt=""
               className="w-4 h-4"
               onError={(e) => {
@@ -122,7 +200,7 @@ export const columns: ColumnDef<LogEntry>[] = [
             />
           )}
           <Tooltip title={modelName}>
-            <span className="max-w-[100px] truncate">
+            <span className="max-w-[15ch] truncate block">
               {modelName}
             </span>
           </Tooltip>
@@ -149,12 +227,20 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Internal User",
     accessorKey: "user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "End User",
     accessorKey: "end_user",
-    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "-")}>
+        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
+      </Tooltip>
+    ),
   },
 
   {
@@ -202,4 +288,52 @@ const formatMessage = (message: any): string => {
     return JSON.stringify(message);
   }
   return String(message);
+};
+
+// Add this new component for displaying request/response with copy buttons
+export const RequestResponsePanel = ({ request, response }: { request: any; response: any }) => {
+  const requestStr = typeof request === 'object' ? JSON.stringify(request, null, 2) : String(request || '{}');
+  const responseStr = typeof response === 'object' ? JSON.stringify(response, null, 2) : String(response || '{}');
+  
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+  
+  return (
+    <div className="grid grid-cols-2 gap-4 mt-4">
+      <div className="rounded-lg border border-gray-200 bg-gray-50">
+        <div className="flex justify-between items-center p-3 border-b border-gray-200">
+          <h3 className="text-sm font-medium">Request</h3>
+          <button 
+            onClick={() => copyToClipboard(requestStr)}
+            className="p-1 hover:bg-gray-200 rounded"
+            title="Copy request"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
+      </div>
+      
+      <div className="rounded-lg border border-gray-200 bg-gray-50">
+        <div className="flex justify-between items-center p-3 border-b border-gray-200">
+          <h3 className="text-sm font-medium">Response</h3>
+          <button 
+            onClick={() => copyToClipboard(responseStr)}
+            className="p-1 hover:bg-gray-200 rounded"
+            title="Copy response"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{responseStr}</pre>
+      </div>
+    </div>
+  );
 };

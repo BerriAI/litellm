@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
     custom_prompt,
@@ -86,9 +89,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -302,6 +305,8 @@ class OllamaConfig(BaseConfig):
         custom_prompt_dict = (
             litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
         )
+
+        text_completion_request = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
@@ -311,7 +316,9 @@ class OllamaConfig(BaseConfig):
                 final_prompt_value=model_prompt_details["final_prompt_value"],
                 messages=messages,
             )
-        else:
+        elif text_completion_request:  # handle `/completions` requests
+            ollama_prompt = get_str_from_messages(messages=messages)
+        else:  # handle `/chat/completions` requests
             modified_prompt = ollama_pt(model=model, messages=messages)
             if isinstance(modified_prompt, dict):
                 ollama_prompt, images = (
@@ -346,6 +353,7 @@ class OllamaConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -353,9 +361,11 @@ class OllamaConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -365,6 +375,8 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
+        if api_base is None:
+            api_base = "http://localhost:11434"
         if api_base.endswith("/api/generate"):
             url = api_base
         else:

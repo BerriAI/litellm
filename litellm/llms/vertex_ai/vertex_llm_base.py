@@ -6,12 +6,12 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
 
@@ -21,12 +21,16 @@ else:
     GoogleCredentialsObject = Any
 
 
-class VertexBase(BaseLLM):
+class VertexBase:
     def __init__(self) -> None:
         super().__init__()
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self._credentials: Optional[GoogleCredentialsObject] = None
+        self._credentials_project_mapping: Dict[
+            Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
+            GoogleCredentialsObject,
+        ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
@@ -34,7 +38,7 @@ class VertexBase(BaseLLM):
         return vertex_region or "us-central1"
 
     def load_auth(
-        self, credentials: Optional[str], project_id: Optional[str]
+        self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
         from google.auth import identity_pool
@@ -42,29 +46,36 @@ class VertexBase(BaseLLM):
             Request,  # type: ignore[import-untyped]
         )
 
-        if credentials is not None and isinstance(credentials, str):
+        if credentials is not None:
             import google.oauth2.service_account
 
-            verbose_logger.debug(
-                "Vertex: Loading vertex credentials from %s", credentials
-            )
-            verbose_logger.debug(
-                "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
-                credentials,
-                os.path.exists(credentials),
-                os.getcwd(),
-            )
+            if isinstance(credentials, str):
+                verbose_logger.debug(
+                    "Vertex: Loading vertex credentials from %s", credentials
+                )
+                verbose_logger.debug(
+                    "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
+                    credentials,
+                    os.path.exists(credentials),
+                    os.getcwd(),
+                )
 
-            try:
-                if os.path.exists(credentials):
-                    json_obj = json.load(open(credentials))
-                else:
-                    json_obj = json.loads(credentials)
-            except Exception:
-                raise Exception(
-                    "Unable to load vertex credentials from environment. Got={}".format(
-                        credentials
+                try:
+                    if os.path.exists(credentials):
+                        json_obj = json.load(open(credentials))
+                    else:
+                        json_obj = json.loads(credentials)
+                except Exception:
+                    raise Exception(
+                        "Unable to load vertex credentials from environment. Got={}".format(
+                            credentials
+                        )
                     )
+            elif isinstance(credentials, dict):
+                json_obj = credentials
+            else:
+                raise ValueError(
+                    "Invalid credentials type: {}".format(type(credentials))
                 )
 
             # Check if the JSON object contains Workload Identity Federation configuration
@@ -109,7 +120,7 @@ class VertexBase(BaseLLM):
 
     def _ensure_access_token(
         self,
-        credentials: Optional[str],
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
@@ -120,32 +131,11 @@ class VertexBase(BaseLLM):
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
-
-        if not self._credentials:
-            self._credentials, cred_project_id = self.load_auth(
-                credentials=credentials, project_id=project_id
-            )
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
         else:
-            if self._credentials.expired or not self._credentials.token:
-                self.refresh_auth(self._credentials)
-
-            if not self.project_id:
-                self.project_id = self._credentials.quota_project_id
-
-        if not self.project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
-            raise RuntimeError("Could not resolve API token from the environment")
-
-        return self._credentials.token, project_id or self.project_id
+            return self.get_access_token(
+                credentials=credentials,
+                project_id=project_id,
+            )
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
@@ -202,7 +192,7 @@ class VertexBase(BaseLLM):
         gemini_api_key: Optional[str],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
@@ -251,9 +241,104 @@ class VertexBase(BaseLLM):
             url=url,
         )
 
+    def get_access_token(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+    ) -> Tuple[str, str]:
+        """
+        Get access token and project id
+
+        1. Check if credentials are already in self._credentials_project_mapping
+        2. If not, load credentials and add to self._credentials_project_mapping
+        3. Check if loaded credentials have expired
+        4. If expired, refresh credentials
+        5. Return access token and project id
+        """
+
+        # Convert dict credentials to string for caching
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        credential_cache_key = (cache_credentials, project_id)
+        _credentials: Optional[GoogleCredentialsObject] = None
+
+        verbose_logger.debug(
+            f"Checking cached credentials for project_id: {project_id}"
+        )
+
+        if credential_cache_key in self._credentials_project_mapping:
+            verbose_logger.debug(
+                f"Cached credentials found for project_id: {project_id}."
+            )
+            _credentials = self._credentials_project_mapping[credential_cache_key]
+            verbose_logger.debug("Using cached credentials")
+            credential_project_id = _credentials.quota_project_id or getattr(
+                _credentials, "project_id", None
+            )
+
+        else:
+            verbose_logger.debug(
+                f"Credential cache key not found for project_id: {project_id}, loading new credentials"
+            )
+
+            try:
+                _credentials, credential_project_id = self.load_auth(
+                    credentials=credentials, project_id=project_id
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+                )
+                raise e
+
+            if _credentials is None:
+                raise ValueError(
+                    "Could not resolve credentials - either dynamically or from environment, for project_id: {}".format(
+                        project_id
+                    )
+                )
+
+            self._credentials_project_mapping[credential_cache_key] = _credentials
+
+        ## VALIDATE CREDENTIALS
+        verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
+        if (
+            project_id is not None
+            and credential_project_id
+            and credential_project_id != project_id
+        ):
+            raise ValueError(
+                "Could not resolve project_id. Credential project_id: {} does not match requested project_id: {}".format(
+                    _credentials.quota_project_id, project_id
+                )
+            )
+        elif (
+            project_id is None
+            and credential_project_id is not None
+            and isinstance(credential_project_id, str)
+        ):
+            project_id = credential_project_id
+
+        if _credentials.expired:
+            self.refresh_auth(_credentials)
+
+        ## VALIDATION STEP
+        if _credentials.token is None or not isinstance(_credentials.token, str):
+            raise ValueError(
+                "Could not resolve credentials token. Got None or non-string token - {}".format(
+                    _credentials.token
+                )
+            )
+
+        if project_id is None:
+            raise ValueError("Could not resolve project_id")
+
+        return _credentials.token, project_id
+
     async def _ensure_access_token_async(
         self,
-        credentials: Optional[str],
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
@@ -264,38 +349,14 @@ class VertexBase(BaseLLM):
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
-
-        if not self._credentials:
-            try:
-                self._credentials, cred_project_id = await asyncify(self.load_auth)(
-                    credentials=credentials, project_id=project_id
-                )
-            except Exception:
-                verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
-                )
-                raise
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
         else:
-            if self._credentials.expired or not self._credentials.token:
-                await asyncify(self.refresh_auth)(self._credentials)
-
-            if not self.project_id:
-                self.project_id = self._credentials.quota_project_id
-
-        if not self.project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
-            raise RuntimeError("Could not resolve API token from the environment")
-
-        return self._credentials.token, project_id or self.project_id
+            try:
+                return await asyncify(self.get_access_token)(
+                    credentials=credentials,
+                    project_id=project_id,
+                )
+            except Exception as e:
+                raise e
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]

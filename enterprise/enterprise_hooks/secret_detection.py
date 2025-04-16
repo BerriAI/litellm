@@ -444,9 +444,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
         detected_secrets = []
         for file in secrets.files:
-
             for found_secret in secrets[file]:
-
                 if found_secret.secret_value is None:
                     continue
                 detected_secrets.append(
@@ -471,14 +469,12 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         data: dict,
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
     ):
-
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
         if "messages" in data and isinstance(data["messages"], list):
             for message in data["messages"]:
                 if "content" in message and isinstance(message["content"], str):
-
                     detected_secrets = self.scan_message_for_secrets(message["content"])
 
                     for secret in detected_secrets:

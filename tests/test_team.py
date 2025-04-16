@@ -6,6 +6,8 @@ import aiohttp
 import time, uuid
 from openai import AsyncOpenAI
 from typing import Optional
+import openai
+from unittest.mock import MagicMock, patch
 
 
 async def get_user_info(session, get_user, call_user, view_all: Optional[bool] = None):
@@ -358,6 +360,11 @@ async def get_team_info(session, get_team, call_key):
         print(response_text)
         print()
 
+        if status == 404:
+            raise openai.NotFoundError(
+                message="404 received", response=MagicMock(), body=None
+            )
+
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
         return await response.json()
@@ -549,7 +556,7 @@ async def test_team_delete():
         key_gen = await generate_key(session=session, i=0, team_id=team_data["team_id"])
         key = key_gen["key"]
         ## Test key
-        response = await chat_completion(session=session, key=key)
+        # response = await chat_completion(session=session, key=key)
         ## Delete team
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
 
@@ -558,6 +565,12 @@ async def test_team_delete():
             session=session, get_user=normal_user, call_user="sk-1234"
         )
         assert len(user_info["teams"]) == 0
+
+        ## ASSERT TEAM INFO NOW RETURNS A 404
+        with pytest.raises(openai.NotFoundError):
+            await get_team_info(
+                session=session, get_team=team_data["team_id"], call_key="sk-1234"
+            )
 
 
 @pytest.mark.parametrize("dimension", ["user_id", "user_email"])

@@ -135,9 +135,9 @@ def _get_turn_off_message_logging_from_dynamic_params(
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-        model_call_details.get("standard_callback_dynamic_params", None)
-    )
+    standard_callback_dynamic_params: Optional[
+        StandardCallbackDynamicParams
+    ] = model_call_details.get("standard_callback_dynamic_params", None)
     if standard_callback_dynamic_params:
         _turn_off_message_logging = standard_callback_dynamic_params.get(
             "turn_off_message_logging"

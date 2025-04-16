@@ -75,7 +75,7 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity"]
+        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy"]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -107,13 +107,16 @@ def rerank(  # noqa: PLR0915
             k for k, v in unique_version_params.items() if v is not None
         ]
 
-        model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=optional_params.api_base,
-                api_key=optional_params.api_key,
-            )
+        (
+            model,
+            _custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
         )
 
         rerank_provider_config: BaseRerankConfig = (
@@ -162,7 +165,7 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == "cohere":
+        if _custom_llm_provider == "cohere" or _custom_llm_provider == "litellm_proxy":
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -187,7 +190,7 @@ def rerank(  # noqa: PLR0915
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
-                api_key=dynamic_api_key or optional_params.api_key,
+                api_key=api_key,
                 api_base=api_base,
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
@@ -272,7 +275,6 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == "jina_ai":
-
             if dynamic_api_key is None:
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"

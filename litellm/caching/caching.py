@@ -13,26 +13,15 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Union
 
-from openai.types.audio.transcription_create_params import TranscriptionCreateParams
-from openai.types.chat.completion_create_params import (
-    CompletionCreateParamsNonStreaming,
-    CompletionCreateParamsStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsNonStreaming as TextCompletionCreateParamsNonStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsStreaming as TextCompletionCreateParamsStreaming,
-)
-from openai.types.embedding_create_params import EmbeddingCreateParams
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.rerank import RerankRequest
 from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
@@ -100,16 +89,16 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
-        redis_semantic_cache_use_async=False,
-        redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir=None,
+        disk_cache_dir: Optional[str] = None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
-        qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         **kwargs,
     ):
         """
@@ -182,8 +171,8 @@ class Cache:
                 port=port,
                 password=password,
                 similarity_threshold=similarity_threshold,
-                use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -257,7 +246,7 @@ class Cache:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs = self._get_relevant_args_to_use_for_cache_key()
+        combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
@@ -364,76 +353,6 @@ class Cache:
             if "litellm_params" in kwargs:
                 kwargs["litellm_params"]["preset_cache_key"] = preset_cache_key
 
-    def _get_relevant_args_to_use_for_cache_key(self) -> Set[str]:
-        """
-        Gets the supported kwargs for each call type and combines them
-        """
-        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs()
-        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs()
-        embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
-        transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
-        rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
-        exclude_kwargs = self._get_kwargs_to_exclude_from_cache_key()
-
-        combined_kwargs = chat_completion_kwargs.union(
-            text_completion_kwargs,
-            embedding_kwargs,
-            transcription_kwargs,
-            rerank_kwargs,
-        )
-        combined_kwargs = combined_kwargs.difference(exclude_kwargs)
-        return combined_kwargs
-
-    def _get_litellm_supported_chat_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported chat completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_chat_completion_kwargs = set(
-            CompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(CompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_chat_completion_kwargs
-
-    def _get_litellm_supported_text_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported text completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_text_completion_kwargs = set(
-            TextCompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(TextCompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_text_completion_kwargs
-
-    def _get_litellm_supported_rerank_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported rerank kwargs
-        """
-        return set(RerankRequest.model_fields.keys())
-
-    def _get_litellm_supported_embedding_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported embedding kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(EmbeddingCreateParams.__annotations__.keys())
-
-    def _get_litellm_supported_transcription_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported transcription kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(TranscriptionCreateParams.__annotations__.keys())
-
-    def _get_kwargs_to_exclude_from_cache_key(self) -> Set[str]:
-        """
-        Get the kwargs to exclude from the cache key
-        """
-        return set(["metadata"])
-
     @staticmethod
     def _get_hashed_cache_key(cache_key: str) -> str:
         """
@@ -488,7 +407,7 @@ class Cache:
                     }
                 ]
             }
-            time.sleep(0.02)
+            time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,

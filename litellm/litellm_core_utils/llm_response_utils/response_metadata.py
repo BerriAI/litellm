@@ -36,14 +36,20 @@ class ResponseMetadata:
         self, logging_obj: LiteLLMLoggingObject, model: Optional[str], kwargs: dict
     ) -> None:
         """Set hidden parameters on the response"""
+
+        ## ADD OTHER HIDDEN PARAMS
+        model_id = kwargs.get("model_info", {}).get("id", None)
         new_params = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-            "model_id": kwargs.get("model_info", {}).get("id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
-            "response_cost": logging_obj._response_cost_calculator(result=self.result),
+            "model_id": model_id,
+            "response_cost": logging_obj._response_cost_calculator(
+                result=self.result, litellm_model_name=model, router_model_id=model_id
+            ),
             "additional_headers": process_response_headers(
                 self._get_value_from_hidden_params("additional_headers") or {}
             ),
+            "litellm_model_name": model,
         }
         self._update_hidden_params(new_params)
 

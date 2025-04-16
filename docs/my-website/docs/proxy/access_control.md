@@ -10,17 +10,13 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
 
 ## Roles
 
-**Admin Roles**
-  - `proxy_admin`: admin over the platform
-  - `proxy_admin_viewer`: can login, view all keys, view all spend. **Cannot** create keys/delete keys/add new users
-
-**Organization Roles**
-  - `org_admin`: admin over the organization. Can create teams and users within their organization
-
-**Internal User Roles**
-  - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
-  - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
-
+| Role Type | Role Name | Permissions |
+|-----------|-----------|-------------|
+| **Admin** | `proxy_admin` | Admin over the platform |
+| | `proxy_admin_viewer` | Can login, view all keys, view all spend. **Cannot** create keys/delete keys/add new users |
+| **Organization** | `org_admin` | Admin over the organization. Can create teams and users within their organization |
+| **Internal User** | `internal_user` | Can login, view/create/delete their own keys, view their spend. **Cannot** add new users |
+| | `internal_user_viewer` | Can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users |
 
 ## Onboarding Organizations 
 

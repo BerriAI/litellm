@@ -1,8 +1,8 @@
 from typing import Literal, Optional
 
 import litellm
-from litellm import LlmProviders
 from litellm.exceptions import BadRequestError
+from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
 def get_supported_openai_params(  # noqa: PLR0915
@@ -29,6 +29,20 @@ def get_supported_openai_params(  # noqa: PLR0915
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
         except BadRequestError:
             return None
+
+    if custom_llm_provider in LlmProvidersSet:
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+    elif custom_llm_provider.split("/")[0] in LlmProvidersSet:
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider.split("/")[0])
+        )
+    else:
+        provider_config = None
+
+    if provider_config and request_type == "chat_completion":
+        return provider_config.get_supported_openai_params(model=model)
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
@@ -79,6 +93,22 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "maritalk":
         return litellm.MaritalkConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openai":
+        if request_type == "transcription":
+            transcription_provider_config = (
+                litellm.ProviderConfigManager.get_provider_audio_transcription_config(
+                    model=model, provider=LlmProviders.OPENAI
+                )
+            )
+            if isinstance(
+                transcription_provider_config, litellm.OpenAIGPTAudioTranscriptionConfig
+            ):
+                return transcription_provider_config.get_supported_openai_params(
+                    model=model
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported provider config: {transcription_provider_config} for model: {model}"
+                )
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
@@ -104,7 +134,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
-        return litellm.HuggingfaceConfig().get_supported_openai_params(model=model)
+        return litellm.HuggingFaceChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "jina_ai":
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
@@ -210,7 +240,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders.CUSTOM
             )
-            return provider_config.get_supported_openai_params(model=model)
+            if provider_config:
+                return provider_config.get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return None
         elif request_type == "transcription":

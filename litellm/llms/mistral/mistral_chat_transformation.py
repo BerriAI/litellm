@@ -80,6 +80,7 @@ class MistralConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "seed",
@@ -104,6 +105,10 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if (
+                param == "max_completion_tokens"
+            ):  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value

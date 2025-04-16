@@ -119,7 +119,7 @@ async def test_router_get_available_deployments(async_test):
     if async_test is True:
         await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
         deployment = await router.async_get_available_deployment(
-            model=model_group, messages=None
+            model=model_group, messages=None, request_kwargs={}
         )
     else:
         router.cache.set_cache(key=cache_key, value=request_count_dict)

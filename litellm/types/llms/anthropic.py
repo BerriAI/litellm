@@ -52,11 +52,12 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolUseParam(TypedDict):
+class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
     input: dict
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
@@ -359,3 +360,8 @@ ANTHROPIC_API_HEADERS = {
 ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
+
+
+class AnthropicThinkingParam(TypedDict, total=False):
+    type: Literal["enabled"]
+    budget_tokens: int

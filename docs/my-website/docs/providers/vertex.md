@@ -347,7 +347,7 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding**
+### **Grounding - Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -358,7 +358,7 @@ See the grounding metadata with `response_obj._hidden_params["vertex_ai_groundin
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python 
+```python showLineNumbers
 from litellm import completion 
 
 ## SETUP ENVIRONMENT
@@ -377,14 +377,36 @@ print(resp)
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-```bash
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"googleSearchRetrieval": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "gemini-pro",
     "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
+      {"role": "user", "content": "Who won the world cup?"}
     ],
    "tools": [
         {
@@ -394,9 +416,81 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 
 ```
+</TabItem>
+</Tabs>
 
 </TabItem>
 </Tabs>
+
+You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"enterpriseWebSearch": {}}] # 👈 ADD GOOGLE ENTERPRISE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"enterpriseWebSearch": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-pro",
+    "messages": [
+      {"role": "user", "content": "Who won the world cup?"}
+    ],
+   "tools": [
+        {
+            "enterpriseWebSearch": {} 
+        }
+    ]
+  }'
+
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
@@ -404,14 +498,16 @@ curl http://localhost:4000/v1/chat/completions \
 If this was your initial VertexAI Grounding code,
 
 ```python
-import vertexai 
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Tool, grounding
+
 
 vertexai.init(project=project_id, location="us-central1")
 
 model = GenerativeModel("gemini-1.5-flash-001")
 
 # Use Google Search for grounding
-tool = Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval(disable_attributon=False))
+tool = Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())
 
 prompt = "When is the next total solar eclipse in US?"
 response = model.generate_content(
@@ -428,7 +524,7 @@ print(response)
 then, this is what it looks like now
 
 ```python
-from litellm import completion 
+from litellm import completion
 
 
 # !gcloud auth application-default login - run this to add vertex credentials to your env
@@ -852,6 +948,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
+| claude-3-7-sonnet@20250219   | `completion('vertex_ai/claude-3-7-sonnet@20250219', messages)` |
 
 ### Usage
 
@@ -924,6 +1021,119 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 </Tabs>
+
+
+
+### Usage - `thinking` / `reasoning_content`
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="vertex_ai/claude-3-7-sonnet-20250219",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-7-sonnet-20250219
+  litellm_params:
+    model: vertex_ai/claude-3-7-sonnet-20250219
+    vertex_ai_project: "my-test-project"
+    vertex_ai_location: "us-west-1"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='claude-3-7-sonnet-20250219',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                provider_specific_fields={
+                    'citations': None,
+                    'thinking_blocks': [
+                        {
+                            'type': 'thinking',
+                            'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                            'signature': 'EuYBCkQYAiJAy6...'
+                        }
+                    ]
+                }
+            ),
+            thinking_blocks=[
+                {
+                    'type': 'thinking',
+                    'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
+                    'signature': 'EuYBCkQYAiJAy6AGB...'
+                }
+            ],
+            reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
 
 
 ## Llama 3 API
@@ -1253,6 +1463,103 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+## Gemini Pro
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+
+## Fine-tuned Models
+
+You can call fine-tuned Vertex AI Gemini models through LiteLLM
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/gemini/{MODEL_ID}` |
+| Vertex Documentation | [Vertex AI - Fine-tuned Gemini Models](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini-use-supervised-tuning#test_the_tuned_model_with_a_prompt)|
+| Supported Operations | `/chat/completions`, `/completions`, `/embeddings`, `/images` |
+
+To use a model that follows the `/gemini` request/response format, simply set the model parameter as 
+
+```python title="Model parameter for calling fine-tuned gemini models"
+model="vertex_ai/gemini/<your-finetuned-model>"
+```
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="Example"
+import litellm
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = litellm.completion(
+  model="vertex_ai/gemini/<your-finetuned-model>",  # e.g. vertex_ai/gemini/4965075652664360960
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Add Vertex Credentials to your env 
+
+```bash title="Authenticate to Vertex AI"
+!gcloud auth application-default login
+```
+
+2. Setup config.yaml 
+
+```yaml showLineNumbers title="Add to litellm config"
+- model_name: finetuned-gemini
+  litellm_params:
+    model: vertex_ai/gemini/<ENDPOINT_ID>
+    vertex_project: <PROJECT_ID>
+    vertex_location: <LOCATION>
+```
+
+3. Test it! 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers title="Example request"
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="finetuned-gemini",
+    messages=[
+        {"role": "user", "content": "hi"}
+    ]
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="Example request"
+curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: <LITELLM_KEY>' \
+--data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
+```
+
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
+
+
 ## Model Garden
 
 :::tip
@@ -1360,67 +1667,6 @@ response = completion(
 
 </TabItem>
 
-</Tabs>
-
-
-## Gemini Pro
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
-
-## Fine-tuned Models
-
-Fine tuned models on vertex have a numerical model/endpoint id. 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/<your-finetuned-model>",  # e.g. vertex_ai/4965075652664360960
-  messages=[{ "content": "Hello, how are you?","role": "user"}],
-  base_model="vertex_ai/gemini-1.5-pro" # the base model - used for routing
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Add Vertex Credentials to your env 
-
-```bash
-!gcloud auth application-default login
-```
-
-2. Setup config.yaml 
-
-```yaml
-- model_name: finetuned-gemini
-  litellm_params:
-    model: vertex_ai/<ENDPOINT_ID>
-    vertex_project: <PROJECT_ID>
-    vertex_location: <LOCATION>
-  model_info:
-    base_model: vertex_ai/gemini-1.5-pro # IMPORTANT
-```
-
-3. Test it! 
-
-```bash
-curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: <LITELLM_KEY>' \
---data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
-```
-
-</TabItem>
 </Tabs>
 
 
@@ -1568,15 +1814,25 @@ assert isinstance(
 ```
 
 
-## Usage - PDF / Videos / etc. Files 
+## Usage - PDF / Videos / Audio etc. Files 
 
 Pass any file supported by Vertex AI, through LiteLLM. 
 
+LiteLLM Supports the following file types passed in url. 
+
+Using `file` message type for VertexAI is live from v1.65.1+ 
+
+```
+Files with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
+Files with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
+Base64 Encoded Local Files
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-### **Using `gs://`**
+### **Using `gs://` or any URL**
 ```python
 from litellm import completion
 
@@ -1588,8 +1844,11 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                        "format": "application/pdf" # OPTIONAL - specify mime-type
+                    }
                 },
             ],
         }
@@ -1623,8 +1882,16 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }  
+                },
+                {
+                    "type": "audio_input",
+                    "audio_input {
+                        "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
+                    }  
                 },
             ],
         }
@@ -1670,8 +1937,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_id": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                    "format": "application/pdf" # OPTIONAL
+                }
             }
           }
         ]
@@ -1698,11 +1968,18 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
-            }
-          }
-        ]
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            },
+            {
+                "type": "audio_input",
+                "audio_input {
+                    "audio_input": f"data:audio/mp3;base64,{encoded_file}", # 👈 AUDIO File ('file' message works as too)
+                }  
+            },
+    ]
       }
     ],
     "max_tokens": 300
@@ -1711,6 +1988,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```
 </TabItem>
 </Tabs>
+
 
 ## Chat Models
 | Model Name       | Function Call                        |
@@ -1920,7 +2198,12 @@ print(response)
 
 ## **Multi-Modal Embeddings**
 
-Usage
+
+Known Limitations:
+- Only supports 1 image / video / image per request
+- Only supports GCS or base64 encoded images / videos
+
+### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -2130,6 +2413,115 @@ embeddings = model.get_embeddings(
 )
 print(f"Image Embedding: {embeddings.image_embedding}")
 print(f"Text Embedding: {embeddings.text_embedding}")
+```
+
+</TabItem>
+</Tabs>
+
+
+### Text + Image + Video Embeddings
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Text + Image 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"] # will be sent as a gcs image
+)
+```
+
+Text + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+Image + Video 
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"] # will be sent as a gcs image
+)
+```
+
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
+
+
+Text + Image 
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
+)
+
+print(response)
+```
+
+Text + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["hey", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
+```
+
+Image + Video 
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = ["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png", "gs://my-bucket/embeddings/supermarket-video.mp4"],
+)
+
+print(response)
 ```
 
 </TabItem>
