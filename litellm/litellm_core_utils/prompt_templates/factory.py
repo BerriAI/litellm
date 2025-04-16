@@ -15,12 +15,6 @@ from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
-from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
-from litellm.types.llms.bedrock import (
-    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
-)
-from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
-from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
@@ -2250,6 +2244,7 @@ from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
+from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
