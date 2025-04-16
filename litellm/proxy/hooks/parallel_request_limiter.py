@@ -43,6 +43,12 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
+        BaseRoutingStrategy.__init__(
+            self,
+            dual_cache=internal_usage_cache.dual_cache,
+            should_batch_redis_writes=True,
+            default_sync_interval=0.1,
+        )
 
     def print_verbose(self, print_statement):
         try:
