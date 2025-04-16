@@ -5,7 +5,7 @@ Base class across routing strategies to abstract commmon functions like batch in
 import asyncio
 import threading
 from abc import ABC
-from typing import List, Optional, Set, Union
+from typing import List, Optional, Set, Tuple, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -52,6 +52,15 @@ class BaseRoutingStrategy(ABC):
                 await self._sync_task
             except asyncio.CancelledError:
                 pass
+
+    async def _increment_value_list_in_current_window(
+        self, increment_list: List[Tuple[str, int]], ttl: int
+    ):
+        """
+        Increment a list of values in the current window
+        """
+        for key, value in increment_list:
+            await self._increment_value_in_current_window(key=key, value=value, ttl=ttl)
 
     async def _increment_value_in_current_window(
         self, key: str, value: Union[int, float], ttl: int
