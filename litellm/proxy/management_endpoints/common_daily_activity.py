@@ -1,8 +1,7 @@
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
