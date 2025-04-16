@@ -1146,6 +1146,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
