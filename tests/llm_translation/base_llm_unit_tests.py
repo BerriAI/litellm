@@ -1058,6 +1058,7 @@ class BaseLLMChatTest(ABC):
                     "description": "Get the weather in a city",
                     "parameters": {
                         "$id": "https://some/internal/name",
+                        "$schema": "https://json-schema.org/draft-07/schema",
                         "type": "object",
                         "properties": {
                             "city": {
