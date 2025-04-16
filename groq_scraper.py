@@ -28,44 +28,49 @@ def _extract_col_names(table: BeautifulSoup):
     return [col_name_soup.text.lower().strip() for col_name_soup in col_names_soup]
 
 
-def _extract_table_data(table: BeautifulSoup):
+def _extract_table_data(
+        table: BeautifulSoup,
+        desired_col_names: list[tuple[str, str]],
+        col_map: dict={}
+    ):
     col_names = _extract_col_names(table)
 
-    col_map = {
-        "try_now_button": 4
-    }
     for i, col in enumerate(col_names):
-        if "model" in col:
-            col_map["name"] = i
-        elif "input token price" in col:
-            col_map["input_cost_per_token"] = i
-        elif "output token price" in col:
-            col_map["output_cost_per_token"] = i
+        for col_desc, litellm_name in desired_col_names:
+            if col_desc in col:
+                col_map[litellm_name] = i
 
-    if "name" not in col_map:
-        raise ValueError("Model-name column not found")
-
+    if "name" not in col_map and "try_now_button" not in col_map:
+        raise ValueError("Neither model-name nor try-now-button column found")
+    
     rows = table.find_all('tr')[1:]
-    model_prices = {}
+
+    model_map = {}
     for row in rows:
-        row_values_soup = row.find_all('td')
-        row_values = [ele for ele in row_values_soup]
+        row_values = row.find_all('td')
 
-        # model_name = _convert_name(row_values[col_map["name"]])
-        model_groq_link = row_values[col_map["try_now_button"]].find('a').get('href')
-        model_name = model_groq_link.split("?model=")[-1]
-        model_prices[model_name] = {}
+        if "try_now_button" in col_map:
+            model_groq_link = row_values[col_map["try_now_button"]].find('a').get('href')
+            model_name = model_groq_link.split("?model=")[-1]
+        else:
+            model_name = row_values[col_map["name"]].text.lower().strip()
 
+        model_map[model_name] = {}
+        
         for col_name, col_idx in col_map.items():
-            if col_name == "name":
+            if col_name == "try_now_button" or col_name == "name":
                 continue
             text_ = row_values[col_idx].text.strip()
             if "cost" in col_name:
-                model_prices[model_name][col_name] = _convert_price(text_)
+                model_map[model_name][col_name] = _convert_price(text_)
+            elif "supports" in col_name:
+                if "yes" not in text_.lower() and "no" not in text_.lower():
+                    raise ValueError(f"Invalid value for {col_name}: {text_}")
+                model_map[model_name][col_name] = text_ == "Yes"
             else:
-                model_prices[model_name][col_name] = text_
+                model_map[model_name][col_name] = text_
 
-    return model_prices 
+    return model_map 
 
 
 def scrape_groq_pricing():
@@ -87,8 +92,43 @@ def scrape_groq_pricing():
     # Get table for chat models:
     chat_models_table = _get_table_from_heading_text("Large Language Models (LLMs)", soup)
 
-    return _extract_table_data(chat_models_table)
+    desired_col_names = [
+        ("input token price", "input_cost_per_token"),
+        ("output token price", "output_cost_per_token"),
+    ]
+
+    return _extract_table_data(chat_models_table, desired_col_names, {"try_now_button": 4})
+
+
+def scrape_groq_capabilities():
+    curl_command = [
+        'curl',
+        'https://console.groq.com/docs/tool-use',
+        '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        '-H', 'Accept-Language: en-US,en;q=0.9',
+        '-H', 'Connection: keep-alive',
+        '-H', 'Upgrade-Insecure-Requests: 1',
+        '-H', 'Cache-Control: max-age=0',
+        '--compressed'
+    ]
+
+    result = subprocess.run(curl_command, capture_output=True, text=True)
+    soup = BeautifulSoup(result.stdout, 'html.parser')
+
+    capabilities_table = soup.find('table')
+
+    desired_col_names = [
+        ("model id", "name"),
+        ("tool use support?", "supports_function_calling"),
+        ("json mode support?", "supports_response_schema"),
+    ]
+
+    return _extract_table_data(capabilities_table, desired_col_names)
 
 
 if __name__ == "__main__":
     scrape_groq_pricing()
+    print("-" * 100)
+    out = scrape_groq_capabilities()
+    print(out)
