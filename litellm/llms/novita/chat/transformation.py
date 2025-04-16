@@ -19,6 +19,7 @@ class NovitaConfig(OpenAIGPTConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -26,10 +27,7 @@ class NovitaConfig(OpenAIGPTConfig):
             raise ValueError(
                 "Missing Novita AI API Key - A call is being made to novita but no key is set either in the environment variables or via params"
             )
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-Novita-Source": "litellm",
-        }
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+        headers["X-Novita-Source"] = "litellm"
         return headers
