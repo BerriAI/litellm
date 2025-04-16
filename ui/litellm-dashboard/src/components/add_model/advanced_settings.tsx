@@ -170,12 +170,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               </div>
             )}
 
-            <CacheControlSettings
-              form={form}
-              showCacheControl={showCacheControl}
-              onCacheControlChange={handleCacheControlChange}
-            />
-
             <Form.Item
               label="Use in pass through routes"
               name="use_in_pass_through"
@@ -195,6 +189,12 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 className="bg-gray-600" 
               />
             </Form.Item>
+
+            <CacheControlSettings
+              form={form}
+              showCacheControl={showCacheControl}
+              onCacheControlChange={handleCacheControlChange}
+            />
             <Form.Item
               label="LiteLLM Params"
               name="litellm_extra_params"
