@@ -22,7 +22,7 @@ class BaseRoutingStrategy(ABC):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
-        self._sync_task = None
+        self._sync_task: Optional[asyncio.Task[None]] = None
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
