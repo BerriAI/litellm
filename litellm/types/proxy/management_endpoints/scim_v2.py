@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
@@ -72,7 +72,7 @@ class SCIMListResponse(BaseModel):
 
 # SCIM PATCH Operation Models
 class SCIMPatchOperation(BaseModel):
-    op: str  # add, remove, replace
+    op: Literal["add", "remove", "replace"]
     path: Optional[str] = None
     value: Optional[Any] = None
 

@@ -451,6 +451,47 @@ async def delete_user(
         )
 
 
+@scim_router.patch(
+    "/Users/{user_id}",
+    response_model=SCIMUser,
+    status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
+)
+async def patch_user(
+    user_id: str = Path(..., title="User ID"),
+    patch_ops: SCIMPatchOp = Body(...),
+):
+    """
+    Patch a user according to SCIM v2 protocol
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No database connected"})
+
+    verbose_proxy_logger.debug("SCIM PATCH USER request: %s", patch_ops)
+
+    try:
+        # Check if user exists
+        existing_user = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+
+        if not existing_user:
+            raise HTTPException(
+                status_code=404, detail={"error": f"User not found with ID: {user_id}"}
+            )
+
+        return None
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail={"error": f"Error patching user: {str(e)}"}
+        )
+
+
 # Group Endpoints
 @scim_router.get(
     "/Groups",
@@ -815,4 +856,44 @@ async def delete_group(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail={"error": f"Error deleting group: {str(e)}"}
+        )
+
+
+@scim_router.patch(
+    "/Groups/{group_id}",
+    response_model=SCIMGroup,
+    status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
+)
+async def patch_group(
+    group_id: str = Path(..., title="Group ID"),
+    patch_ops: SCIMPatchOp = Body(...),
+):
+    """
+    Patch a group according to SCIM v2 protocol
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No database connected"})
+
+    verbose_proxy_logger.debug("SCIM PATCH GROUP request: %s", patch_ops)
+
+    try:
+        # Check if group exists
+        existing_team = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": group_id}
+        )
+
+        if not existing_team:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Group not found with ID: {group_id}"},
+            )
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail={"error": f"Error patching group: {str(e)}"}
         )
