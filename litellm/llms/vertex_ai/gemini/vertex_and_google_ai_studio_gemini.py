@@ -207,7 +207,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
-            "top_logprobs",
+            "top_logprobs",  # Added this to list of supported openAI params
             "modalities",
         ]
 
@@ -313,10 +313,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = _build_vertex_schema(parameters=item, add_property_ordering=True)
-
+                    item = _build_vertex_schema(parameters=item)
         elif isinstance(old_schema, dict):
-            old_schema = _build_vertex_schema(parameters=old_schema, add_property_ordering=True)
+            old_schema = _build_vertex_schema(parameters=old_schema)
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
