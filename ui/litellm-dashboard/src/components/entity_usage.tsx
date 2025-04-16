@@ -252,6 +252,29 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
+      <Grid numItems={2} className="gap-2 w-full mb-4">
+          <Col>
+            <Text>Select Time Range</Text>
+            <DateRangePicker
+              enableSelect={true}
+              value={dateValue}
+              onValueChange={setDateValue}
+            />
+          </Col>
+          <Col>
+            <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
+              value={selectedTags}
+              onChange={setSelectedTags}
+              options={getAllTags()}
+              className="mt-2"
+              allowClear
+            />
+          </Col>
+        </Grid>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
@@ -259,30 +282,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         </TabList>
         <TabPanels>
           <TabPanel>
-          <Grid numItems={2} className="gap-2 w-full mb-4">
-              <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
-                  value={dateValue}
-                  onValueChange={setDateValue}
-                />
-              </Col>
-              <Col>
-                <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
-                <Select
-                  mode="multiple"
-                  style={{ width: '100%' }}
-                  placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
-                  value={selectedTags}
-                  onChange={setSelectedTags}
-                  options={getAllTags()}
-                  className="mt-2"
-                  allowClear
-                />
-              </Col>
-            </Grid>
-
             <Grid numItems={2} className="gap-2 w-full">
               {/* Total Spend Card */}
               <Col numColSpan={2}>
