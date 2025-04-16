@@ -1264,6 +1264,50 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_tools_transformation_valid_params():
+    from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "$id": "https://some/internal/name",
+                    "type": "object",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+     # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert toolJsonSchema is not None
+    print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
+    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
+    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+
+    
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[0]["toolSpec"]["description"] == "Invalid name test"
+    assert "inputSchema" in result[0]["toolSpec"]
+    assert "json" in result[0]["toolSpec"]["inputSchema"]
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
+    assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
+
+
+
 def test_not_found_error():
     with pytest.raises(litellm.NotFoundError):
         completion(
