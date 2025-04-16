@@ -26,6 +26,11 @@ def _convert_name(full_name: str):
     return new_name
 
 
+def _convert_date(date: str):
+    date_parts = date.split("/")
+    return f"20{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
+
+
 def _convert_price(price: str, divisor: int=1_000_000):
     ppm = float(price.split("\n")[0].replace("$", "").replace("*", "").strip())
     return ppm / divisor
@@ -87,6 +92,8 @@ def _extract_table_data(
                 tokens = text_.replace(",", "").replace("k", "000")
                 if tokens.isdigit():
                     model_map[model_name][col_name] = int(tokens)
+            elif "date" in col_name:
+                model_map[model_name][col_name] = _convert_date(text_)
             else:
                 model_map[model_name][col_name] = text_
 
@@ -137,6 +144,41 @@ def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw
                     flags=re.DOTALL
                 )
 
+    return local_data_raw
+
+
+def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: dict, local_data_raw_input: str):
+    local_data_raw = str(local_data_raw_input)  # make a copy of input
+    counter = 0
+    for name, date_dict in deprecation_data.items():
+        if name not in local_data:
+            continue
+
+        # Format dict into raw JSON 
+        updated_model_dict = local_data[name].copy()
+        updated_model_dict.update(date_dict)
+
+        new_model_json_unindented = json.dumps(updated_model_dict, indent=4)
+        new_model_json = ""
+        for i, line in enumerate(new_model_json_unindented.splitlines()):
+            if i not in [0, len(new_model_json_unindented.splitlines()) - 1]:
+                new_model_json += " " * 4 + line + "\n"
+            elif i == 0:
+                new_model_json += line + "\n"
+            else:
+                new_model_json += " " * 4 + line
+
+        # If the model already exists, update its values
+        if name in local_data:
+            counter += 1
+            local_data_raw = re.sub(
+                r'"'+ str(name) + r'":\s*\{.*?\n\s*\},',
+                f'"{name}": {new_model_json},',
+                local_data_raw,
+                flags=re.DOTALL
+            )
+
+    print(f"Added deprecation dates for {counter} models on Groq")
     return local_data_raw
 
 
@@ -267,6 +309,32 @@ def scrape_groq_reasoning_models():
     return reasoning_models_dict
 
 
+def scrape_groq_deprecated_models():
+    curl_command = [
+        'curl',
+        'https://console.groq.com/docs/deprecations',
+        '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    ]
+
+    result = subprocess.run(curl_command, capture_output=True, text=True)
+    soup = BeautifulSoup(result.stdout, 'html.parser')
+
+    total = {}
+    for i, table in enumerate(soup.find_all('table')):
+        desired_col_names = [
+            ("shutdown date", "deprecation_date"),
+        ]
+
+        total |= _extract_table_data(table, desired_col_names, {"name": 0})
+    
+    out = {}
+    for k, v in total.items():
+        out[f"groq/{k}"] = v
+
+    return out
+
+
 def scrape_groq_main():
     pricing = scrape_groq_pricing()
     capabilities = scrape_groq_capabilities()
@@ -318,15 +386,17 @@ def main():
 
     local_data_raw = load_local_data(local_file_path, raw=True)
     local_data = load_local_data(local_file_path)
+
     remote_data = scrape_groq_main()
+    deprecated_model_data = scrape_groq_deprecated_models()
 
     if local_data and remote_data:
-        local_data_raw = _insert_dict_in_raw_json(remote_data, local_data, local_data_raw)
-
-        write_to_file(local_file_path, local_data_raw)
+        # local_data_raw = _insert_dict_in_raw_json(remote_data, local_data, local_data_raw)
+        local_data_raw = _update_deprecated_models_in_raw_json(deprecated_model_data, local_data, local_data_raw)
+        write_to_file(local_file_path, local_data_raw, write_raw=True)
     else:
         print("Failed to fetch model data from either local file or URL.")
 
 
 if __name__ == "__main__":
-    print(scrape_groq_deprecated_models())
+    main()
