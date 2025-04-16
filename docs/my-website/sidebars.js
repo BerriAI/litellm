@@ -444,6 +444,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/msft_sso",
+        "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
         {
