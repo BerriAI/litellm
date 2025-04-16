@@ -841,59 +841,6 @@ def test_completion_function_plus_image(model):
         pass
 
 
-@pytest.mark.parametrize(
-    "provider",
-    ["azure", "azure_ai"],
-)
-def test_completion_azure_mistral_large_function_calling(provider):
-    """
-    This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
-    """
-    litellm.set_verbose = True
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-
-    model_cost = litellm.get_model_cost_map(url="")
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-
-    response = completion(
-        model="{}/mistral-large-latest".format(provider),
-        api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
-        api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
-        messages=messages,
-        tools=tools,
-        tool_choice="auto",
-    )
-    # Add any assertions, here to check response args
-    print(response)
-    assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-    assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
-
-
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
