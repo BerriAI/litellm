@@ -11,7 +11,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -20,6 +20,7 @@ from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     BaseDailySpendTransaction,
+    DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
@@ -61,6 +62,7 @@ class DBSpendUpdateWriter:
         self.spend_update_queue = SpendUpdateQueue()
         self.daily_spend_update_queue = DailySpendUpdateQueue()
         self.daily_team_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
 
     async def update_database(
         # LiteLLM management object fields
@@ -165,6 +167,13 @@ class DBSpendUpdateWriter:
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_team_transaction(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
+            )
+
+            asyncio.create_task(
+                self.add_spend_log_transaction_to_daily_tag_transaction(
                     payload=payload,
                     prisma_client=prisma_client,
                 )
@@ -394,6 +403,7 @@ class DBSpendUpdateWriter:
             spend_update_queue=self.spend_update_queue,
             daily_spend_update_queue=self.daily_spend_update_queue,
             daily_team_spend_update_queue=self.daily_team_spend_update_queue,
+            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
         )
 
         # Only commit from redis to db if this pod is the leader
@@ -493,6 +503,20 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_team_spend_update_transactions,
+        )
+
+        ################## Daily Tag Spend Update Transactions ##################
+        # Aggregate all in memory daily tag spend transactions and commit to db
+        daily_tag_spend_update_transactions = cast(
+            Dict[str, DailyTagSpendTransaction],
+            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_tag_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_tag_spend_update_transactions,
         )
 
     async def _commit_spend_updates_to_db(  # noqa: PLR0915
@@ -740,6 +764,208 @@ class DBSpendUpdateWriter:
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Dict[str, DailyUserSpendTransaction],
+        entity_type: Literal["user"],
+        entity_id_field: str,
+        table_name: str,
+        unique_constraint_name: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Dict[str, DailyTeamSpendTransaction],
+        entity_type: Literal["team"],
+        entity_id_field: str,
+        table_name: str,
+        unique_constraint_name: str,
+    ) -> None:
+        ...
+
+    @overload
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Dict[str, DailyTagSpendTransaction],
+        entity_type: Literal["tag"],
+        entity_id_field: str,
+        table_name: str,
+        unique_constraint_name: str,
+    ) -> None:
+        ...
+
+    @staticmethod
+    async def _update_daily_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Union[
+            Dict[str, DailyUserSpendTransaction],
+            Dict[str, DailyTeamSpendTransaction],
+            Dict[str, DailyTagSpendTransaction],
+        ],
+        entity_type: Literal["user", "team", "tag"],
+        entity_id_field: str,
+        table_name: str,
+        unique_constraint_name: str,
+    ) -> None:
+        """
+        Generic function to update daily spend for any entity type (user, team, tag)
+        """
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        verbose_proxy_logger.debug(
+            f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
+        )
+        BATCH_SIZE = 100
+        start_time = time.time()
+
+        try:
+            for i in range(n_retry_times + 1):
+                try:
+                    transactions_to_process = dict(
+                        list(daily_spend_transactions.items())[:BATCH_SIZE]
+                    )
+
+                    if len(transactions_to_process) == 0:
+                        verbose_proxy_logger.debug(
+                            f"No new transactions to process for daily {entity_type} spend update"
+                        )
+                        break
+
+                    async with prisma_client.db.batch_() as batcher:
+                        for _, transaction in transactions_to_process.items():
+                            entity_id = transaction.get(entity_id_field)
+                            if not entity_id:
+                                continue
+
+                            # Construct the where clause dynamically
+                            where_clause = {
+                                unique_constraint_name: {
+                                    entity_id_field: entity_id,
+                                    "date": transaction["date"],
+                                    "api_key": transaction["api_key"],
+                                    "model": transaction["model"],
+                                    "custom_llm_provider": transaction.get(
+                                        "custom_llm_provider"
+                                    ),
+                                }
+                            }
+
+                            # Get the table dynamically
+                            table = getattr(batcher, table_name)
+
+                            # Common data structure for both create and update
+                            common_data = {
+                                entity_id_field: entity_id,
+                                "date": transaction["date"],
+                                "api_key": transaction["api_key"],
+                                "model": transaction["model"],
+                                "model_group": transaction.get("model_group"),
+                                "custom_llm_provider": transaction.get(
+                                    "custom_llm_provider"
+                                ),
+                                "prompt_tokens": transaction["prompt_tokens"],
+                                "completion_tokens": transaction["completion_tokens"],
+                                "spend": transaction["spend"],
+                                "api_requests": transaction["api_requests"],
+                                "successful_requests": transaction[
+                                    "successful_requests"
+                                ],
+                                "failed_requests": transaction["failed_requests"],
+                            }
+
+                            # Add cache-related fields if they exist
+                            if "cache_read_input_tokens" in transaction:
+                                common_data[
+                                    "cache_read_input_tokens"
+                                ] = transaction.get("cache_read_input_tokens", 0)
+                            if "cache_creation_input_tokens" in transaction:
+                                common_data[
+                                    "cache_creation_input_tokens"
+                                ] = transaction.get("cache_creation_input_tokens", 0)
+
+                            # Create update data structure
+                            update_data = {
+                                "prompt_tokens": {
+                                    "increment": transaction["prompt_tokens"]
+                                },
+                                "completion_tokens": {
+                                    "increment": transaction["completion_tokens"]
+                                },
+                                "spend": {"increment": transaction["spend"]},
+                                "api_requests": {
+                                    "increment": transaction["api_requests"]
+                                },
+                                "successful_requests": {
+                                    "increment": transaction["successful_requests"]
+                                },
+                                "failed_requests": {
+                                    "increment": transaction["failed_requests"]
+                                },
+                            }
+
+                            # Add cache-related fields to update if they exist
+                            if "cache_read_input_tokens" in transaction:
+                                update_data["cache_read_input_tokens"] = {
+                                    "increment": transaction.get(
+                                        "cache_read_input_tokens", 0
+                                    )
+                                }
+                            if "cache_creation_input_tokens" in transaction:
+                                update_data["cache_creation_input_tokens"] = {
+                                    "increment": transaction.get(
+                                        "cache_creation_input_tokens", 0
+                                    )
+                                }
+
+                            table.upsert(
+                                where=where_clause,
+                                data={
+                                    "create": common_data,
+                                    "update": update_data,
+                                },
+                            )
+
+                    verbose_proxy_logger.info(
+                        f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
+                    )
+
+                    # Remove processed transactions
+                    for key in transactions_to_process.keys():
+                        daily_spend_transactions.pop(key, None)
+
+                    break
+
+                except DB_CONNECTION_ERROR_TYPES as e:
+                    if i >= n_retry_times:
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    await asyncio.sleep(2**i)
+
+        except Exception as e:
+            if "transactions_to_process" in locals():
+                for key in transactions_to_process.keys():  # type: ignore
+                    daily_spend_transactions.pop(key, None)
+            _raise_failed_update_spend_exception(
+                e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+            )
+
     @staticmethod
     async def update_daily_user_spend(
         n_retry_times: int,
@@ -750,144 +976,16 @@ class DBSpendUpdateWriter:
         """
         Batch job to update LiteLLM_DailyUserSpend table using in-memory daily_spend_transactions
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception
-
-        ### UPDATE DAILY USER SPEND ###
-        verbose_proxy_logger.debug(
-            "Daily User Spend transactions: {}".format(len(daily_spend_transactions))
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+            table_name="litellm_dailyuserspend",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider",
         )
-        BATCH_SIZE = (
-            100  # Number of aggregated records to update in each database operation
-        )
-        start_time = time.time()
-
-        try:
-            for i in range(n_retry_times + 1):
-                try:
-                    # Get transactions to process
-                    transactions_to_process = dict(
-                        list(daily_spend_transactions.items())[:BATCH_SIZE]
-                    )
-
-                    if len(transactions_to_process) == 0:
-                        verbose_proxy_logger.debug(
-                            "No new transactions to process for daily spend update"
-                        )
-                        break
-
-                    # Update DailyUserSpend table in batches
-                    async with prisma_client.db.batch_() as batcher:
-                        for _, transaction in transactions_to_process.items():
-                            user_id = transaction.get("user_id")
-                            if not user_id:  # Skip if no user_id
-                                continue
-
-                            batcher.litellm_dailyuserspend.upsert(
-                                where={
-                                    "user_id_date_api_key_model_custom_llm_provider": {
-                                        "user_id": user_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                    }
-                                },
-                                data={
-                                    "create": {
-                                        "user_id": user_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "model_group": transaction.get("model_group"),
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                        "prompt_tokens": transaction["prompt_tokens"],
-                                        "completion_tokens": transaction[
-                                            "completion_tokens"
-                                        ],
-                                        "cache_read_input_tokens": transaction.get(
-                                            "cache_read_input_tokens", 0
-                                        ),
-                                        "cache_creation_input_tokens": transaction.get(
-                                            "cache_creation_input_tokens", 0
-                                        ),
-                                        "spend": transaction["spend"],
-                                        "api_requests": transaction["api_requests"],
-                                        "successful_requests": transaction[
-                                            "successful_requests"
-                                        ],
-                                        "failed_requests": transaction[
-                                            "failed_requests"
-                                        ],
-                                    },
-                                    "update": {
-                                        "prompt_tokens": {
-                                            "increment": transaction["prompt_tokens"]
-                                        },
-                                        "completion_tokens": {
-                                            "increment": transaction[
-                                                "completion_tokens"
-                                            ]
-                                        },
-                                        "cache_read_input_tokens": {
-                                            "increment": transaction.get(
-                                                "cache_read_input_tokens", 0
-                                            )
-                                        },
-                                        "cache_creation_input_tokens": {
-                                            "increment": transaction.get(
-                                                "cache_creation_input_tokens", 0
-                                            )
-                                        },
-                                        "spend": {"increment": transaction["spend"]},
-                                        "api_requests": {
-                                            "increment": transaction["api_requests"]
-                                        },
-                                        "successful_requests": {
-                                            "increment": transaction[
-                                                "successful_requests"
-                                            ]
-                                        },
-                                        "failed_requests": {
-                                            "increment": transaction["failed_requests"]
-                                        },
-                                    },
-                                },
-                            )
-
-                    verbose_proxy_logger.info(
-                        f"Processed {len(transactions_to_process)} daily spend transactions in {time.time() - start_time:.2f}s"
-                    )
-
-                    # Remove processed transactions
-                    for key in transactions_to_process.keys():
-                        daily_spend_transactions.pop(key, None)
-
-                    verbose_proxy_logger.debug(
-                        f"Processed {len(transactions_to_process)} daily spend transactions in {time.time() - start_time:.2f}s"
-                    )
-                    break
-
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(2**i)  # Exponential backoff
-
-        except Exception as e:
-            # Remove processed transactions even if there was an error
-            if "transactions_to_process" in locals():
-                for key in transactions_to_process.keys():  # type: ignore
-                    daily_spend_transactions.pop(key, None)
-            _raise_failed_update_spend_exception(
-                e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-            )
 
     @staticmethod
     async def update_daily_team_spend(
@@ -899,140 +997,53 @@ class DBSpendUpdateWriter:
         """
         Batch job to update LiteLLM_DailyTeamSpend table using in-memory daily_spend_transactions
         """
-        from litellm.proxy.utils import _raise_failed_update_spend_exception
-
-        ### UPDATE DAILY USER SPEND ###
-        verbose_proxy_logger.debug(
-            "Daily Team Spend transactions: {}".format(len(daily_spend_transactions))
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="team",
+            entity_id_field="team_id",
+            table_name="litellm_dailyteamspend",
+            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider",
         )
-        BATCH_SIZE = (
-            100  # Number of aggregated records to update in each database operation
+
+    @staticmethod
+    async def update_daily_tag_spend(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_spend_transactions: Dict[str, DailyTagSpendTransaction],
+    ):
+        """
+        Batch job to update LiteLLM_DailyTagSpend table using in-memory daily_spend_transactions
+        """
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="tag",
+            entity_id_field="tag",
+            table_name="litellm_dailytagspend",
+            unique_constraint_name="tag_date_api_key_model_custom_llm_provider",
         )
-        start_time = time.time()
-
-        try:
-            for i in range(n_retry_times + 1):
-                try:
-                    # Get transactions to process
-                    transactions_to_process = dict(
-                        list(daily_spend_transactions.items())[:BATCH_SIZE]
-                    )
-
-                    if len(transactions_to_process) == 0:
-                        verbose_proxy_logger.debug(
-                            "No new transactions to process for daily spend update"
-                        )
-                        break
-
-                    # Update DailyUserSpend table in batches
-                    async with prisma_client.db.batch_() as batcher:
-                        for _, transaction in transactions_to_process.items():
-                            team_id = transaction.get("team_id")
-                            if not team_id:  # Skip if no team_id
-                                continue
-
-                            batcher.litellm_dailyteamspend.upsert(
-                                where={
-                                    "team_id_date_api_key_model_custom_llm_provider": {
-                                        "team_id": team_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                    }
-                                },
-                                data={
-                                    "create": {
-                                        "team_id": team_id,
-                                        "date": transaction["date"],
-                                        "api_key": transaction["api_key"],
-                                        "model": transaction["model"],
-                                        "model_group": transaction.get("model_group"),
-                                        "custom_llm_provider": transaction.get(
-                                            "custom_llm_provider"
-                                        ),
-                                        "prompt_tokens": transaction["prompt_tokens"],
-                                        "completion_tokens": transaction[
-                                            "completion_tokens"
-                                        ],
-                                        "spend": transaction["spend"],
-                                        "api_requests": transaction["api_requests"],
-                                        "successful_requests": transaction[
-                                            "successful_requests"
-                                        ],
-                                        "failed_requests": transaction[
-                                            "failed_requests"
-                                        ],
-                                    },
-                                    "update": {
-                                        "prompt_tokens": {
-                                            "increment": transaction["prompt_tokens"]
-                                        },
-                                        "completion_tokens": {
-                                            "increment": transaction[
-                                                "completion_tokens"
-                                            ]
-                                        },
-                                        "spend": {"increment": transaction["spend"]},
-                                        "api_requests": {
-                                            "increment": transaction["api_requests"]
-                                        },
-                                        "successful_requests": {
-                                            "increment": transaction[
-                                                "successful_requests"
-                                            ]
-                                        },
-                                        "failed_requests": {
-                                            "increment": transaction["failed_requests"]
-                                        },
-                                    },
-                                },
-                            )
-
-                    verbose_proxy_logger.info(
-                        f"Processed {len(transactions_to_process)} daily team transactions in {time.time() - start_time:.2f}s"
-                    )
-
-                    # Remove processed transactions
-                    for key in transactions_to_process.keys():
-                        daily_spend_transactions.pop(key, None)
-
-                    verbose_proxy_logger.debug(
-                        f"Processed {len(transactions_to_process)} daily spend transactions in {time.time() - start_time:.2f}s"
-                    )
-                    break
-
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i >= n_retry_times:
-                        _raise_failed_update_spend_exception(
-                            e=e,
-                            start_time=start_time,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    await asyncio.sleep(2**i)  # Exponential backoff
-
-        except Exception as e:
-            # Remove processed transactions even if there was an error
-            if "transactions_to_process" in locals():
-                for key in transactions_to_process.keys():  # type: ignore
-                    daily_spend_transactions.pop(key, None)
-            _raise_failed_update_spend_exception(
-                e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-            )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
         self,
         payload: Union[dict, SpendLogsPayload],
         prisma_client: PrismaClient,
-        type: Literal["user", "team"] = "user",
+        type: Literal["user", "team", "request_tags"] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
         common_expected_keys = ["startTime", "api_key", "model", "custom_llm_provider"]
         if type == "user":
             expected_keys = ["user", *common_expected_keys]
-        else:
+        elif type == "team":
             expected_keys = ["team_id", *common_expected_keys]
+        elif type == "request_tags":
+            expected_keys = ["request_tags", *common_expected_keys]
+        else:
+            raise ValueError(f"Invalid type: {type}")
 
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
@@ -1143,3 +1154,44 @@ class DBSpendUpdateWriter:
         await self.daily_team_spend_update_queue.add_update(
             update={daily_transaction_key: daily_transaction}
         )
+
+    async def add_spend_log_transaction_to_daily_tag_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: Optional[PrismaClient] = None,
+    ) -> None:
+        if prisma_client is None:
+            verbose_proxy_logger.debug(
+                "prisma_client is None. Skipping writing spend logs to db."
+            )
+            return
+
+        base_daily_transaction = (
+            await self._common_add_spend_log_transaction_to_daily_transaction(
+                payload, prisma_client, "request_tags"
+            )
+        )
+        if base_daily_transaction is None:
+            return
+        if payload["request_tags"] is None:
+            verbose_proxy_logger.debug(
+                "request_tags is None for request. Skipping incrementing tag spend."
+            )
+            return
+
+        request_tags = []
+        if isinstance(payload["request_tags"], str):
+            request_tags = json.loads(payload["request_tags"])
+        elif isinstance(payload["request_tags"], list):
+            request_tags = payload["request_tags"]
+        else:
+            raise ValueError(f"Invalid request_tags: {payload['request_tags']}")
+        for tag in request_tags:
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+            daily_transaction = DailyTagSpendTransaction(
+                tag=tag, **base_daily_transaction
+            )
+
+            await self.daily_tag_spend_update_queue.add_update(
+                update={daily_transaction_key: daily_transaction}
+            )
