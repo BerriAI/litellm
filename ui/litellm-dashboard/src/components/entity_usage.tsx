@@ -8,7 +8,7 @@ import {
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData } from './usage/types';
-import { tagDailyActivityCall } from './networking';
+import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 
 interface EntityMetrics {
   metrics: {
@@ -82,6 +82,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     
     if (entityType === 'tag') {
       const data = await tagDailyActivityCall(
+        accessToken, 
+        startTime, 
+        endTime, 
+        1, 
+        selectedTags.length > 0 ? selectedTags : null
+      );
+      setSpendData(data);
+    } else if (entityType === 'team') {
+      const data = await teamDailyActivityCall(
         accessToken, 
         startTime, 
         endTime, 
@@ -400,7 +409,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             />
           </Card>
         </Col>
-        
+
         {/* Top Models */}
         <Col numColSpan={1}>
           <Card>
