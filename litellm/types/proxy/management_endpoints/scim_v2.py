@@ -1,6 +1,16 @@
 from typing import Any, Dict, List, Optional, Union
 
+from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
+
+
+class LiteLLM_UserScimMetadata(BaseModel):
+    """
+    Scim metadata stored in LiteLLM_UserTable.metadata
+    """
+
+    givenName: Optional[str] = None
+    familyName: Optional[str] = None
 
 
 # SCIM Resource Models

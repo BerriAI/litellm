@@ -89,6 +89,14 @@ class ScimTransformations:
         """
         SCIM requires a family name with length > 0
         """
+        metadata = user.metadata or {}
+        if "scim_metadata" in metadata:
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
+                **metadata["scim_metadata"]
+            )
+            if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
+                return scim_metadata.familyName
+
         if user.user_alias and len(user.user_alias) > 0:
             return user.user_alias
         return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
@@ -98,6 +106,14 @@ class ScimTransformations:
         """
         SCIM requires a given name with length > 0
         """
+        metadata = user.metadata or {}
+        if "scim_metadata" in metadata:
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
+                **metadata["scim_metadata"]
+            )
+            if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
+                return scim_metadata.givenName
+
         if user.user_alias and len(user.user_alias) > 0:
             return user.user_alias
         return ScimTransformations.DEFAULT_SCIM_NAME
@@ -252,6 +268,12 @@ async def create_user(
                 user_email=user_email,
                 user_alias=user.name.givenName,
                 teams=[group.value for group in user.groups] if user.groups else None,
+                metadata={
+                    "scim_metadata": LiteLLM_UserScimMetadata(
+                        givenName=user.name.givenName,
+                        familyName=user.name.familyName,
+                    ).model_dump()
+                },
             )
         )
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
