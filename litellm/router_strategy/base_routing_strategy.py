@@ -55,12 +55,17 @@ class BaseRoutingStrategy(ABC):
 
     async def _increment_value_list_in_current_window(
         self, increment_list: List[Tuple[str, int]], ttl: int
-    ):
+    ) -> List[float]:
         """
         Increment a list of values in the current window
         """
+        results = []
         for key, value in increment_list:
-            await self._increment_value_in_current_window(key=key, value=value, ttl=ttl)
+            result = await self._increment_value_in_current_window(
+                key=key, value=value, ttl=ttl
+            )
+            results.append(result)
+        return results
 
     async def _increment_value_in_current_window(
         self, key: str, value: Union[int, float], ttl: int

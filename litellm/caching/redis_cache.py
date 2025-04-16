@@ -975,6 +975,7 @@ class RedisCache(BaseCache):
                 - increment_value: float
                 - ttl_seconds: int
         """
+
         # don't waste a network request if there's nothing to increment
         if len(increment_list) == 0:
             return None
