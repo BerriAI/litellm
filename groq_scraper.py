@@ -127,8 +127,36 @@ def scrape_groq_capabilities():
     return _extract_table_data(capabilities_table, desired_col_names)
 
 
+def scrape_groq_context_window():
+    curl_command = [
+        'curl',
+        'https://console.groq.com/docs/models',
+        '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    ]
+
+    result = subprocess.run(curl_command, capture_output=True, text=True)
+    soup = BeautifulSoup(result.stdout, 'html.parser')
+
+    out = {}
+    for context_window_table in soup.find_all('table'):
+        desired_col_names = [
+            ("model id", "name"),
+            ("context window", "max_input_tokens"),
+            ("completion tokens", "max_output_tokens"),
+            ("completion tokens", "max_tokens"),
+        ]
+
+        context_window_dict = _extract_table_data(context_window_table, desired_col_names)
+        for model_name, model_dict in context_window_dict.items():
+            for k, v in model_dict.items():
+                if k == "max_output_tokens" or k == "max_tokens":
+                    if v == "-":
+                        context_window_dict[model_name][k] = model_dict["max_input_tokens"]
+        
+        out |= context_window_dict
+    return out
+
+
 if __name__ == "__main__":
-    scrape_groq_pricing()
-    print("-" * 100)
-    out = scrape_groq_capabilities()
-    print(out)
+    print(scrape_groq_context_window())
