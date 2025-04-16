@@ -368,7 +368,7 @@ async def delete_tag(
     tags=["tag management"],
 )
 async def get_tag_daily_activity(
-    tag: Optional[str] = None,
+    tags: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     model: Optional[str] = None,
@@ -377,10 +377,10 @@ async def get_tag_daily_activity(
     page_size: int = 10,
 ):
     """
-    Get daily activity for a specific tag or all tags.
+    Get daily activity for specific tags or all tags.
 
     Args:
-        tag (Optional[str]): The tag to filter by. If not provided, returns data for all tags.
+        tags (Optional[str]): Comma-separated list of tags to filter by. If not provided, returns data for all tags.
         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
         model (Optional[str]): Filter by model name.
@@ -393,11 +393,14 @@ async def get_tag_daily_activity(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    # Convert comma-separated tags string to list if provided
+    tag_list = tags.split(",") if tags else None
+
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailytagspend",
         entity_id_field="tag",
-        entity_id=tag,
+        entity_id=tag_list,
         start_date=start_date,
         end_date=end_date,
         model=model,

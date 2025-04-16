@@ -25,6 +25,7 @@ class BreakdownMetrics(BaseModel):
     models: Dict[str, SpendMetrics] = Field(default_factory=dict)
     api_keys: Dict[str, SpendMetrics] = Field(default_factory=dict)
     providers: Dict[str, SpendMetrics] = Field(default_factory=dict)
+    entities: Dict[str, SpendMetrics] = Field(default_factory=dict)
 
 
 class DailySpendData(BaseModel):
@@ -73,6 +74,7 @@ def update_breakdown_metrics(
     model_metadata: Dict[str, Dict[str, Any]],
     provider_metadata: Dict[str, Dict[str, Any]],
     api_key_metadata: Dict[str, Dict[str, Any]],
+    entity_id_field: Optional[str] = None,
 ) -> BreakdownMetrics:
     """Update breakdown metrics with new record data."""
     # Update model metrics
@@ -95,6 +97,16 @@ def update_breakdown_metrics(
         breakdown.providers[provider], record
     )
 
+    # Update entity-specific metrics if entity_id_field is provided
+    if entity_id_field:
+        entity_value = getattr(record, entity_id_field, None)
+        if entity_value:
+            if entity_value not in breakdown.entities:
+                breakdown.entities[entity_value] = SpendMetrics()
+            breakdown.entities[entity_value] = update_metrics(
+                breakdown.entities[entity_value], record
+            )
+
     return breakdown
 
 
@@ -102,7 +114,7 @@ async def get_daily_activity(
     prisma_client: Optional[PrismaClient],
     table_name: str,
     entity_id_field: str,
-    entity_id: Optional[str],
+    entity_id: Optional[Union[str, List[str]]],
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
@@ -137,7 +149,10 @@ async def get_daily_activity(
         if api_key:
             where_conditions["api_key"] = api_key
         if entity_id:
-            where_conditions[entity_id_field] = entity_id
+            if isinstance(entity_id, list):
+                where_conditions[entity_id_field] = {"in": entity_id}
+            else:
+                where_conditions[entity_id_field] = entity_id
 
         # Get total count for pagination
         total_count = await getattr(prisma_client.db, table_name).count(
@@ -196,6 +211,7 @@ async def get_daily_activity(
                 model_metadata,
                 provider_metadata,
                 api_key_metadata,
+                entity_id_field=entity_id_field,
             )
 
             # Update total metrics
