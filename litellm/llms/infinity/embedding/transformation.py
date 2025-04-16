@@ -37,6 +37,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        litellm_params: dict = {},
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY")
