@@ -13,6 +13,16 @@ from workflows.auto_update_price_and_context_window_file import load_local_data,
 
 
 def _get_table_from_heading_text(heading_text: str, soup: BeautifulSoup):
+    """
+    Find an HTML table that follows a specific heading text in the HTML document.
+    
+    Args:
+        heading_text: String to search for in h4 headings
+        soup: BeautifulSoup object representing the HTML document
+        
+    Returns:
+        BeautifulSoup object representing the table element
+    """
     llm_heading = soup.find('h4', string=lambda text: text and heading_text in text)
     heading_container = llm_heading.parent.parent
     table_container = heading_container.find_next_sibling('div', class_='elementor-widget')
@@ -20,23 +30,45 @@ def _get_table_from_heading_text(heading_text: str, soup: BeautifulSoup):
     return table_container.find('table')
 
 
-def _convert_name(full_name: str):
-    new_name = full_name.split("(")[0].strip().lower()
-    new_name = new_name.replace(" ", "-")
-    return new_name
-
-
 def _convert_date(date: str):
+    """
+    Convert a date from MM/DD/YY format to YYYY-MM-DD format expected by LiteLLM.
+    
+    Args:
+        date: Date string in MM/DD/YY format
+        
+    Returns:
+        Date string in YYYY-MM-DD format
+    """
     date_parts = date.split("/")
     return f"20{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
 
 
 def _convert_price(price: str, divisor: int=1_000_000):
+    """
+    Convert a price string to a decimal value expected by LiteLLM.
+    
+    Args:
+        price: Price string (e.g. "$10.00*")
+        divisor: Value to divide the price by (default: 1,000,000 for converting to per-token pricing)
+        
+    Returns:
+        Float representing the converted price
+    """
     ppm = float(price.split("\n")[0].replace("$", "").replace("*", "").strip())
     return ppm / divisor
 
 
 def _extract_col_names(table: BeautifulSoup):
+    """
+    Extract column names from an HTML table.
+
+    Args:
+        table: BeautifulSoup object representing the HTML table
+
+    Returns:
+        List of column names
+    """
     col_names_soup = table.find_all('th')
     return [col_name_soup.text.lower().strip() for col_name_soup in col_names_soup]
 
@@ -46,6 +78,17 @@ def _extract_table_data(
         desired_col_names: list[tuple[str, str]],
         col_map_input: dict={}
     ):
+    """
+    Extract data from an HTML table.
+
+    Args:
+        table: BeautifulSoup object representing the HTML table
+        desired_col_names: list of tuples, each containing a column name and the name of the column in the output dictionary
+        col_map_input: dictionary mapping column names to column indices
+
+    Returns:
+        Dictionary mapping model names to their corresponding data
+    """
     col_map = col_map_input.copy()
 
     col_names = _extract_col_names(table)
@@ -64,19 +107,22 @@ def _extract_table_data(
     for row in rows:
         row_values = row.find_all('td')
 
+        # create model_map entry that's associated with this row's model name
         if "try_now_button" in col_map:
             model_groq_link = row_values[col_map["try_now_button"]].find('a').get('href')
             model_name = model_groq_link.split("?model=")[-1]
         else:
             model_name = row_values[col_map["name"]].text.lower().strip()
-
         model_map[model_name] = {}
         
+        # fill in the model_map entry with the data from this row
         for col_name, col_idx in col_map.items():
             if col_name == "try_now_button" or col_name == "name":
                 continue
 
             text_ = row_values[col_idx].text.lower().strip()
+
+            # when appropriate, convert data formats into those expected by LiteLLM
             if "cost" in col_name:
                 if "per_token" in col_name:
                     model_map[model_name][col_name] = _convert_price(text_)
@@ -101,6 +147,17 @@ def _extract_table_data(
 
 
 def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw_input: str):
+    """
+    Insert a dictionary into a raw JSON string.
+
+    Args:
+        remote_data: Dictionary containing the new model data
+        local_data: Dictionary containing the existing model data
+        local_data_raw_input: Raw JSON string to containing the existing model data
+
+    Returns:
+        Updated raw JSON string
+    """
     local_data_raw = str(local_data_raw_input)  # make a copy of input
     new_models = []
     for update_model_id, updated_model_dict in remote_data.items():
@@ -153,6 +210,17 @@ def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw
 
 
 def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: dict, local_data_raw_input: str):
+    """
+    Update the deprecated models in a raw JSON string.
+
+    Args:
+        deprecation_data: Dictionary containing the deprecation data
+        local_data: Dictionary containing the existing model data
+        local_data_raw_input: Raw JSON string to containing the existing model data
+
+    Returns:
+        Updated raw JSON string
+    """
     local_data_raw = str(local_data_raw_input)  # make a copy of input
 
     deprecated_models = []
@@ -192,6 +260,12 @@ def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: di
 
 
 def scrape_groq_pricing():
+    """
+    Scrape the pricing information for Groq models.
+
+    Returns:
+        Dictionary mapping model names to their pricing information
+    """
     curl_command = [
         'curl',
         'https://groq.com/pricing/',
@@ -233,6 +307,12 @@ def scrape_groq_pricing():
 
 
 def scrape_groq_capabilities():
+    """
+    Scrape the capabilities information (supports_tool_choice, supports_function_calling, supports_response_schema) for Groq models.
+
+    Returns:
+        Dictionary mapping model names to their capabilities information
+    """
     curl_command = [
         'curl',
         'https://console.groq.com/docs/tool-use',
@@ -261,6 +341,12 @@ def scrape_groq_capabilities():
 
 
 def scrape_groq_context_window():
+    """
+    Scrape the context window (max_input_tokens, max_output_tokens, max_tokens) information for Groq models.
+
+    Returns:
+        Dictionary mapping model names to their context window information
+    """
     curl_command = [
         'curl',
         'https://console.groq.com/docs/models',
@@ -293,6 +379,12 @@ def scrape_groq_context_window():
 
 
 def scrape_groq_reasoning_models():
+    """
+    Scrape the Groq models that support reasoning.
+
+    Returns:
+        Dictionary mapping model names to a boolean of if they support reasoning
+    """
     curl_command = [
         'curl',
         'https://console.groq.com/docs/reasoning',
@@ -319,6 +411,12 @@ def scrape_groq_reasoning_models():
 
 
 def scrape_groq_deprecated_models():
+    """
+    Scrape the deprecated models for Groq.
+
+    Returns:
+        Dictionary mapping model names to their deprecation date
+    """
     curl_command = [
         'curl',
         'https://console.groq.com/docs/deprecations',
@@ -345,6 +443,12 @@ def scrape_groq_deprecated_models():
 
 
 def scrape_groq_main():
+    """
+    The main function that scrapes all the information for active Groq models.
+
+    Returns:
+        Dictionary mapping model names to their main information
+    """
     pricing = scrape_groq_pricing()
     capabilities = scrape_groq_capabilities()
     context_window = scrape_groq_context_window()
@@ -395,6 +499,9 @@ def scrape_groq_main():
 
 
 def main():
+    """
+    The main function that updates the JSON file using current information on Groq's website.
+    """
     local_file_path = "../model_prices_and_context_window.json" 
 
     local_data_raw = load_local_data(local_file_path, raw=True)
