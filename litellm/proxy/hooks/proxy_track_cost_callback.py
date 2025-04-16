@@ -199,9 +199,13 @@ class _ProxyDBLogger(CustomLogger):
         except Exception as e:
             error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
-            metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            litellm_metadata = kwargs.get("litellm_params", {}).get(
+                "litellm_metadata", {}
+            )
+            old_metadata = kwargs.get("litellm_params", {}).get("metadata", {})
             call_type = kwargs.get("call_type", "")
-            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n call_type: {call_type}\n"
+            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n chosen_metadata: {metadata}\n litellm_metadata: {litellm_metadata}\n old_metadata: {old_metadata}\n call_type: {call_type}\n"
             asyncio.create_task(
                 proxy_logging_obj.failed_tracking_alert(
                     error_message=error_msg,
