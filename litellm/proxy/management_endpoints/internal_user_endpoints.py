@@ -82,9 +82,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     is_internal_user = False
     if data.user_role and data.user_role.is_internal_user_role:
@@ -651,9 +651,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             duration_s = duration_in_seconds(
                 duration=non_default_values["budget_duration"]
             )
@@ -964,13 +964,13 @@ async def get_users(
             "in": user_id_list,  # Now passing a list of strings as required by Prisma
         }
 
-    users: Optional[
-        List[LiteLLM_UserTable]
-    ] = await prisma_client.db.litellm_usertable.find_many(
-        where=where_conditions,
-        skip=skip,
-        take=page_size,
-        order={"created_at": "desc"},
+    users: Optional[List[LiteLLM_UserTable]] = (
+        await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
+        )
     )
 
     # Get total count of user rows
@@ -1225,13 +1225,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
@@ -1258,6 +1258,8 @@ class SpendMetrics(BaseModel):
     spend: float = Field(default=0.0)
     prompt_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
+    cache_read_input_tokens: int = Field(default=0)
+    cache_creation_input_tokens: int = Field(default=0)
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
@@ -1312,6 +1314,8 @@ class DailySpendMetadata(BaseModel):
     total_api_requests: int = Field(default=0)
     total_successful_requests: int = Field(default=0)
     total_failed_requests: int = Field(default=0)
+    total_cache_read_input_tokens: int = Field(default=0)
+    total_cache_creation_input_tokens: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
@@ -1332,6 +1336,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     custom_llm_provider: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     spend: float = 0.0
     api_requests: int = 0
     successful_requests: int = 0
@@ -1349,6 +1355,8 @@ def update_metrics(
     group_metrics.spend += record.spend
     group_metrics.prompt_tokens += record.prompt_tokens
     group_metrics.completion_tokens += record.completion_tokens
+    group_metrics.cache_read_input_tokens += record.cache_read_input_tokens
+    group_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
     group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
     group_metrics.api_requests += record.api_requests
     group_metrics.successful_requests += record.successful_requests
@@ -1448,6 +1456,8 @@ async def get_user_daily_activity(
     - spend
     - prompt_tokens
     - completion_tokens
+    - cache_read_input_tokens
+    - cache_creation_input_tokens
     - total_tokens
     - api_requests
     - breakdown by model, api_key, provider
@@ -1484,9 +1494,9 @@ async def get_user_daily_activity(
             user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
             and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
         ):
-            where_conditions[
-                "user_id"
-            ] = user_api_key_dict.user_id  # only allow access to own data
+            where_conditions["user_id"] = (
+                user_api_key_dict.user_id
+            )  # only allow access to own data
 
         # Get total count for pagination
         total_count = await prisma_client.db.litellm_dailyuserspend.count(
@@ -1560,6 +1570,10 @@ async def get_user_daily_activity(
             total_metrics.total_tokens += (
                 record.prompt_tokens + record.completion_tokens
             )
+            total_metrics.cache_read_input_tokens += record.cache_read_input_tokens
+            total_metrics.cache_creation_input_tokens += (
+                record.cache_creation_input_tokens
+            )
             total_metrics.api_requests += record.api_requests
             total_metrics.successful_requests += record.successful_requests
             total_metrics.failed_requests += record.failed_requests
@@ -1587,6 +1601,8 @@ async def get_user_daily_activity(
                 total_api_requests=total_metrics.api_requests,
                 total_successful_requests=total_metrics.successful_requests,
                 total_failed_requests=total_metrics.failed_requests,
+                total_cache_read_input_tokens=total_metrics.cache_read_input_tokens,
+                total_cache_creation_input_tokens=total_metrics.cache_creation_input_tokens,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,

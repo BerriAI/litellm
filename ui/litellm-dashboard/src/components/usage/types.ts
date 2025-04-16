@@ -6,6 +6,8 @@ export interface SpendMetrics {
   api_requests: number;
   successful_requests: number;
   failed_requests: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
 }
 
 export interface DailyData {
@@ -36,6 +38,8 @@ export interface ModelActivityData {
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
+  total_cache_read_input_tokens: number;
+  total_cache_creation_input_tokens: number;
   total_tokens: number;
   prompt_tokens: number;
   completion_tokens: number;
@@ -50,6 +54,8 @@ export interface ModelActivityData {
       spend: number;
       successful_requests: number;
       failed_requests: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
     };
   }[];
 }
