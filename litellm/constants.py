@@ -24,6 +24,7 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
+REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = 100
 MAX_SIZE_IN_MEMORY_QUEUE = 10000
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = 1000
