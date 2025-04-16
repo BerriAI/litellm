@@ -5290,10 +5290,7 @@ async def token_counter(request: TokenCountRequest):
         for _model in llm_router.model_list:
             if _model["model_name"] == request.model:
                 deployment = _model
-                model_info = llm_router.get_router_model_info(
-                    deployment=deployment,
-                    received_model_name=request.model,
-                )
+                model_info = deployment.get("model_info", {})
                 break
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
