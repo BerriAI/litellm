@@ -382,23 +382,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </Card>
         </Col>
 
-        {/* Top Models */}
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Models</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={getTopModels()}
-              index="key"
-              categories={["spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              layout="vertical"
-              yAxisWidth={200}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
 
         {/* Top API Keys */}
         <Col numColSpan={1}>
@@ -417,6 +400,26 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             />
           </Card>
         </Col>
+        
+        {/* Top Models */}
+        <Col numColSpan={1}>
+          <Card>
+            <Title>Top Models</Title>
+            <BarChart
+              className="mt-4 h-40"
+              data={getTopModels()}
+              index="key"
+              categories={["spend"]}
+              colors={["cyan"]}
+              valueFormatter={(value) => `$${value.toFixed(2)}`}
+              layout="vertical"
+              yAxisWidth={200}
+              showLegend={false}
+            />
+          </Card>
+        </Col>
+
+        
 
         {/* Spend by Provider */}
         <Col numColSpan={2}>
