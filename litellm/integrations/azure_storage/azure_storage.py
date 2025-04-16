@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from litellm._logging import verbose_logger
-from litellm.constants import AZURE_STORAGE_MSFT_VERSION
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
 from litellm.llms.custom_httpx.http_handler import (
@@ -54,12 +54,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self._service_client_timeout: Optional[float] = None
 
             # Internal variables used for Token based authentication
-            self.azure_auth_token: Optional[
-                str
-            ] = None  # the Azure AD token to use for Azure Storage API requests
-            self.token_expiry: Optional[
-                datetime
-            ] = None  # the expiry time of the currentAzure AD token
+            self.azure_auth_token: Optional[str] = (
+                None  # the Azure AD token to use for Azure Storage API requests
+            )
+            self.token_expiry: Optional[datetime] = (
+                None  # the expiry time of the currentAzure AD token
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -344,7 +344,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = time.time() + 3600
+            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(
