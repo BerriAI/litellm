@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, os.path.abspath("../.."))
 from workflows.auto_update_price_and_context_window_file import (
     load_local_data,
-    sync_local_data_with_remote,
     write_to_file,
 )
 
