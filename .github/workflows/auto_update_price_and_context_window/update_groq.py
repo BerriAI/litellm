@@ -58,8 +58,10 @@ def _convert_price(price: str, divisor: int = 1_000_000):
     Returns:
         Float representing the converted price
     """
-    ppm = float(price.split("\n")[0].replace("$", "").replace("*", "").strip())
-    return ppm / divisor
+    ppm = price.split("\n")[0].replace("$", "").replace("*", "").strip()
+    ppt = float(ppm) / divisor
+    ppt_rounded = float(f"{ppt:.8f}")
+    return ppt_rounded
 
 
 def _extract_col_names(table: BeautifulSoup):
