@@ -210,7 +210,7 @@ def scrape_groq_reasoning_models():
     return reasoning_models_dict
 
 
-def main():
+def scrape_groq_main():
     pricing = scrape_groq_pricing()
     capabilities = scrape_groq_capabilities()
     context_window = scrape_groq_context_window()
@@ -238,4 +238,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    scrape_groq_main()
