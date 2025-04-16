@@ -35,7 +35,7 @@ def safe_set_attribute(span: Span, key: str, value: Any):
     span.set_attribute(key, primitive_value)
 
 
-def set_attributes(span: Span, kwargs, response_obj):
+def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
