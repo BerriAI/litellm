@@ -57,6 +57,14 @@ class GroqChatConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params = super().get_supported_openai_params(model)
+        try:
+            base_params.remove("max_retries")
+        except ValueError:
+            pass
+        return base_params
+
     def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List:
         for idx, message in enumerate(messages):
             """

@@ -230,6 +230,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
+        extra_body: Optional[dict] = optional_params.pop("extra_body", None)
 
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -266,6 +267,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body is not None:
+            data = {**data, **extra_body}
 
         headers = provider_config.sign_request(
             headers=headers,
