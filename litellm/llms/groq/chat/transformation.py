@@ -14,10 +14,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class GroqChatConfig(OpenAIGPTConfig):
+class GroqChatConfig(OpenAILikeChatConfig):
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -132,6 +132,7 @@ class GroqChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool = False,
+        replace_max_completion_tokens_with_max_tokens: bool = False,  # groq supports max_completion_tokens
     ) -> dict:
         _response_format = non_default_params.get("response_format")
         if self._should_fake_stream(non_default_params):
