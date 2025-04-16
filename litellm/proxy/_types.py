@@ -2769,8 +2769,7 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
     )
 
 
-class DailyUserSpendTransaction(TypedDict):
-    user_id: str
+class BaseDailySpendTransaction(TypedDict):
     date: str
     api_key: str
     model: str
@@ -2788,6 +2787,14 @@ class DailyUserSpendTransaction(TypedDict):
     api_requests: int
     successful_requests: int
     failed_requests: int
+
+
+class DailyTeamSpendTransaction(BaseDailySpendTransaction):
+    team_id: str
+
+
+class DailyUserSpendTransaction(BaseDailySpendTransaction):
+    user_id: str
 
 
 class DBSpendUpdateTransactions(TypedDict):
