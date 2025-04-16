@@ -8,7 +8,8 @@ and integration purposes.
 import uuid
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Response
+from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, NewUserRequest, NewUserResponse
@@ -19,6 +20,14 @@ scim_router = APIRouter(
     prefix="/scim/v2",
     tags=["SCIM v2"],
 )
+
+
+# Dependency to set the correct SCIM Content-Type
+async def set_scim_content_type(response: Response):
+    """Sets the Content-Type header to application/scim+json"""
+    # Check if content type is already application/json, only override in that case
+    # Avoids overriding for non-JSON responses or already correct types if they were set manually
+    response.headers["Content-Type"] = "application/scim+json"
 
 
 class ScimTransformations:
@@ -124,6 +133,7 @@ class ScimTransformations:
     "/Users",
     response_model=SCIMListResponse,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
@@ -190,6 +200,7 @@ async def get_users(
     "/Users/{user_id}",
     response_model=SCIMUser,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def get_user(
     user_id: str = Path(..., title="User ID"),
@@ -228,6 +239,7 @@ async def get_user(
     "/Users",
     response_model=SCIMUser,
     status_code=201,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def create_user(
     user: SCIMUser = Body(...),
@@ -293,6 +305,7 @@ async def create_user(
     "/Users/{user_id}",
     response_model=SCIMUser,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def update_user(
     user_id: str = Path(..., title="User ID"),
@@ -378,6 +391,7 @@ async def delete_user(
     "/Groups",
     response_model=SCIMListResponse,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
@@ -463,6 +477,7 @@ async def get_groups(
     "/Groups/{group_id}",
     response_model=SCIMGroup,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def get_group(
     group_id: str = Path(..., title="Group ID"),
@@ -524,6 +539,7 @@ async def get_group(
     "/Groups",
     response_model=SCIMGroup,
     status_code=201,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def create_group(
     group: SCIMGroup = Body(...),
@@ -625,6 +641,7 @@ async def create_group(
     "/Groups/{group_id}",
     response_model=SCIMGroup,
     status_code=200,
+    dependencies=[Depends(set_scim_content_type)],
 )
 async def update_group(
     group_id: str = Path(..., title="Group ID"),
