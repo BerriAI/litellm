@@ -11,6 +11,7 @@ sys.path.insert(
 
 
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from test_rerank import assert_response_shape
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import patch, MagicMock
@@ -78,3 +79,59 @@ def test_voyage_ai_embedding_prompt_token_mapping():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+### Rerank Tests
+@pytest.mark.asyncio()
+async def test_voyage_ai_rerank():
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "id": "cmpl-mockid",
+            "results": [{"index": 0, "relevance_score": 0.95}],
+            "usage": {"total_tokens": 150},
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "model": "rerank-model",
+        "query": "hello",
+        "top_k": 1,
+        "documents": ["hello", "world", "foo", "bar"],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.arerank(
+            model="voyage/rerank-model",
+            query="hello",
+            documents=["hello", "world", "foo", "bar"],
+            top_k=1,
+        )
+
+        print("async re rank response: ", response)
+
+        # Assert
+        mock_post.assert_called_once()
+        args_to_api = mock_post.call_args.kwargs["data"]
+        _url = mock_post.call_args.kwargs["url"]
+        assert _url == "https://api.voyageai.com/v1/rerank"
+
+        request_data = json.loads(args_to_api)
+        assert request_data["query"] == expected_payload["query"]
+        assert request_data["documents"] == expected_payload["documents"]
+        assert request_data["top_k"] == expected_payload["top_k"]
+        assert request_data["model"] == expected_payload["model"]
+
+        assert response.id is not None
+        assert response.results is not None
+        assert response.meta["tokens"]["total_tokens"] == 150
+
+        assert_response_shape(response, custom_llm_provider="voyage")
+            
