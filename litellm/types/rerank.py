@@ -32,7 +32,6 @@ class OptionalRerankParams(TypedDict, total=False):
     max_tokens_per_doc: Optional[int]
     top_k: Optional[int]
 
-
 class RerankBilledUnits(TypedDict, total=False):
     search_units: Optional[int]
     total_tokens: Optional[int]
