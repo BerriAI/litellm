@@ -71,6 +71,11 @@ def test_completion_pydantic_obj_2():
                                     "type": "array",
                                 },
                             },
+                            "propertyOrdering": [
+                                "name",
+                                "date",
+                                "participants",
+                            ],
                             "required": ["name", "date", "participants"],
                             "title": "CalendarEvent",
                             "type": "object",
@@ -79,6 +84,7 @@ def test_completion_pydantic_obj_2():
                         "type": "array",
                     }
                 },
+                "propertyOrdering": ["events"],
                 "required": ["events"],
                 "title": "EventsList",
                 "type": "object",
