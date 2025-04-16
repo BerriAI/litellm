@@ -102,6 +102,7 @@ def _extract_table_data(
 
 def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw_input: str):
     local_data_raw = str(local_data_raw_input)  # make a copy of input
+    new_models = []
     for update_model_id, updated_model_dict in remote_data.items():
         # Format dict into raw JSON 
         new_model_json_unindented = json.dumps(updated_model_dict, indent=4)
@@ -144,14 +145,21 @@ def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw
                     flags=re.DOTALL
                 )
 
+            new_models.append(update_model_id)
+
+    if len(new_models) > 0:
+        print(f"Added {len(new_models)} new models to Groq: {new_models}")
     return local_data_raw
 
 
 def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: dict, local_data_raw_input: str):
     local_data_raw = str(local_data_raw_input)  # make a copy of input
-    counter = 0
+
+    deprecated_models = []
     for name, date_dict in deprecation_data.items():
         if name not in local_data:
+            continue
+        elif local_data[name].get("deprecation_date", None) is not None:
             continue
 
         # Format dict into raw JSON 
@@ -170,7 +178,7 @@ def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: di
 
         # If the model already exists, update its values
         if name in local_data:
-            counter += 1
+            deprecated_models.append(name)
             local_data_raw = re.sub(
                 r'"'+ str(name) + r'":\s*\{.*?\n\s*\},',
                 f'"{name}": {new_model_json},',
@@ -178,7 +186,8 @@ def _update_deprecated_models_in_raw_json(deprecation_data: dict, local_data: di
                 flags=re.DOTALL
             )
 
-    print(f"Added deprecation dates for {counter} models on Groq")
+    if len(deprecated_models) > 0:
+        print(f"Added deprecation dates for {len(deprecated_models)} models on Groq: {deprecated_models}")
     return local_data_raw
 
 
@@ -354,6 +363,9 @@ def scrape_groq_main():
             total[model]["mode"] = "audio_transcription"
         elif "tts" in model:
             total[model]["mode"] = "audio_speech"
+            if "input_cost_per_character" not in total[model]:
+                total.pop(model)
+                continue
         else:
             total.pop(model)
             continue
@@ -369,6 +381,7 @@ def scrape_groq_main():
             "output_cost_per_token": total[model].get("output_cost_per_token", None),
             "input_cost_per_second": total[model].get("input_cost_per_second", None),
             "output_cost_per_second": total[model].get("output_cost_per_second", None),
+            "input_cost_per_character": total[model].get("input_cost_per_character", None),
             "litellm_provider": total[model].get("litellm_provider", None),
             "mode": total[model].get("mode", None),
             "supports_function_calling": total[model].get("supports_function_calling", None),
@@ -391,7 +404,7 @@ def main():
     deprecated_model_data = scrape_groq_deprecated_models()
 
     if local_data and remote_data:
-        # local_data_raw = _insert_dict_in_raw_json(remote_data, local_data, local_data_raw)
+        local_data_raw = _insert_dict_in_raw_json(remote_data, local_data, local_data_raw)
         local_data_raw = _update_deprecated_models_in_raw_json(deprecated_model_data, local_data, local_data_raw)
         write_to_file(local_file_path, local_data_raw, write_raw=True)
     else:
