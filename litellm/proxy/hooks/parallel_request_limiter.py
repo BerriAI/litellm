@@ -16,6 +16,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
+from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -38,7 +39,7 @@ class CacheObject(TypedDict):
     request_count_end_user_id: Optional[dict]
 
 
-class _PROXY_MaxParallelRequestsHandler(CustomLogger):
+class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
