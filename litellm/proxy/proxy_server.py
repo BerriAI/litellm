@@ -238,6 +238,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -803,9 +804,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1131,9 +1132,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1806,13 +1807,6 @@ class ProxyConfig:
 
             if master_key and master_key.startswith("os.environ/"):
                 master_key = get_secret(master_key)  # type: ignore
-
-                if not isinstance(master_key, str):
-                    raise Exception(
-                        "Master key must be a string. Current type - {}".format(
-                            type(master_key)
-                        )
-                    )
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = hash_token(master_key)
@@ -2812,9 +2806,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -7756,9 +7750,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
@@ -8176,6 +8170,7 @@ app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
+app.include_router(scim_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
