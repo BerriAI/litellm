@@ -23,11 +23,17 @@ def _convert_price(price: str):
     return format(ppm / 1_000_000, '.8f')
 
 
-def _extract_table_data(table: BeautifulSoup):
+def _extract_col_names(table: BeautifulSoup):
     col_names_soup = table.find_all('th')
-    col_names = [col_name_soup.text.lower().strip() for col_name_soup in col_names_soup]
+    return [col_name_soup.text.lower().strip() for col_name_soup in col_names_soup]
 
-    col_map = {}
+
+def _extract_table_data(table: BeautifulSoup):
+    col_names = _extract_col_names(table)
+
+    col_map = {
+        "try_now_button": 4
+    }
     for i, col in enumerate(col_names):
         if "model" in col:
             col_map["name"] = i
@@ -43,23 +49,26 @@ def _extract_table_data(table: BeautifulSoup):
     model_prices = {}
     for row in rows:
         row_values_soup = row.find_all('td')
-        row_values = [ele.text.strip() for ele in row_values_soup]
+        row_values = [ele for ele in row_values_soup]
 
-        model_name = _convert_name(row_values[col_map["name"]])
+        # model_name = _convert_name(row_values[col_map["name"]])
+        model_groq_link = row_values[col_map["try_now_button"]].find('a').get('href')
+        model_name = model_groq_link.split("?model=")[-1]
         model_prices[model_name] = {}
+
         for col_name, col_idx in col_map.items():
             if col_name == "name":
                 continue
-            elif "cost" in col_name:
-                model_prices[model_name][col_name] = _convert_price(row_values[col_idx])
+            text_ = row_values[col_idx].text.strip()
+            if "cost" in col_name:
+                model_prices[model_name][col_name] = _convert_price(text_)
             else:
-                model_prices[model_name][col_name] = row_values[col_idx]
+                model_prices[model_name][col_name] = text_
 
     return model_prices 
 
 
 def scrape_groq_pricing():
-    # Construct curl command with browser-like headers
     curl_command = [
         'curl',
         'https://groq.com/pricing/',
@@ -77,10 +86,8 @@ def scrape_groq_pricing():
 
     # Get table for chat models:
     chat_models_table = _get_table_from_heading_text("Large Language Models (LLMs)", soup)
-    
-    print(_extract_table_data(chat_models_table))
 
-    return
+    return _extract_table_data(chat_models_table)
 
 
 if __name__ == "__main__":
