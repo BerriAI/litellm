@@ -926,6 +926,9 @@ def execute_completion(opts: dict):
     response_gen = litellm.completion(**opts)
     for i, part in enumerate(response_gen):
         partial_streaming_chunks.append(part)
+    print("\n\n")
+    print(f"partial_streaming_chunks: {partial_streaming_chunks}")
+    print("\n\n")
     assembly = litellm.stream_chunk_builder(partial_streaming_chunks)
     print(f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}")
     assert len(assembly.choices[0].message.tool_calls) == 3, (
