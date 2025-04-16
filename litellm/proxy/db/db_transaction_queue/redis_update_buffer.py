@@ -6,17 +6,22 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
     REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import DailyUserSpendTransaction, DBSpendUpdateTransactions
+from litellm.proxy._types import (
+    DailyTeamSpendTransaction,
+    DailyUserSpendTransaction,
+    DBSpendUpdateTransactions,
+)
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
@@ -67,6 +72,7 @@ class RedisUpdateBuffer:
         self,
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
+        daily_team_spend_update_queue: DailySpendUpdateQueue,
     ):
         """
         Stores the in-memory spend updates to Redis
@@ -127,6 +133,9 @@ class RedisUpdateBuffer:
         daily_spend_update_transactions = (
             await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
         )
+        daily_team_spend_update_transactions = (
+            await daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        )
         verbose_proxy_logger.debug(
             "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
         )
@@ -159,6 +168,19 @@ class RedisUpdateBuffer:
         await self._emit_new_item_added_to_redis_buffer_event(
             queue_size=current_redis_buffer_size,
             service=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
+        )
+
+        list_of_daily_team_spend_update_transactions = [
+            safe_dumps(daily_team_spend_update_transactions)
+        ]
+
+        current_redis_buffer_size = await self.redis_cache.async_rpush(
+            key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+            values=list_of_daily_team_spend_update_transactions,
+        )
+        await self._emit_new_item_added_to_redis_buffer_event(
+            queue_size=current_redis_buffer_size,
+            service=ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
         )
 
     @staticmethod
@@ -258,8 +280,35 @@ class RedisUpdateBuffer:
         list_of_daily_spend_update_transactions = [
             json.loads(transaction) for transaction in list_of_transactions
         ]
-        return DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-            list_of_daily_spend_update_transactions
+        return cast(
+            Dict[str, DailyUserSpendTransaction],
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                list_of_daily_spend_update_transactions
+            ),
+        )
+
+    async def get_all_daily_team_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> Optional[Dict[str, DailyTeamSpendTransaction]]:
+        """
+        Gets all the daily team spend update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        list_of_transactions = await self.redis_cache.async_lpop(
+            key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+            count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+        )
+        if list_of_transactions is None:
+            return None
+        list_of_daily_spend_update_transactions = [
+            json.loads(transaction) for transaction in list_of_transactions
+        ]
+        return cast(
+            Dict[str, DailyTeamSpendTransaction],
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                list_of_daily_spend_update_transactions
+            ),
         )
 
     @staticmethod
