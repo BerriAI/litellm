@@ -1145,7 +1145,7 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
   }
 };
 
-export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: string | null = null) => {
+export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: List<string> | null = null) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1157,7 +1157,7 @@ export const tagDailyActivityCall = async (accessToken: String, startTime: Date,
     queryParams.append('page_size', '1000');
     queryParams.append('page', page.toString());
     if (tags) {
-      queryParams.append('tags', tags);
+      queryParams.append('tags', tags.join(','));
     }
     const queryString = queryParams.toString();
     if (queryString) {

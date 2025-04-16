@@ -5,6 +5,7 @@ import {
   Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell,
   DonutChart
 } from "@tremor/react";
+import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData } from './usage/types';
 import { tagDailyActivityCall } from './networking';
@@ -68,6 +69,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   });
 
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
@@ -79,7 +81,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     const endTime = dateValue.to;
     
     if (entityType === 'tag') {
-      const data = await tagDailyActivityCall(accessToken, startTime, endTime, 1, entityId);
+      const data = await tagDailyActivityCall(
+        accessToken, 
+        startTime, 
+        endTime, 
+        1, 
+        selectedTags.length > 0 ? selectedTags : null
+      );
       setSpendData(data);
     } else {
       throw new Error("Invalid entity type");
@@ -88,7 +96,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   useEffect(() => {
     fetchSpendData();
-  }, [accessToken, dateValue, entityId]);
+  }, [accessToken, dateValue, entityId, selectedTags]);
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
@@ -182,12 +190,31 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       .sort((a, b) => b.spend - a.spend);
   };
 
+  const getAllTags = () => {
+    const tags = new Set<string>();
+    spendData.results.forEach(day => {
+      Object.keys(day.breakdown.entities || {}).forEach(tag => {
+        tags.add(tag);
+      });
+    });
+    return Array.from(tags).map(tag => ({
+      label: tag,
+      value: tag
+    }));
+  };
+
+  const filterDataByTags = (data: any[]) => {
+    if (selectedTags.length === 0) return data;
+    return data.filter(item => selectedTags.includes(item.entity));
+  };
+
   const getEntityBreakdown = () => {
     const entitySpend: { [key: string]: any } = {};
     spendData.results.forEach(day => {
       Object.entries(day.breakdown.entities || {}).forEach(([entity, data]) => {
         if (!entitySpend[entity]) {
           entitySpend[entity] = {
+            entity,
             spend: 0,
             requests: 0,
             successful_requests: 0,
@@ -203,12 +230,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       });
     });
     
-    return Object.entries(entitySpend)
-      .map(([entity, metrics]) => ({
-        entity,
-        ...metrics
-      }))
+    const result = Object.values(entitySpend)
       .sort((a, b) => b.spend - a.spend);
+    
+    return filterDataByTags(result);
   };
 
   return (
@@ -220,6 +245,19 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             enableSelect={true}
             value={dateValue}
             onValueChange={setDateValue}
+          />
+        </Col>
+        <Col>
+          <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
+          <Select
+            mode="multiple"
+            style={{ width: '100%' }}
+            placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
+            value={selectedTags}
+            onChange={setSelectedTags}
+            options={getAllTags()}
+            className="mt-2"
+            allowClear
           />
         </Col>
       </Grid>
