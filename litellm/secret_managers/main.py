@@ -12,6 +12,9 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
 
 oidc_cache = DualCache()
 
@@ -168,7 +171,12 @@ def get_secret(  # noqa: PLR0915
             # https://azure.github.io/azure-workload-identity/docs/quick-start.html
             azure_federated_token_file = os.getenv("AZURE_FEDERATED_TOKEN_FILE")
             if azure_federated_token_file is None:
-                raise ValueError("AZURE_FEDERATED_TOKEN_FILE not found in environment")
+                verbose_logger.warning("AZURE_FEDERATED_TOKEN_FILE not found in environment will use Azure AD token provider")
+                azure_token_provider = get_azure_ad_token_provider(azure_scope=oidc_aud)
+                oidc_token = azure_token_provider()
+                if oidc_token is None:
+                    raise ValueError("Azure OIDC provider failed")
+                return oidc_token
             with open(azure_federated_token_file, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
