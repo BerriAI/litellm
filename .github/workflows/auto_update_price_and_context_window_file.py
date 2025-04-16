@@ -32,12 +32,15 @@ def sync_local_data_with_remote(local_data, remote_data):
         local_data[key] = remote_data[key]
 
 # Write data to the json file
-def write_to_file(file_path, data):
+def write_to_file(file_path, data, write_raw: bool = False):
     try:
         # Open the file in write mode
         with open(file_path, "w") as file:
             # Dump the data as JSON into the file
-            json.dump(data, file, indent=4)
+            if write_raw:
+                file.write(data)
+            else:
+                json.dump(data, file, indent=4)
         print("Values updated successfully.")
     except Exception as e:
         # Print an error message if writing to file fails
@@ -83,12 +86,14 @@ def transform_remote_data(data):
 
 
 # Load local data from a specified file
-def load_local_data(file_path):
+def load_local_data(file_path, raw: bool = False):
     try:
         # Open the file in read mode
         with open(file_path, "r") as file:
             # Load and return the JSON data
-            return json.load(file)
+            if raw:
+                return file.read()
+            return json.load(file, parse_float=float)
     except FileNotFoundError:
         # Print an error message if the file is not found
         print("File not found:", file_path)

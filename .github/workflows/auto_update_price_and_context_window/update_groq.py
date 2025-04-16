@@ -1,6 +1,16 @@
 import subprocess
 from bs4 import BeautifulSoup
 import pandas as pd
+import os
+import sys
+import re
+import json
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)
+from workflows.auto_update_price_and_context_window_file import load_local_data, sync_local_data_with_remote, write_to_file
+
 
 def _get_table_from_heading_text(heading_text: str, soup: BeautifulSoup):
     llm_heading = soup.find('h4', string=lambda text: text and heading_text in text)
@@ -18,7 +28,7 @@ def _convert_name(full_name: str):
 
 def _convert_price(price: str, divisor: int=1_000_000):
     ppm = float(price.split("\n")[0].replace("$", "").replace("*", "").strip())
-    return format(ppm / divisor, '.8f')
+    return ppm / divisor
 
 
 def _extract_col_names(table: BeautifulSoup):
@@ -81,6 +91,53 @@ def _extract_table_data(
                 model_map[model_name][col_name] = text_
 
     return model_map 
+
+
+def _insert_dict_in_raw_json(remote_data: dict, local_data: dict, local_data_raw_input: str):
+    local_data_raw = str(local_data_raw_input)  # make a copy of input
+    for update_model_id, updated_model_dict in remote_data.items():
+        # Format dict into raw JSON 
+        new_model_json_unindented = json.dumps(updated_model_dict, indent=4)
+        new_model_json = ""
+        for i, line in enumerate(new_model_json_unindented.splitlines()):
+            if i not in [0, len(new_model_json_unindented.splitlines()) - 1]:
+                new_model_json += " " * 4 + line + "\n"
+            elif i == 0:
+                new_model_json += line + "\n"
+            else:
+                new_model_json += " " * 4 + line
+
+        # If the model already exists, update its values
+        if update_model_id in local_data:
+            local_data_raw = re.sub(
+                r'"'+ str(update_model_id) + r'":\s*\{.*?\n\s*\},',
+                f'"{update_model_id}": {new_model_json},',
+                local_data_raw,
+                flags=re.DOTALL
+            )
+        # If the model doesn't exist, add it to the file
+        else:
+            # Find the position to insert the new model (maintaining alphabetical order)
+            model_keys = list(local_data.keys())
+            model_keys.append(update_model_id)
+            model_keys.sort()
+            new_model_index = model_keys.index(update_model_id)
+            
+            # If it's the last model, append to the end
+            if new_model_index == len(model_keys) - 1:
+                local_data_raw += f'"{update_model_id}": {new_model_json},\n'
+            else:
+                # Find the model that should come after our new model
+                next_model = model_keys[new_model_index + 1]
+                # Insert before the next model
+                local_data_raw = re.sub(
+                    r'"'+ re.escape(next_model) + r'":\s*\{',
+                    f'"{update_model_id}": {new_model_json},\n    "{next_model}": {{',
+                    local_data_raw,
+                    flags=re.DOTALL
+                )
+
+    return local_data_raw
 
 
 def scrape_groq_pricing():
@@ -218,8 +275,9 @@ def scrape_groq_main():
     
     all_models = pricing.keys() | capabilities.keys() | context_window.keys() | reasoning_models.keys()
     total = {}
-    for model in all_models:
-        total[model] = pricing.get(model, {}) | capabilities.get(model, {}) | context_window.get(model, {}) | reasoning_models.get(model, {})
+    for model_name in all_models:
+        model = f"groq/{model_name}"
+        total[model] = pricing.get(model_name, {}) | capabilities.get(model_name, {}) | context_window.get(model_name, {}) | reasoning_models.get(model_name, {})
         
         if "input_cost_per_token" in total[model]:
             total[model]["mode"] = "chat"
@@ -231,11 +289,44 @@ def scrape_groq_main():
         else:
             total.pop(model)
             continue
-
+        
         total[model]["litellm_provider"] = "groq"
+
+        # Keep the original data but ensure it's in the correct order
+        total[model] = {
+            "max_tokens": total[model].get("max_tokens", None),
+            "max_input_tokens": total[model].get("max_input_tokens", None),
+            "max_output_tokens": total[model].get("max_output_tokens", None),
+            "input_cost_per_token": total[model].get("input_cost_per_token", None),
+            "output_cost_per_token": total[model].get("output_cost_per_token", None),
+            "input_cost_per_second": total[model].get("input_cost_per_second", None),
+            "output_cost_per_second": total[model].get("output_cost_per_second", None),
+            "litellm_provider": total[model].get("litellm_provider", None),
+            "mode": total[model].get("mode", None),
+            "supports_function_calling": total[model].get("supports_function_calling", None),
+            "supports_response_schema": total[model].get("supports_response_schema", None),
+            "supports_reasoning": total[model].get("supports_reasoning", None),
+            "supports_tool_choice": total[model].get("supports_tool_choice", None),
+        }
+        total[model] = {k: v for k, v in total[model].items() if v is not None}
 
     return total
 
 
+def main():
+    local_file_path = "../model_prices_and_context_window.json" 
+
+    local_data_raw = load_local_data(local_file_path, raw=True)
+    local_data = load_local_data(local_file_path)
+    remote_data = scrape_groq_main()
+
+    if local_data and remote_data:
+        local_data_raw = _insert_dict_in_raw_json(remote_data, local_data, local_data_raw)
+
+        write_to_file(local_file_path, local_data_raw)
+    else:
+        print("Failed to fetch model data from either local file or URL.")
+
+
 if __name__ == "__main__":
-    scrape_groq_main()
+    print(scrape_groq_deprecated_models())
