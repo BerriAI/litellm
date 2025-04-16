@@ -23,7 +23,7 @@ from fastapi import (
 from pydantic import BaseModel, EmailStr, Field
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import NewUserRequest
+from litellm.proxy._types import LiteLLM_UserTable, NewUserRequest, NewUserResponse
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 
 scim_router = APIRouter(
@@ -41,9 +41,9 @@ class SCIMResource(BaseModel):
 
 
 class SCIMUserName(BaseModel):
+    familyName: str
+    givenName: str
     formatted: Optional[str] = None
-    familyName: Optional[str] = None
-    givenName: Optional[str] = None
     middleName: Optional[str] = None
     honorificPrefix: Optional[str] = None
     honorificSuffix: Optional[str] = None
@@ -63,7 +63,7 @@ class SCIMUserGroup(BaseModel):
 
 class SCIMUser(SCIMResource):
     userName: str
-    name: Optional[SCIMUserName] = None
+    name: SCIMUserName
     displayName: Optional[str] = None
     active: bool = True
     emails: Optional[List[SCIMUserEmail]] = None
@@ -87,6 +87,88 @@ class SCIMListResponse(BaseModel):
     startIndex: Optional[int] = 1
     itemsPerPage: Optional[int] = 10
     Resources: List[Union[SCIMUser, SCIMGroup]]
+
+
+class ScimTransformations:
+    DEFAULT_SCIM_NAME = "Unknown User"
+    DEFAULT_SCIM_FAMILY_NAME = "Unknown Family Name"
+    DEFAULT_SCIM_DISPLAY_NAME = "Unknown Display Name"
+
+    @staticmethod
+    async def transform_litellm_user_to_scim_user(
+        user: Union[LiteLLM_UserTable, NewUserResponse],
+    ) -> SCIMUser:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail={"error": "No database connected"}
+            )
+
+        # Get user's teams/groups
+        groups = []
+        for team_id in user.teams or []:
+            team = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+            if team:
+                team_alias = getattr(team, "team_alias", team.team_id)
+                groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
+
+        user_created_at = user.created_at.isoformat() if user.created_at else None
+        user_updated_at = user.updated_at.isoformat() if user.updated_at else None
+
+        emails = []
+        if user.user_email:
+            emails.append(SCIMUserEmail(value=user.user_email, primary=True))
+
+        return SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id=user.user_id,
+            userName=ScimTransformations._get_scim_user_name(user),
+            displayName=ScimTransformations._get_scim_user_name(user),
+            name=SCIMUserName(
+                familyName=ScimTransformations._get_scim_family_name(user),
+                givenName=ScimTransformations._get_scim_given_name(user),
+            ),
+            emails=emails,
+            groups=groups,
+            active=True,
+            meta={
+                "resourceType": "User",
+                "created": user_created_at,
+                "lastModified": user_updated_at,
+            },
+        )
+
+    @staticmethod
+    def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+        """
+        SCIM requires a display name with length > 0
+
+        We use the same userName and displayName for SCIM users
+        """
+        if user.user_email and len(user.user_email) > 0:
+            return user.user_email
+        return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
+
+    @staticmethod
+    def _get_scim_family_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+        """
+        SCIM requires a family name with length > 0
+        """
+        if user.user_alias and len(user.user_alias) > 0:
+            return user.user_alias
+        return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
+
+    @staticmethod
+    def _get_scim_given_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+        """
+        SCIM requires a given name with length > 0
+        """
+        if user.user_alias and len(user.user_alias) > 0:
+            return user.user_alias
+        return ScimTransformations.DEFAULT_SCIM_NAME
 
 
 # User Endpoints
@@ -121,11 +203,13 @@ async def get_users(
                 where_conditions["user_email"] = email
 
         # Get users from database
-        users = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=count,
-            order={"created_at": "desc"},
+        users: List[LiteLLM_UserTable] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=(startIndex - 1),
+                take=count,
+                order={"created_at": "desc"},
+            )
         )
 
         # Get total count for pagination
@@ -136,36 +220,8 @@ async def get_users(
         # Convert to SCIM format
         scim_users = []
         for user in users:
-            emails = []
-            if user.user_email:
-                emails.append(SCIMUserEmail(value=user.user_email, primary=True))
-
-            # Get user's teams/groups
-            groups = []
-            for team_id in user.teams or []:
-                team = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
-                if team:
-                    team_alias = getattr(team, "team_alias", team.team_id)
-                    groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
-
-            user_created_at = user.created_at.isoformat() if user.created_at else None
-            user_updated_at = user.updated_at.isoformat() if user.updated_at else None
-
-            scim_user = SCIMUser(
-                schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-                id=user.user_id,
-                userName=user.user_id,
-                displayName=user.user_email or user.user_id,
-                emails=emails,
-                groups=groups,
-                active=True,
-                meta={
-                    "resourceType": "User",
-                    "created": user_created_at,
-                    "lastModified": user_updated_at,
-                },
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user=user
             )
             scim_users.append(scim_user)
 
@@ -209,37 +265,8 @@ async def get_user(
             )
 
         # Convert to SCIM format
-        emails = []
-        if user.user_email:
-            emails.append(SCIMUserEmail(value=user.user_email, primary=True))
-
-        # Get user's teams/groups
-        groups = []
-        for team_id in user.teams or []:
-            team = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
-            )
-            if team:
-                team_alias = getattr(team, "team_alias", team.team_id)
-                groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
-
-        user_created_at = user.created_at.isoformat() if user.created_at else None
-        user_updated_at = user.updated_at.isoformat() if user.updated_at else None
-
-        return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-            id=user.user_id,
-            userName=user.user_id,
-            displayName=user.user_email or user.user_id,
-            emails=emails,
-            groups=groups,
-            active=True,
-            meta={
-                "resourceType": "User",
-                "created": user_created_at,
-                "lastModified": user_updated_at,
-            },
-        )
+        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(user)
+        return scim_user
 
     except HTTPException:
         raise
@@ -291,55 +318,14 @@ async def create_user(
             data=NewUserRequest(
                 user_id=user_id,
                 user_email=user_email,
+                user_alias=user.name.givenName,
+                teams=[group.value for group in user.groups] if user.groups else None,
             )
         )
-        # If teams were specified, add user to teams
-        if user.groups:
-            for group in user.groups:
-                team_id = group.value
-                # Check if team exists
-                team = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
-                if team:
-                    # Update team members to include this user
-                    current_members = team.members or []
-                    if user_id not in current_members:
-                        await prisma_client.db.litellm_teamtable.update(
-                            where={"team_id": team_id},
-                            data={"members": {"push": user_id}},
-                        )
-
-        # Construct SCIM response
-        emails = []
-        if user_email:
-            emails.append(SCIMUserEmail(value=user_email, primary=True))
-
-        user_created_at = (
-            created_user.created_at.isoformat()
-            if created_user.created_at
-            else datetime.now(timezone.utc).isoformat()
+        scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+            user=created_user
         )
-        user_updated_at = (
-            created_user.updated_at.isoformat()
-            if created_user.updated_at
-            else datetime.now(timezone.utc).isoformat()
-        )
-
-        return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-            id=user_id,
-            userName=user_id,
-            displayName=user_email or user_id,
-            emails=emails,
-            groups=user.groups,
-            active=True,
-            meta={
-                "resourceType": "User",
-                "created": user_created_at,
-                "lastModified": user_updated_at,
-            },
-        )
+        return scim_user
 
     except HTTPException:
         raise
@@ -365,99 +351,8 @@ async def update_user(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No database connected"})
-
     try:
-        # Check if user exists
-        existing_user = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}
-        )
-
-        if not existing_user:
-            raise HTTPException(
-                status_code=404, detail={"error": f"User not found with ID: {user_id}"}
-            )
-
-        # Extract email from SCIM user
-        user_email = None
-        if user.emails and len(user.emails) > 0:
-            user_email = user.emails[0].value
-
-        # Prepare update data
-        existing_metadata = existing_user.metadata if existing_user.metadata else {}
-        update_data = {
-            "user_email": user_email,
-            "metadata": {**existing_metadata, "scim_data": user.model_dump()},
-        }
-
-        # Update user in database
-        updated_user = await prisma_client.db.litellm_usertable.update(
-            where={"user_id": user_id}, data=update_data
-        )
-
-        # Handle group memberships if provided
-        if user.groups:
-            # Get current teams
-            current_teams = existing_user.teams or []
-
-            # Teams to add user to
-            requested_teams = [group.value for group in user.groups]
-
-            # Add user to requested teams
-            for team_id in requested_teams:
-                if team_id not in current_teams:
-                    team = await prisma_client.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}
-                    )
-                    if team:
-                        current_members = team.members or []
-                        if user_id not in current_members:
-                            await prisma_client.db.litellm_teamtable.update(
-                                where={"team_id": team_id},
-                                data={"members": {"push": user_id}},
-                            )
-
-            # Remove user from teams not in the request
-            for team_id in current_teams:
-                if team_id not in requested_teams:
-                    team = await prisma_client.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}
-                    )
-                    if team:
-                        current_members = team.members or []
-                        if user_id in current_members:
-                            new_members = [m for m in current_members if m != user_id]
-                            await prisma_client.db.litellm_teamtable.update(
-                                where={"team_id": team_id},
-                                data={"members": new_members},
-                            )
-
-        # Construct SCIM response
-        emails = []
-        if user_email:
-            emails.append(SCIMUserEmail(value=user_email, primary=True))
-
-        user_created_at = (
-            updated_user.created_at.isoformat() if updated_user.created_at else None
-        )
-        user_updated_at = (
-            updated_user.updated_at.isoformat() if updated_user.updated_at else None
-        )
-
-        return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-            id=user_id,
-            userName=user_id,
-            displayName=user_email or user_id,
-            emails=emails,
-            groups=user.groups,
-            active=user.active,
-            meta={
-                "resourceType": "User",
-                "created": user_created_at,
-                "lastModified": user_updated_at,
-            },
-        )
-
+        return None
     except HTTPException:
         raise
     except Exception as e:
