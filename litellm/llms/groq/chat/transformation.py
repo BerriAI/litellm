@@ -134,6 +134,8 @@ class GroqChatConfig(OpenAIGPTConfig):
         drop_params: bool = False,
     ) -> dict:
         _response_format = non_default_params.get("response_format")
+        if self._should_fake_stream(non_default_params):
+            optional_params["fake_stream"] = True
         if _response_format is not None and isinstance(_response_format, dict):
             json_schema: Optional[dict] = None
             if "response_schema" in _response_format:
@@ -160,6 +162,8 @@ class GroqChatConfig(OpenAIGPTConfig):
                 non_default_params.pop(
                     "response_format", None
                 )  # only remove if it's a json_schema - handled via using groq's tool calling params.
-        return super().map_openai_params(
+        optional_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+
+        return optional_params

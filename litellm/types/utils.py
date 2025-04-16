@@ -1011,7 +1011,9 @@ class ModelResponseStream(ModelResponseBase):
 
     def __init__(
         self,
-        choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        choices: Optional[
+            Union[List[StreamingChoices], Union[StreamingChoices, dict, BaseModel]]
+        ] = None,
         id: Optional[str] = None,
         created: Optional[int] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
