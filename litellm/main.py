@@ -24,6 +24,7 @@ from copy import deepcopy
 from functools import partial
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -460,19 +461,23 @@ async def acompletion(
 
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(completion, **completion_kwargs, **kwargs)
+        # func = partial(completion, **completion_kwargs, **kwargs)
 
-        # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        # # Add the context to the function
+        # ctx = contextvars.copy_context()
+        # func_with_context = partial(ctx.run, func)
 
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response = await cast(
+            Awaitable[Union[dict, ModelResponse, CustomStreamWrapper]],
+            completion(**completion_kwargs, **kwargs),
+        )
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
         ):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
                 response = ModelResponse(**init_response)
-            response = init_response
+            else:
+                response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
         else:
