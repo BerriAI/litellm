@@ -2,10 +2,15 @@ import { useEffect, useState } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
+import { useQuery } from "@tanstack/react-query";
+import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
+import { Setter } from "@/types";
+
 
 export interface FilterState {
   'Team ID': string;
   'Organization ID': string;
+  'Key Alias': string;
   [key: string]: string;
 }
 
@@ -15,7 +20,8 @@ export function useFilterLogic({
   organizations,
   accessToken,
   setSelectedTeam,
-  setCurrentOrg
+  setCurrentOrg,
+  setSelectedKeyAlias
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
@@ -23,12 +29,13 @@ export function useFilterLogic({
   accessToken: string | null;
   setSelectedTeam: (team: Team | null) => void;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  setSelectedKeyAlias: Setter<string | null>
 }) {
   const [filters, setFilters] = useState<FilterState>({
     'Team ID': '',
     'Organization ID': '',
+    'Key Alias': ''
   });
-  const [allKeyAliases, setAllKeyAliases] = useState<string[]>([]);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
@@ -79,6 +86,16 @@ export function useFilterLogic({
     }
   }, [accessToken]);
 
+  const queryAllKeysQuery = useQuery({
+    queryKey: ['allKeys'],
+    queryFn: async () => {
+      if (!accessToken) throw new Error('Access token required');
+      return await fetchAllKeyAliases(accessToken);
+    },
+    enabled: !!accessToken
+  });
+  const allKeyAliases = queryAllKeysQuery.data || []
+
   // Update teams and organizations when props change
   useEffect(() => {
     if (teams && teams.length > 0) {
@@ -103,6 +120,7 @@ export function useFilterLogic({
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
+      'Key Alias': newFilters['Key Alias'] || ''
     });
   
     // Handle Team change
@@ -120,6 +138,12 @@ export function useFilterLogic({
         setCurrentOrg(selectedOrg);
       }
     }
+
+    const keyAlias = newFilters['Key Alias'];
+    const selectedKeyAlias = keyAlias
+      ? allKeyAliases.find((k) => k === keyAlias) || null
+      : null;
+    setSelectedKeyAlias(selectedKeyAlias)
   };
 
   const handleFilterReset = () => {
@@ -127,6 +151,7 @@ export function useFilterLogic({
     setFilters({
       'Team ID': '',
       'Organization ID': '',
+      'Key Alias': ''
     });
     
     // Reset team and org selections
@@ -144,6 +169,3 @@ export function useFilterLogic({
     handleFilterReset
   };
 }
-
-// These functions are imported from key_team_helpers/filter_helpers.ts
-import { fetchAllKeyAliases, fetchAllTeams, fetchAllOrganizations } from './filter_helpers'; 

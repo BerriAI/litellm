@@ -21,6 +21,7 @@ export const fetchAllKeyAliases = async (accessToken: string | null): Promise<st
         accessToken,
         null, // organization_id
         "", // team_id
+        null, // selectedKeyAlias
         currentPage,
         100 // larger page size to reduce number of requests
       );
