@@ -7,8 +7,9 @@ import {
   Col,
   Button as TremorButton,
   Callout,
+  TextInput,
 } from "@tremor/react";
-import { Button, message, Form, Input } from "antd";
+import { Button, message, Form } from "antd";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 
@@ -63,9 +64,9 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
         <div className="mt-6">
           <Title className="text-lg">SCIM Base URL</Title>
           <div className="flex items-center mt-2 mb-6">
-            <Input
+            <TextInput
               value={scimBaseUrl}
-              readOnly
+              disabled={true}
               className="flex-grow"
             />
             <CopyToClipboard
@@ -95,7 +96,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
                   label="Token Name"
                   rules={[{ required: true, message: "Please enter a name for your token" }]}
                 >
-                  <Input placeholder="SCIM Access Token" />
+                  <TextInput placeholder="SCIM Access Token" />
                 </Form.Item>
                 <Form.Item>
                   <Button
@@ -115,9 +116,11 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
                 Make sure to copy this token now. You won't be able to see it again!
               </Text>
               <div className="flex items-center mt-2">
-                <Input.Password
+                <TextInput
                   value={tokenData.token}
                   className="flex-grow mr-2"
+                  type="password"
+                  disabled={true}
                 />
                 <CopyToClipboard
                   text={tokenData.token}
