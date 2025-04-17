@@ -92,6 +92,25 @@ def test_transform_system_message():
     assert "cachePoint" in system_blocks[1]
     assert system_blocks[1]["cachePoint"]["type"] == "default"
 
+    # Case 3b: System message with two blocks, one with cache_control and one without
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Cache this!", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Don't cache this!"},
+            ],
+        },
+        {"role": "user", "content": "Hi!"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages.copy())
+    assert len(out_messages) == 1
+    assert len(system_blocks) == 3
+    assert system_blocks[0]["text"] == "Cache this!"
+    assert "cachePoint" in system_blocks[1]
+    assert system_blocks[1]["cachePoint"]["type"] == "default"
+    assert system_blocks[2]["text"] == "Don't cache this!"
+
     # Case 4: Non-system messages are not affected
     messages = [
         {"role": "user", "content": "Hello!"},
