@@ -364,6 +364,7 @@ async def delete_tag(
     "/tag/daily/activity",
     response_model=SpendAnalyticsPaginatedResponse,
     tags=["tag management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_tag_daily_activity(
     tags: Optional[str] = None,
