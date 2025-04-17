@@ -68,13 +68,6 @@ Most identity providers will require authentication. You should use a valid Lite
 - Automatic synchronization of user-team relationships
 - Proper status codes and error handling per SCIM specification
 
-## Limitations
-
-This is a basic implementation intended for testing and integration purposes. Some limitations include:
-
-- Limited filtering capabilities (only supports basic equality filters)
-- No support for complex SCIM operations like PATCH
-- Limited schema customization
 
 ## Example Usage
 
