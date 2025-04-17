@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     NewUserResponse,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.types.proxy.management_endpoints.scim_v2 import *
@@ -198,7 +199,7 @@ class ScimTransformations:
     "/Users",
     response_model=SCIMListResponse,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
@@ -265,7 +266,7 @@ async def get_users(
     "/Users/{user_id}",
     response_model=SCIMUser,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def get_user(
     user_id: str = Path(..., title="User ID"),
@@ -304,7 +305,7 @@ async def get_user(
     "/Users",
     response_model=SCIMUser,
     status_code=201,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def create_user(
     user: SCIMUser = Body(...),
@@ -371,7 +372,7 @@ async def create_user(
     "/Users/{user_id}",
     response_model=SCIMUser,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def update_user(
     user_id: str = Path(..., title="User ID"),
@@ -397,6 +398,7 @@ async def update_user(
 @scim_router.delete(
     "/Users/{user_id}",
     status_code=204,
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_user(
     user_id: str = Path(..., title="User ID"),
@@ -456,7 +458,7 @@ async def delete_user(
     "/Users/{user_id}",
     response_model=SCIMUser,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def patch_user(
     user_id: str = Path(..., title="User ID"),
@@ -498,7 +500,7 @@ async def patch_user(
     "/Groups",
     response_model=SCIMListResponse,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
@@ -584,7 +586,7 @@ async def get_groups(
     "/Groups/{group_id}",
     response_model=SCIMGroup,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def get_group(
     group_id: str = Path(..., title="Group ID"),
@@ -625,7 +627,7 @@ async def get_group(
     "/Groups",
     response_model=SCIMGroup,
     status_code=201,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def create_group(
     group: SCIMGroup = Body(...),
@@ -691,7 +693,7 @@ async def create_group(
     "/Groups/{group_id}",
     response_model=SCIMGroup,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def update_group(
     group_id: str = Path(..., title="Group ID"),
@@ -810,6 +812,7 @@ async def update_group(
 @scim_router.delete(
     "/Groups/{group_id}",
     status_code=204,
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_group(
     group_id: str = Path(..., title="Group ID"),
@@ -864,7 +867,7 @@ async def delete_group(
     "/Groups/{group_id}",
     response_model=SCIMGroup,
     status_code=200,
-    dependencies=[Depends(set_scim_content_type)],
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
 )
 async def patch_group(
     group_id: str = Path(..., title="Group ID"),
