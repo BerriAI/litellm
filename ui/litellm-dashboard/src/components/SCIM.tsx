@@ -8,10 +8,18 @@ import {
   Button as TremorButton,
   Callout,
   TextInput,
+  Divider,
 } from "@tremor/react";
 import { message, Form } from "antd";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { 
+  LinkOutlined, 
+  KeyOutlined, 
+  CopyOutlined,
+  ExclamationCircleOutlined,
+  PlusCircleOutlined
+} from "@ant-design/icons";
 
 interface SCIMConfigProps {
   accessToken: string | null;
@@ -70,89 +78,128 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   return (
     <Grid numItems={1}>
       <Card>
-        <Title className="mb-4">SCIM Configuration</Title>
-        <Text>
+        <div className="flex items-center mb-4">
+          <Title>SCIM Configuration</Title>
+        </div>
+        <Text className="text-gray-600">
           System for Cross-domain Identity Management (SCIM) allows you to automatically provision and manage users and groups in LiteLLM.
         </Text>
         
-        <div className="mt-6">
-          <Title className="text-lg">SCIM Tenant URL (Base URL)</Title>
-          <div className="flex items-center mt-2 mb-6">
-            <TextInput
-              value={scimBaseUrl}
-              disabled={true}
-              className="flex-grow"
-            />
-            <CopyToClipboard
-              text={scimBaseUrl}
-              onCopy={() => message.success("URL copied to clipboard")}
-            >
-              <TremorButton variant="primary" className="ml-2">
-                Copy
-              </TremorButton>
-            </CopyToClipboard>
+        <Divider />
+        
+        <div className="space-y-8">
+          {/* Step 1: SCIM URL */}
+          <div>
+            <div className="flex items-center mb-2">
+              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 mr-2">
+                1
+              </div>
+              <Title className="text-lg flex items-center">
+                <LinkOutlined className="h-5 w-5 mr-2" />
+                SCIM Tenant URL
+              </Title>
+            </div>
+            <Text className="text-gray-600 mb-3">
+              Use this URL in your identity provider's SCIM integration settings.
+            </Text>
+            <div className="flex items-center">
+              <TextInput
+                value={scimBaseUrl}
+                disabled={true}
+                className="flex-grow"
+              />
+              <CopyToClipboard
+                text={scimBaseUrl}
+                onCopy={() => message.success("URL copied to clipboard")}
+              >
+                <TremorButton variant="primary" className="ml-2 flex items-center">
+                  <CopyOutlined className="h-4 w-4 mr-1" />
+                  Copy
+                </TremorButton>
+              </CopyToClipboard>
+            </div>
           </div>
 
-          <Callout title="Using SCIM" color="blue" className="mt-4 mb-6">
-            You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider's configuration.
-          </Callout>
-
-          {!tokenData ? (
-            <>
-              <Title className="text-lg mb-4">Create SCIM Access Token</Title>
-              <Form
-                form={form}
-                onFinish={handleCreateSCIMToken}
-                layout="vertical"
-              >
-                <Form.Item
-                  name="key_alias"
-                  label="Token Name"
-                  rules={[{ required: true, message: "Please enter a name for your token" }]}
-                >
-                  <TextInput placeholder="SCIM Access Token" />
-                </Form.Item>
-                <Form.Item>
-                  <TremorButton
-                    variant="primary"
-                    type="submit"
-                    loading={isCreatingToken}
-                  >
-                    Create SCIM Token
-                  </TremorButton>
-                </Form.Item>
-              </Form>
-            </>
-          ) : (
-            <Card className="mt-4 bg-yellow-50">
-              <Title className="text-lg text-yellow-800">Your SCIM Token</Title>
-              <Text className="text-yellow-800 mb-2">
-                Make sure to copy this token now. You won't be able to see it again!
-              </Text>
-              <div className="flex items-center mt-2">
-                <TextInput
-                  value={tokenData.token}
-                  className="flex-grow mr-2"
-                  type="password"
-                  disabled={true}
-                />
-                <CopyToClipboard
-                  text={tokenData.token}
-                  onCopy={() => message.success("Token copied to clipboard")}
-                >
-                  <TremorButton variant="primary">
-                    Copy
-                  </TremorButton>
-                </CopyToClipboard>
+          {/* Step 2: SCIM Token */}
+          <div>
+            <div className="flex items-center mb-2">
+              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 mr-2">
+                2
               </div>
-              <TremorButton
-                className="mt-4"
-                onClick={() => setTokenData(null)}
-              >
-                Create Another Token
-              </TremorButton>
-            </Card>
-          )}
+              <Title className="text-lg flex items-center">
+                <KeyOutlined className="h-5 w-5 mr-2" />
+                Authentication Token
+              </Title>
+            </div>
+            
+            <Callout title="Using SCIM" color="blue" className="mb-4">
+              You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider's configuration.
+            </Callout>
+
+            {!tokenData ? (
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <Form
+                  form={form}
+                  onFinish={handleCreateSCIMToken}
+                  layout="vertical"
+                >
+                  <Form.Item
+                    name="key_alias"
+                    label="Token Name"
+                    rules={[{ required: true, message: "Please enter a name for your token" }]}
+                  >
+                    <TextInput placeholder="SCIM Access Token" />
+                  </Form.Item>
+                  <Form.Item>
+                    <TremorButton
+                      variant="primary"
+                      type="submit"
+                      loading={isCreatingToken}
+                      className="flex items-center"
+                    >
+                      <KeyOutlined className="h-4 w-4 mr-1" />
+                      Create SCIM Token
+                    </TremorButton>
+                  </Form.Item>
+                </Form>
+              </div>
+            ) : (
+              <Card className="border border-yellow-300 bg-yellow-50">
+                <div className="flex items-center mb-2 text-yellow-800">
+                  <ExclamationCircleOutlined className="h-5 w-5 mr-2" />
+                  <Title className="text-lg text-yellow-800">Your SCIM Token</Title>
+                </div>
+                <Text className="text-yellow-800 mb-4 font-medium">
+                  Make sure to copy this token now. You won't be able to see it again!
+                </Text>
+                <div className="flex items-center">
+                  <TextInput
+                    value={tokenData.token}
+                    className="flex-grow mr-2 bg-white"
+                    type="password"
+                    disabled={true}
+                  />
+                  <CopyToClipboard
+                    text={tokenData.token}
+                    onCopy={() => message.success("Token copied to clipboard")}
+                  >
+                    <TremorButton variant="primary" className="flex items-center">
+                      <CopyOutlined className="h-4 w-4 mr-1" />
+                      Copy
+                    </TremorButton>
+                  </CopyToClipboard>
+                </div>
+                <TremorButton
+                  className="mt-4 flex items-center"
+                  variant="secondary"
+                  onClick={() => setTokenData(null)}
+                >
+                  <PlusCircleOutlined className="h-4 w-4 mr-1" />
+                  Create Another Token
+                </TremorButton>
+              </Card>
+            )}
+          </div>
         </div>
       </Card>
     </Grid>
