@@ -943,7 +943,6 @@ from test_completion import response_format_tests
     [
         "vertex_ai/mistral-large@2407",
         "vertex_ai/mistral-nemo@2407",
-        "vertex_ai/codestral@2405",
         # "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
@@ -1007,8 +1006,7 @@ async def test_partner_models_httpx(model, sync_mode):
     [
         "vertex_ai/mistral-large@2407",
         # "vertex_ai/meta/llama3-405b-instruct-maas",
-        "vertex_ai/codestral@2405",
-    ],  #
+    ],
 )  # "vertex_ai",
 @pytest.mark.parametrize(
     "sync_mode",
