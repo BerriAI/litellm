@@ -351,7 +351,8 @@ async def create_user(
                         familyName=user.name.familyName,
                     ).model_dump()
                 },
-            )
+                auto_create_key=False,
+            ),
         )
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
             user=created_user
