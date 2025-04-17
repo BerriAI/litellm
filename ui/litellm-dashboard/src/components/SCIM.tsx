@@ -100,7 +100,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
               </Title>
             </div>
             <Text className="text-gray-600 mb-3">
-              Use this URL in your identity provider's SCIM integration settings.
+              Use this URL in your identity provider SCIM integration settings.
             </Text>
             <div className="flex items-center">
               <TextInput
@@ -133,7 +133,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
             </div>
             
             <Callout title="Using SCIM" color="blue" className="mb-4">
-              You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider's configuration.
+              You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider configuration.
             </Callout>
 
             {!tokenData ? (
@@ -170,7 +170,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                   <Title className="text-lg text-yellow-800">Your SCIM Token</Title>
                 </div>
                 <Text className="text-yellow-800 mb-4 font-medium">
-                  Make sure to copy this token now. You won't be able to see it again!
+                  Make sure to copy this token now. You will not be able to see it again.
                 </Text>
                 <div className="flex items-center">
                   <TextInput
