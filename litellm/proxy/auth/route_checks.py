@@ -39,7 +39,9 @@ class RouteChecks:
                 ):
                     return True
 
-        raise Exception("Virtual key is not allowed to call this route.")
+        raise Exception(
+            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+        )
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
