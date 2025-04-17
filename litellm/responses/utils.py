@@ -60,7 +60,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def get_requested_response_api_optional_param(
-        params: Dict[str, Any]
+        params: Dict[str, Any],
     ) -> ResponsesAPIOptionalRequestParams:
         """
         Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
@@ -72,7 +72,9 @@ class ResponsesAPIRequestUtils:
             ResponsesAPIOptionalRequestParams instance with only the valid parameters
         """
         valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys}
+        filtered_params = {
+            k: v for k, v in params.items() if k in valid_keys and v is not None
+        }
         return cast(ResponsesAPIOptionalRequestParams, filtered_params)
 
 
@@ -88,7 +90,7 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage: Union[dict, ResponseAPIUsage]
+        usage: Union[dict, ResponseAPIUsage],
     ) -> Usage:
         """Tranforms the ResponseAPIUsage object to a Usage object"""
         response_api_usage: ResponseAPIUsage = (
