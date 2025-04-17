@@ -201,13 +201,25 @@ class TestOpenAIResponsesAPIConfig:
         # Test with provided API base
         api_base = "https://custom-openai.example.com/v1"
 
-        result = self.config.get_complete_url(api_base=api_base, model=self.model)
+        result = self.config.get_complete_url(
+            api_base=api_base,
+            model=self.model,
+            api_key="test_api_key",
+            optional_params={},
+            litellm_params={},
+        )
 
         assert result == "https://custom-openai.example.com/v1/responses"
 
         # Test with litellm.api_base
         with patch("litellm.api_base", "https://litellm-api-base.example.com/v1"):
-            result = self.config.get_complete_url(api_base=None, model=self.model)
+            result = self.config.get_complete_url(
+                api_base=None,
+                model=self.model,
+                api_key="test_api_key",
+                optional_params={},
+                litellm_params={},
+            )
 
             assert result == "https://litellm-api-base.example.com/v1/responses"
 
@@ -217,7 +229,13 @@ class TestOpenAIResponsesAPIConfig:
                 "litellm.llms.openai.responses.transformation.get_secret_str",
                 return_value="https://env-api-base.example.com/v1",
             ):
-                result = self.config.get_complete_url(api_base=None, model=self.model)
+                result = self.config.get_complete_url(
+                    api_base=None,
+                    model=self.model,
+                    api_key="test_api_key",
+                    optional_params={},
+                    litellm_params={},
+                )
 
                 assert result == "https://env-api-base.example.com/v1/responses"
 
@@ -227,13 +245,25 @@ class TestOpenAIResponsesAPIConfig:
                 "litellm.llms.openai.responses.transformation.get_secret_str",
                 return_value=None,
             ):
-                result = self.config.get_complete_url(api_base=None, model=self.model)
+                result = self.config.get_complete_url(
+                    api_base=None,
+                    model=self.model,
+                    api_key="test_api_key",
+                    optional_params={},
+                    litellm_params={},
+                )
 
                 assert result == "https://api.openai.com/v1/responses"
 
         # Test with trailing slash in API base
         api_base = "https://custom-openai.example.com/v1/"
 
-        result = self.config.get_complete_url(api_base=api_base, model=self.model)
+        result = self.config.get_complete_url(
+            api_base=api_base,
+            model=self.model,
+            api_key="test_api_key",
+            optional_params={},
+            litellm_params={},
+        )
 
         assert result == "https://custom-openai.example.com/v1/responses"
