@@ -587,7 +587,7 @@ async def test_openai_responses_litellm_router_no_metadata():
 
         # Assert metadata is not in the request
         assert (
-            loaded_request_body["metadata"] == None
+            "metadata" not in loaded_request_body
         ), "metadata should not be in the request body"
         mock_post.assert_called_once()
 
