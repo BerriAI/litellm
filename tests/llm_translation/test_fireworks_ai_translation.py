@@ -80,7 +80,7 @@ def test_map_response_format():
 class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "fireworks_ai/llama-v3p3-70b-instruct"
+            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -292,4 +292,3 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
                 "url"
             ]
         )
-
