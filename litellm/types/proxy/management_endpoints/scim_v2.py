@@ -67,7 +67,7 @@ class SCIMListResponse(BaseModel):
     totalResults: int
     startIndex: Optional[int] = 1
     itemsPerPage: Optional[int] = 10
-    Resources: List[Union[SCIMUser, SCIMGroup]]
+    Resources: Union[List[SCIMUser], List[SCIMGroup]]
 
 
 # SCIM PATCH Operation Models

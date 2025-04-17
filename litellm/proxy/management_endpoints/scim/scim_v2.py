@@ -96,7 +96,7 @@ async def get_users(
         )
 
         # Convert to SCIM format
-        scim_users = []
+        scim_users: List[SCIMUser] = []
         for user in users:
             scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
                 user=user
