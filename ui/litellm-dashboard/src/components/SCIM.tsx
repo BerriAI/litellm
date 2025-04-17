@@ -9,7 +9,7 @@ import {
   Callout,
   TextInput,
 } from "@tremor/react";
-import { Button, message, Form } from "antd";
+import { message, Form } from "antd";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 
@@ -73,9 +73,9 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
               text={scimBaseUrl}
               onCopy={() => message.success("URL copied to clipboard")}
             >
-              <Button type="primary" className="ml-2">
+              <TremorButton variant="primary" className="ml-2">
                 Copy
-              </Button>
+              </TremorButton>
             </CopyToClipboard>
           </div>
 
@@ -99,13 +99,13 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
                   <TextInput placeholder="SCIM Access Token" />
                 </Form.Item>
                 <Form.Item>
-                  <Button
-                    type="primary"
-                    htmlType="submit"
+                  <TremorButton
+                    variant="primary"
+                    type="submit"
                     loading={isCreatingToken}
                   >
                     Create SCIM Token
-                  </Button>
+                  </TremorButton>
                 </Form.Item>
               </Form>
             </>
@@ -126,9 +126,9 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl })
                   text={tokenData.token}
                   onCopy={() => message.success("Token copied to clipboard")}
                 >
-                  <Button type="primary">
+                  <TremorButton variant="primary">
                     Copy
-                  </Button>
+                  </TremorButton>
                 </CopyToClipboard>
               </div>
               <TremorButton
