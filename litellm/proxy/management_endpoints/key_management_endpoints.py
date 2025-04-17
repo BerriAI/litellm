@@ -1273,7 +1273,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "blocked": blocked,
             "created_by": created_by,
             "updated_by": updated_by,
-            "allowed_routes": allowed_routes,
+            "allowed_routes": allowed_routes or [],
         }
 
         if (
