@@ -22,6 +22,7 @@ import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
+import EntityUsage from './entity_usage';
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -230,228 +231,255 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-      <Text>Experimental Usage page, using new `/user/daily/activity` endpoint.</Text>
-      <Grid numItems={2} className="gap-2 w-full mb-4">
-        <Col>
-          <Text>Select Time Range</Text>
-          <DateRangePicker
-            enableSelect={true}
-            value={dateValue}
-            onValueChange={(value) => {
-              setDateValue(value);
-            }}
-          />
-        </Col>
-      </Grid>
+      <Text>Usage Analytics Dashboard</Text>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
-          <Tab>Cost</Tab>
-          <Tab>Activity</Tab>
+          <Tab>Your Usage</Tab>
+          <Tab>Tag Usage</Tab>
+          <Tab>Team Usage</Tab>
         </TabList>
         <TabPanels>
-          {/* Cost Panel */}
+          {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full">
-              {/* Total Spend Card */}
-              <Col numColSpan={2}>
-                <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-                  Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
-                </Text>
-                
-                <ViewUserSpend
-                  userID={userID}
-                  userRole={userRole}
-                  accessToken={accessToken}
-                  userSpend={totalSpend}
-                  selectedTeam={null}
-                  userMaxBudget={null}
+            <Grid numItems={2} className="gap-2 w-full mb-4">
+              <Col>
+                <Text>Select Time Range</Text>
+                <DateRangePicker
+                  enableSelect={true}
+                  value={dateValue}
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                  }}
                 />
               </Col>
-
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Usage Metrics</Title>
-                  <Grid numItems={5} className="gap-4 mt-4">
-                    <Card>
-                      <Title>Total Requests</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+            </Grid>
+            <TabGroup>
+              <TabList variant="solid" className="mt-1">
+                <Tab>Cost</Tab>
+                <Tab>Activity</Tab>
+              </TabList>
+              <TabPanels>
+                {/* Cost Panel */}
+                <TabPanel>
+                  <Grid numItems={2} className="gap-2 w-full">
+                    {/* Total Spend Card */}
+                    <Col numColSpan={2}>
+                      <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
+                        Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
                       </Text>
-                    </Card>
-                    <Card>
-                      <Title>Successful Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-green-600">
-                        {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Failed Requests</Title>
-                      <Text className="text-2xl font-bold mt-2 text-red-600">
-                        {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Total Tokens</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                      </Text>
-                    </Card>
-                    <Card>
-                      <Title>Average Cost per Request</Title>
-                      <Text className="text-2xl font-bold mt-2">
-                        ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
-                      </Text>
-                    </Card>
-                  </Grid>
-                </Card>
-              </Col>
-
-              {/* Daily Spend Chart */}
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Daily Spend</Title>
-                  <BarChart
-                    data={[...userSpendData.results].sort((a, b) => 
-                      new Date(a.date).getTime() - new Date(b.date).getTime()
-                    )}
-                    index="date"
-                    categories={["metrics.spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    yAxisWidth={100}
-                    showLegend={false}
-                    customTooltip={({ payload, active }) => {
-                      if (!active || !payload?.[0]) return null;
-                      const data = payload[0].payload;
-                      return (
-                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                          <p className="font-bold">{data.date}</p>
-                          <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
-                          <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                          <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                          <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                          <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                        </div>
-                      );
-                    }}
-                  />
-                </Card>
-              </Col>
-              {/* Top API Keys */}
-              <Col numColSpan={1}>
-                <Card className="h-full">
-                  <Title>Top API Keys</Title>
-                  <TopKeyView
-                    topKeys={getTopKeys()}
-                    accessToken={accessToken}
-                    userID={userID}
-                    userRole={userRole}
-                    teams={null}
-                  />
-                </Card>
-              </Col>
-
-              {/* Top Models */}
-              <Col numColSpan={1}>
-                <Card className="h-full">
-                  <div className="flex justify-between items-center mb-4">
-                    <Title>Top Models</Title>
-                  </div>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopModels()}
-                    index="key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                    customTooltip={({ payload, active }) => {
-                      if (!active || !payload?.[0]) return null;
-                      const data = payload[0].payload;
-                      return (
-                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                          <p className="font-bold">{data.key}</p>
-                          <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
-                          <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
-                          <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
-                          <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
-                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                        </div>
-                      );
-                    }}
-                  />
-                </Card>
-              </Col>
-
-              {/* Spend by Provider */}
-              <Col numColSpan={2}>
-                <Card className="h-full">
-                  <div className="flex justify-between items-center mb-4">
-                    <Title>Spend by Provider</Title>
-                  </div>
-                  <Grid numItems={2}>
-                    <Col numColSpan={1}>
-                      <DonutChart
-                        className="mt-4 h-40"
-                        data={getProviderSpend()}
-                        index="provider"
-                        category="spend"
-                        valueFormatter={(value) => `$${value.toFixed(2)}`}
-                        colors={["cyan"]}
+                      
+                      <ViewUserSpend
+                        userID={userID}
+                        userRole={userRole}
+                        accessToken={accessToken}
+                        userSpend={totalSpend}
+                        selectedTeam={null}
+                        userMaxBudget={null}
                       />
                     </Col>
-                    <Col numColSpan={1}>
-                      <Table>
-                        <TableHead>
-                          <TableRow>
-                            <TableHeaderCell>Provider</TableHeaderCell>
-                            <TableHeaderCell>Spend</TableHeaderCell>
-                            <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                            <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                            <TableHeaderCell>Tokens</TableHeaderCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {getProviderSpend()
-                            .filter(provider => provider.spend > 0)
-                            .map((provider) => (
-                              <TableRow key={provider.provider}>
-                                <TableCell>{provider.provider}</TableCell>
-                                <TableCell>
-                                  ${provider.spend < 0.00001
-                                      ? "less than 0.00001" 
-                                      : provider.spend.toFixed(2)}
-                              </TableCell>
-                              <TableCell className="text-green-600">
-                                {provider.successful_requests.toLocaleString()}
-                              </TableCell>
-                              <TableCell className="text-red-600">
-                                {provider.failed_requests.toLocaleString()}
-                              </TableCell>
-                              <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </Col>
-                  </Grid>
-                </Card>
-              </Col>
 
-              {/* Usage Metrics */}
-              
-            </Grid>
+                    <Col numColSpan={2}>
+                      <Card>
+                        <Title>Usage Metrics</Title>
+                        <Grid numItems={5} className="gap-4 mt-4">
+                          <Card>
+                            <Title>Total Requests</Title>
+                            <Text className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Successful Requests</Title>
+                            <Text className="text-2xl font-bold mt-2 text-green-600">
+                              {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Failed Requests</Title>
+                            <Text className="text-2xl font-bold mt-2 text-red-600">
+                              {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Total Tokens</Title>
+                            <Text className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
+                          <Card>
+                            <Title>Average Cost per Request</Title>
+                            <Text className="text-2xl font-bold mt-2">
+                              ${((totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1)).toFixed(4)}
+                            </Text>
+                          </Card>
+                        </Grid>
+                      </Card>
+                    </Col>
+
+                    {/* Daily Spend Chart */}
+                    <Col numColSpan={2}>
+                      <Card>
+                        <Title>Daily Spend</Title>
+                        <BarChart
+                          data={[...userSpendData.results].sort((a, b) => 
+                            new Date(a.date).getTime() - new Date(b.date).getTime()
+                          )}
+                          index="date"
+                          categories={["metrics.spend"]}
+                          colors={["cyan"]}
+                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          yAxisWidth={100}
+                          showLegend={false}
+                          customTooltip={({ payload, active }) => {
+                            if (!active || !payload?.[0]) return null;
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                <p className="font-bold">{data.date}</p>
+                                <p className="text-cyan-500">Spend: ${data.metrics.spend.toFixed(2)}</p>
+                                <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                                <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                              </div>
+                            );
+                          }}
+                        />
+                      </Card>
+                    </Col>
+                    {/* Top API Keys */}
+                    <Col numColSpan={1}>
+                      <Card className="h-full">
+                        <Title>Top API Keys</Title>
+                        <TopKeyView
+                          topKeys={getTopKeys()}
+                          accessToken={accessToken}
+                          userID={userID}
+                          userRole={userRole}
+                          teams={null}
+                        />
+                      </Card>
+                    </Col>
+
+                    {/* Top Models */}
+                    <Col numColSpan={1}>
+                      <Card className="h-full">
+                        <div className="flex justify-between items-center mb-4">
+                          <Title>Top Models</Title>
+                        </div>
+                        <BarChart
+                          className="mt-4 h-40"
+                          data={getTopModels()}
+                          index="key"
+                          categories={["spend"]}
+                          colors={["cyan"]}
+                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          layout="vertical"
+                          yAxisWidth={200}
+                          showLegend={false}
+                          customTooltip={({ payload, active }) => {
+                            if (!active || !payload?.[0]) return null;
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                <p className="font-bold">{data.key}</p>
+                                <p className="text-cyan-500">Spend: ${data.spend.toFixed(2)}</p>
+                                <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+                                <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
+                                <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
+                                <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                              </div>
+                            );
+                          }}
+                        />
+                      </Card>
+                    </Col>
+
+                    {/* Spend by Provider */}
+                    <Col numColSpan={2}>
+                      <Card className="h-full">
+                        <div className="flex justify-between items-center mb-4">
+                          <Title>Spend by Provider</Title>
+                        </div>
+                        <Grid numItems={2}>
+                          <Col numColSpan={1}>
+                            <DonutChart
+                              className="mt-4 h-40"
+                              data={getProviderSpend()}
+                              index="provider"
+                              category="spend"
+                              valueFormatter={(value) => `$${value.toFixed(2)}`}
+                              colors={["cyan"]}
+                            />
+                          </Col>
+                          <Col numColSpan={1}>
+                            <Table>
+                              <TableHead>
+                                <TableRow>
+                                  <TableHeaderCell>Provider</TableHeaderCell>
+                                  <TableHeaderCell>Spend</TableHeaderCell>
+                                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                                  <TableHeaderCell>Tokens</TableHeaderCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {getProviderSpend()
+                                  .filter(provider => provider.spend > 0)
+                                  .map((provider) => (
+                                    <TableRow key={provider.provider}>
+                                      <TableCell>{provider.provider}</TableCell>
+                                      <TableCell>
+                                        ${provider.spend < 0.00001
+                                            ? "less than 0.00001" 
+                                            : provider.spend.toFixed(2)}
+                                    </TableCell>
+                                    <TableCell className="text-green-600">
+                                      {provider.successful_requests.toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-red-600">
+                                      {provider.failed_requests.toLocaleString()}
+                                    </TableCell>
+                                    <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </Col>
+                        </Grid>
+                      </Card>
+                    </Col>
+
+                    {/* Usage Metrics */}
+                    
+                  </Grid>
+                </TabPanel>
+
+                {/* Activity Panel */}
+                <TabPanel>
+                  <ActivityMetrics modelMetrics={modelMetrics} />
+                </TabPanel>
+              </TabPanels>
+            </TabGroup>
           </TabPanel>
 
-          {/* Activity Panel */}
+          {/* Tag Usage Panel */}
           <TabPanel>
-            <ActivityMetrics modelMetrics={modelMetrics} />
+            <EntityUsage 
+              accessToken={accessToken}
+              entityType="tag"
+            />
+          </TabPanel>
+
+          {/* Team Usage Panel */}
+          <TabPanel>
+            <EntityUsage 
+              accessToken={accessToken}
+              entityType="team"
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
-      
     </div>
   );
 };

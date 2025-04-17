@@ -342,6 +342,60 @@ model LiteLLM_DailyUserSpend {
   @@index([model])
 }
 
+// Track daily team spend metrics per model and key
+model LiteLLM_DailyTeamSpend {
+  id                  String   @id @default(uuid())
+  team_id             String
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  cache_read_input_tokens     Int      @default(0)
+  cache_creation_input_tokens Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([team_id, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([team_id])
+  @@index([api_key])
+  @@index([model])
+}
+
+// Track daily team spend metrics per model and key
+model LiteLLM_DailyTagSpend {
+  id                  String   @id @default(uuid())
+  tag                 String   
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  cache_read_input_tokens     Int      @default(0)
+  cache_creation_input_tokens Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([tag, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([tag])
+  @@index([api_key])
+  @@index([model])
+}
+
 
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
 model LiteLLM_CronJob {
