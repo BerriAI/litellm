@@ -18,7 +18,7 @@ from litellm.types.llms.openai import (
     IncompleteDetails,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from base_responses_api import BaseResponsesAPITest
+from base_responses_api import BaseResponsesAPITest, validate_responses_api_response
 
 class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
