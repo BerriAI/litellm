@@ -6267,9 +6267,11 @@ def validate_and_fix_openai_messages(messages: List):
             message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
-        cleaned_message = cleanup_none_field_in_message(message=message)
+
+        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
-    return validate_chat_completion_messages(messages=new_messages)
+    return validate_chat_completion_user_messages(messages=new_messages)
 
 
 def cleanup_none_field_in_message(message: AllMessageValues):
@@ -6280,18 +6282,6 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     """
     new_message = message.copy()
     return {k: v for k, v in new_message.items() if v is not None}
-
-
-def validate_chat_completion_messages(messages: List[AllMessageValues]):
-    """
-    Ensures all messages are valid OpenAI chat completion messages.
-    """
-    # 1. convert all messages to dict
-    messages = [
-        cast(AllMessageValues, convert_to_dict(cast(dict, m))) for m in messages
-    ]
-    # 2. validate user messages
-    return validate_chat_completion_user_messages(messages=messages)
 
 
 def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
