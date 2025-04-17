@@ -18,7 +18,13 @@ from litellm.types.llms.openai import (
     IncompleteDetails,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from base_responses_api import BaseResponsesAPITest
 
+class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "openai/gpt-4o",
+        }
 
 
 class TestCustomLogger(CustomLogger):
