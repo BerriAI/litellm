@@ -221,6 +221,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "infinity":
+        return litellm.InfinityEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "triton":
         if request_type == "embeddings":
             return litellm.TritonEmbeddingConfig().get_supported_openai_params(

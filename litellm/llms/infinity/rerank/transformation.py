@@ -22,7 +22,7 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
-from .common_utils import InfinityError
+from ..common_utils import InfinityError
 
 
 class InfinityRerankConfig(CohereRerankConfig):
