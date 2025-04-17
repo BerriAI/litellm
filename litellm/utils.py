@@ -6261,12 +6261,25 @@ def validate_and_fix_openai_messages(messages: List):
 
     Handles missing role for assistant messages.
     """
+    new_messages = []
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
-    return validate_chat_completion_messages(messages=messages)
+        cleaned_message = cleanup_none_field_in_message(message=message)
+        new_messages.append(cleaned_message)
+    return validate_chat_completion_messages(messages=new_messages)
+
+
+def cleanup_none_field_in_message(message: AllMessageValues):
+    """
+    Cleans up the message by removing the none field.
+
+    remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
+    """
+    new_message = message.copy()
+    return {k: v for k, v in new_message.items() if v is not None}
 
 
 def validate_chat_completion_messages(messages: List[AllMessageValues]):

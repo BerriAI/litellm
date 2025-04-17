@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -252,15 +253,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             and message.tool_calls is None
         ):
             try:
-                tool_call = ChatCompletionMessageToolCall(
-                    function=Function(**json.loads(message.content)), id=None, type=None
-                )
-                if (
-                    tool_call.function.name != RESPONSE_FORMAT_TOOL_NAME
-                    and tool_call.function.name
-                    in [tool["function"]["name"] for tool in tool_calls]
-                ):
+                function = Function(**json.loads(message.content))
+                if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
+                    tool["function"]["name"] for tool in tool_calls
+                ]:
+                    tool_call = ChatCompletionMessageToolCall(
+                        function=function, id=str(uuid.uuid4()), type="function"
+                    )
                     message.tool_calls = [tool_call]
+
                     message.content = None
             except Exception:
                 pass

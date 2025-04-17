@@ -386,6 +386,7 @@ class Function(OpenAIObject):
                 params["parameters"], dict
             ):
                 arguments = json.dumps(params["parameters"])
+                params.pop("parameters")
             else:
                 arguments = ""
         elif isinstance(arguments, Dict):
@@ -396,7 +397,7 @@ class Function(OpenAIObject):
         name = name
 
         # Build a dictionary with the structure your BaseModel expects
-        data = {"arguments": arguments, "name": name, **params}
+        data = {"arguments": arguments, "name": name}
 
         super(Function, self).__init__(**data)
 
