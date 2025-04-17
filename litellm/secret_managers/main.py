@@ -173,10 +173,15 @@ def get_secret(  # noqa: PLR0915
                     "AZURE_FEDERATED_TOKEN_FILE not found in environment will use Azure AD token provider"
                 )
                 azure_token_provider = get_azure_ad_token_provider(azure_scope=oidc_aud)
-                oidc_token = azure_token_provider()
-                if oidc_token is None:
-                    raise ValueError("Azure OIDC provider failed")
-                return oidc_token
+                try:
+                    oidc_token = azure_token_provider()
+                    if oidc_token is None:
+                        raise ValueError("Azure OIDC provider returned None token")
+                    return oidc_token
+                except Exception as e:
+                    error_msg = f"Azure OIDC provider failed: {str(e)}"
+                    verbose_logger.error(error_msg)
+                    raise ValueError(error_msg)
             with open(azure_federated_token_file, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
