@@ -578,16 +578,70 @@ async def azure_proxy_route(
     )
 
 
+from abc import ABC, abstractmethod
+
+
+class BaseVertexAIPassThroughHandler(ABC):
+    @staticmethod
+    @abstractmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        pass
+
+
+class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
+    @staticmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        return "https://discoveryengine.googleapis.com/"
+
+    @staticmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        return base_target_url
+
+
+class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
+    @staticmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+
+    @staticmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+
+
+def get_vertex_pass_through_handler(
+    call_type: Literal["discovery", "aiplatform"]
+) -> BaseVertexAIPassThroughHandler:
+    if call_type == "discovery":
+        return VertexAIDiscoveryPassThroughHandler()
+    elif call_type == "aiplatform":
+        return VertexAIPassThroughHandler()
+    else:
+        raise ValueError(f"Invalid call type: {call_type}")
+
+
 async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    base_target_url: str,
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ):
     """
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
+
+    Default base_target_url is `https://{vertex_location}-aiplatform.googleapis.com/`
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -598,6 +652,11 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
+    api_key_to_use = get_litellm_virtual_key(request=request)
+    user_api_key_dict = await user_api_key_auth(
+        request=request,
+        api_key=api_key_to_use,
+    )
 
     if user_api_key_dict is None:
         api_key_to_use = get_litellm_virtual_key(request=request)
@@ -611,6 +670,10 @@ async def _base_vertex_proxy_route(
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
         location=vertex_location,
+    )
+
+    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(
+        vertex_location
     )
 
     headers_passed_through = False
@@ -649,6 +712,13 @@ async def _base_vertex_proxy_route(
         headers = {
             "Authorization": f"Bearer {auth_header}",
         }
+
+        base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
+            base_target_url, vertex_location
+        )
+
+    if base_target_url is None:
+        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
     request_route = encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
@@ -713,11 +783,13 @@ async def vertex_discovery_proxy_route(
 
     Target url: `https://discoveryengine.googleapis.com`
     """
+
+    discovery_handler = get_vertex_pass_through_handler(call_type="discovery")
     return await _base_vertex_proxy_route(
         endpoint=endpoint,
         request=request,
         fastapi_response=fastapi_response,
-        base_target_url="https://discoveryengine.googleapis.com/",
+        get_vertex_pass_through_handler=discovery_handler,
     )
 
 
@@ -743,16 +815,13 @@ async def vertex_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
     """
-    from litellm.llms.vertex_ai.common_utils import get_vertex_location_from_url
-
-    vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
-    base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
+    ai_platform_handler = get_vertex_pass_through_handler(call_type="aiplatform")
 
     return await _base_vertex_proxy_route(
         endpoint=endpoint,
         request=request,
         fastapi_response=fastapi_response,
-        base_target_url=base_target_url,
+        get_vertex_pass_through_handler=ai_platform_handler,
         user_api_key_dict=user_api_key_dict,
     )
 

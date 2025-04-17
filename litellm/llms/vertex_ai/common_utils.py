@@ -401,6 +401,7 @@ def construct_target_url(
     Constructed Url:
     POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
     """
+
     new_base_url = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
         if vertex_project and vertex_location:
