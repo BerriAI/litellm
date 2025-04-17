@@ -723,6 +723,7 @@ async def update_key_fn(
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
 
     Example:
     ```bash
