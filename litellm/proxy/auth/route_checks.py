@@ -23,21 +23,25 @@ class RouteChecks:
         """
         Raises Exception if Virtual Key is not allowed to call the route
         """
-        if (
-            valid_token.allowed_routes
-            and isinstance(valid_token.allowed_routes, list)
-            and len(valid_token.allowed_routes) > 0
-        ):
-            # explicit check for allowed routes
-            if route in valid_token.allowed_routes:
-                return True
 
-            # check if wildcard pattern is allowed
-            for allowed_route in valid_token.allowed_routes:
-                if RouteChecks._route_matches_wildcard_pattern(
-                    route=route, pattern=allowed_route
-                ):
-                    return True
+        # Only check if valid_token.allowed_routes is set and is a list with at least one item
+        if valid_token.allowed_routes is None:
+            return True
+        if not isinstance(valid_token.allowed_routes, list):
+            return True
+        if len(valid_token.allowed_routes) == 0:
+            return True
+
+        # explicit check for allowed routes
+        if route in valid_token.allowed_routes:
+            return True
+
+        # check if wildcard pattern is allowed
+        for allowed_route in valid_token.allowed_routes:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
 
         raise Exception(
             f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
