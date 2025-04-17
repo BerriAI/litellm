@@ -16,15 +16,23 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 interface SCIMConfigProps {
   accessToken: string | null;
   userID: string | null;
-  baseUrl: string;
+  proxySettings: any;
 }
 
-const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, baseUrl }) => {
+const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySettings }) => {
   const [form] = Form.useForm();
   const [isCreatingToken, setIsCreatingToken] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
   
-  const scimBaseUrl = `${baseUrl}/scim`;
+  let base_url = "<your_proxy_base_url>";
+
+  if (proxySettings) {
+    if (proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
+      base_url = proxySettings.PROXY_BASE_URL;
+    }
+  }
+  
+  const scimBaseUrl = `${base_url}/scim`;
   
   const handleCreateSCIMToken = async (values: any) => {
     if (!accessToken || !userID) {

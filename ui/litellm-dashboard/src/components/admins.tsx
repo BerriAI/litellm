@@ -51,6 +51,7 @@ interface AdminPanelProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
+  proxySettings?: any;
 }
 import { useBaseUrl } from "./constants";
 
@@ -73,6 +74,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   accessToken,
   showSSOBanner,
   premiumUser,
+  proxySettings,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -638,7 +640,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <SCIMConfig 
               accessToken={accessToken} 
               userID={admins && admins.length > 0 ? admins[0].user_id : null}
-              baseUrl={baseUrl}
+              proxySettings={proxySettings}
             />
           </TabPanel>
         </TabPanels>
