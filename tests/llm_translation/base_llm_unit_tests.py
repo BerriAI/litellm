@@ -891,6 +891,13 @@ class BaseLLMChatTest(ABC):
             assert response is not None
 
             # if the provider did not return any tool calls do not make a subsequent llm api call
+            if response.choices[0].message.content is not None:
+                try:
+                    json.loads(response.choices[0].message.content)
+                    pytest.fail(f"Tool call returned in content instead of tool_calls")
+                except Exception as e:
+                    print(f"Error: {e}")
+                    pass
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response

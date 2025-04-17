@@ -1416,7 +1416,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "api_base": api_base,
                     },
                 )
-        elif custom_llm_provider == "deepseek":
+        elif custom_llm_provider == "deepseek" or custom_llm_provider == "fireworks_ai":
             ## COMPLETION CALL
             try:
                 response = base_llm_http_handler.completion(
@@ -1435,6 +1435,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider=custom_llm_provider,
                     encoding=encoding,
                     stream=stream,
+                    provider_config=provider_config,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned

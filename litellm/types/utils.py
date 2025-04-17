@@ -377,12 +377,17 @@ class Function(OpenAIObject):
 
     def __init__(
         self,
-        arguments: Optional[Union[Dict, str]],
+        arguments: Optional[Union[Dict, str]] = None,
         name: Optional[str] = None,
         **params,
     ):
         if arguments is None:
-            arguments = ""
+            if params.get("parameters", None) is not None and isinstance(
+                params["parameters"], dict
+            ):
+                arguments = json.dumps(params["parameters"])
+            else:
+                arguments = ""
         elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
