@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -39,6 +40,54 @@ class JsonFormatter(Formatter):
             json_record["stacktrace"] = self.formatException(record.exc_info)
 
         return json.dumps(json_record)
+
+
+class SensitiveDataFilter(logging.Filter):
+    """Filter to redact sensitive information from logs"""
+
+    SENSITIVE_KEYS = [
+        "credentials",
+        "api_key",
+        "key",
+        "api_base",
+        "password",
+        "secret",
+        "token",
+    ]
+
+    def filter(self, record):
+        if not hasattr(record, "msg") or not record.msg:
+            return True
+
+        # Convert message to string if it's not already
+        msg = str(record.msg)
+
+        key_pattern = r'["\']?([^"\':\s]+)["\']?\s*[:=]'
+        keys = re.findall(key_pattern, msg)
+
+        # Redact sensitive information
+        for key in keys:
+            # Check if any sensitive key is a substring of the current key
+            if any(
+                sensitive_key in key.lower() for sensitive_key in self.SENSITIVE_KEYS
+            ):
+                # Handle JSON-like strings
+                pattern = f'"{key}":\\s*"[^"]*"'
+                msg = re.sub(pattern, f'"{key}": "REDACTED"', msg)
+
+                # Handle key-value pairs in plain text
+                pattern = f"{key}\\s*=\\s*[^\\s,}}]+"
+                msg = re.sub(pattern, f"{key}=REDACTED", msg)
+
+                # Handle dictionary-like strings
+                pattern = f"'{key}':\\s*'[^']*'"
+                msg = re.sub(pattern, f"'{key}': 'REDACTED'", msg)
+
+                pattern = f"\"{key}\":\\s*'[^']*'"
+                msg = re.sub(pattern, f"\"{key}\": 'REDACTED'", msg)
+
+        record.msg = msg
+        return True
 
 
 # Function to set up exception handlers for JSON logging
@@ -102,6 +151,12 @@ else:
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
+
+# Add the sensitive data filter to all loggers
+sensitive_filter = SensitiveDataFilter()
+verbose_router_logger.addFilter(sensitive_filter)
+verbose_proxy_logger.addFilter(sensitive_filter)
+verbose_logger.addFilter(sensitive_filter)
 
 # Add the handler to the logger
 verbose_router_logger.addHandler(handler)
