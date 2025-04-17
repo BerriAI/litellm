@@ -61,6 +61,25 @@ export function ModelDataTable<TData, TValue>({
     },
   });
 
+  const getHeaderText = (header: any): string => {
+    if (typeof header === 'string') {
+      return header;
+    }
+    if (typeof header === 'function') {
+      const headerElement = header();
+      if (headerElement && headerElement.props && headerElement.props.children) {
+        const children = headerElement.props.children;
+        if (typeof children === 'string') {
+          return children;
+        }
+        if (children.props && children.props.children) {
+          return children.props.children;
+        }
+      }
+    }
+    return '';
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -89,7 +108,7 @@ export function ModelDataTable<TData, TValue>({
                         onChange={() => column.toggleVisibility()}
                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
-                      <span className="ml-2">{column.columnDef.header as string}</span>
+                      <span className="ml-2">{getHeaderText(column.columnDef.header)}</span>
                     </div>
                   );
                 })}
