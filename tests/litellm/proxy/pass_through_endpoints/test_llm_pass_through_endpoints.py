@@ -19,13 +19,13 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
+    vertex_discovery_proxy_route,
     vertex_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
 class TestBaseOpenAIPassThroughHandler:
-
     def test_join_url_paths(self):
         print("\nTesting _join_url_paths method...")
 
@@ -448,6 +448,123 @@ class TestVertexAIPassThroughHandler:
                 # Call the function
                 result = await vertex_proxy_route(
                     endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                )
+
+                # Verify user_api_key_auth was called with the correct Bearer token
+                mock_auth.assert_called_once()
+                call_args = mock_auth.call_args[1]
+                assert call_args["api_key"] == "Bearer test-key-123"
+
+
+class TestVertexAIDiscoveryPassThroughHandler:
+    """
+    Test cases for Vertex AI Discovery passthrough endpoint
+    """
+
+    @pytest.mark.asyncio
+    async def test_vertex_discovery_passthrough_with_credentials(self, monkeypatch):
+        """
+        Test that when passthrough credentials are set, they are correctly used in the request
+        """
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        vertex_project = "test-project"
+        vertex_location = "us-central1"
+        vertex_credentials = "test-creds"
+
+        pass_through_router = PassthroughEndpointRouter()
+
+        pass_through_router.add_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            pass_through_router,
+        )
+
+        endpoint = f"/v1/projects/{vertex_project}/locations/{vertex_location}/dataStores/default/servingConfigs/default:search"
+
+        # Mock request
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": endpoint,
+                "headers": [
+                    (b"Authorization", b"Bearer test-creds"),
+                    (b"Content-Type", b"application/json"),
+                ],
+            }
+        )
+
+        # Mock response
+        mock_response = Response()
+
+        # Mock vertex credentials
+        test_project = vertex_project
+        test_location = vertex_location
+        test_token = vertex_credentials
+
+        with mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+        ) as mock_ensure_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+        ) as mock_get_token, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_ensure_token.return_value = ("test-auth-header", test_project)
+            mock_get_token.return_value = (test_token, "")
+
+            # Call the route
+            try:
+                await vertex_discovery_proxy_route(
+                    endpoint=endpoint,
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            # Verify create_pass_through_route was called with correct arguments
+            mock_create_route.assert_called_once_with(
+                endpoint=endpoint,
+                target=f"https://discoveryengine.googleapis.com/v1/projects/{test_project}/locations/{test_location}/dataStores/default/servingConfigs/default:search",
+                custom_headers={"Authorization": f"Bearer {test_token}"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_vertex_discovery_proxy_route_api_key_auth(self):
+        """
+        Test that the route correctly handles API key authentication
+        """
+        # Mock dependencies
+        mock_request = Mock()
+        mock_request.headers = {"x-litellm-api-key": "test-key-123"}
+        mock_request.method = "POST"
+        mock_response = Mock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+        ) as mock_auth:
+            mock_auth.return_value = {"api_key": "test-key-123"}
+
+            with patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_pass_through:
+                mock_pass_through.return_value = AsyncMock(
+                    return_value={"status": "success"}
+                )
+
+                # Call the function
+                result = await vertex_discovery_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
                     request=mock_request,
                     fastapi_response=mock_response,
                 )
