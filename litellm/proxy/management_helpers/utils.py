@@ -179,7 +179,7 @@ def _delete_api_key_from_cache(kwargs):
             user_api_key_cache.delete_cache(key=update_request.key)
 
         # delete key request
-        if isinstance(update_request, KeyRequest):
+        if isinstance(update_request, KeyRequest) and update_request.keys:
             for key in update_request.keys:
                 user_api_key_cache.delete_cache(key=key)
     pass
@@ -251,7 +251,6 @@ async def send_management_endpoint_alert(
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
     ):
-
         # Virtual Key Events
         if function_name in management_function_to_event_name:
             _event_name: AlertType = management_function_to_event_name[function_name]

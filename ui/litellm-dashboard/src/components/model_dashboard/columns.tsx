@@ -7,6 +7,8 @@ import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../delete_model_button";
 
 export const columns = (
+  userRole: string,
+  userID: string,
   premiumUser: boolean,
   setSelectedModelId: (id: string) => void,
   setSelectedTeamId: (id: string) => void,
@@ -189,6 +191,22 @@ export const columns = (
     },
   },
   {
+    header: "Credentials",
+    accessorKey: "litellm_credential_name",
+    cell: ({ row }) => {
+      const model = row.original;
+      return model.litellm_params && model.litellm_params.litellm_credential_name ? (
+        <div className="overflow-hidden">
+          <Tooltip title={model.litellm_params.litellm_credential_name}>
+            {model.litellm_params.litellm_credential_name.slice(0, 7)}...
+          </Tooltip>
+        </div>
+      ) : (
+        <span className="text-gray-400">-</span>
+      );
+    },
+  },
+  {
     header: "Status",
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
@@ -210,23 +228,30 @@ export const columns = (
     header: "",
     cell: ({ row }) => {
       const model = row.original;
+      const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
           <Icon
             icon={PencilAltIcon}
             size="sm"
             onClick={() => {
-              setSelectedModelId(model.model_info.id);
-              setEditModel(true);
+              if (canEditModel) {
+                setSelectedModelId(model.model_info.id);
+                setEditModel(true);
+              }
             }}
+            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
           />
           <Icon
             icon={TrashIcon}
             size="sm"
             onClick={() => {
-              setSelectedModelId(model.model_info.id);
-              setEditModel(false);
+              if (canEditModel) {
+                setSelectedModelId(model.model_info.id);
+                setEditModel(false);
+              }
             }}
+            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
           />
         </div>
       );

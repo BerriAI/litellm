@@ -5,7 +5,7 @@
 import os
 import sys
 import traceback
-
+import json
 import pytest
 
 sys.path.insert(
@@ -465,7 +465,8 @@ def test_sagemaker_default_region():
         )
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        print(f"kwargs: {kwargs}")
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 
@@ -517,7 +518,7 @@ def test_sagemaker_environment_region():
         )
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 
@@ -574,7 +575,7 @@ def test_sagemaker_config_region():
 
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         print("url=", kwargs["url"])
 

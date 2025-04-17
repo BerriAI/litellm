@@ -1,0 +1,117 @@
+suite: test deployment
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should work
+    template: deployment.yaml
+    set:
+      image.tag: test
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: metadata.name
+          pattern: -litellm$
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-database:test
+  - it: should work with tolerations
+    template: deployment.yaml
+    set:
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: node-role.kubernetes.io/master
+      - equal:
+          path: spec.template.spec.tolerations[0].operator
+          value: Exists
+  - it: should work with affinity
+    template: deployment.yaml
+    set:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                - antarctica-east1
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: topology.kubernetes.io/zone
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator
+          value: In
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]
+          value: antarctica-east1
+  - it: should work without masterkeySecretName or masterkeySecretKey
+    template: deployment.yaml
+    set:
+      masterkeySecretName: ""
+      masterkeySecretKey: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_MASTER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-masterkey
+                key: masterkey
+  - it: should work with masterkeySecretName and masterkeySecretKey
+    template: deployment.yaml
+    set:
+      masterkeySecretName: my-secret
+      masterkeySecretKey: my-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_MASTER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-secret
+                key: my-key
+  - it: should work with extraEnvVars
+    template: deployment.yaml
+    set:
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['env']
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['env']
+  - it: should work with both extraEnvVars and envVars
+    template: deployment.yaml
+    set:
+      envVars:
+        ENV_VAR: ENV_VAR_VALUE
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          value: EXTRA_ENV_VAR_VALUE
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENV_VAR
+            value: ENV_VAR_VALUE
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            value: EXTRA_ENV_VAR_VALUE

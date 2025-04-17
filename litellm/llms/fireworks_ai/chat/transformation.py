@@ -2,7 +2,11 @@ from typing import List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    OpenAIChatCompletionToolParam,
+)
 from litellm.types.utils import ProviderSpecificModelInfo
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -88,7 +92,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-
         supported_openai_params = self.get_supported_openai_params(model=model)
         is_tools_set = any(
             param == "tools" and value is not None
@@ -104,7 +107,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
             elif param == "response_format":
-
                 if (
                     is_tools_set
                 ):  # fireworks ai doesn't support tools and response_format together
@@ -152,6 +154,14 @@ class FireworksAIConfig(OpenAIGPTConfig):
             ] = f"{content['image_url']['url']}#transform=inline"
         return content
 
+    def _transform_tools(
+        self, tools: List[OpenAIChatCompletionToolParam]
+    ) -> List[OpenAIChatCompletionToolParam]:
+        for tool in tools:
+            if tool.get("type") == "function":
+                tool["function"].pop("strict", None)
+        return tools
+
     def _transform_messages_helper(
         self, messages: List[AllMessageValues], model: str, litellm_params: dict
     ) -> List[AllMessageValues]:
@@ -198,6 +208,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params
         )
+        if "tools" in optional_params and optional_params["tools"] is not None:
+            tools = self._transform_tools(tools=optional_params["tools"])
+            optional_params["tools"] = tools
         return super().transform_request(
             model=model,
             messages=messages,
@@ -223,7 +236,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
-
         api_base, api_key = self._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
         )

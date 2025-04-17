@@ -165,6 +165,7 @@ class IBMWatsonXMixin:
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:

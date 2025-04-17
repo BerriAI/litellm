@@ -71,6 +71,7 @@ import useKeyList from "./key_team_helpers/key_list";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
+import { Setter } from "@/types";
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -107,6 +108,8 @@ interface ViewKeyTableProps {
   currentOrg: Organization | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
 }
 
 interface ItemData {
@@ -154,7 +157,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   premiumUser,
   currentOrg,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
+  selectedKeyAlias,
+  setSelectedKeyAlias
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -176,11 +181,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   // Build a memoized filters object for the backend call.
 
   // Pass filters into the hook so the API call includes these query parameters.
-  const { keys, isLoading, error, pagination, refresh } = useKeyList({
+  const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
   });
+
+  // Make both refresh and addKey functions available globally
+  if (typeof window !== 'undefined') {
+    window.refreshKeysList = refresh;
+    window.addNewKeyToList = (newKey) => {
+      // Add the new key to the keys list without making an API call
+      setKeys((prevKeys) => [newKey, ...prevKeys]);
+    };
+  }
 
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });
@@ -409,10 +424,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     <div>
       <AllKeysTable 
         keys={keys}
+        setKeys={setKeys}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
-        pageSize={50}
+        pageSize={100}
         teams={teams}
         selectedTeam={selectedTeam}
         setSelectedTeam={setSelectedTeam}
@@ -421,6 +437,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         userRole={userRole}
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
+        refresh={refresh}
+        selectedKeyAlias={selectedKeyAlias}
+        setSelectedKeyAlias={setSelectedKeyAlias}
       />
 
       {isDeleteModalOpen && (
@@ -618,5 +637,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     </div>
   );
 };
+
+// Update the type declaration to include the new function
+declare global {
+  interface Window {
+    refreshKeysList?: () => void;
+    addNewKeyToList?: (newKey: any) => void;
+  }
+}
 
 export default ViewKeyTable;

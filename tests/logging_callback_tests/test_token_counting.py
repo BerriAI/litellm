@@ -21,16 +21,18 @@ sys.path.insert(
 import litellm
 import asyncio
 from typing import Optional
-from litellm.types.utils import StandardLoggingPayload, Usage
+from litellm.types.utils import StandardLoggingPayload, Usage, ModelInfoBase
 from litellm.integrations.custom_logger import CustomLogger
 
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         self.recorded_usage: Optional[Usage] = None
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object")
+        self.standard_logging_payload = standard_logging_payload
         print(
             "standard_logging_payload",
             json.dumps(standard_logging_payload, indent=4, default=str),

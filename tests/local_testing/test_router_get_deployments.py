@@ -569,7 +569,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         # call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
         for _ in range(1000):
             selected_model = await router.async_get_available_deployment(
-                "gpt-3.5-turbo"
+                "gpt-3.5-turbo", request_kwargs={}
             )
             selected_model_id = selected_model["litellm_params"]["model"]
             selected_model_name = selected_model_id

@@ -21,7 +21,6 @@ from .types import EndpointType
 
 
 class PassThroughStreamingHandler:
-
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,

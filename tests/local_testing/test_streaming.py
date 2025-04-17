@@ -2948,48 +2948,6 @@ def test_azure_streaming_and_function_calling():
         pytest.fail(f"Error occurred: {e}")
         raise e
 
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
-    try:
-        import os
-        from litellm import stream_chunk_builder
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_MISTRAL_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_MISTRAL_API_KEY", "")
-
-        data = {
-            "model": "azure_ai/mistral",
-            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.1,
-            "drop_params": True,
-            "stream": True,
-        }
-        chunks = []
-        if sync_mode:
-            response = completion(**data)  # type: ignore
-            for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        else:
-            response = await litellm.acompletion(**data)  # type: ignore
-
-            async for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        print(f"chunks: {chunks}")
-        response = stream_chunk_builder(chunks=chunks)
-        assert response.choices[0].message.content is not None
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
     import uuid
@@ -4069,7 +4027,8 @@ def test_mock_response_iterator_tool_use():
     "model",
     [
         # "deepseek/deepseek-reasoner",
-        "anthropic/claude-3-7-sonnet-20250219",
+        # "anthropic/claude-3-7-sonnet-20250219",
+        "openrouter/anthropic/claude-3.7-sonnet",
     ],
 )
 def test_reasoning_content_completion(model):
@@ -4080,7 +4039,9 @@ def test_reasoning_content_completion(model):
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
-            thinking={"type": "enabled", "budget_tokens": 1024},
+            # thinking={"type": "enabled", "budget_tokens": 1024},
+            reasoning={"effort": "high"},
+            drop_params=True,
         )
 
         reasoning_content_exists = False

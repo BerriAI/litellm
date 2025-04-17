@@ -98,14 +98,6 @@ const ConditionalPublicModelName: React.FC = () => {
           size="small"
         />
       </Form.Item>
-      <Row>
-        <Col span={10}></Col>
-        <Col span={10}>
-          <Text className="mb-2">
-            Model name your users will pass in.
-          </Text>
-        </Col>
-      </Row>
     </>
   );
 };
