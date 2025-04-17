@@ -300,6 +300,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
+                  proxySettings={proxySettings}
                 />
               ) : page == "api_ref" ? (
                 <APIRef proxySettings={proxySettings} />

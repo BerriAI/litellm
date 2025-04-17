@@ -1,18 +1,6 @@
 model_list:
-  - model_name: anhropic-auto-inject-cache-user-message
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
-      api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
-  
-  - model_name: anhropic-auto-inject-cache-system-message
-    litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
-      api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
-
-
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
