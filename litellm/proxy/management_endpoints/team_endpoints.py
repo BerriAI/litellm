@@ -62,6 +62,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
 )
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    get_daily_activity,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -75,6 +78,9 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
 )
 from litellm.router import Router
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
@@ -515,12 +521,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1146,10 +1152,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -1307,10 +1313,10 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_info is None:
                 raise Exception
@@ -2079,3 +2085,52 @@ async def update_team_member_permissions(
     )
 
     return updated_team
+
+
+@router.get(
+    "/team/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_team_daily_activity(
+    team_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+):
+    """
+    Get daily activity for specific teams or all teams.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Convert comma-separated tags string to list if provided
+    team_ids_list = team_ids.split(",") if team_ids else None
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=team_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )
