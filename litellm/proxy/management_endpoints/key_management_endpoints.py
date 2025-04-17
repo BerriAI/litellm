@@ -372,7 +372,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
-
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -577,9 +577,9 @@ async def generate_key_fn(  # noqa: PLR0915
             request_type="key", **data_json, table_name="key"
         )
 
-        response[
-            "soft_budget"
-        ] = data.soft_budget  # include the user-input soft budget in the response
+        response["soft_budget"] = (
+            data.soft_budget
+        )  # include the user-input soft budget in the response
 
         response = GenerateKeyResponse(**response)
 
@@ -723,6 +723,7 @@ async def update_key_fn(
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
 
     Example:
     ```bash
@@ -1167,6 +1168,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     send_invite_email: Optional[bool] = None,
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
+    allowed_routes: Optional[list] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1272,6 +1274,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "blocked": blocked,
             "created_by": created_by,
             "updated_by": updated_by,
+            "allowed_routes": allowed_routes or [],
         }
 
         if (
@@ -1467,10 +1470,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             # Assuming 'db' is your Prisma Client instance
@@ -1572,9 +1575,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -1861,11 +1864,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -1926,10 +1929,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []

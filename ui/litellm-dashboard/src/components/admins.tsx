@@ -32,12 +32,18 @@ import {
   Grid,
   Callout,
   Divider,
+  TabGroup,
+  TabList,
+  Tab,
+  TabPanel,
+  TabPanels,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
+import SCIMConfig from "./SCIM";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -45,6 +51,7 @@ interface AdminPanelProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
+  proxySettings?: any;
 }
 import { useBaseUrl } from "./constants";
 
@@ -67,6 +74,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   accessToken,
   showSSOBanner,
   premiumUser,
+  proxySettings,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -515,45 +523,51 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Admin Access </Title>
       <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
-      <Grid >
-        <Card>
-        <Title level={4}> ✨ Security Settings</Title>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-    <div>
-      <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
-    </div>
-    <div>
-      <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
-    </div>
-  </div>
-        </Card>
-       
-        <div className="flex justify-start mb-4">
-          <SSOModals
-            isAddSSOModalVisible={isAddSSOModalVisible}
-            isInstructionsModalVisible={isInstructionsModalVisible}
-            handleAddSSOOk={handleAddSSOOk}
-            handleAddSSOCancel={handleAddSSOCancel}
-            handleShowInstructions={handleShowInstructions}
-            handleInstructionsOk={handleInstructionsOk}
-            handleInstructionsCancel={handleInstructionsCancel}
-            form={form}
-          />
-          <Modal
-          title="Manage Allowed IP Addresses"
-          width={800}
-          visible={isAllowedIPModalVisible}
-          onCancel={() => setIsAllowedIPModalVisible(false)}
-          footer={[
-            <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
-              Add IP Address
-            </Button>,
-            <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-              Close
-            </Button>
-          ]}
-        >
-          <Table>
+      <TabGroup>
+        <TabList>
+          <Tab>Security Settings</Tab>
+          <Tab>SCIM</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Card>
+              <Title level={4}> ✨ Security Settings</Title>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+                <div>
+                  <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
+                </div>
+                <div>
+                  <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
+                </div>
+              </div>
+            </Card>
+           
+            <div className="flex justify-start mb-4">
+              <SSOModals
+                isAddSSOModalVisible={isAddSSOModalVisible}
+                isInstructionsModalVisible={isInstructionsModalVisible}
+                handleAddSSOOk={handleAddSSOOk}
+                handleAddSSOCancel={handleAddSSOCancel}
+                handleShowInstructions={handleShowInstructions}
+                handleInstructionsOk={handleInstructionsOk}
+                handleInstructionsCancel={handleInstructionsCancel}
+                form={form}
+              />
+              <Modal
+              title="Manage Allowed IP Addresses"
+              width={800}
+              visible={isAllowedIPModalVisible}
+              onCancel={() => setIsAllowedIPModalVisible(false)}
+              footer={[
+                <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
+                  Add IP Address
+                </Button>,
+                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
+                  Close
+                </Button>
+              ]}
+            >
+              <Table>
   <TableHead>
     <TableRow>
       <TableHeaderCell>IP Address</TableHeaderCell>
@@ -621,7 +635,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <b>{nonSssoUrl}</b>{" "}
           </a>
         </Callout>
-      </Grid>
+          </TabPanel>
+          <TabPanel>
+            <SCIMConfig 
+              accessToken={accessToken} 
+              userID={admins && admins.length > 0 ? admins[0].user_id : null}
+              proxySettings={proxySettings}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };
