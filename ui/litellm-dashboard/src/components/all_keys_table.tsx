@@ -30,6 +30,8 @@ interface AllKeysTableProps {
   teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
@@ -98,6 +100,8 @@ export function AllKeysTable({
   teams,
   selectedTeam,
   setSelectedTeam,
+  selectedKeyAlias,
+  setSelectedKeyAlias,
   accessToken,
   userID,
   userRole,
@@ -123,7 +127,8 @@ export function AllKeysTable({
     organizations,
     accessToken,
     setSelectedTeam,
-    setCurrentOrg
+    setCurrentOrg,
+    setSelectedKeyAlias
   });
 
   useEffect(() => {
@@ -358,6 +363,23 @@ export function AllKeysTable({
           }));
       }
     },
+    {
+      name: "Key Alias",
+      label: "Key Alias",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredKeyAliases = allKeyAliases.filter(key => {
+          return key.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredKeyAliases.map((key) => {
+          return {
+            label: key,
+            value: key
+          }
+        });
+      }
+    }
   ];
   
   
