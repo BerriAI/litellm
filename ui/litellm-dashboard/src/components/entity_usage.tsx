@@ -3,12 +3,13 @@ import {
   BarChart, Card, Title, Text, 
   Grid, Col, DateRangePicker, DateRangePickerValue,
   Table, TableHead, TableRow, TableHeaderCell, TableBody, TableCell,
-  DonutChart
+  DonutChart,
+  TabPanel, TabGroup, TabList, Tab, TabPanels
 } from "@tremor/react";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData } from './usage/types';
-import { tagDailyActivityCall } from './networking';
+import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 
 interface EntityMetrics {
   metrics: {
@@ -69,6 +70,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   });
 
+  const modelMetrics = processActivityData(spendData);
+
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
@@ -82,6 +85,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     
     if (entityType === 'tag') {
       const data = await tagDailyActivityCall(
+        accessToken, 
+        startTime, 
+        endTime, 
+        1, 
+        selectedTags.length > 0 ? selectedTags : null
+      );
+      setSpendData(data);
+    } else if (entityType === 'team') {
+      const data = await teamDailyActivityCall(
         accessToken, 
         startTime, 
         endTime, 
@@ -236,240 +248,254 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     return filterDataByTags(result);
   };
 
+  
+
   return (
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
-        <Col>
-          <Text>Select Time Range</Text>
-          <DateRangePicker
-            enableSelect={true}
-            value={dateValue}
-            onValueChange={setDateValue}
-          />
-        </Col>
-        <Col>
-          <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
-          <Select
-            mode="multiple"
-            style={{ width: '100%' }}
-            placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
-            value={selectedTags}
-            onChange={setSelectedTags}
-            options={getAllTags()}
-            className="mt-2"
-            allowClear
-          />
-        </Col>
-      </Grid>
-
-      <Grid numItems={2} className="gap-2 w-full">
-        {/* Total Spend Card */}
-        <Col numColSpan={2}>
-          <Card>
-            <Title>{entityType === 'tag' ? 'Tag' : 'Team'} Spend Overview</Title>
-            <Grid numItems={5} className="gap-4 mt-4">
-              <Card>
-                <Title>Total Spend</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  ${spendData.metadata.total_spend.toFixed(2)}
-                </Text>
-              </Card>
-              <Card>
-                <Title>Total Requests</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  {spendData.metadata.total_api_requests.toLocaleString()}
-                </Text>
-              </Card>
-              <Card>
-                <Title>Successful Requests</Title>
-                <Text className="text-2xl font-bold mt-2 text-green-600">
-                  {spendData.metadata.total_successful_requests.toLocaleString()}
-                </Text>
-              </Card>
-              <Card>
-                <Title>Failed Requests</Title>
-                <Text className="text-2xl font-bold mt-2 text-red-600">
-                  {spendData.metadata.total_failed_requests.toLocaleString()}
-                </Text>
-              </Card>
-              <Card>
-                <Title>Total Tokens</Title>
-                <Text className="text-2xl font-bold mt-2">
-                  {spendData.metadata.total_tokens.toLocaleString()}
-                </Text>
-              </Card>
-            </Grid>
-          </Card>
-        </Col>
-
-        {/* Daily Spend Chart */}
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Daily Spend</Title>
-            <BarChart
-              data={[...spendData.results].sort((a, b) => 
-                new Date(a.date).getTime() - new Date(b.date).getTime()
-              )}
-              index="date"
-              categories={["metrics.spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              yAxisWidth={100}
-              showLegend={false}
+          <Col>
+            <Text>Select Time Range</Text>
+            <DateRangePicker
+              enableSelect={true}
+              value={dateValue}
+              onValueChange={setDateValue}
             />
-          </Card>
-        </Col>
+          </Col>
+          <Col>
+            <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
+              value={selectedTags}
+              onChange={setSelectedTags}
+              options={getAllTags()}
+              className="mt-2"
+              allowClear
+            />
+          </Col>
+        </Grid>
+      <TabGroup>
+        <TabList variant="solid" className="mt-1">
+          <Tab>Cost</Tab>
+          <Tab>Activity</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 w-full">
+              {/* Total Spend Card */}
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>{entityType === 'tag' ? 'Tag' : 'Team'} Spend Overview</Title>
+                  <Grid numItems={5} className="gap-4 mt-4">
+                    <Card>
+                      <Title>Total Spend</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        ${spendData.metadata.total_spend.toFixed(2)}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Total Requests</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {spendData.metadata.total_api_requests.toLocaleString()}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Successful Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-green-600">
+                        {spendData.metadata.total_successful_requests.toLocaleString()}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Failed Requests</Title>
+                      <Text className="text-2xl font-bold mt-2 text-red-600">
+                        {spendData.metadata.total_failed_requests.toLocaleString()}
+                      </Text>
+                    </Card>
+                    <Card>
+                      <Title>Total Tokens</Title>
+                      <Text className="text-2xl font-bold mt-2">
+                        {spendData.metadata.total_tokens.toLocaleString()}
+                      </Text>
+                    </Card>
+                  </Grid>
+                </Card>
+              </Col>
 
-        {/* Entity Breakdown Section */}
-        <Col numColSpan={2}>
-          <Card>
-            <div className="flex flex-col space-y-4">
-              <div className="flex flex-col space-y-2">
-                <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
-                <div className="flex items-center text-sm text-gray-500">
-                  <span>Get Started Tracking cost per {entityType} </span>
-                  <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
-                    here
-                  </a>
-                </div>
-              </div>
-              <Grid numItems={2}>
-                <Col numColSpan={1}>
+              {/* Daily Spend Chart */}
+              <Col numColSpan={2}>
+                <Card>
+                  <Title>Daily Spend</Title>
                   <BarChart
-                    className="mt-4 h-52"
-                    data={getEntityBreakdown()}
-                    index="entity"
+                    data={[...spendData.results].sort((a, b) => 
+                      new Date(a.date).getTime() - new Date(b.date).getTime()
+                    )}
+                    index="date"
+                    categories={["metrics.spend"]}
+                    colors={["cyan"]}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    yAxisWidth={100}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+
+              {/* Entity Breakdown Section */}
+              <Col numColSpan={2}>
+                <Card>
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex flex-col space-y-2">
+                      <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
+                      <div className="flex items-center text-sm text-gray-500">
+                        <span>Get Started Tracking cost per {entityType} </span>
+                        <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
+                          here
+                        </a>
+                      </div>
+                    </div>
+                    <Grid numItems={2}>
+                      <Col numColSpan={1}>
+                        <BarChart
+                          className="mt-4 h-52"
+                          data={getEntityBreakdown()}
+                          index="entity"
+                          categories={["spend"]}
+                          colors={["cyan"]}
+                          valueFormatter={(value) => `$${value.toFixed(4)}`}
+                          layout="vertical"
+                          showLegend={false}
+                          yAxisWidth={100}
+                        />
+                      </Col>
+                      <Col numColSpan={1}>
+                        <Table>
+                          <TableHead>
+                            <TableRow>
+                              <TableHeaderCell>{entityType === 'tag' ? 'Tag' : 'Team'}</TableHeaderCell>
+                              <TableHeaderCell>Spend</TableHeaderCell>
+                              <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                              <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                              <TableHeaderCell>Tokens</TableHeaderCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {getEntityBreakdown()
+                              .filter(entity => entity.spend > 0)
+                              .map((entity) => (
+                                <TableRow key={entity.entity}>
+                                  <TableCell>{entity.entity}</TableCell>
+                                  <TableCell>${entity.spend.toFixed(4)}</TableCell>
+                                  <TableCell className="text-green-600">
+                                    {entity.successful_requests.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell className="text-red-600">
+                                    {entity.failed_requests.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell>{entity.tokens.toLocaleString()}</TableCell>
+                                </TableRow>
+                              ))}
+                          </TableBody>
+                        </Table>
+                      </Col>
+                    </Grid>
+                  </div>
+                </Card>
+              </Col>
+
+
+              {/* Top API Keys */}
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top API Keys</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={getTopApiKeys()}
+                    index="key"
                     categories={["spend"]}
                     colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(4)}`}
-                    layout="vertical"
-                    showLegend={false}
-                    yAxisWidth={100}
-                  />
-                </Col>
-                <Col numColSpan={1}>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>{entityType === 'tag' ? 'Tag' : 'Team'}</TableHeaderCell>
-                        <TableHeaderCell>Spend</TableHeaderCell>
-                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                        <TableHeaderCell>Tokens</TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {getEntityBreakdown()
-                        .filter(entity => entity.spend > 0)
-                        .map((entity) => (
-                          <TableRow key={entity.entity}>
-                            <TableCell>{entity.entity}</TableCell>
-                            <TableCell>${entity.spend.toFixed(4)}</TableCell>
-                            <TableCell className="text-green-600">
-                              {entity.successful_requests.toLocaleString()}
-                            </TableCell>
-                            <TableCell className="text-red-600">
-                              {entity.failed_requests.toLocaleString()}
-                            </TableCell>
-                            <TableCell>{entity.tokens.toLocaleString()}</TableCell>
-                          </TableRow>
-                        ))}
-                    </TableBody>
-                  </Table>
-                </Col>
-              </Grid>
-            </div>
-          </Card>
-        </Col>
-
-
-        {/* Top API Keys */}
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top API Keys</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={getTopApiKeys()}
-              index="key"
-              categories={["spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              layout="vertical"
-              yAxisWidth={200}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-        
-        {/* Top Models */}
-        <Col numColSpan={1}>
-          <Card>
-            <Title>Top Models</Title>
-            <BarChart
-              className="mt-4 h-40"
-              data={getTopModels()}
-              index="key"
-              categories={["spend"]}
-              colors={["cyan"]}
-              valueFormatter={(value) => `$${value.toFixed(2)}`}
-              layout="vertical"
-              yAxisWidth={200}
-              showLegend={false}
-            />
-          </Card>
-        </Col>
-
-        
-
-        {/* Spend by Provider */}
-        <Col numColSpan={2}>
-          <Card>
-            <div className="flex flex-col space-y-4">
-              <Title>Provider Usage</Title>
-              <Grid numItems={2}>
-                <Col numColSpan={1}>
-                  <DonutChart
-                    className="mt-4 h-40"
-                    data={getProviderSpend()}
-                    index="provider"
-                    category="spend"
                     valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                    layout="vertical"
+                    yAxisWidth={200}
+                    showLegend={false}
                   />
-                </Col>
-                <Col numColSpan={1}>
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>Provider</TableHeaderCell>
-                        <TableHeaderCell>Spend</TableHeaderCell>
-                        <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                        <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                        <TableHeaderCell>Tokens</TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {getProviderSpend().map((provider) => (
-                        <TableRow key={provider.provider}>
-                          <TableCell>{provider.provider}</TableCell>
-                          <TableCell>${provider.spend.toFixed(2)}</TableCell>
-                          <TableCell className="text-green-600">
-                            {provider.successful_requests.toLocaleString()}
-                          </TableCell>
-                          <TableCell className="text-red-600">
-                            {provider.failed_requests.toLocaleString()}
-                          </TableCell>
-                          <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Col>
-              </Grid>
-            </div>
-          </Card>
-        </Col>
-      </Grid>
+                </Card>
+              </Col>
+
+              {/* Top Models */}
+              <Col numColSpan={1}>
+                <Card>
+                  <Title>Top Models</Title>
+                  <BarChart
+                    className="mt-4 h-40"
+                    data={getTopModels()}
+                    index="key"
+                    categories={["spend"]}
+                    colors={["cyan"]}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    layout="vertical"
+                    yAxisWidth={200}
+                    showLegend={false}
+                  />
+                </Card>
+              </Col>
+
+              
+
+              {/* Spend by Provider */}
+              <Col numColSpan={2}>
+                <Card>
+                  <div className="flex flex-col space-y-4">
+                    <Title>Provider Usage</Title>
+                    <Grid numItems={2}>
+                      <Col numColSpan={1}>
+                        <DonutChart
+                          className="mt-4 h-40"
+                          data={getProviderSpend()}
+                          index="provider"
+                          category="spend"
+                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          colors={["cyan", "blue", "indigo", "violet", "purple"]}
+                        />
+                      </Col>
+                      <Col numColSpan={1}>
+                        <Table>
+                          <TableHead>
+                            <TableRow>
+                              <TableHeaderCell>Provider</TableHeaderCell>
+                              <TableHeaderCell>Spend</TableHeaderCell>
+                              <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                              <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                              <TableHeaderCell>Tokens</TableHeaderCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {getProviderSpend().map((provider) => (
+                              <TableRow key={provider.provider}>
+                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>${provider.spend.toFixed(2)}</TableCell>
+                                <TableCell className="text-green-600">
+                                  {provider.successful_requests.toLocaleString()}
+                                </TableCell>
+                                <TableCell className="text-red-600">
+                                  {provider.failed_requests.toLocaleString()}
+                                </TableCell>
+                                <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </Col>
+                    </Grid>
+                  </div>
+                </Card>
+              </Col>
+            </Grid>
+          </TabPanel>
+          <TabPanel>
+          <ActivityMetrics modelMetrics={modelMetrics} />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

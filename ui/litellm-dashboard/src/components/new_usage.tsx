@@ -236,6 +236,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         <TabList variant="solid" className="mt-1">
           <Tab>Your Usage</Tab>
           <Tab>Tag Usage</Tab>
+          <Tab>Team Usage</Tab>
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -467,6 +468,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <EntityUsage 
               accessToken={accessToken}
               entityType="tag"
+            />
+          </TabPanel>
+
+          {/* Team Usage Panel */}
+          <TabPanel>
+            <EntityUsage 
+              accessToken={accessToken}
+              entityType="team"
             />
           </TabPanel>
         </TabPanels>
