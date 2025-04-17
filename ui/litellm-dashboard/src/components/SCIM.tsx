@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Card,
   Title,
@@ -23,16 +23,22 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   const [form] = Form.useForm();
   const [isCreatingToken, setIsCreatingToken] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
+  const [baseUrl, setBaseUrl] = useState("<your_proxy_base_url>");
   
-  let base_url = "<your_proxy_base_url>";
-
-  if (proxySettings) {
-    if (proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
-      base_url = proxySettings.PROXY_BASE_URL;
+  useEffect(() => {
+    let url = "<your_proxy_base_url>";
+    
+    if (proxySettings && proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
+      url = proxySettings.PROXY_BASE_URL;
+    } else if (typeof window !== 'undefined') {
+      // Use the current origin as the base URL if no proxy URL is set
+      url = window.location.origin;
     }
-  }
+    
+    setBaseUrl(url);
+  }, [proxySettings]);
   
-  const scimBaseUrl = `${base_url}/scim`;
+  const scimBaseUrl = `${baseUrl}/scim/v2`;
   
   const handleCreateSCIMToken = async (values: any) => {
     if (!accessToken || !userID) {
@@ -70,7 +76,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
         </Text>
         
         <div className="mt-6">
-          <Title className="text-lg">SCIM Base URL</Title>
+          <Title className="text-lg">SCIM Tenant URL (Base URL)</Title>
           <div className="flex items-center mt-2 mb-6">
             <TextInput
               value={scimBaseUrl}
