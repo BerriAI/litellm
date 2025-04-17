@@ -59,12 +59,8 @@ export function ModelDataTable<TData, TValue>({
   return (
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
-        <div
-          style={{
-            width: table.getCenterTotalSize(),
-          }}
-        >
-          <Table className="[&_td]:py-0.5 [&_th]:py-1">
+        <div className="relative min-w-full">
+          <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
             <TableHead>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
@@ -73,12 +69,13 @@ export function ModelDataTable<TData, TValue>({
                       key={header.id} 
                       className={`py-1 h-8 relative ${
                         header.id === 'actions' 
-                          ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]' 
+                          ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-10 w-[120px] ml-8' 
                           : ''
                       }`}
                       style={{
-                        width: header.getSize(),
-                        position: 'relative',
+                        width: header.id === 'actions' ? 120 : header.getSize(),
+                        position: header.id === 'actions' ? 'sticky' : 'relative',
+                        right: header.id === 'actions' ? 0 : 'auto',
                       }}
                       onClick={header.column.getToggleSortingHandler()}
                     >
@@ -135,13 +132,15 @@ export function ModelDataTable<TData, TValue>({
                         key={cell.id}
                         className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
                           cell.column.id === 'actions'
-                            ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
+                            ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-10 w-[120px] ml-8'
                             : ''
                         }`}
                         style={{
-                          width: cell.column.getSize(),
-                          minWidth: cell.column.getSize(),
-                          maxWidth: cell.column.getSize(),
+                          width: cell.column.id === 'actions' ? 120 : cell.column.getSize(),
+                          minWidth: cell.column.id === 'actions' ? 120 : cell.column.getSize(),
+                          maxWidth: cell.column.id === 'actions' ? 120 : cell.column.getSize(),
+                          position: cell.column.id === 'actions' ? 'sticky' : 'relative',
+                          right: cell.column.id === 'actions' ? 0 : 'auto',
                         }}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
