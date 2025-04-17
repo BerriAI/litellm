@@ -648,7 +648,6 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
-    allowed_routes: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = (
@@ -668,6 +667,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
+    allowed_routes: Optional[list] = []
 
 
 class GenerateKeyRequest(KeyRequestBase):
