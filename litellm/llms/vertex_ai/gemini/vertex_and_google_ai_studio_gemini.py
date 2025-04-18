@@ -577,19 +577,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def get_assistant_content_message(
         self, parts: List[HttpxPartType]
-    ) -> Optional[str]:
-        _content_str = ""
+    ) -> Tuple[Optional[str], Optional[str]]:
+        content_str: Optional[str] = None
+        reasoning_content_str: Optional[str] = None
         for part in parts:
+            _content_str = ""
             if "text" in part:
                 _content_str += part["text"]
             elif "inlineData" in part:  # base64 encoded image
                 _content_str += "data:{};base64,{}".format(
                     part["inlineData"]["mimeType"], part["inlineData"]["data"]
                 )
+            if part.get("thought") is True:
+                if reasoning_content_str is None:
+                    reasoning_content_str = ""
+                reasoning_content_str += _content_str
+            else:
+                if content_str is None:
+                    content_str = ""
+                content_str += _content_str
 
-        if _content_str:
-            return _content_str
-        return None
+        return content_str, reasoning_content_str
 
     def _transform_parts(
         self,
@@ -799,11 +807,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 citation_metadata.append(candidate["citationMetadata"])
 
             if "parts" in candidate["content"]:
-                chat_completion_message[
-                    "content"
-                ] = VertexGeminiConfig().get_assistant_content_message(
+                (
+                    content,
+                    reasoning_content,
+                ) = VertexGeminiConfig().get_assistant_content_message(
                     parts=candidate["content"]["parts"]
                 )
+                if content is not None:
+                    chat_completion_message["content"] = content
+                if reasoning_content is not None:
+                    chat_completion_message["reasoning_content"] = reasoning_content
 
                 functions, tools = self._transform_parts(
                     parts=candidate["content"]["parts"],

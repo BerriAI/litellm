@@ -69,6 +69,7 @@ class HttpxPartType(TypedDict, total=False):
     functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
+    thought: bool
 
 
 class HttpxContentType(TypedDict, total=False):
