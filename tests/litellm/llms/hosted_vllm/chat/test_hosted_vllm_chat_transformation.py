@@ -40,6 +40,6 @@ def test_hosted_vllm_chat_transformation_file_url():
     assert transformed_response["messages"] == [
         {
             "role": "user",
-            "content": [{"type": "video", "video_url": {"url": video_data}}],
+            "content": [{"type": "video_url", "video_url": {"url": video_data}}],
         }
     ]
