@@ -732,7 +732,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4o",
+        "azure/gpt-4o-new-test",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
@@ -1826,7 +1826,7 @@ def test_completion_openai():
         # ("gpt-4o-2024-08-06", None),
         # ("azure/chatgpt-v-3", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
-        # ("azure/gpt-4o", "2024-08-01-preview"),
+        # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)

@@ -339,7 +339,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
         response = litellm.completion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[
                 {
                     "role": "system",
@@ -474,7 +474,7 @@ def test_azure_max_retries_0(
 
     try:
         completion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -502,7 +502,7 @@ async def test_async_azure_max_retries_0(
 
     try:
         await acompletion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
