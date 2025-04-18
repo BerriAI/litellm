@@ -23,6 +23,7 @@ import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import EntityUsage from './entity_usage';
+import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -235,8 +236,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Your Usage</Tab>
-          <Tab>Tag Usage</Tab>
           <Tab>Team Usage</Tab>
+          {all_admin_roles.includes(userRole || "") && <Tab>Tag Usage</Tab>}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -463,6 +464,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             </TabGroup>
           </TabPanel>
 
+          {/* Team Usage Panel */}
+          <TabPanel>
+            <EntityUsage 
+              accessToken={accessToken}
+              entityType="team"
+            />
+          </TabPanel>
+
           {/* Tag Usage Panel */}
           <TabPanel>
             <EntityUsage 
@@ -471,13 +480,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             />
           </TabPanel>
 
-          {/* Team Usage Panel */}
-          <TabPanel>
-            <EntityUsage 
-              accessToken={accessToken}
-              entityType="team"
-            />
-          </TabPanel>
         </TabPanels>
       </TabGroup>
     </div>
