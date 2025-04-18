@@ -1,6 +1,6 @@
 import os
 import sys
-
+import json
 import pytest
 
 sys.path.insert(
@@ -202,14 +202,15 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     from openai import OpenAI
     from unittest.mock import patch
     from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
 
     monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", True)
 
-    client = OpenAI()
-
     with patch.object(
-        client.chat.completions.with_raw_response,
-        "create",
+        client,
+        "post",
     ) as mock_post:
         try:
             completion(
@@ -235,9 +236,10 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
 
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs)
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"
-            not in mock_post.call_args.kwargs["messages"][0]["content"][1]["image_url"][
+            not in json_data["messages"][0]["content"][1]["image_url"][
                 "url"
             ]
         )
