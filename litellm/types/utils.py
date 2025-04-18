@@ -28,8 +28,8 @@ from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     Batch,
-    ChatCompletionRedactedThinkingBlock,
     ChatCompletionAnnotation,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
@@ -546,7 +546,9 @@ class Message(OpenAIObject):
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -561,7 +563,11 @@ class Message(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -644,7 +650,9 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -655,7 +663,11 @@ class Delta(OpenAIObject):
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
