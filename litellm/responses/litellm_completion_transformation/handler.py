@@ -5,6 +5,9 @@ Handler for transforming responses api requests to litellm.completion requests
 from typing import Any, Coroutine, Optional, Union
 
 import litellm
+from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+    LiteLLMCompletionStreamingIterator,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -26,6 +29,7 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         _is_async: bool = False,
+        stream: Optional[bool] = None,
         **kwargs,
     ) -> Union[
         ResponsesAPIResponse,
@@ -40,6 +44,8 @@ class LiteLLMCompletionTransformationHandler:
                 input=input,
                 responses_api_request=responses_api_request,
                 custom_llm_provider=custom_llm_provider,
+                stream=stream,
+                **kwargs,
             )
         )
 
@@ -88,4 +94,7 @@ class LiteLLMCompletionTransformationHandler:
 
             return responses_api_response
 
-        raise ValueError("litellm_completion_response is not a ModelResponse")
+        elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
+            return LiteLLMCompletionStreamingIterator(
+                litellm_custom_stream_wrapper=litellm_completion_response,
+            )

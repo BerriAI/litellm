@@ -204,6 +204,7 @@ def responses(
                 responses_api_request=ResponsesAPIOptionalRequestParams(),
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
+                stream=stream,
                 **kwargs,
             )
 
