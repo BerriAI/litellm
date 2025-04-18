@@ -1,6 +1,8 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: o4-mini
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: azure/computer-use-preview
+      truncation: auto
+      api_base: os.environ/AZURE_RESPONSES_OPENAI_ENDPOINT
+      api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
+      api_version: os.environ/AZURE_RESPONSES_OPENAI_API_VERSION
