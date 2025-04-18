@@ -400,6 +400,7 @@ async def get_tag_daily_activity(
         table_name="litellm_dailytagspend",
         entity_id_field="tag",
         entity_id=tag_list,
+        entity_metadata_field=None,
         start_date=start_date,
         end_date=end_date,
         model=model,
