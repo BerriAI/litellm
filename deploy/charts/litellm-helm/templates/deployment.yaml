@@ -120,10 +120,12 @@ spec:
             httpGet:
               path: /health/liveliness
               port: http
+            timeoutSeconds: 10
           readinessProbe:
             httpGet:
               path: /health/readiness
               port: http
+            timeoutSeconds: 10
           # Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
           startupProbe:
             httpGet:
