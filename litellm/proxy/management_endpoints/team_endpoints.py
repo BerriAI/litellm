@@ -2125,6 +2125,12 @@ async def get_team_daily_activity(
         user_api_key_cache,
     )
 
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
 
@@ -2159,11 +2165,23 @@ async def get_team_daily_activity(
                         },
                     )
 
+    ## Fetch team aliases
+    where_condition = {}
+    if team_ids_list:
+        where_condition["team_id"] = {"in": list(team_ids_list)}
+    team_aliases = await prisma_client.db.litellm_teamtable.find_many(
+        where=where_condition
+    )
+    team_alias_metadata = {
+        t.team_id: {"team_alias": t.team_alias} for t in team_aliases
+    }
+
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=team_ids_list,
+        entity_metadata_field=team_alias_metadata,
         start_date=start_date,
         end_date=end_date,
         model=model,

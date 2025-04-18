@@ -39,6 +39,7 @@ def update_breakdown_metrics(
     provider_metadata: Dict[str, Dict[str, Any]],
     api_key_metadata: Dict[str, Dict[str, Any]],
     entity_id_field: Optional[str] = None,
+    entity_metadata_field: Optional[Dict[str, dict]] = None,
 ) -> BreakdownMetrics:
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
@@ -87,7 +88,10 @@ def update_breakdown_metrics(
         if entity_value:
             if entity_value not in breakdown.entities:
                 breakdown.entities[entity_value] = MetricWithMetadata(
-                    metrics=SpendMetrics(), metadata={}
+                    metrics=SpendMetrics(),
+                    metadata=entity_metadata_field.get(entity_value, {})
+                    if entity_metadata_field
+                    else {},
                 )
             breakdown.entities[entity_value].metrics = update_metrics(
                 breakdown.entities[entity_value].metrics, record
@@ -101,6 +105,7 @@ async def get_daily_activity(
     table_name: str,
     entity_id_field: str,
     entity_id: Optional[Union[str, List[str]]],
+    entity_metadata_field: Optional[Dict[str, dict]],
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
@@ -198,6 +203,7 @@ async def get_daily_activity(
                 provider_metadata,
                 api_key_metadata,
                 entity_id_field=entity_id_field,
+                entity_metadata_field=entity_metadata_field,
             )
 
             # Update total metrics
