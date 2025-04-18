@@ -40,7 +40,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
 
     input_args: dict = {
         "kwargs": {
-            "model": "chatgpt-v-2",
+            "model": "chatgpt-v-3",
             "messages": [
                 {"role": "system", "content": "you are a helpful assistant.\n"},
                 {"role": "user", "content": "bom dia"},
@@ -89,7 +89,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     },
                     "endpoint": "http://localhost:4000/chat/completions",
                     "model_group": "gpt-3.5-turbo",
-                    "deployment": "azure/chatgpt-v-2",
+                    "deployment": "azure/chatgpt-v-3",
                     "model_info": {
                         "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                         "db_model": False,
@@ -99,7 +99,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     "error_information": None,
                     "status": "success",
                     "proxy_server_request": "{}",
-                    "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+                    "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
                 },
                 "model_info": {
                     "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
@@ -158,7 +158,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "api_base": "openai-gpt-4-test-v-1.openai.azure.com",
                 "acompletion": True,
                 "complete_input_dict": {
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "messages": [
                         {"role": "system", "content": "you are a helpful assistant.\n"},
                         {"role": "user", "content": "bom dia"},
