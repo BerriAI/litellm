@@ -85,3 +85,4 @@ def test_gemini_image_generation():
     assert response.choices[0].message.content is not None
 
 
+
