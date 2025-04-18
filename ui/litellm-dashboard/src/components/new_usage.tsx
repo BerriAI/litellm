@@ -469,6 +469,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <EntityUsage 
               accessToken={accessToken}
               entityType="team"
+              userID={userID}
+              userRole={userRole}
             />
           </TabPanel>
 
@@ -477,6 +479,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <EntityUsage 
               accessToken={accessToken}
               entityType="tag"
+              userID={userID}
+              userRole={userRole}
             />
           </TabPanel>
 

@@ -8,8 +8,9 @@ import {
 } from "@tremor/react";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
-import { SpendMetrics, DailyData } from './usage/types';
+import { SpendMetrics, DailyData, KeyMetricWithMetadata } from './usage/types';
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
+import TopKeyView from "./top_key_view";
 
 interface EntityMetrics {
   metrics: {
@@ -52,12 +53,16 @@ interface EntityUsageProps {
   accessToken: string | null;
   entityType: 'tag' | 'team';
   entityId?: string | null;
+  userID: string | null;
+  userRole: string | null;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
   accessToken,
   entityType,
-  entityId
+  entityId,
+  userID,
+  userRole
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({ 
     results: [], 
@@ -144,29 +149,46 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       .slice(0, 5);
   };
 
-  const getTopApiKeys = () => {
-    const apiKeySpend: { [key: string]: any } = {};
+  const getTopAPIKeys = () => {
+    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     spendData.results.forEach(day => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
-        if (!apiKeySpend[key]) {
-          apiKeySpend[key] = {
-            key: key,
-            spend: 0,
-            requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            tokens: 0
+        if (!keySpend[key]) {
+          keySpend[key] = {
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
+            },
+            metadata: {
+              key_alias: metrics.metadata.key_alias
+            }
           };
         }
-        apiKeySpend[key].spend += metrics.metrics.spend;
-        apiKeySpend[key].requests += metrics.metrics.api_requests;
-        apiKeySpend[key].successful_requests += metrics.metrics.successful_requests;
-        apiKeySpend[key].failed_requests += metrics.metrics.failed_requests;
-        apiKeySpend[key].tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.spend += metrics.metrics.spend;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
     
-    return Object.values(apiKeySpend)
+    return Object.entries(keySpend)
+      .map(([api_key, metrics]) => ({
+        api_key,
+        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        spend: metrics.metrics.spend,
+      }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, 5);
   };
@@ -407,17 +429,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top API Keys</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopApiKeys()}
-                    index="key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                  />
+                    <TopKeyView
+                      topKeys={getTopAPIKeys()}
+                      accessToken={accessToken}
+                      userID={userID}
+                      userRole={userRole}
+                      teams={null}
+                    />
                 </Card>
               </Col>
 
