@@ -76,10 +76,10 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
-    @abstractmethod
+
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         """Must return the base completion call args with reasoning_effort"""
-        pass
+        return {}
 
     def test_developer_role_translation(self):
         """
