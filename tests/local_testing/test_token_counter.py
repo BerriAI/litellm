@@ -151,6 +151,16 @@ def test_tokenizers():
             llama3_tokens_1 == llama3_tokens_2
         ), "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
 
+        if hf_api_key := os.getenv("HUGGINGFACE_API_KEY"):
+            private_tokenizer = create_pretrained_tokenizer(
+                "meta-llama/Llama-3.1-70B", auth_token=hf_api_key
+            )
+            private_tokens = token_counter(
+                custom_tokenizer=private_tokenizer, text=sample_text
+            )
+            print(f"private model tokens: {private_tokens}")
+            assert private_tokens > 0
+
         print("test tokenizer: It worked!")
     except Exception as e:
         pytest.fail(f"An exception occured: {e}")
