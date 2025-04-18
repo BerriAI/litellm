@@ -309,6 +309,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         response = ModelResponse(**completion_response)
 
+        if response.model is not None:
+            response.model = "fireworks_ai/" + response.model
+
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
             cast(
