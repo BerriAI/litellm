@@ -557,10 +557,11 @@ class ModelResponseIterator:
         """
         reasoning_content = None
         for block in thinking_blocks:
+            thinking_content = cast(Optional[str], block.get("thinking"))
             if reasoning_content is None:
                 reasoning_content = ""
-            if "thinking" in block:
-                reasoning_content += block["thinking"]
+            if thinking_content is not None:
+                reasoning_content += thinking_content
         return reasoning_content
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:

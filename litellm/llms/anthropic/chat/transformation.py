@@ -615,8 +615,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
-                if "thinking" in block:
-                    reasoning_content += block["thinking"]
+                thinking_content = cast(Optional[str], block.get("thinking"))
+                if thinking_content is not None:
+                    reasoning_content += thinking_content
 
         return text_content, citations, thinking_blocks, reasoning_content, tool_calls
 
