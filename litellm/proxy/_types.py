@@ -2448,6 +2448,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    user: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):
