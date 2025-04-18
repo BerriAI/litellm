@@ -24,6 +24,11 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -31,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -45,6 +51,7 @@ from litellm.types.llms.vertex_ai import (
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
+    GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
@@ -60,7 +67,7 @@ from litellm.types.utils import (
     TopLogprob,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.utils import CustomStreamWrapper, ModelResponse, supports_reasoning
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import VertexAIError, _build_vertex_schema
@@ -191,7 +198,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -211,6 +218,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "top_logprobs",
             "modalities",
         ]
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        return supported_params
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict]
@@ -348,6 +359,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 value=optional_params["response_schema"]
             )
 
+    @staticmethod
+    def _map_reasoning_effort_to_thinking_budget(
+        reasoning_effort: str,
+    ) -> GeminiThinkingConfig:
+        if reasoning_effort == "low":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "medium":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "high":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        else:
+            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+
+    @staticmethod
+    def _map_thinking_param(
+        thinking_param: AnthropicThinkingParam,
+    ) -> GeminiThinkingConfig:
+        thinking_enabled = thinking_param.get("type") == "enabled"
+        thinking_budget = thinking_param.get("budgetTokens")
+
+        params: GeminiThinkingConfig = {}
+        if thinking_enabled:
+            params["includeThoughts"] = True
+        if thinking_budget:
+            params["thinkingBudget"] = thinking_budget
+
+        return params
+
     def map_openai_params(
         self,
         non_default_params: Dict,
@@ -404,6 +452,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "seed":
                 optional_params["seed"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+            elif param == "thinking":
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_thinking_param(
+                    cast(AnthropicThinkingParam, value)
+                )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = []
                 for modality in value:

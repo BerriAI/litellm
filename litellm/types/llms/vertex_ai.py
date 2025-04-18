@@ -166,6 +166,11 @@ class SafetSettingsConfig(TypedDict, total=False):
     method: HarmBlockMethod
 
 
+class GeminiThinkingConfig(TypedDict, total=False):
+    includeThoughts: bool
+    thinkingBudget: int
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -181,6 +186,7 @@ class GenerationConfig(TypedDict, total=False):
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
+    thinkingConfig: GeminiThinkingConfig
 
 
 class Tools(TypedDict, total=False):
