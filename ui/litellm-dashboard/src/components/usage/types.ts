@@ -69,6 +69,16 @@ export interface KeyMetricWithMetadata {
   metadata: KeyMetadata;
 }
 
+export interface EntityMetadata {
+  alias: string;
+  id: string;
+}
+
+export interface EntityMetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: EntityMetadata;
+}
+
 export interface MetricWithMetadata {
   metrics: SpendMetrics;
   metadata: object;

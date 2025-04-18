@@ -8,7 +8,7 @@ import {
 } from "@tremor/react";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
-import { SpendMetrics, DailyData, KeyMetricWithMetadata } from './usage/types';
+import { DailyData, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 
@@ -237,35 +237,44 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }));
   };
 
-  const filterDataByTags = (data: any[]) => {
+  const filterDataByTags = (data: EntityMetricWithMetadata[]) => {
     if (selectedTags.length === 0) return data;
-    return data.filter(item => selectedTags.includes(item.entity));
+    return data.filter(item => selectedTags.includes(item.metadata.id));
   };
 
   const getEntityBreakdown = () => {
-    const entitySpend: { [key: string]: any } = {};
+    const entitySpend: { [key: string]: EntityMetricWithMetadata } = {};
     spendData.results.forEach(day => {
       Object.entries(day.breakdown.entities || {}).forEach(([entity, data]) => {
         if (!entitySpend[entity]) {
           entitySpend[entity] = {
-            entity,
-            spend: 0,
-            requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            tokens: 0
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
+            },
+            metadata: {
+              alias: data.metadata.team_alias || entity,
+              id: entity
+            }
           };
         }
-        entitySpend[entity].spend += data.metrics.spend;
-        entitySpend[entity].requests += data.metrics.api_requests;
-        entitySpend[entity].successful_requests += data.metrics.successful_requests;
-        entitySpend[entity].failed_requests += data.metrics.failed_requests;
-        entitySpend[entity].tokens += data.metrics.total_tokens;
+        entitySpend[entity].metrics.spend += data.metrics.spend;
+        entitySpend[entity].metrics.api_requests += data.metrics.api_requests;
+        entitySpend[entity].metrics.successful_requests += data.metrics.successful_requests;
+        entitySpend[entity].metrics.failed_requests += data.metrics.failed_requests;
+        entitySpend[entity].metrics.total_tokens += data.metrics.total_tokens;
       });
     });
     
     const result = Object.values(entitySpend)
-      .sort((a, b) => b.spend - a.spend);
+      .sort((a, b) => b.metrics.spend - a.metrics.spend);
     
     return filterDataByTags(result);
   };
@@ -375,15 +384,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                         </a>
                       </div>
                     </div>
-                    <Grid numItems={2}>
-                      <Col numColSpan={1}>
+                      <Grid numItems={2}>
+                        <Col numColSpan={1}>
                         <BarChart
                           className="mt-4 h-52"
                           data={getEntityBreakdown()}
-                          index="entity"
-                          categories={["spend"]}
+                          index="metadata.alias"
+                          categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(4)}`}
+                          valueFormatter={(value) => `$${value.toFixed(7)}`}
                           layout="vertical"
                           showLegend={false}
                           yAxisWidth={100}
@@ -402,18 +411,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           </TableHead>
                           <TableBody>
                             {getEntityBreakdown()
-                              .filter(entity => entity.spend > 0)
+                              .filter(entity => entity.metrics.spend > 0)
                               .map((entity) => (
-                                <TableRow key={entity.entity}>
-                                  <TableCell>{entity.entity}</TableCell>
-                                  <TableCell>${entity.spend.toFixed(4)}</TableCell>
+                                <TableRow key={entity.metadata.id}>
+                                  <TableCell>{entity.metadata.alias}</TableCell>
+                                  <TableCell>${entity.metrics.spend.toFixed(7)}</TableCell>
                                   <TableCell className="text-green-600">
-                                    {entity.successful_requests.toLocaleString()}
+                                    {entity.metrics.successful_requests.toLocaleString()}
                                   </TableCell>
                                   <TableCell className="text-red-600">
-                                    {entity.failed_requests.toLocaleString()}
+                                    {entity.metrics.failed_requests.toLocaleString()}
                                   </TableCell>
-                                  <TableCell>{entity.tokens.toLocaleString()}</TableCell>
+                                  <TableCell>{entity.metrics.total_tokens.toLocaleString()}</TableCell>
                                 </TableRow>
                               ))}
                           </TableBody>
