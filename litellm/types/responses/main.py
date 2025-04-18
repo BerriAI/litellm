@@ -1,3 +1,5 @@
+from typing import Literal
+
 from typing_extensions import Any, List, Optional, TypedDict
 
 
@@ -18,6 +20,17 @@ class OutputText(TypedDict, total=False):
     type: Optional[str]  # "output_text"
     text: Optional[str]
     annotations: Optional[List[GenericResponseOutputItemContentAnnotation]]
+
+
+class OutputFunctionToolCall(TypedDict, total=False):
+    """A tool call to run a function"""
+
+    arguments: Optional[str]
+    call_id: Optional[str]
+    name: Optional[str]
+    type: Optional[str]  # "function_call"
+    id: Optional[str]
+    status: Literal["in_progress", "completed", "incomplete"]
 
 
 class GenericResponseOutputItem(TypedDict, total=False):
