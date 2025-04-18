@@ -62,10 +62,18 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
-    if "batches" in request.url.path:
-        return "litellm_metadata"
-    if "/v1/messages" in request.url.path:
-        # anthropic API has a field called metadata
+
+    LITELLM_METADATA_ROUTES = [
+        "batches",
+        "/v1/messages",
+        "responses",
+    ]
+    if any(
+        [
+            litellm_metadata_route in request.url.path
+            for litellm_metadata_route in LITELLM_METADATA_ROUTES
+        ]
+    ):
         return "litellm_metadata"
     else:
         return "metadata"
@@ -183,6 +191,7 @@ def clean_headers(
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
+
     for header, value in headers.items():
         if header.lower() not in special_headers:
             clean_headers[header] = value
@@ -338,11 +347,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = (
-                LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=key_metadata["tags"],
-                )
+            data[_metadata_variable_name][
+                "tags"
+            ] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=key_metadata["tags"],
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -520,7 +529,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _metadata_variable_name = _get_metadata_variable_name(request)
 
-    if _metadata_variable_name not in data:
+    if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
     # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
@@ -548,9 +557,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
+        data[_metadata_variable_name][
+            "global_max_parallel_requests"
+        ] = general_settings.get("global_max_parallel_requests", None)
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -739,7 +748,10 @@ def _get_enforced_params(
     enforced_params: Optional[list] = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
-        if "service_account_settings" in general_settings:
+        if (
+            "service_account_settings" in general_settings
+            and check_if_token_is_service_account(user_api_key_dict) is True
+        ):
             service_account_settings = general_settings["service_account_settings"]
             if "enforced_params" in service_account_settings:
                 if enforced_params is None:
@@ -750,6 +762,20 @@ def _get_enforced_params(
             enforced_params = []
         enforced_params.extend(user_api_key_dict.metadata["enforced_params"])
     return enforced_params
+
+
+def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Checks if the token is a service account
+
+    Returns:
+        bool: True if token is a service account
+
+    """
+    if valid_token.metadata:
+        if "service_account_id" in valid_token.metadata:
+            return True
+    return False
 
 
 def _enforced_params_check(

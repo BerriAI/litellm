@@ -1,32 +1,6 @@
 model_list:
-  - model_name: model-1
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/model-1
-      api_key: os.environ/OPENAI_API_KEY_MODEL_1
+      model: openai/fake
+      api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: model-2
-    litellm_params:
-      model: openai/model-2
-      api_key: os.environ/OPENAI_API_KEY_MODEL_2
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-general_settings:
-  key_management_system: "aws_secret_manager"
-  key_management_settings:
-    hosted_keys: [
-      "OPENAI_API_KEY_MODEL_1",
-      "OPENAI_API_KEY_MODEL_2",
-    ]
-    primary_secret_name: "litellm_secrets"
-  - model_name: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
-    litellm_params:
-
-      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
-      thinking: {"type": "enabled", "budget_tokens": 1024}
-      max_tokens: 1080
-      merge_reasoning_content_in_choices: true
-
-
-general_settings:
-  store_model_in_db: true
-  store_prompts_in_spend_logs: true

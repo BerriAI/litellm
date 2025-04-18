@@ -1,0 +1,1 @@
+export type Setter<T> = (newValueOrUpdater: T | ((previousValue: T) => T)) => void

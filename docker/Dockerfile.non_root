@@ -14,7 +14,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev && \
+    apt-get install -y gcc g++ python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -56,10 +56,8 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0
 # ensure pyjwt is used, not jwt
-RUN pip install redisvl==0.0.7 --no-deps --no-cache-dir && \
-    pip uninstall jwt -y && \
+RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 

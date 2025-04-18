@@ -127,7 +127,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
     completion_kwargs={},
     extra_kwargs={},
 ):
-
+    """Maps an LLM Provider Exception to OpenAI Exception Format"""
     if any(
         isinstance(original_exception, exc_type)
         for exc_type in litellm.LITELLM_EXCEPTION_TYPES
@@ -331,6 +331,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "Web server is returning an unknown error" in error_str
@@ -421,6 +422,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            body=getattr(original_exception, "body", None),
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -1960,6 +1962,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         litellm_debug_info=extra_information,
                         response=getattr(original_exception, "response", None),
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting"
@@ -1991,6 +1994,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             litellm_debug_info=extra_information,
                             response=getattr(original_exception, "response", None),
+                            body=getattr(original_exception, "body", None),
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True

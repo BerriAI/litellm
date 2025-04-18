@@ -80,7 +80,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      #
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -112,7 +111,11 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: |
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
           
@@ -151,8 +154,12 @@ jobs:
           context: .
           file: ./docker/Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
-          labels: ${{ steps.meta-database.outputs.labels }} 
+          tags: |
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-stable', env.REGISTRY) || '' }}
+          labels: ${{ steps.meta-database.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
             
   build-and-push-image-non_root:
@@ -190,7 +197,11 @@ jobs:
           context: .
           file: ./docker/Dockerfile.non_root
           push: true
-          tags: ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }} 
+          tags: |
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta-non_root.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
@@ -229,7 +240,11 @@ jobs:
           context: .
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
-          tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+          tags: |
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-stable', env.REGISTRY) || '' }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:

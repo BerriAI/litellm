@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 from ..base_llm.base_utils import BaseLLMModelInfo
 from ..base_llm.chat.transformation import BaseLLMException
@@ -11,7 +12,29 @@ class TopazException(BaseLLMException):
 
 
 class TopazModelInfo(BaseLLMModelInfo):
-    def get_models(self) -> List[str]:
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if api_key is None:
+            raise ValueError(
+                "API key is required for Topaz image variations. Set via `TOPAZ_API_KEY` or `api_key=..`"
+            )
+        return {
+            # "Content-Type": "multipart/form-data",
+            "Accept": "image/jpeg",
+            "X-API-Key": api_key,
+        }
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
         return [
             "topaz/Standard V2",
             "topaz/Low Resolution V2",

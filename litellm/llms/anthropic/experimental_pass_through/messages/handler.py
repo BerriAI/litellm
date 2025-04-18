@@ -6,7 +6,7 @@
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Union, cast
+from typing import AsyncIterator, Dict, List, Optional, Union, cast
 
 import httpx
 
@@ -19,13 +19,15 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager, client
 
 
 class AnthropicMessagesHandler:
-
     @staticmethod
     async def _handle_anthropic_streaming(
         response: httpx.Response,
@@ -61,32 +63,46 @@ class AnthropicMessagesHandler:
 
 @client
 async def anthropic_messages(
-    api_key: str,
+    max_tokens: int,
+    messages: List[Dict],
     model: str,
-    stream: bool = False,
+    metadata: Optional[Dict] = None,
+    stop_sequences: Optional[List[str]] = None,
+    stream: Optional[bool] = False,
+    system: Optional[str] = None,
+    temperature: Optional[float] = None,
+    thinking: Optional[Dict] = None,
+    tool_choice: Optional[Dict] = None,
+    tools: Optional[List[Dict]] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[Dict[str, Any], AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
     # Use provided client or create a new one
     optional_params = GenericLiteLLMParams(**kwargs)
-    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=optional_params.api_base,
-            api_key=optional_params.api_key,
-        )
+    (
+        model,
+        _custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=optional_params.api_base,
+        api_key=optional_params.api_key,
     )
-    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(_custom_llm_provider),
-        )
+    anthropic_messages_provider_config: Optional[
+        BaseAnthropicMessagesConfig
+    ] = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model,
+        provider=litellm.LlmProviders(_custom_llm_provider),
     )
     if anthropic_messages_provider_config is None:
         raise ValueError(
@@ -127,10 +143,8 @@ async def anthropic_messages(
         },
         custom_llm_provider=_custom_llm_provider,
     )
-    litellm_logging_obj.model_call_details.update(kwargs)
-
     # Prepare request body
-    request_body = kwargs.copy()
+    request_body = locals().copy()
     request_body = {
         k: v
         for k, v in request_body.items()
@@ -138,10 +152,12 @@ async def anthropic_messages(
         in anthropic_messages_provider_config.get_supported_anthropic_messages_params(
             model=model
         )
+        and v is not None
     }
     request_body["stream"] = stream
     request_body["model"] = model
     litellm_logging_obj.stream = stream
+    litellm_logging_obj.model_call_details.update(request_body)
 
     # Make the request
     request_url = anthropic_messages_provider_config.get_complete_url(
@@ -162,7 +178,7 @@ async def anthropic_messages(
         url=request_url,
         headers=headers,
         data=json.dumps(request_body),
-        stream=stream,
+        stream=stream or False,
     )
     response.raise_for_status()
 

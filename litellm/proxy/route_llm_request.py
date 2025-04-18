@@ -21,6 +21,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
     "arerank": "/rerank",
+    "aresponses": "/responses",
 }
 
 
@@ -45,6 +46,7 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "aresponses",
         "_arealtime",  # private function for realtime API
     ],
 ):

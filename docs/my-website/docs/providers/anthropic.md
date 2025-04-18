@@ -821,6 +821,14 @@ print(f"\nResponse: {resp}")
 
 ## Usage - Thinking / `reasoning_content`
 
+LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/23051d89dd3611a81617d84277059cd88b2df511/litellm/llms/anthropic/chat/transformation.py#L298)
+
+| reasoning_effort | thinking |
+| ---------------- | -------- |
+| "low"            | "budget_tokens": 1024 |
+| "medium"         | "budget_tokens": 2048 |
+| "high"           | "budget_tokens": 4096 |
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -830,7 +838,7 @@ from litellm import completion
 resp = completion(
     model="anthropic/claude-3-7-sonnet-20250219",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
-    thinking={"type": "enabled", "budget_tokens": 1024},
+    reasoning_effort="low",
 )
 
 ```
@@ -863,7 +871,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   -d '{
     "model": "claude-3-7-sonnet-20250219",
     "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
+    "reasoning_effort": "low"
   }'
 ```
 
@@ -926,6 +934,44 @@ ModelResponse(
     )
 )
 ```
+
+### Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-3-7-sonnet-20250219",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 
 ## **Passing Extra Headers to Anthropic API**
 
@@ -1035,8 +1081,10 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                       "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }
                 },
             ],
         }
@@ -1081,8 +1129,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                }
             }
           }
         ]

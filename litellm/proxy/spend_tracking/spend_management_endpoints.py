@@ -3,7 +3,7 @@ import collections
 import os
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -286,7 +286,6 @@ async def get_global_activity(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 date_trunc('day', "startTime") AS date,
@@ -453,7 +452,6 @@ async def get_global_activity_model(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 model_group,
@@ -1096,7 +1094,6 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1689,7 +1686,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -2160,7 +2156,6 @@ async def global_spend_for_internal_user(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
-
         user_id = user_api_key_dict.user_id
         if user_id is None:
             raise ValueError("/global/spend/logs Error: User ID is None")
@@ -2293,7 +2288,6 @@ async def global_spend():
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-
         total_spend = 0.0
 
         if prisma_client is None:

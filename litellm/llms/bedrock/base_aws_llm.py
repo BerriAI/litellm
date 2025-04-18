@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret
 
@@ -279,16 +279,30 @@ class BaseAWSLLM:
         return None
 
     def _get_aws_region_name(
-        self, optional_params: dict, model: Optional[str] = None
+        self,
+        optional_params: dict,
+        model: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> str:
         """
-        Get the AWS region name from the environment variables
+        Get the AWS region name from the environment variables.
+
+        Parameters:
+            optional_params (dict): Optional parameters for the model call
+            model (str): The model name
+            model_id (str): The model ID. This is the ARN of the model, if passed in as a separate param.
+
+        Returns:
+            str: The AWS region name
         """
         aws_region_name = optional_params.get("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #
-            aws_region_name = self._get_aws_region_from_model_arn(model)
+            if model_id is not None:
+                aws_region_name = self._get_aws_region_from_model_arn(model_id)
+            else:
+                aws_region_name = self._get_aws_region_from_model_arn(model)
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
@@ -367,7 +381,7 @@ class BaseAWSLLM:
             "region_name": aws_region_name,
         }
 
-        if sts_response["PackedPolicySize"] > 75:
+        if sts_response["PackedPolicySize"] > BEDROCK_MAX_POLICY_SIZE:
             verbose_logger.warning(
                 f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
             )

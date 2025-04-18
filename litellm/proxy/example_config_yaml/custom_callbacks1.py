@@ -61,6 +61,7 @@ class MyCustomHandler(
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         pass

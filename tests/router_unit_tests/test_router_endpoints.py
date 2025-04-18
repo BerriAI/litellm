@@ -315,14 +315,20 @@ async def test_router_with_empty_choices(model_list):
     assert response is not None
 
 
-@pytest.mark.asyncio
-async def test_ageneric_api_call_with_fallbacks_basic():
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_generic_api_call_with_fallbacks_basic(sync_mode):
     """
-    Test the _ageneric_api_call_with_fallbacks method with a basic successful call
+    Test both the sync and async versions of generic_api_call_with_fallbacks with a basic successful call
     """
-    # Create a mock function that will be passed to _ageneric_api_call_with_fallbacks
-    mock_function = AsyncMock()
-    mock_function.__name__ = "test_function"
+    # Create a mock function that will be passed to generic_api_call_with_fallbacks
+    if sync_mode:
+        from unittest.mock import Mock
+
+        mock_function = Mock()
+        mock_function.__name__ = "test_function"
+    else:
+        mock_function = AsyncMock()
+        mock_function.__name__ = "test_function"
 
     # Create a mock response
     mock_response = {
@@ -347,13 +353,23 @@ async def test_ageneric_api_call_with_fallbacks_basic():
         ]
     )
 
-    # Call the _ageneric_api_call_with_fallbacks method
-    response = await router._ageneric_api_call_with_fallbacks(
-        model="test-model-alias",
-        original_function=mock_function,
-        messages=[{"role": "user", "content": "Hello"}],
-        max_tokens=100,
-    )
+    # Call the appropriate generic_api_call_with_fallbacks method
+    if sync_mode:
+        response = router._generic_api_call_with_fallbacks(
+            model="test-model-alias",
+            original_function=mock_function,
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+    else:
+        response = asyncio.run(
+            router._ageneric_api_call_with_fallbacks(
+                model="test-model-alias",
+                original_function=mock_function,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=100,
+            )
+        )
 
     # Verify the mock function was called
     mock_function.assert_called_once()
@@ -510,3 +526,36 @@ async def test__aadapter_completion():
 
         # Verify async_routing_strategy_pre_call_checks was called
         router.async_routing_strategy_pre_call_checks.assert_called_once()
+
+
+def test_initialize_router_endpoints():
+    """
+    Test that initialize_router_endpoints correctly sets up all router endpoints
+    """
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "anthropic/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    # Explicitly call initialize_router_endpoints
+    router.initialize_router_endpoints()
+
+    # Verify all expected endpoints are initialized
+    assert hasattr(router, "amoderation")
+    assert hasattr(router, "aanthropic_messages")
+    assert hasattr(router, "aresponses")
+    assert hasattr(router, "responses")
+
+    # Verify the endpoints are callable
+    assert callable(router.amoderation)
+    assert callable(router.aanthropic_messages)
+    assert callable(router.aresponses)
+    assert callable(router.responses)

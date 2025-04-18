@@ -74,8 +74,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         """
@@ -129,7 +131,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        extra_headers = optional_params.get("extra_headers", None)
         aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
         aws_access_key_id = optional_params.get("aws_access_key_id", None)
         aws_session_token = optional_params.get("aws_session_token", None)
@@ -155,9 +156,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         )
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-        headers = {"Content-Type": "application/json"}
-        if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers}
+        if headers is not None:
+            headers = {"Content-Type": "application/json", **headers}
+        else:
+            headers = {"Content-Type": "application/json"}
 
         request = AWSRequest(
             method="POST",
@@ -166,12 +168,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             headers=headers,
         )
         sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
 
-        return dict(request.headers)
+        request_headers_dict = dict(request.headers)
+        if (
+            headers is not None and "Authorization" in headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["Authorization"]
+        return request_headers_dict
 
     def transform_request(
         self,
@@ -223,9 +226,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             return litellm.AmazonAnthropicClaude3Config().transform_request(
@@ -309,7 +312,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             completion_response = raw_response.json()
         except Exception:
@@ -440,10 +442,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return {}
+        return headers
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

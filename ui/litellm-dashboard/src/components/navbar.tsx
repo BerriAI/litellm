@@ -1,5 +1,5 @@
 import Link from "next/link";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
 import { Organization } from "@/components/networking";
@@ -9,6 +9,8 @@ import {
   LogoutOutlined
 } from '@ant-design/icons';
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+
 interface NavbarProps {
   userID: string | null;
   userEmail: string | null;
@@ -16,6 +18,7 @@ interface NavbarProps {
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  accessToken: string | null;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -24,10 +27,30 @@ const Navbar: React.FC<NavbarProps> = ({
   userRole,
   premiumUser,
   proxySettings,
+  setProxySettings,
+  accessToken,
 }) => {
   const isLocal = process.env.NODE_ENV === "development";
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
-  let logoutUrl = proxySettings?.PROXY_LOGOUT_URL || "";
+  const [logoutUrl, setLogoutUrl] = useState("");
+
+  useEffect(() => {
+    const initializeProxySettings = async () => {
+      if (accessToken) {
+        const settings = await fetchProxySettings(accessToken);
+        console.log("response from fetchProxySettings", settings);
+        if (settings) {
+          setProxySettings(settings);
+        }
+      }
+    };
+
+    initializeProxySettings();
+  }, [accessToken]);
+
+  useEffect(() => {
+    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
+  }, [proxySettings]);
 
   const handleLogout = () => {
     clearTokenCookies();

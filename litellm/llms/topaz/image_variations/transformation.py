@@ -10,10 +10,7 @@ from litellm.llms.base_llm.chat.transformation import (
     BaseLLMException,
     LiteLLMLoggingObj,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIImageVariationOptionalParams,
-)
+from litellm.types.llms.openai import OpenAIImageVariationOptionalParams
 from litellm.types.utils import (
     FileTypes,
     HttpHandlerRequestFields,
@@ -22,39 +19,22 @@ from litellm.types.utils import (
 )
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
-from ..common_utils import TopazException
+from ..common_utils import TopazException, TopazModelInfo
 
 
-class TopazImageVariationConfig(BaseImageVariationConfig):
+class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageVariationOptionalParams]:
         return ["response_format", "size"]
 
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        if api_key is None:
-            raise ValueError(
-                "API key is required for Topaz image variations. Set via `TOPAZ_API_KEY` or `api_key=..`"
-            )
-        return {
-            # "Content-Type": "multipart/form-data",
-            "Accept": "image/jpeg",
-            "X-API-Key": api_key,
-        }
-
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         api_base = api_base or "https://api.topazlabs.com"
@@ -120,7 +100,6 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         optional_params: dict,
         headers: dict,
     ) -> HttpHandlerRequestFields:
-
         request_params = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
             data=optional_params,
@@ -133,7 +112,6 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         image_content: bytes,
         response_ms: float,
     ) -> ImageResponse:
-
         # Convert to base64
         base64_image = base64.b64encode(image_content).decode("utf-8")
 
