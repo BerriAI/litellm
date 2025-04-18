@@ -24,17 +24,20 @@ import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import EntityUsage from './entity_usage';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
+import { Team } from "./key_team_helpers/key_list";
 
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  teams: Team[];
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
   userRole,
   userID,
+  teams
 }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
@@ -471,6 +474,10 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               entityType="team"
               userID={userID}
               userRole={userRole}
+              entityList={teams?.map(team => ({
+                label: team.team_alias,
+                value: team.team_id
+              })) || null}
             />
           </TabPanel>
 
@@ -481,6 +488,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               entityType="tag"
               userID={userID}
               userRole={userRole}
+              entityList={null}
             />
           </TabPanel>
 

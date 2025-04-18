@@ -49,12 +49,18 @@ interface EntitySpendData {
   };
 }
 
+interface EntityList {
+  label: string;
+  value: string;
+}
+
 interface EntityUsageProps {
   accessToken: string | null;
   entityType: 'tag' | 'team';
   entityId?: string | null;
   userID: string | null;
   userRole: string | null;
+  entityList: EntityList[] | null;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -62,7 +68,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityType,
   entityId,
   userID,
-  userRole
+  userRole,
+  entityList
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({ 
     results: [], 
@@ -225,16 +232,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   const getAllTags = () => {
-    const tags = new Set<string>();
-    spendData.results.forEach(day => {
-      Object.keys(day.breakdown.entities || {}).forEach(tag => {
-        tags.add(tag);
-      });
-    });
-    return Array.from(tags).map(tag => ({
-      label: tag,
-      value: tag
-    }));
+    if (entityList) {
+      return entityList;
+    }
   };
 
   const filterDataByTags = (data: EntityMetricWithMetadata[]) => {
@@ -292,9 +292,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               onValueChange={setDateValue}
             />
           </Col>
-          <Col>
-            <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
-            <Select
+          {entityList && entityList.length > 0 && (
+            <Col>
+              <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
+              <Select
               mode="multiple"
               style={{ width: '100%' }}
               placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
@@ -303,8 +304,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               options={getAllTags()}
               className="mt-2"
               allowClear
-            />
-          </Col>
+              />
+            </Col>
+          )}
         </Grid>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
