@@ -172,12 +172,16 @@ class VertexBase:
             if custom_llm_provider == "gemini":
                 url = "{}:{}".format(api_base, endpoint)
                 if gemini_api_key is None:
-                    raise ValueError(
-                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                    # Do not raise error as google-ai-studio expect header 'x-goog-api-key' instead of 'Authorization',
+                    #     https://developers.cloudflare.com/ai-gateway/providers/google-ai-studio/#curl
+                    # raise ValueError(
+                    #     "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                    # )
+                    pass
+                else:
+                    auth_header = (
+                        gemini_api_key  # cloudflare expects api key as bearer token
                     )
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
             else:
                 url = "{}:{}".format(api_base, endpoint)
 
