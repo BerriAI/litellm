@@ -8197,6 +8197,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -8315,6 +8316,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
