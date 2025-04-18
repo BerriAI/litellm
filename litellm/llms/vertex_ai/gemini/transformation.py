@@ -331,7 +331,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
-def _transform_request_body(
+def _transform_request_body( # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
@@ -342,13 +342,35 @@ def _transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    # Duplicate system message as user message for Gemini 
+    duplicate_system_as_user = optional_params.pop("duplicate_system_as_user_for_gemini", True)
+
+    # Check if all messages are system messages
+    all_system_messages = all(message["role"] == "system" for message in messages)
+
     # Separate system prompt from rest of message
     supports_system_message = get_supports_system_message(
         model=model, custom_llm_provider=custom_llm_provider
     )
-    system_instructions, messages = _transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
-    )
+
+    system_instructions = None
+    # If all messages are system messages, add a user message to the end
+    if (all_system_messages and supports_system_message and messages):
+        # Always create system instruction
+        system_content = messages[0].get("content", "")
+        system_part = PartType(text=system_content) # type: ignore
+        system_instructions = SystemInstructions(parts=[system_part])
+        
+        # Only duplicate as user message if flag is set
+        if duplicate_system_as_user or litellm.modify_params:
+            user_message = cast(AllMessageValues, {
+                "role": "user",
+                "content": system_content
+            })
+            messages = [user_message]
+        else:
+            messages = []
+
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
         supports_response_schema = get_supports_response_schema(
