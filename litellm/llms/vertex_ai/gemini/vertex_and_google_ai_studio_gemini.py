@@ -54,6 +54,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
+    CompletionTokensDetailsWrapper,
     GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
@@ -313,10 +314,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = _build_vertex_schema(parameters=item, add_property_ordering=True)
+                    item = _build_vertex_schema(
+                        parameters=item, add_property_ordering=True
+                    )
 
         elif isinstance(old_schema, dict):
-            old_schema = _build_vertex_schema(parameters=old_schema, add_property_ordering=True)
+            old_schema = _build_vertex_schema(
+                parameters=old_schema, add_property_ordering=True
+            )
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
@@ -677,6 +682,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         audio_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        reasoning_tokens: Optional[int] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
@@ -687,7 +693,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     audio_tokens = detail["tokenCount"]
                 elif detail["modality"] == "TEXT":
                     text_tokens = detail["tokenCount"]
-
+        if "thoughtsTokenCount" in completion_response["usageMetadata"]:
+            reasoning_tokens = completion_response["usageMetadata"][
+                "thoughtsTokenCount"
+            ]
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
@@ -703,6 +712,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ),
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
+            reasoning_tokens=reasoning_tokens,
         )
 
         return usage
