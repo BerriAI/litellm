@@ -2608,3 +2608,64 @@ def test_caching_with_reasoning_content():
     print(f"response 2: {response_2.model_dump_json(indent=4)}")
     assert response_2._hidden_params["cache_hit"] == True
     assert response_2.choices[0].message.reasoning_content is not None
+
+
+def test_caching_reasoning_args_miss():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id != response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+def test_caching_reasoning_args_hit():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id == response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+ 
+def test_caching_thinking_args_miss():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id != response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+def test_caching_thinking_args_hit():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response" )
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id == response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
