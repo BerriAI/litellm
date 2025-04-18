@@ -2,25 +2,8 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-import asyncio
-import contextvars
-from functools import partial
-from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-import httpx
-from openai.types.chat.completion_create_params import CompletionCreateParamsBase
-
-import litellm
-from litellm.constants import request_timeout
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.responses.streaming_iterator import (
-    BaseResponsesAPIStreamingIterator,
-    ResponsesAPIStreamingIterator,
-    SyncResponsesAPIStreamingIterator,
-)
-from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionSystemMessage,
@@ -30,8 +13,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
-from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import ModelResponse
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -149,9 +131,40 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
-        chat_completion_response: dict,
-    ) -> dict:
+        chat_completion_response: ModelResponse,
+    ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
         """
-        return {}
+        return ResponsesAPIResponse(
+            id=chat_completion_response.id,
+            created_at=chat_completion_response.created,
+            model=chat_completion_response.model,
+            object=chat_completion_response.object,
+            error=getattr(chat_completion_response, "error", None),
+            incomplete_details=getattr(
+                chat_completion_response, "incomplete_details", None
+            ),
+            instructions=getattr(chat_completion_response, "instructions", None),
+            metadata=getattr(chat_completion_response, "metadata", None),
+            output=getattr(chat_completion_response, "output", []),
+            parallel_tool_calls=getattr(
+                chat_completion_response, "parallel_tool_calls", False
+            ),
+            temperature=getattr(chat_completion_response, "temperature", None),
+            tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
+            tools=getattr(chat_completion_response, "tools", []),
+            top_p=getattr(chat_completion_response, "top_p", None),
+            max_output_tokens=getattr(
+                chat_completion_response, "max_output_tokens", None
+            ),
+            previous_response_id=getattr(
+                chat_completion_response, "previous_response_id", None
+            ),
+            reasoning=getattr(chat_completion_response, "reasoning", None),
+            status=getattr(chat_completion_response, "status", None),
+            text=getattr(chat_completion_response, "text", None),
+            truncation=getattr(chat_completion_response, "truncation", None),
+            usage=getattr(chat_completion_response, "usage", None),
+            user=getattr(chat_completion_response, "user", None),
+        )
