@@ -323,6 +323,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "empower"
         elif model == "*":
             custom_llm_provider = "openai"
+        elif "diffusers" in model:
+            custom_llm_provider = "diffusers"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
