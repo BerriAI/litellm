@@ -8,6 +8,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
@@ -31,7 +32,6 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
-_DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
 
 def mask_sensitive_info(error_message):
@@ -192,7 +192,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -427,7 +427,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -527,7 +527,7 @@ class HTTPHandler:
     def post(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
@@ -573,7 +573,6 @@ class HTTPHandler:
                 setattr(e, "text", error_text)
 
             setattr(e, "status_code", e.response.status_code)
-
             raise e
         except Exception as e:
             raise e

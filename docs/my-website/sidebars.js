@@ -188,7 +188,7 @@ const sidebars = {
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-        
+
         {
           type: "category",
           label: "Google AI Studio",
@@ -340,7 +340,15 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        "files_endpoints",
+
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
         "batches",
         "realtime",
         "fine_tuning",
@@ -400,9 +408,9 @@ const sidebars = {
       label: "Logging & Observability",
       items: [
         "observability/agentops_integration",
+        "observability/langfuse_integration",
         "observability/lunary_integration",
         "observability/mlflow",
-        "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/literalai_integration",
@@ -436,6 +444,9 @@ const sidebars = {
       label: "Tutorials",
       items: [
         "tutorials/openweb_ui",
+        "tutorials/msft_sso",
+        "tutorials/prompt_caching",
+        "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
         {
           type: "category",

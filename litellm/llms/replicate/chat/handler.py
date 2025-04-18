@@ -141,6 +141,7 @@ def completion(
         model=model,
         messages=messages,
         optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     # Start a prediction and get the prediction URL
     version_id = replicate_config.model_to_version_id(model)

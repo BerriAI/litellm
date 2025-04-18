@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -33,23 +33,22 @@ class BaseFilesConfig(BaseConfig):
     ) -> List[OpenAICreateFileRequestOptionalParams]:
         pass
 
-    def get_complete_url(
+    def get_complete_file_url(
         self,
         api_base: Optional[str],
         api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        """
-        OPTIONAL
-
-        Get the complete url for the request
-
-        Some providers need `model` in `api_base`
-        """
-        return api_base or ""
+        data: CreateFileRequest,
+    ):
+        return self.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
 
     @abstractmethod
     def transform_create_file_request(
@@ -58,7 +57,7 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict:
+    ) -> Union[dict, str, bytes]:
         pass
 
     @abstractmethod

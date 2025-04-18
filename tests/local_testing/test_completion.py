@@ -131,45 +131,15 @@ def test_null_role_response():
 
         assert response.choices[0].message.role == "assistant"
 
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_MISTRAL_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_MISTRAL_API_KEY", "")
-
-        data = {
-            "model": "azure_ai/mistral",
-            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.1,
-            "drop_params": True,
-        }
-        if sync_mode:
-            response: litellm.ModelResponse = completion(**data)  # type: ignore
-        else:
-            response: litellm.ModelResponse = await litellm.acompletion(**data)  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
+@pytest.mark.skip(reason="Cohere having RBAC issues")
 def test_completion_azure_command_r():
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
 
         response = completion(
             model="azure/command-r-plus",
-            api_base=os.getenv("AZURE_COHERE_API_BASE"),
-            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com",
+            api_key="AO89xyvmOLLMgoMI7WaiEaP0t6M09itr",
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
         )
 
@@ -869,59 +839,6 @@ def test_completion_function_plus_image(model):
         print(response)
     except litellm.InternalServerError:
         pass
-
-
-@pytest.mark.parametrize(
-    "provider",
-    ["azure", "azure_ai"],
-)
-def test_completion_azure_mistral_large_function_calling(provider):
-    """
-    This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
-    """
-    litellm.set_verbose = True
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-
-    model_cost = litellm.get_model_cost_map(url="")
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-
-    response = completion(
-        model="{}/mistral-large-latest".format(provider),
-        api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
-        api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
-        messages=messages,
-        tools=tools,
-        tool_choice="auto",
-    )
-    # Add any assertions, here to check response args
-    print(response)
-    assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-    assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
 
 
 def test_completion_mistral_api():

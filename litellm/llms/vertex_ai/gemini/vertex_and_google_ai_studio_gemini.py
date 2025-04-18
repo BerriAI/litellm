@@ -207,7 +207,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
-            "top_logprobs",  # Added this to list of supported openAI params
+            "top_logprobs",
             "modalities",
         ]
 
@@ -240,6 +240,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
+        enterpriseWebSearch: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
@@ -273,6 +274,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 googleSearch = tool["googleSearch"]
             elif tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif tool.get("enterpriseWebSearch", None) is not None:
+                enterpriseWebSearch = tool["enterpriseWebSearch"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
             elif openai_function_object is not None:
@@ -299,6 +302,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools["googleSearch"] = googleSearch
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        if enterpriseWebSearch is not None:
+            _tools["enterpriseWebSearch"] = enterpriseWebSearch
         if code_execution is not None:
             _tools["code_execution"] = code_execution
         return [_tools]
@@ -308,9 +313,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = _build_vertex_schema(parameters=item)
+                    item = _build_vertex_schema(parameters=item, add_property_ordering=True)
+
         elif isinstance(old_schema, dict):
-            old_schema = _build_vertex_schema(parameters=old_schema)
+            old_schema = _build_vertex_schema(parameters=old_schema, add_property_ordering=True)
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
@@ -743,9 +749,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_logprobs = self._transform_logprobs(
                     logprobs_result=candidate["logprobsResult"]
                 )
-            # Handle avgLogprobs for Gemini Flash 2.0
-            elif "avgLogprobs" in candidate:
-                chat_completion_logprobs = candidate["avgLogprobs"]
 
             if tools:
                 chat_completion_message["tool_calls"] = tools
@@ -900,6 +903,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: Dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -1017,7 +1021,7 @@ class VertexLLM(VertexBase):
         logging_obj,
         stream,
         optional_params: dict,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         api_base: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
@@ -1058,6 +1062,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -1144,6 +1149,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         request_body = await async_transform_request_body(**data)  # type: ignore
@@ -1317,6 +1323,7 @@ class VertexLLM(VertexBase):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##

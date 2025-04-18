@@ -451,3 +451,11 @@ def test_router_get_deployment_credentials():
     credentials = router.get_deployment_credentials(model_id="1")
     assert credentials is not None
     assert credentials["api_key"] == "123"
+
+
+def test_router_get_deployment_model_info():
+    router = Router(
+        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}, "model_info": {"id": "1"}}]
+    )
+    model_info = router.get_deployment_model_info(model_id="1", model_name="gemini/gemini-1.5-flash")
+    assert model_info is not None

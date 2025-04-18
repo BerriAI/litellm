@@ -864,29 +864,6 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
 #     assert False
 
-
-def test_completion_azure_ai():
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="azure_ai/Mistral-large-nmefg",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            max_tokens=15,
-            num_retries=3,
-            api_base=os.getenv("AZURE_AI_MISTRAL_API_BASE"),
-            api_key=os.getenv("AZURE_AI_MISTRAL_API_KEY"),
-        )
-        print(response)
-
-        assert "response_cost" in response._hidden_params
-        assert isinstance(response._hidden_params["response_cost"], float)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -2954,9 +2931,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
-
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032

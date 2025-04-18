@@ -300,6 +300,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
+                  proxySettings={proxySettings}
                 />
               ) : page == "api_ref" ? (
                 <APIRef proxySettings={proxySettings} />
@@ -314,6 +315,8 @@ export default function CreateKeyPage() {
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
                 <GuardrailsPanel accessToken={accessToken} />
+              ): page == "transform-request" ? (
+                <TransformRequestPanel accessToken={accessToken} />
               ): page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
