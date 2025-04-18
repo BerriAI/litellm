@@ -832,6 +832,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 raise litellm.BudgetExceededError(
                                     current_cost=valid_token.team_member_spend,
                                     max_budget=team_member_budget,
+                                    budget_reset_at=valid_token.budget_reset_at,
                                 )
 
             # Check 3. If token is expired
