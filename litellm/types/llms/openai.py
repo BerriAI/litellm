@@ -466,6 +466,7 @@ class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     data: str
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
+
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
     city: str
     """Free text input for the city of the user, e.g. `San Francisco`."""
@@ -533,7 +534,6 @@ class ChatCompletionAnnotation(TypedDict, total=False):
 
     url_citation: ChatCompletionAnnotationURLCitation
     """A URL citation when using web search."""
-
 
 
 class OpenAIChatCompletionTextObject(TypedDict):
@@ -791,7 +791,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionUsageBlock(TypedDict):
