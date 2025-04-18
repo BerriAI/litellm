@@ -9,11 +9,13 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    ResponseAPIUsage,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -147,7 +149,10 @@ class LiteLLMCompletionResponsesConfig:
             ),
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", None),
-            output=getattr(chat_completion_response, "output", []),
+            output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
+                chat_completion_response=chat_completion_response,
+                choices=getattr(chat_completion_response, "choices", []),
+            ),
             parallel_tool_calls=getattr(
                 chat_completion_response, "parallel_tool_calls", False
             ),
@@ -167,4 +172,44 @@ class LiteLLMCompletionResponsesConfig:
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=getattr(chat_completion_response, "usage", None),
             user=getattr(chat_completion_response, "user", None),
+        )
+
+    @staticmethod
+    def _transform_chat_completion_choices_to_responses_output(
+        chat_completion_response: ModelResponse,
+        choices: List[Choices],
+    ) -> List[GenericResponseOutputItem]:
+        responses_output: List[GenericResponseOutputItem] = []
+        for choice in choices:
+            responses_output.append(
+                GenericResponseOutputItem(
+                    id=chat_completion_response.id,
+                    status=choice.finish_reason,
+                    role=choice.message.role,
+                    content=[
+                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+                            choice.message
+                        )
+                    ],
+                )
+            )
+        return responses_output
+
+    @staticmethod
+    def _transform_chat_message_to_response_output_text(
+        message: Message,
+    ) -> OutputText:
+        return OutputText(
+            type="text",
+            text=message.content,
+        )
+
+    @staticmethod
+    def _transform_chat_completion_usage_to_responses_usage(
+        usage: Usage,
+    ) -> ResponseAPIUsage:
+        return ResponseAPIUsage(
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
         )

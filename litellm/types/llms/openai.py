@@ -52,6 +52,8 @@ from openai.types.responses.response_create_params import (
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
+from litellm.types.responses.main import GenericResponseOutputItem
+
 FileContent = Union[IO[bytes], bytes, PathLike]
 
 FileTypes = Union[
@@ -963,7 +965,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: List[ResponseOutputItem]
+    output: Union[List[ResponseOutputItem], List[GenericResponseOutputItem]]
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
