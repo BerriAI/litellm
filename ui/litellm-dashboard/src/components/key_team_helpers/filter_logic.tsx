@@ -154,9 +154,10 @@ export function useFilterLogic({
       'Key Alias': ''
     });
     
-    // Reset team and org selections
+    // Reset selections
     setSelectedTeam(null);
     setCurrentOrg(null);
+    setSelectedKeyAlias(null);
   };
 
   return {
