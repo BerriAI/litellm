@@ -57,9 +57,10 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         - file_data: base64 encoded video data
         - file_id: infer mp4 from extension
         """
-        format = content_item.get("file").get("format")
-        file_data = content_item.get("file").get("file_data")
-        file_id = content_item.get("file").get("file_id")
+        file = content_item.get("file", {})
+        format = file.get("format")
+        file_data = file.get("file_data")
+        file_id = file.get("file_id")
         if content_item.get("type") != "file":
             return False
         if format and format.startswith("video/"):
@@ -77,8 +78,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     def _convert_file_to_video_url(
         self, content_item: ChatCompletionFileObject
     ) -> ChatCompletionVideoObject:
-        file_id = content_item.get("file").get("file_id")
-        file_data = content_item.get("file").get("file_data")
+        file = content_item.get("file", {})
+        file_id = file.get("file_id")
+        file_data = file.get("file_data")
 
         if file_id:
             return ChatCompletionVideoObject(
