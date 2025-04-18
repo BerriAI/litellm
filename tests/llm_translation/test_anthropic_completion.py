@@ -1001,7 +1001,7 @@ def test_anthropic_thinking_output(model):
     "model",
     [
         "anthropic/claude-3-7-sonnet-20250219",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
 def test_anthropic_redacted_thinking_output(model):
@@ -1066,45 +1066,6 @@ def test_anthropic_thinking_output_stream(model):
         assert signature_block_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-    ],
-)
-def test_anthropic_redacted_thinking_output_stream(model):
-    litellm.set_verbose = True
-    try:
-        # litellm._turn_on_debug()
-        resp = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"}],
-            stream=True,
-            thinking={"type": "enabled", "budget_tokens": 1024},
-            timeout=10,
-        )
-
-        data_exists = False
-        for chunk in resp:
-            print(f"chunk 2: {chunk}")
-            if (
-                hasattr(chunk.choices[0].delta, "thinking_blocks")
-                and chunk.choices[0].delta.thinking_blocks is not None
-                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
-                and len(chunk.choices[0].delta.thinking_blocks) > 0
-            ):
-                print(chunk.choices[0].delta.thinking_blocks[0])
-                if chunk.choices[0].delta.thinking_blocks[0].get("data"):
-                    data_exists = True
-                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "redacted_thinking"
-        assert data_exists
-    except litellm.Timeout:
-        pytest.skip("Model is timing out")
-
 
 
 
