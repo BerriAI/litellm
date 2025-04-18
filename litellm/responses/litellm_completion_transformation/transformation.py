@@ -17,7 +17,13 @@ from litellm.types.llms.openai import (
     ResponseTextConfig,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    Usage,
+)
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -28,6 +34,7 @@ class LiteLLMCompletionResponsesConfig:
         input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
+        stream: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         """
@@ -46,7 +53,7 @@ class LiteLLMCompletionResponsesConfig:
             "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
-            "stream": kwargs.get("stream", False),
+            "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
         }
@@ -194,6 +201,7 @@ class LiteLLMCompletionResponsesConfig:
         for choice in choices:
             responses_output.append(
                 GenericResponseOutputItem(
+                    type="message",
                     id=chat_completion_response.id,
                     status=choice.finish_reason,
                     role=choice.message.role,
@@ -211,7 +219,7 @@ class LiteLLMCompletionResponsesConfig:
         message: Message,
     ) -> OutputText:
         return OutputText(
-            type="text",
+            type="output_text",
             text=message.content,
         )
 
