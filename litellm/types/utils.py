@@ -150,6 +150,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_vector_size: Optional[int]
+    output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -829,8 +830,11 @@ class Usage(CompletionUsage):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if reasoning_tokens:
+            text_tokens = (
+                completion_tokens - reasoning_tokens if completion_tokens else None
+            )
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens
+                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
             )
 
         # Ensure completion_tokens_details is properly handled

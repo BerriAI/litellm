@@ -5197,7 +5197,7 @@
         "supported_output_modalities": ["text"],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
     },
-    "vertex_ai/gemini-2.5-flash-preview-04-17": {
+    "gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
