@@ -137,7 +137,7 @@ def test_azure_extra_headers(input, call_type, header_value):
                 func = image_generation
 
             data = {
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                 "api_version": "2023-07-01-preview",
                 "api_key": "my-azure-api-key",
