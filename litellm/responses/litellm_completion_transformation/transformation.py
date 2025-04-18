@@ -9,10 +9,12 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponseTextConfig,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -31,7 +33,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
-        return {
+        litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
@@ -45,9 +47,16 @@ class LiteLLMCompletionResponsesConfig:
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": kwargs.get("stream", False),
-            "metadata": kwargs.get("metadata", {}),
-            "service_tier": kwargs.get("service_tier", ""),
+            "metadata": kwargs.get("metadata"),
+            "service_tier": kwargs.get("service_tier"),
         }
+
+        # only pass non-None values
+        litellm_completion_request = {
+            k: v for k, v in litellm_completion_request.items() if v is not None
+        }
+
+        return litellm_completion_request
 
     @staticmethod
     def transform_responses_api_input_to_messages(
@@ -148,7 +157,7 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response, "incomplete_details", None
             ),
             instructions=getattr(chat_completion_response, "instructions", None),
-            metadata=getattr(chat_completion_response, "metadata", None),
+            metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
@@ -156,7 +165,7 @@ class LiteLLMCompletionResponsesConfig:
             parallel_tool_calls=getattr(
                 chat_completion_response, "parallel_tool_calls", False
             ),
-            temperature=getattr(chat_completion_response, "temperature", None),
+            temperature=getattr(chat_completion_response, "temperature", 0),
             tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
             tools=getattr(chat_completion_response, "tools", []),
             top_p=getattr(chat_completion_response, "top_p", None),
@@ -166,11 +175,13 @@ class LiteLLMCompletionResponsesConfig:
             previous_response_id=getattr(
                 chat_completion_response, "previous_response_id", None
             ),
-            reasoning=getattr(chat_completion_response, "reasoning", None),
-            status=getattr(chat_completion_response, "status", None),
-            text=getattr(chat_completion_response, "text", None),
+            reasoning=Reasoning(),
+            status=getattr(chat_completion_response, "status", "completed"),
+            text=ResponseTextConfig(),
             truncation=getattr(chat_completion_response, "truncation", None),
-            usage=getattr(chat_completion_response, "usage", None),
+            usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                chat_completion_response=chat_completion_response
+            ),
             user=getattr(chat_completion_response, "user", None),
         )
 
@@ -206,8 +217,15 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
-        usage: Usage,
+        chat_completion_response: ModelResponse,
     ) -> ResponseAPIUsage:
+        usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
+        if usage is None:
+            return ResponseAPIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            )
         return ResponseAPIUsage(
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
