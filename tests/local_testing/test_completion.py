@@ -131,15 +131,15 @@ def test_null_role_response():
 
         assert response.choices[0].message.role == "assistant"
 
-
+@pytest.mark.skip(reason="Cohere having RBAC issues")
 def test_completion_azure_command_r():
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
 
         response = completion(
             model="azure/command-r-plus",
-            api_base=os.getenv("AZURE_COHERE_API_BASE"),
-            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com",
+            api_key="AO89xyvmOLLMgoMI7WaiEaP0t6M09itr",
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
         )
 
