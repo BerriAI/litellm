@@ -1546,7 +1546,7 @@ def test_call_with_key_over_budget(prisma_client):
             )
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1578,7 +1578,7 @@ def test_call_with_key_over_budget(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
                 == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
@@ -1669,7 +1669,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             proxy_db_logger = _ProxyDBLogger()
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1702,7 +1702,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
                 == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
@@ -1757,7 +1757,7 @@ async def test_call_with_key_over_model_budget(
 
     try:
 
-        # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
+        # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
         model_max_budget = {
             "gpt-4o-mini": {
                 "budget_limit": "0.000001",
@@ -1898,7 +1898,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         )
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
-                "model": "chatgpt-v-2",
+                "model": "chatgpt-v-3",
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
@@ -1987,7 +1987,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "call_type": "acompletion",
-                "model": "sagemaker-chatgpt-v-2",
+                "model": "sagemaker-chatgpt-v-3",
                 "stream": True,
                 "complete_streaming_response": resp,
                 "litellm_params": {
@@ -2431,7 +2431,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     await proxy_db_logger._PROXY_track_cost_callback(
         kwargs={
             "call_type": "acompletion",
-            "model": "sagemaker-chatgpt-v-2",
+            "model": "sagemaker-chatgpt-v-3",
             "stream": True,
             "complete_streaming_response": resp,
             "litellm_params": {
