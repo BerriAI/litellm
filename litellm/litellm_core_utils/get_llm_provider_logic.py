@@ -216,6 +216,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.galadriel.com/v1":
                         custom_llm_provider = "galadriel"
                         dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
+                    elif endpoint == "api.asi1.ai/v1":
+                        custom_llm_provider = "asi"
+                        dynamic_api_key = get_secret_str("ASI_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -234,6 +237,7 @@ def get_llm_provider(  # noqa: PLR0915
                     return model, custom_llm_provider, dynamic_api_key, api_base  # type: ignore
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
+
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
@@ -418,6 +422,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://app.empower.dev/api/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("EMPOWER_API_KEY")
+    elif custom_llm_provider == "asi":
+        api_base = (
+            api_base
+            or get_secret_str("ASI_API_BASE")
+            or "https://api.asi1.ai/v1"
+        )
+        dynamic_api_key = api_key or get_secret_str("ASI_API_KEY")
     elif custom_llm_provider == "groq":
         (
             api_base,
