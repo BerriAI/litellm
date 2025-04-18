@@ -201,7 +201,7 @@ def responses(
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
-                responses_api_request=ResponsesAPIOptionalRequestParams(),
+                responses_api_request=response_api_optional_params,
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
