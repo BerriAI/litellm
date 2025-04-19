@@ -74,9 +74,10 @@ async def test_get_assistants(provider, sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_create_delete_assistants(provider, sync_mode):
     litellm.ssl_verify = False
+    litellm._turn_on_debug()
     data = {
         "custom_llm_provider": provider,
-        "model": "gpt-4-turbo",
+        "model": "gpt-4.5-preview",
         "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
         "name": "Math Tutor",
         "tools": [{"type": "code_interpreter"}],
@@ -106,10 +107,7 @@ async def test_create_delete_assistants(provider, sync_mode):
         print("Response deleting assistant", response)
         assert response.id == assistant.id
     else:
-        assistant = await litellm.acreate_assistants(
-            custom_llm_provider=provider,
-            **data,
-        )
+        assistant = await litellm.acreate_assistants(**data)
         print("New assistants", assistant)
         assert isinstance(assistant, Assistant)
         assert (
