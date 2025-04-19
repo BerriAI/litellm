@@ -59,8 +59,11 @@ class SensitiveDataFilter(logging.Filter):
         if not hasattr(record, "msg") or not record.msg:
             return True
 
-        # Convert message to string if it's not already
-        msg = str(record.msg)
+        # If the message is a format string with args, we need to format it first
+        if record.args:
+            msg = record.msg % record.args
+        else:
+            msg = str(record.msg)
 
         key_pattern = r'["\']?([^"\':\s]+)["\']?\s*[:=]'
         keys = re.findall(key_pattern, msg)
@@ -86,7 +89,9 @@ class SensitiveDataFilter(logging.Filter):
                 pattern = f"\"{key}\":\\s*'[^']*'"
                 msg = re.sub(pattern, f"\"{key}\": 'REDACTED'", msg)
 
+        # Set the message and clear args since we've already formatted it
         record.msg = msg
+        record.args = None
         return True
 
 
