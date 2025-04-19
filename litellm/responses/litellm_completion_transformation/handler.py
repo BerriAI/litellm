@@ -5,7 +5,6 @@ Handler for transforming responses api requests to litellm.completion requests
 from typing import Any, Coroutine, Optional, Union
 
 import litellm
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
