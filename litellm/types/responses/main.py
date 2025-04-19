@@ -2,8 +2,10 @@ from typing import Literal
 
 from typing_extensions import Any, List, Optional, TypedDict
 
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
-class GenericResponseOutputItemContentAnnotation(TypedDict, total=False):
+
+class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
     """Annotation for content in a message"""
 
     type: Optional[str]
@@ -14,7 +16,7 @@ class GenericResponseOutputItemContentAnnotation(TypedDict, total=False):
     pass
 
 
-class OutputText(TypedDict, total=False):
+class OutputText(BaseLiteLLMOpenAIResponseObject):
     """Text output content from an assistant message"""
 
     type: Optional[str]  # "output_text"
@@ -22,7 +24,7 @@ class OutputText(TypedDict, total=False):
     annotations: Optional[List[GenericResponseOutputItemContentAnnotation]]
 
 
-class OutputFunctionToolCall(TypedDict, total=False):
+class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     """A tool call to run a function"""
 
     arguments: Optional[str]
@@ -33,7 +35,7 @@ class OutputFunctionToolCall(TypedDict, total=False):
     status: Literal["in_progress", "completed", "incomplete"]
 
 
-class GenericResponseOutputItem(TypedDict, total=False):
+class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item
 
