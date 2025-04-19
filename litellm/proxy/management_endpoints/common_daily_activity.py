@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
@@ -103,7 +103,7 @@ def update_breakdown_metrics(
 
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
-    api_keys: set[str],
+    api_keys: Set[str],
 ) -> Dict[str, Dict[str, Any]]:
     """Update api key metadata for a single record."""
     key_records = await prisma_client.db.litellm_verificationtoken.find_many(
