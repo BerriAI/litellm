@@ -5,3 +5,9 @@ model_list:
   - model_name: anthropic/*
     litellm_params:
       model: anthropic/*
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+litellm_settings:
+  drop_params: true
+      

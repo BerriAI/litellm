@@ -52,6 +52,8 @@ class LiteLLMCompletionTransformationHandler:
         if _is_async:
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
+                request_input=input,
+                responses_api_request=responses_api_request,
                 **kwargs,
             )
 
@@ -66,6 +68,8 @@ class LiteLLMCompletionTransformationHandler:
             responses_api_response: ResponsesAPIResponse = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
+                    request_input=input,
+                    responses_api_request=responses_api_request,
                 )
             )
 
@@ -76,6 +80,8 @@ class LiteLLMCompletionTransformationHandler:
     async def async_response_api_handler(
         self,
         litellm_completion_request: dict,
+        request_input: Union[str, ResponseInputParam],
+        responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         litellm_completion_response: Union[
@@ -89,6 +95,8 @@ class LiteLLMCompletionTransformationHandler:
             responses_api_response: ResponsesAPIResponse = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
+                    request_input=request_input,
+                    responses_api_request=responses_api_request,
                 )
             )
 
@@ -97,4 +105,6 @@ class LiteLLMCompletionTransformationHandler:
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
                 litellm_custom_stream_wrapper=litellm_completion_response,
+                request_input=request_input,
+                responses_api_request=responses_api_request,
             )
