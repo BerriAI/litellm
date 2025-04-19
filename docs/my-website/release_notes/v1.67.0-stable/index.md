@@ -41,7 +41,7 @@ hide_table_of_contents: false
     1. New mapped bedrock regions - [PR](https://github.com/BerriAI/litellm/pull/9430)
 - **VertexAI / Google AI Studio**
     1. Gemini - Response format - Retain schema field ordering for google gemini and vertex by specifying propertyOrdering - [Get Started](../../docs/providers/vertex#json-schema), [PR](https://github.com/BerriAI/litellm/pull/9828)
-    2. Gemini-2.5-flash - return reasoning content [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10125)
+    2. Gemini-2.5-flash - return reasoning content [Google AI Studio](../../docs/providers/gemini#usage---thinking--reasoning_content), [Vertex AI](../../docs/providers/vertex#thinking--reasoning_content)
     3. Gemini-2.5-flash - pricing + model information [PR](https://github.com/BerriAI/litellm/pull/10125)
     4. Passthrough - new `/vertex_ai/discovery` route - enables calling AgentBuilder API routes [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10084)
 - **Fireworks AI**
