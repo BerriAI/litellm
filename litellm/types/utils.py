@@ -378,12 +378,18 @@ class Function(OpenAIObject):
 
     def __init__(
         self,
-        arguments: Optional[Union[Dict, str]],
+        arguments: Optional[Union[Dict, str]] = None,
         name: Optional[str] = None,
         **params,
     ):
         if arguments is None:
-            arguments = ""
+            if params.get("parameters", None) is not None and isinstance(
+                params["parameters"], dict
+            ):
+                arguments = json.dumps(params["parameters"])
+                params.pop("parameters")
+            else:
+                arguments = ""
         elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
@@ -392,7 +398,7 @@ class Function(OpenAIObject):
         name = name
 
         # Build a dictionary with the structure your BaseModel expects
-        data = {"arguments": arguments, "name": name, **params}
+        data = {"arguments": arguments, "name": name}
 
         super(Function, self).__init__(**data)
 
