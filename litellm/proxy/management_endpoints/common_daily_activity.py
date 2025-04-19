@@ -101,6 +101,19 @@ def update_breakdown_metrics(
     return breakdown
 
 
+async def get_api_key_metadata(
+    prisma_client: PrismaClient,
+    api_keys: set[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Update api key metadata for a single record."""
+    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"token": {"in": list(api_keys)}}
+    )
+    return {
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+    }
+
+
 async def get_daily_activity(
     prisma_client: Optional[PrismaClient],
     table_name: str,
@@ -177,15 +190,7 @@ async def get_daily_activity(
         model_metadata: Dict[str, Dict[str, Any]] = {}
         provider_metadata: Dict[str, Dict[str, Any]] = {}
         if api_keys:
-            key_records = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": list(api_keys)}}
-            )
-            api_key_metadata.update(
-                {
-                    k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
-                    for k in key_records
-                }
-            )
+            api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
 
         # Process results
         results = []
