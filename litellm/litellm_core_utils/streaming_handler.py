@@ -1506,7 +1506,7 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-                if chunk is not None and chunk != b"":
+                if chunk is not None and chunk != b"" and chunk != ["DONE"]:
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
