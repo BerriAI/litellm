@@ -7,15 +7,18 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
     TextCompletionResponse,
 )
 
@@ -38,7 +41,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = (
             responses_api_request
         )
-        self.collected_chunks: List[ModelResponseStream] = []
+        self.collected_chat_completion_chunks: List[ModelResponseStream] = []
         self.finished: bool = False
 
     async def __anext__(
@@ -51,7 +54,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Get the next chunk from the stream
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
-                    self.collected_chunks.append(chunk)
+                    response_api_chunk = (
+                        self._transform_chat_completion_chunk_to_response_api_chunk(
+                            chunk
+                        )
+                    )
+                    if response_api_chunk:
+                        return response_api_chunk
+                    self.collected_chat_completion_chunks.append(chunk)
                 except StopAsyncIteration:
                     self.finished = True
                     response_completed_event = self._emit_response_completed_event()
@@ -78,7 +88,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Get the next chunk from the stream
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
-                    self.collected_chunks.append(chunk)
+                    response_api_chunk = (
+                        self._transform_chat_completion_chunk_to_response_api_chunk(
+                            chunk
+                        )
+                    )
+                    if response_api_chunk:
+                        return response_api_chunk
+                    self.collected_chat_completion_chunks.append(chunk)
                 except StopAsyncIteration:
                     self.finished = True
                     response_completed_event = self._emit_response_completed_event()
@@ -92,10 +109,40 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.finished = True
             raise e
 
+    def _transform_chat_completion_chunk_to_response_api_chunk(
+        self, chunk: ModelResponseStream
+    ) -> Optional[ResponsesAPIStreamingResponse]:
+        """
+        Transform a chat completion chunk to a response API chunk.
+
+        This currently only handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API.
+        """
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id=chunk.id,
+            output_index=0,
+            content_index=0,
+            delta=self._get_delta_string_from_streaming_choices(chunk.choices),
+        )
+
+    def _get_delta_string_from_streaming_choices(
+        self, choices: List[StreamingChoices]
+    ) -> str:
+        """
+        Get the delta string from the streaming choices
+
+        For now this collected the first choice's delta string.
+
+        It's unclear how users expect litellm to translate multiple-choices-per-chunk to the responses API output.
+        """
+        choice = choices[0]
+        chat_completion_delta: ChatCompletionDelta = choice.delta
+        return chat_completion_delta.content or ""
+
     def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
         litellm_model_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(chunks=self.collected_chunks)
+        ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
 
             return ResponseCompletedEvent(
