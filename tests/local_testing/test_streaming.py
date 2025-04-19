@@ -241,7 +241,7 @@ tools_schema = [
 def test_completion_azure_stream_special_char():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
-    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response = completion(model="azure/chatgpt-v-3", messages=messages, stream=True)
     response_str = ""
     for part in response:
         response_str += part.choices[0].delta.content or ""
@@ -449,7 +449,7 @@ def test_completion_azure_stream():
             },
         ]
         response = completion(
-            model="azure/chatgpt-v-2", messages=messages, stream=True, max_tokens=50
+            model="azure/chatgpt-v-3", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -2070,7 +2070,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/chatgpt-v-2",
+        "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
         "o1-preview",
         "o1",
