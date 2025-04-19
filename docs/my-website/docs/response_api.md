@@ -14,7 +14,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Supported LiteLLM Versions | 1.63.8+ | |
-| Supported LLM providers | **All LiteLLM supported providers** | |
+| Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
 
 ## Usage
 
