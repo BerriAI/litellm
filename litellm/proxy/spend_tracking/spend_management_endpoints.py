@@ -1580,7 +1580,18 @@ async def calculate_spend(request: SpendCalculateRequest):
             else:
                 _cost = completion_cost(model=request.model, messages=request.messages)
         elif request.completion_response is not None:
-            _completion_response = litellm.ModelResponse(**request.completion_response)
+            _completion_response_dict = dict(request.completion_response)
+            _model_name = _completion_response_dict.get("model")
+            _resolved_model = None
+            if llm_router is not None and llm_router.model_list is not None and _model_name is not None:
+                for model in llm_router.model_list:
+                    if model.get("model_name") == _model_name:
+                        litellm_params = model.get("litellm_params", {})
+                        _resolved_model = litellm_params.get("model")
+                        break
+            if _resolved_model:
+                _completion_response_dict["model"] = _resolved_model
+            _completion_response = litellm.ModelResponse(**_completion_response_dict)
             _cost = completion_cost(completion_response=_completion_response)
         else:
             raise HTTPException(
