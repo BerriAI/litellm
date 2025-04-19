@@ -31,10 +31,12 @@ export interface KeyMetricWithMetadata {
   metrics: SpendMetrics;
   metadata: {
     key_alias: string | null;
+    team_id?: string | null;
   };
 }
 
 export interface ModelActivityData {
+  label: string;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
@@ -62,11 +64,7 @@ export interface ModelActivityData {
 
 export interface KeyMetadata {
   key_alias: string | null;
-}
-
-export interface KeyMetricWithMetadata {
-  metrics: SpendMetrics;
-  metadata: KeyMetadata;
+  team_id: string | null;
 }
 
 export interface EntityMetadata {

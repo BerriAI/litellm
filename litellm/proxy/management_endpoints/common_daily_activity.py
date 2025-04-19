@@ -75,7 +75,8 @@ def update_breakdown_metrics(
             metadata=KeyMetadata(
                 key_alias=api_key_metadata.get(record.api_key, {}).get(
                     "key_alias", None
-                )
+                ),
+                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
             ),  # Add any api_key-specific metadata here
         )
     breakdown.api_keys[record.api_key].metrics = update_metrics(
@@ -112,6 +113,7 @@ async def get_daily_activity(
     api_key: Optional[str],
     page: int,
     page_size: int,
+    exclude_entity_ids: Optional[List[str]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
     if prisma_client is None:
@@ -144,6 +146,10 @@ async def get_daily_activity(
                 where_conditions[entity_id_field] = {"in": entity_id}
             else:
                 where_conditions[entity_id_field] = entity_id
+        if exclude_entity_ids:
+            where_conditions.setdefault(entity_id_field, {})["not"] = {
+                "in": exclude_entity_ids
+            }
 
         # Get total count for pagination
         total_count = await getattr(prisma_client.db, table_name).count(
@@ -175,7 +181,10 @@ async def get_daily_activity(
                 where={"token": {"in": list(api_keys)}}
             )
             api_key_metadata.update(
-                {k.token: {"key_alias": k.key_alias} for k in key_records}
+                {
+                    k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
+                    for k in key_records
+                }
             )
 
         # Process results

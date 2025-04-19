@@ -49,12 +49,18 @@ interface EntitySpendData {
   };
 }
 
+export interface EntityList {
+  label: string;
+  value: string;
+}
+
 interface EntityUsageProps {
   accessToken: string | null;
   entityType: 'tag' | 'team';
   entityId?: string | null;
   userID: string | null;
   userRole: string | null;
+  entityList: EntityList[] | null;
 }
 
 const EntityUsage: React.FC<EntityUsageProps> = ({
@@ -62,7 +68,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityType,
   entityId,
   userID,
-  userRole
+  userRole,
+  entityList
 }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({ 
     results: [], 
@@ -75,8 +82,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   });
 
-  const modelMetrics = processActivityData(spendData);
-
+  const modelMetrics = processActivityData(spendData, "models");
+  const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
@@ -225,16 +232,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   const getAllTags = () => {
-    const tags = new Set<string>();
-    spendData.results.forEach(day => {
-      Object.keys(day.breakdown.entities || {}).forEach(tag => {
-        tags.add(tag);
-      });
-    });
-    return Array.from(tags).map(tag => ({
-      label: tag,
-      value: tag
-    }));
+    if (entityList) {
+      return entityList;
+    }
   };
 
   const filterDataByTags = (data: EntityMetricWithMetadata[]) => {
@@ -292,9 +292,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               onValueChange={setDateValue}
             />
           </Col>
-          <Col>
-            <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
-            <Select
+          {entityList && entityList.length > 0 && (
+            <Col>
+              <Text>Filter by {entityType === 'tag' ? 'Tags' : 'Teams'}</Text>
+              <Select
               mode="multiple"
               style={{ width: '100%' }}
               placeholder={`Select ${entityType === 'tag' ? 'tags' : 'teams'} to filter...`}
@@ -303,13 +304,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               options={getAllTags()}
               className="mt-2"
               allowClear
-            />
-          </Col>
+              />
+            </Col>
+          )}
         </Grid>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
-          <Tab>Activity</Tab>
+          <Tab>Model Activity</Tab>
+          <Tab>Key Activity</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -355,20 +358,45 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
               {/* Daily Spend Chart */}
               <Col numColSpan={2}>
-                <Card>
-                  <Title>Daily Spend</Title>
-                  <BarChart
-                    data={[...spendData.results].sort((a, b) => 
-                      new Date(a.date).getTime() - new Date(b.date).getTime()
-                    )}
-                    index="date"
-                    categories={["metrics.spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    yAxisWidth={100}
-                    showLegend={false}
-                  />
-                </Card>
+              <Card>
+                        <Title>Daily Spend</Title>
+                        <BarChart
+                          data={[...spendData.results].sort((a, b) => 
+                            new Date(a.date).getTime() - new Date(b.date).getTime()
+                          )}
+                          index="date"
+                          categories={["metrics.spend"]}
+                          colors={["cyan"]}
+                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          yAxisWidth={100}
+                          showLegend={false}
+                          customTooltip={({ payload, active }) => {
+                            if (!active || !payload?.[0]) return null;
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                <p className="font-bold">{data.date}</p>
+                                <p className="text-cyan-500">Total Spend: ${data.metrics.spend.toFixed(2)}</p>
+                                <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
+                                <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
+                                <div className="mt-2 border-t pt-2">
+                                  <p className="font-semibold">Spend by {entityType === 'tag' ? 'Tag' : 'Team'}:</p>
+                                  {Object.entries(data.breakdown.entities || {}).map(([entity, entityData]) => {
+                                    const metrics = entityData as EntityMetrics;
+                                    return (
+                                      <p key={entity} className="text-sm text-gray-600">
+                                        {metrics.metadata.team_alias || entity}: ${metrics.metrics.spend.toFixed(2)}
+                                      </p>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          }}
+                        />
+                      </Card>
               </Col>
 
               {/* Entity Breakdown Section */}
@@ -392,7 +420,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="metadata.alias"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(7)}`}
+                          valueFormatter={(value) => `$${value.toFixed(4)}`}
                           layout="vertical"
                           showLegend={false}
                           yAxisWidth={100}
@@ -415,7 +443,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                               .map((entity) => (
                                 <TableRow key={entity.metadata.id}>
                                   <TableCell>{entity.metadata.alias}</TableCell>
-                                  <TableCell>${entity.metrics.spend.toFixed(7)}</TableCell>
+                                  <TableCell>${entity.metrics.spend.toFixed(4)}</TableCell>
                                   <TableCell className="text-green-600">
                                     {entity.metrics.successful_requests.toLocaleString()}
                                   </TableCell>
@@ -520,6 +548,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </TabPanel>
           <TabPanel>
           <ActivityMetrics modelMetrics={modelMetrics} />
+          </TabPanel>
+          <TabPanel>
+          <ActivityMetrics modelMetrics={keyMetrics} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

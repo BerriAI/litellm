@@ -17,24 +17,29 @@ import {
 } from "@tremor/react";
 import { AreaChart } from "@tremor/react";
 
-import { userDailyActivityCall } from "./networking";
+import { userDailyActivityCall, tagListCall } from "./networking";
+import { Tag } from "./tag_management/types";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import EntityUsage from './entity_usage';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
+import { Team } from "./key_team_helpers/key_list";
+import { EntityList } from "./entity_usage";
 
 interface NewUsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  teams: Team[];
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({
   accessToken,
   userRole,
   userID,
+  teams
 }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
@@ -46,6 +51,23 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
+
+  const [allTags, setAllTags] = useState<EntityList[]>([]); 
+
+  const getAllTags = async () => {
+    if (!accessToken) {
+      return;
+    }
+    const tags = await tagListCall(accessToken);
+    setAllTags(Object.values(tags).map((tag: Tag) => ({
+      label: tag.name,
+      value: tag.name
+    })));
+  };
+
+  useEffect(() => {
+    getAllTags();
+  }, [accessToken]);
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -228,16 +250,19 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     fetchUserSpendData();
   }, [accessToken, dateValue]);
 
-  const modelMetrics = processActivityData(userSpendData);
+  const modelMetrics = processActivityData(userSpendData, "models");
+  const keyMetrics = processActivityData(userSpendData, "api_keys");
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-      <Text>Usage Analytics Dashboard</Text>
+      <Text className="text-sm text-gray-500 mb-4">
+        This is the new usage dashboard. <br/> You may see empty data, as these use <a href="https://github.com/BerriAI/litellm/blob/6de348125208dd4be81ff0e5813753df2fbe9735/schema.prisma#L320" className="text-blue-500 hover:text-blue-700 ml-1">new aggregate tables</a> to allow UI to work at 1M+ spend logs. To access the old dashboard, go to Experimental {'>'} Old Usage.
+      </Text>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
-          <Tab>Your Usage</Tab>
+          {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
           <Tab>Team Usage</Tab>
-          {all_admin_roles.includes(userRole || "") && <Tab>Tag Usage</Tab>}
+          {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -257,7 +282,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <TabGroup>
               <TabList variant="solid" className="mt-1">
                 <Tab>Cost</Tab>
-                <Tab>Activity</Tab>
+                <Tab>Model Activity</Tab>
+                <Tab>Key Activity</Tab>
               </TabList>
               <TabPanels>
                 {/* Cost Panel */}
@@ -460,6 +486,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <TabPanel>
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabPanel>
+                <TabPanel>
+                  <ActivityMetrics modelMetrics={keyMetrics} />
+                </TabPanel>
               </TabPanels>
             </TabGroup>
           </TabPanel>
@@ -471,6 +500,10 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               entityType="team"
               userID={userID}
               userRole={userRole}
+              entityList={teams?.map(team => ({
+                label: team.team_alias,
+                value: team.team_id
+              })) || null}
             />
           </TabPanel>
 
@@ -481,6 +514,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               entityType="tag"
               userID={userID}
               userRole={userRole}
+              entityList={allTags}
             />
           </TabPanel>
 

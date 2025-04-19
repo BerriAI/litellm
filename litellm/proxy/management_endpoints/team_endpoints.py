@@ -2102,6 +2102,7 @@ async def get_team_daily_activity(
     api_key: Optional[str] = None,
     page: int = 1,
     page_size: int = 10,
+    exclude_team_ids: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2115,7 +2116,7 @@ async def get_team_daily_activity(
         api_key (Optional[str]): Filter by API key.
         page (int): Page number for pagination.
         page_size (int): Number of items per page.
-
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
@@ -2133,6 +2134,12 @@ async def get_team_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
+    exclude_team_ids_list: Optional[List[str]] = None
+
+    if exclude_team_ids:
+        exclude_team_ids_list = (
+            exclude_team_ids.split(",") if exclude_team_ids else None
+        )
 
     if not _user_has_admin_view(user_api_key_dict):
         user_info = await get_user_object(
@@ -2182,6 +2189,7 @@ async def get_team_daily_activity(
         entity_id_field="team_id",
         entity_id=team_ids_list,
         entity_metadata_field=team_alias_metadata,
+        exclude_entity_ids=exclude_team_ids_list,
         start_date=start_date,
         end_date=end_date,
         model=model,
