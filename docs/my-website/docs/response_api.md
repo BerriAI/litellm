@@ -122,4 +122,4 @@ for event in response:
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | OpenAI|   [Usage](#usage)                 |
-| Azure OpenAI|   [Usage](../docs/providers/azure#responses-api)                 |  
+| Azure OpenAI|   [Usage](../docs/providers/azure#azure-responses-api)                 |  

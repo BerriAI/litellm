@@ -163,6 +163,12 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
+| gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
+| gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
+| o4-mini | `response = completion(model="o4-mini", messages=messages)` |
+| o3-mini | `response = completion(model="o3-mini", messages=messages)` |
+| o3 | `response = completion(model="o3", messages=messages)` |
 | o1-mini | `response = completion(model="o1-mini", messages=messages)` |
 | o1-preview | `response = completion(model="o1-preview", messages=messages)` |
 | gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |

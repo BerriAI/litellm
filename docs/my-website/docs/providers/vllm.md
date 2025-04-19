@@ -161,6 +161,120 @@ curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
 
 Example Implementation from VLLM [here](https://github.com/vllm-project/vllm/pull/10020)
 
+<Tabs>
+<TabItem value="files_message" label="(Unified) Files Message">
+
+Use this to send a video url to VLLM + Gemini in the same format, using OpenAI's `files` message type.
+
+There are two ways to send a video url to VLLM:
+
+1. Pass the video url directly
+
+```
+{"type": "file", "file": {"file_id": video_url}},
+```
+
+2. Pass the video data as base64
+
+```
+{"type": "file", "file": {"file_data": f"data:video/mp4;base64,{video_data_base64}"}}
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+messages=[
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Summarize the following video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                }
+            }
+        ]
+    }
+]
+
+# call vllm 
+os.environ["HOSTED_VLLM_API_BASE"] = "https://hosted-vllm-api.co"
+os.environ["HOSTED_VLLM_API_KEY"] = "" # [optional], if your VLLM server requires an API key
+response = completion(
+    model="hosted_vllm/qwen", # pass the vllm model name
+    messages=messages,
+)
+
+# call gemini 
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+response = completion(
+    model="gemini/gemini-1.5-flash", # pass the gemini model name
+    messages=messages,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: my-model
+      litellm_params:
+        model: hosted_vllm/qwen  # add hosted_vllm/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+    - model_name: my-gemini-model
+      litellm_params:
+        model: gemini/gemini-1.5-flash  # add gemini/ prefix to route as Google AI Studio provider
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST http://0.0.0.0:4000/chat/completions \
+-H "Authorization: Bearer sk-1234" \
+-H "Content-Type: application/json" \
+-d '{
+    "model": "my-model",
+    "messages": [
+        {"role": "user", "content": 
+            [
+                {"type": "text", "text": "Summarize the following video"},
+                {"type": "file", "file": {"file_id": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}}
+            ]
+        }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
+</TabItem>
+<TabItem value="video_url" label="(VLLM-specific) Video Message">
+
+Use this to send a video url to VLLM in it's native message format (`video_url`).
+
 There are two ways to send a video url to VLLM:
 
 1. Pass the video url directly
@@ -244,6 +358,10 @@ curl -X POST http://0.0.0.0:4000/chat/completions \
     ]
 }'
 ```
+
+</TabItem>
+</Tabs>
+
 
 </TabItem>
 </Tabs>
