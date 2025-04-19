@@ -5,7 +5,7 @@ import { TokenUsage } from "../ResponseMetrics";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
-  updateTextUI: (role: string, chunk: string, model?: string) => void,
+  updateTextUI: (role: string, delta: string, model?: string) => void,
   selectedModel: string,
   accessToken: string | null,
   tags: string[] = [],
@@ -60,22 +60,31 @@ export async function makeOpenAIResponsesRequest(
       // Use a type-safe approach to handle events
       if (typeof event === 'object' && event !== null) {
         // Handle output text delta
-        if (event.type === "response.output_text.delta" && 'delta' in event) {
-          const delta = event.delta;
-          if (typeof delta === 'string') {
-            updateTextUI("assistant", delta, selectedModel);
+        // 1) drop any “role” streams
+        if (event.type === "response.role.delta") {
+            continue;
+        }
+
+        // 2) only handle actual text deltas
+        if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+            const delta = event.delta;
+            console.log("Text delta", delta);
+            // skip pure whitespace/newlines
+            if (delta.trim().length > 0) {
+                updateTextUI("assistant", delta, selectedModel);
+                            
+                // Calculate time to first token
+                if (!firstTokenReceived) {
+                    firstTokenReceived = true;
+                    const timeToFirstToken = Date.now() - startTime;
+                    console.log("First token received! Time:", timeToFirstToken, "ms");
+                    
+                    if (onTimingData) {
+                    onTimingData(timeToFirstToken);
+                    }
+                }
             
-            // Calculate time to first token
-            if (!firstTokenReceived) {
-              firstTokenReceived = true;
-              const timeToFirstToken = Date.now() - startTime;
-              console.log("First token received! Time:", timeToFirstToken, "ms");
-              
-              if (onTimingData) {
-                onTimingData(timeToFirstToken);
-              }
             }
-          }
         }
         
         // Handle reasoning content

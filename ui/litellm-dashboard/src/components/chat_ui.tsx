@@ -138,20 +138,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
+    console.log("updateTextUI called with:", role, chunk, model);
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // if the last message is already from this same role, append
+      if (last && last.role === role && !last.isImage) {
+        // build a new object, but only set `model` if it wasn't there already
+        const updated: MessageType = {
+          ...last,
+          content: last.content + chunk,
+          model: last.model ?? model,      // ← only use the passed‐in model on the first chunk
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // otherwise start a brand new assistant bubble
         return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          { 
-            ...lastMessage,
-            content: lastMessage.content + chunk, 
-            model 
+          ...prev,
+          {
+            role,
+            content: chunk,
+            model,                          // model set exactly once here
           },
         ];
-      } else {
-        return [...prevHistory, { role, content: chunk, model }];
       }
     });
   };
@@ -329,7 +337,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           
           await makeOpenAIResponsesRequest(
             apiChatHistory,
-            (chunk, model) => updateTextUI("assistant", chunk, model),
+            (role, delta, model) => updateTextUI(role, delta, model),
             selectedModel,
             effectiveApiKey,
             selectedTags,
