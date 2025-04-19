@@ -615,7 +615,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT 
+                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
                     ? "Type your message... (Shift+Enter for new line)" 
                     : "Describe the image you want to generate..."
                 }
