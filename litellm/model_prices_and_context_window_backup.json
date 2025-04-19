@@ -5,6 +5,7 @@
         "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens", 
         "input_cost_per_token": 0.0000,
         "output_cost_per_token": 0.000,
+        "output_cost_per_reasoning_token": 0.000,
         "litellm_provider": "one of https://docs.litellm.ai/docs/providers",
         "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank",
         "supports_function_calling": true,
