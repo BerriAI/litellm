@@ -61,7 +61,6 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
-    CompletionTokensDetailsWrapper,
     GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
