@@ -36,8 +36,6 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
-    DailySpendData,
-    DailySpendMetadata,
     KeyMetadata,
     KeyMetricWithMetadata,
     LiteLLM_DailyUserSpend,
