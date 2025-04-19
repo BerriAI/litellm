@@ -32,6 +32,7 @@ import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { getAuthToken } from "@/utils/cookieUtils";
 import MCPToolsViewer from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 
@@ -122,7 +123,7 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getCookie("token");
+    const token = getAuthToken();
     setToken(token);
   }, []);
 
