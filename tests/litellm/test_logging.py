@@ -97,3 +97,100 @@ def test_sensitive_data_filter_with_different_formats():
         assert (
             record.msg == test_case["expected"]
         ), f"Failed for input: {test_case['input']}"
+
+
+def test_sensitive_data_filter_with_special_characters():
+    # Create a test logger
+    logger = logging.getLogger("test_logger")
+    logger.setLevel(logging.INFO)
+
+    # Create a filter
+    sensitive_filter = SensitiveDataFilter()
+
+    # Test cases with special characters in keys
+    test_cases = [
+        {
+            "input": '{"api_key": "sk-1234567890"}',
+            "expected": '{"api_key": "REDACTED"}',
+        },
+        {
+            "input": '{"api-key": "sk-1234567890"}',
+            "expected": '{"api-key": "REDACTED"}',
+        },
+        {
+            "input": '{"api/key": "sk-1234567890"}',
+            "expected": '{"api/key": "REDACTED"}',
+        },
+        {
+            "input": '{"api\\key": "sk-1234567890"}',
+            "expected": '{"api\\key": "REDACTED"}',
+        },
+    ]
+
+    for test_case in test_cases:
+        # Create a log record
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg=test_case["input"],
+            args=(),
+            exc_info=None,
+        )
+
+        # Apply the filter
+        sensitive_filter.filter(record)
+
+        # Verify the output
+        assert (
+            record.msg == test_case["expected"]
+        ), f"Failed for input: {test_case['input']}"
+
+
+def test_sensitive_data_filter_with_format_strings():
+    # Create a test logger
+    logger = logging.getLogger("test_logger")
+    logger.setLevel(logging.INFO)
+
+    # Create a filter
+    sensitive_filter = SensitiveDataFilter()
+
+    # Test cases with format strings
+    test_cases = [
+        {
+            "input": "API key: %s",
+            "args": ("sk-1234567890",),
+            "expected": "API key: REDACTED",
+        },
+        {
+            "input": "Credentials: %s, Token: %s",
+            "args": ("secret123", "abc123"),
+            "expected": "Credentials: REDACTED, Token: REDACTED",
+        },
+        {
+            "input": "API base: %s, Key: %s",
+            "args": ("https://api.example.com", "sk-1234567890"),
+            "expected": "API base: REDACTED, Key: REDACTED",
+        },
+    ]
+
+    for test_case in test_cases:
+        # Create a log record
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=1,
+            msg=test_case["input"],
+            args=test_case["args"],
+            exc_info=None,
+        )
+
+        # Apply the filter
+        sensitive_filter.filter(record)
+
+        # Verify the output
+        assert (
+            record.msg == test_case["expected"]
+        ), f"Failed for input: {test_case['input']} with args: {test_case['args']}"

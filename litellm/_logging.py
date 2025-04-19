@@ -53,6 +53,7 @@ class SensitiveDataFilter(logging.Filter):
         "password",
         "secret",
         "token",
+        "private_key",  # Added for nested JSON case
     ]
 
     def filter(self, record):
@@ -65,29 +66,39 @@ class SensitiveDataFilter(logging.Filter):
         else:
             msg = str(record.msg)
 
-        key_pattern = r'["\']?([^"\':\s]+)["\']?\s*[:=]'
-        keys = re.findall(key_pattern, msg)
-
         # Redact sensitive information
-        for key in keys:
-            # Check if any sensitive key is a substring of the current key
-            if any(
-                sensitive_key in key.lower() for sensitive_key in self.SENSITIVE_KEYS
-            ):
-                # Handle JSON-like strings
-                pattern = f'"{key}":\\s*"[^"]*"'
-                msg = re.sub(pattern, f'"{key}": "REDACTED"', msg)
+        for key in self.SENSITIVE_KEYS:
+            # Create patterns for compound keys (e.g., openai_api_key)
+            key_pattern = f"[a-zA-Z0-9_/\\\\-]*{key}[a-zA-Z0-9_/\\\\-]*"
 
-                # Handle key-value pairs in plain text
-                pattern = f"{key}\\s*=\\s*[^\\s,}}]+"
-                msg = re.sub(pattern, f"{key}=REDACTED", msg)
+            # Handle JSON-like strings with double quotes
+            json_pattern = f'"({key_pattern})":\\s*"[^"]*"'
+            msg = re.sub(json_pattern, r'"\1": "REDACTED"', msg, flags=re.IGNORECASE)
 
-                # Handle dictionary-like strings
-                pattern = f"'{key}':\\s*'[^']*'"
-                msg = re.sub(pattern, f"'{key}': 'REDACTED'", msg)
+            # Handle dictionary-like strings with single quotes
+            dict_pattern = f"'({key_pattern})':\\s*'[^']*'"
+            msg = re.sub(dict_pattern, r"'\1': 'REDACTED'", msg, flags=re.IGNORECASE)
 
-                pattern = f"\"{key}\":\\s*'[^']*'"
-                msg = re.sub(pattern, f"\"{key}\": 'REDACTED'", msg)
+            # Handle mixed quote styles
+            mixed_pattern = f"\"({key_pattern})\":\\s*'[^']*'"
+            msg = re.sub(mixed_pattern, r'"\1": \'REDACTED\'', msg, flags=re.IGNORECASE)
+
+            # Handle key-value pairs in plain text
+            # Convert snake_case and special characters to flexible matching
+            display_key = key.replace("_", "[-_ ]")
+            # Match both original and display versions of the key, preserving the separator and spacing
+            plain_pattern = (
+                f"\\b({key_pattern}|{display_key})\\s*([:=])\\s*[^,\\s][^,]*"
+            )
+            msg = re.sub(
+                plain_pattern,
+                lambda m: f"{m.group(1)}{m.group(2)}{' ' if m.group(2) == ':' else ''}REDACTED",
+                msg,
+                flags=re.IGNORECASE,
+            )
+
+            # Handle mixed quotes without escaping
+            msg = msg.replace('\\"', '"').replace("\\'", "'")
 
         # Set the message and clear args since we've already formatted it
         record.msg = msg
