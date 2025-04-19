@@ -251,6 +251,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   }, [accessToken, dateValue]);
 
   const modelMetrics = processActivityData(userSpendData, "models");
+  const keyMetrics = processActivityData(userSpendData, "api_keys");
 
   return (
     <div style={{ width: "100%" }} className="p-8">
@@ -279,7 +280,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             <TabGroup>
               <TabList variant="solid" className="mt-1">
                 <Tab>Cost</Tab>
-                <Tab>Activity</Tab>
+                <Tab>Model Activity</Tab>
+                <Tab>Key Activity</Tab>
               </TabList>
               <TabPanels>
                 {/* Cost Panel */}
@@ -481,6 +483,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 {/* Activity Panel */}
                 <TabPanel>
                   <ActivityMetrics modelMetrics={modelMetrics} />
+                </TabPanel>
+                <TabPanel>
+                  <ActivityMetrics modelMetrics={keyMetrics} />
                 </TabPanel>
               </TabPanels>
             </TabGroup>
