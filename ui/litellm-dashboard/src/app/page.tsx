@@ -370,6 +370,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   accessToken={accessToken}
+                  teams={teams as Team[] ?? []}
                 />
               ) : 
               (
