@@ -1,0 +1,120 @@
+import openai from "openai";
+import { message } from "antd";
+import { MessageType } from "../types";
+import { TokenUsage } from "../ResponseMetrics";
+
+export async function makeOpenAIResponsesRequest(
+  messages: MessageType[],
+  updateTextUI: (role: string, chunk: string, model?: string) => void,
+  selectedModel: string,
+  accessToken: string | null,
+  tags: string[] = [],
+  signal?: AbortSignal,
+  onReasoningContent?: (content: string) => void,
+  onTimingData?: (timeToFirstToken: number) => void,
+  onUsageData?: (usage: TokenUsage) => void
+) {
+  if (!accessToken) {
+    throw new Error("API key is required");
+  }
+
+  // Base URL should be the current base_url
+  const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal !== true) {
+    console.log = function () {};
+  }
+  
+  const proxyBaseUrl = isLocal
+    ? "http://localhost:4000"
+    : window.location.origin;
+  
+  const client = new openai.OpenAI({
+    apiKey: accessToken,
+    baseURL: proxyBaseUrl,
+    dangerouslyAllowBrowser: true,
+    defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
+  });
+
+  try {
+    const startTime = Date.now();
+    let firstTokenReceived = false;
+    
+    // Format messages for the API
+    const formattedInput = messages.map(message => ({
+      role: message.role,
+      content: message.content,
+      type: "message"
+    }));
+
+    // Create request to OpenAI responses API
+    // Use 'any' type to avoid TypeScript issues with the experimental API
+    const response = await (client as any).responses.create({
+      model: selectedModel,
+      input: formattedInput,
+      stream: true,
+    }, { signal });
+
+    for await (const event of response) {
+      console.log("Response event:", event);
+      
+      // Use a type-safe approach to handle events
+      if (typeof event === 'object' && event !== null) {
+        // Handle output text delta
+        if (event.type === "response.output_text.delta" && 'delta' in event) {
+          const delta = event.delta;
+          if (typeof delta === 'string') {
+            updateTextUI("assistant", delta, selectedModel);
+            
+            // Calculate time to first token
+            if (!firstTokenReceived) {
+              firstTokenReceived = true;
+              const timeToFirstToken = Date.now() - startTime;
+              console.log("First token received! Time:", timeToFirstToken, "ms");
+              
+              if (onTimingData) {
+                onTimingData(timeToFirstToken);
+              }
+            }
+          }
+        }
+        
+        // Handle reasoning content
+        if (event.type === "response.reasoning.delta" && 'delta' in event) {
+          const delta = event.delta;
+          if (typeof delta === 'string' && onReasoningContent) {
+            onReasoningContent(delta);
+          }
+        }
+        
+        // Handle usage data at the end
+        if (event.type === "response.end" && 'usage' in event) {
+          const usage = event.usage;
+          if (usage && onUsageData) {
+            console.log("Usage data:", usage);
+            
+            // Extract usage data safely
+            const usageData: TokenUsage = {
+              completionTokens: typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0,
+              promptTokens: typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0,
+              totalTokens: typeof usage.total_tokens === 'number' ? usage.total_tokens : 0
+            };
+            
+            // Add reasoning tokens if available
+            if (usage.completion_tokens_details?.reasoning_tokens) {
+              usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            }
+            
+            onUsageData(usageData);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (signal?.aborted) {
+      console.log("Responses API request was cancelled");
+    } else {
+      message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
+    }
+    throw error; // Re-throw to allow the caller to handle the error
+  }
+} 
