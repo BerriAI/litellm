@@ -1,14 +1,21 @@
 import asyncio
 from typing import List, cast
+import json
 from unittest.mock import MagicMock
 
 import pytest
+import respx
 from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+from litellm.llms.vertex_ai.gemini.transformation import async_transform_request_body, sync_transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    VertexLLM,
 )
 from litellm.types.utils import ChoiceLogprobs
 
@@ -239,3 +246,211 @@ def test_vertex_ai_thinking_output_part():
     content, reasoning_content = v.get_assistant_content_message(parts=parts)
     assert content == "Hello world"
     assert reasoning_content == "I'm thinking..."
+
+
+def _mock_logging():
+    mock_logging = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging.pre_call = MagicMock(return_value=None)
+    mock_logging.post_call = MagicMock(return_value=None)
+    return mock_logging
+
+def _mock_get_post_cached_content(api_key: str, respx_mock: respx.MockRouter) -> tuple[respx.MockRouter, respx.MockRouter]:
+    get_mock = respx_mock.get(
+        f"https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}"
+    ).respond(
+        json={
+            "cachedContents": [],
+            "nextPageToken": None,
+        }
+    )
+
+    post_mock = respx_mock.post(
+        f"https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}"
+    ).respond(
+        json={
+            "name": "projects/fake_project/locations/fake_location/cachedContents/fake_cache_id",
+            "model": "gemini-2.0-flash-001",
+        }
+    )
+    return get_mock, post_mock
+
+def test_google_ai_studio_gemini_message_caching_sync(
+    # ideally this would unit test just a small transformation, but there's a lot going on with gemini/vertex
+    # (hinges around branching for sync/async transformations).
+    respx_mock: respx.MockRouter,
+):
+    mock_logging = _mock_logging()
+
+    get_mock, post_mock = _mock_get_post_cached_content("fake_api_key", respx_mock)
+
+    transformed_request = sync_transform_request_body(
+        gemini_api_key="fake_api_key",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "you are a helpful assistant",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Hello, world!",
+            },
+        ],
+        api_base=None,
+        model="gemini-2.0-flash-001",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params={},
+        logging_obj=mock_logging,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+    )
+    # Assert both GET and POST endpoints were called
+    assert get_mock.calls.call_count == 1
+    assert post_mock.calls.call_count == 1
+    assert json.loads(post_mock.calls[0].request.content) == {
+        "contents": [],
+        "model": "models/gemini-2.0-flash-001",
+        "displayName": "203ae753b6c793e1af13b13d0710de5863c486e610963ce243b07ee6830ce1d2",
+        "tools": None,
+        "toolConfig": None,
+        "system_instruction": {"parts": [{"text": "you are a helpful assistant"}]},
+    }
+
+    assert transformed_request["contents"] == [
+        {"parts": [{"text": "Hello, world!"}], "role": "user"}
+    ]
+    assert (
+        transformed_request["cachedContent"]
+        == "projects/fake_project/locations/fake_location/cachedContents/fake_cache_id"
+    )
+
+_GET_WEATHER_MESSAGES = [
+    {
+        "role": "system",
+        "content": [
+            {
+                "type": "text",
+                "text": "you are a helpful assistant",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    },
+    {
+        "role": "user",
+        "content": "What is the weather now?",
+    },
+]
+
+_GET_WEATHER_TOOLS_OPTIONAL_PARAMS = {
+    "tools": [
+        {
+            "functionDeclarations": [
+                {"name": "get_weather", "description": "Get the current weather"}
+            ],
+        }
+    ],
+    "tool_choice": {
+        "functionCallingConfig": {
+            "mode": "ANY"
+        }
+    },
+}
+
+_EXPECTED_GET_WEATHER_CACHED_CONTENT_REQUEST_BODY = {
+    "contents": [],
+    "model": "models/gemini-2.0-flash-001",
+    "displayName": "62398619ff33908a18561c1a342c580c3d876f169d103ec52128df38f04e03d1",
+    "tools": [
+        {
+            "functionDeclarations": [
+                {"name": "get_weather", "description": "Get the current weather"}
+            ],
+        }
+    ],
+    "toolConfig": {
+        "functionCallingConfig": {
+            "mode": "ANY"
+        }
+    },        
+    "system_instruction": {"parts": [{"text": "you are a helpful assistant"}]},
+}
+
+def test_google_ai_studio_gemini_message_caching_with_tools_sync(
+    respx_mock: respx.MockRouter,
+):
+    mock_logging = _mock_logging()
+
+    get_mock, post_mock = _mock_get_post_cached_content("fake_api_key", respx_mock)
+
+    transformed_request = sync_transform_request_body(
+        gemini_api_key="fake_api_key",
+        messages=_GET_WEATHER_MESSAGES,
+        api_base=None,
+        model="gemini-2.0-flash-001",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params=_GET_WEATHER_TOOLS_OPTIONAL_PARAMS,
+        logging_obj=mock_logging,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+    )
+    # Assert both GET and POST endpoints were called
+    assert get_mock.calls.call_count == 1
+    assert post_mock.calls.call_count == 1
+    assert json.loads(post_mock.calls[0].request.content) == _EXPECTED_GET_WEATHER_CACHED_CONTENT_REQUEST_BODY
+
+    assert transformed_request["contents"] == [
+        {"parts": [{"text": "What is the weather now?"}], "role": "user"}
+    ]
+    assert (
+        transformed_request["cachedContent"]
+        == "projects/fake_project/locations/fake_location/cachedContents/fake_cache_id"
+    )
+    assert transformed_request.get("tools") is None
+    assert transformed_request.get("tool_choice") is None
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_gemini_message_caching_with_tools_async(
+    respx_mock: respx.MockRouter,
+):
+    mock_logging = _mock_logging()
+
+    get_mock, post_mock = _mock_get_post_cached_content("fake_api_key", respx_mock)
+
+    transformed_request = await async_transform_request_body(
+        gemini_api_key="fake_api_key",
+        messages=_GET_WEATHER_MESSAGES,
+        api_base=None,
+        model="gemini-2.0-flash-001",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params=_GET_WEATHER_TOOLS_OPTIONAL_PARAMS,
+        logging_obj=mock_logging,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+    )
+    # Assert both GET and POST endpoints were called
+    assert get_mock.calls.call_count == 1
+    assert post_mock.calls.call_count == 1
+    assert json.loads(post_mock.calls[0].request.content) == _EXPECTED_GET_WEATHER_CACHED_CONTENT_REQUEST_BODY
+
+    assert transformed_request["contents"] == [
+        {"parts": [{"text": "What is the weather now?"}], "role": "user"}
+    ]
+    assert (
+        transformed_request["cachedContent"]
+        == "projects/fake_project/locations/fake_location/cachedContents/fake_cache_id"
+    )
+    assert transformed_request.get("tools") is None
+    assert transformed_request.get("tool_choice") is None
+
