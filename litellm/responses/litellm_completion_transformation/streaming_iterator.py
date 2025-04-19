@@ -65,6 +65,33 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.finished = True
             raise e
 
+    def __iter__(self):
+        return self
+
+    def __next__(
+        self,
+    ) -> Union[ResponsesAPIStreamingResponse, ResponseCompletedEvent]:
+        try:
+            while True:
+                if self.finished is True:
+                    raise StopAsyncIteration
+                # Get the next chunk from the stream
+                try:
+                    chunk = self.litellm_custom_stream_wrapper.__next__()
+                    self.collected_chunks.append(chunk)
+                except StopAsyncIteration:
+                    self.finished = True
+                    response_completed_event = self._emit_response_completed_event()
+                    if response_completed_event:
+                        return response_completed_event
+                    else:
+                        raise StopAsyncIteration
+
+        except Exception as e:
+            # Handle HTTP errors
+            self.finished = True
+            raise e
+
     def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
         litellm_model_response: Optional[
             Union[ModelResponse, TextCompletionResponse]

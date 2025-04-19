@@ -75,7 +75,12 @@ class LiteLLMCompletionTransformationHandler:
 
             return responses_api_response
 
-        raise ValueError("litellm_completion_response is not a ModelResponse")
+        elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
+            return LiteLLMCompletionStreamingIterator(
+                litellm_custom_stream_wrapper=litellm_completion_response,
+                request_input=input,
+                responses_api_request=responses_api_request,
+            )
 
     async def async_response_api_handler(
         self,
