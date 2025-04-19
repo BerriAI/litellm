@@ -54,6 +54,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Get the next chunk from the stream
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                    self.collected_chat_completion_chunks.append(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
                             chunk
@@ -61,7 +62,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     )
                     if response_api_chunk:
                         return response_api_chunk
-                    self.collected_chat_completion_chunks.append(chunk)
                 except StopAsyncIteration:
                     self.finished = True
                     response_completed_event = self._emit_response_completed_event()
@@ -84,10 +84,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         try:
             while True:
                 if self.finished is True:
-                    raise StopAsyncIteration
+                    raise StopIteration
                 # Get the next chunk from the stream
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
+                    self.collected_chat_completion_chunks.append(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
                             chunk
@@ -95,14 +96,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     )
                     if response_api_chunk:
                         return response_api_chunk
-                    self.collected_chat_completion_chunks.append(chunk)
-                except StopAsyncIteration:
+                except StopIteration:
                     self.finished = True
                     response_completed_event = self._emit_response_completed_event()
                     if response_completed_event:
                         return response_completed_event
                     else:
-                        raise StopAsyncIteration
+                        raise StopIteration
 
         except Exception as e:
             # Handle HTTP errors

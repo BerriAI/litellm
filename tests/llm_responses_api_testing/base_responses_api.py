@@ -138,6 +138,8 @@ class BaseResponsesAPITest(ABC):
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
+        collected_content_string = ""
+        response_completed_event = None
         if sync_mode:
             response = litellm.responses(
                 input="Basic ping",
@@ -146,6 +148,10 @@ class BaseResponsesAPITest(ABC):
             )
             for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
         else:
             response = await litellm.aresponses(
                 input="Basic ping",
@@ -154,5 +160,26 @@ class BaseResponsesAPITest(ABC):
             )
             async for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
+
+        # assert the delta chunks content had len(collected_content_string) > 0
+        # this content is typically rendered on chat ui's
+        assert len(collected_content_string) > 0
+
+        # assert the response completed event is not None
+        assert response_completed_event is not None
+
+        # assert the response completed event has a response
+        assert response_completed_event.response is not None
+
+        # assert the response completed event includes the usage
+        assert response_completed_event.response.usage is not None
+
+
+
+
 
 
