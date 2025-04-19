@@ -5,12 +5,11 @@ from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import (
-    ResponsesAPIStreamingIterator,
-    SyncResponsesAPIStreamingIterator,
-)
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
@@ -29,9 +28,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def __init__(
         self,
         litellm_custom_stream_wrapper: litellm.CustomStreamWrapper,
+        request_input: Union[str, ResponseInputParam],
+        responses_api_request: ResponsesAPIOptionalRequestParams,
     ):
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
             litellm_custom_stream_wrapper
+        )
+        self.request_input: Union[str, ResponseInputParam] = request_input
+        self.responses_api_request: ResponsesAPIOptionalRequestParams = (
+            responses_api_request
         )
         self.collected_chunks: List[ModelResponseStream] = []
         self.finished: bool = False
@@ -65,10 +70,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = stream_chunk_builder(chunks=self.collected_chunks)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    litellm_model_response
+                    request_input=self.request_input,
+                    chat_completion_response=litellm_model_response,
+                    responses_api_request=self.responses_api_request,
                 ),
             )
         else:
