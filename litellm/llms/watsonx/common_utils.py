@@ -38,7 +38,7 @@ def generate_iam_token(api_key=None, **params) -> str:
         headers = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
-            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY")
+            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY") or get_secret_str("WATSONX_APIKEY")
         if api_key is None:
             raise ValueError("API key is required")
         headers["Accept"] = "application/json"
