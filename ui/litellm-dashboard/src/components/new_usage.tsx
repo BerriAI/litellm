@@ -18,6 +18,7 @@ import {
 import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, tagListCall } from "./networking";
+import { Tag } from "./tag_management/types";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
@@ -58,9 +59,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       return;
     }
     const tags = await tagListCall(accessToken);
-    setAllTags(Object.keys(tags).map((tag) => ({
-      label: tag,
-      value: tag
+    setAllTags(Object.values(tags).map((tag: Tag) => ({
+      label: tag.name,
+      value: tag.name
     })));
   };
 
