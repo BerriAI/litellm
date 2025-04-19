@@ -1,6 +1,7 @@
 import glob
 import os
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -83,6 +84,26 @@ class ProxyExtrasDBManager:
         return [Path(p).parent.name for p in migration_paths]
 
     @staticmethod
+    def _roll_back_migration(migration_name: str):
+        """Mark a specific migration as rolled back"""
+        subprocess.run(
+            ["prisma", "migrate", "resolve", "--rolled-back", migration_name],
+            timeout=60,
+            check=True,
+            capture_output=True,
+        )
+
+    @staticmethod
+    def _resolve_specific_migration(migration_name: str):
+        """Mark a specific migration as applied"""
+        subprocess.run(
+            ["prisma", "migrate", "resolve", "--applied", migration_name],
+            timeout=60,
+            check=True,
+            capture_output=True,
+        )
+
+    @staticmethod
     def _resolve_all_migrations(migrations_dir: str):
         """Mark all existing migrations as applied"""
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
@@ -141,7 +162,34 @@ class ProxyExtrasDBManager:
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
-                        if (
+                        if "P3009" in e.stderr:
+                            # Extract the failed migration name from the error message
+                            migration_match = re.search(
+                                r"`(\d+_.*)` migration", e.stderr
+                            )
+                            if migration_match:
+                                failed_migration = migration_match.group(1)
+                                logger.info(
+                                    f"Found failed migration: {failed_migration}, marking as rolled back"
+                                )
+                                # Mark the failed migration as rolled back
+                                subprocess.run(
+                                    [
+                                        "prisma",
+                                        "migrate",
+                                        "resolve",
+                                        "--rolled-back",
+                                        failed_migration,
+                                    ],
+                                    timeout=60,
+                                    check=True,
+                                    capture_output=True,
+                                    text=True,
+                                )
+                                logger.info(
+                                    f"✅ Migration {failed_migration} marked as rolled back... retrying"
+                                )
+                        elif (
                             "P3005" in e.stderr
                             and "database schema is not empty" in e.stderr
                         ):
@@ -155,6 +203,29 @@ class ProxyExtrasDBManager:
                             ProxyExtrasDBManager._resolve_all_migrations(migrations_dir)
                             logger.info("✅ All migrations resolved.")
                             return True
+                        elif (
+                            "P3018" in e.stderr
+                        ):  # PostgreSQL error code for duplicate column
+                            logger.info(
+                                "Migration already exists, resolving specific migration"
+                            )
+                            # Extract the migration name from the error message
+                            migration_match = re.search(
+                                r"Migration name: (\d+_.*)", e.stderr
+                            )
+                            if migration_match:
+                                migration_name = migration_match.group(1)
+                                logger.info(f"Rolling back migration {migration_name}")
+                                ProxyExtrasDBManager._roll_back_migration(
+                                    migration_name
+                                )
+                                logger.info(
+                                    f"Resolving migration {migration_name} that failed due to existing columns"
+                                )
+                                ProxyExtrasDBManager._resolve_specific_migration(
+                                    migration_name
+                                )
+                                logger.info("✅ Migration resolved.")
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
