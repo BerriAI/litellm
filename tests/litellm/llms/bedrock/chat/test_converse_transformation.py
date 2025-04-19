@@ -40,3 +40,22 @@ def test_transform_usage():
     )
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
+
+
+def test_transform_thinking_blocks_with_redacted_content():
+    thinking_blocks = [
+        {
+            "reasoningText": {
+                "text": "This is a test",
+                "signature": "test_signature",
+            }
+        },
+        {
+            "redactedContent": "This is a redacted content",
+        },
+    ]
+    config = AmazonConverseConfig()
+    transformed_thinking_blocks = config._transform_thinking_blocks(thinking_blocks)
+    assert len(transformed_thinking_blocks) == 2
+    assert transformed_thinking_blocks[0]["type"] == "thinking"
+    assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
