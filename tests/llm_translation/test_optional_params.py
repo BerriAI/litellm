@@ -217,7 +217,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -396,7 +396,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,

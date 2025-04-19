@@ -287,6 +287,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
         # token counter
         "/utils/token_counter",
+        "/utils/transform_request",
         # rerank
         "/rerank",
         "/v1/rerank",
@@ -462,6 +463,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_delete",
         "/team/permissions_list",
         "/team/permissions_update",
+        "/team/daily/activity",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -667,6 +669,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
+    allowed_routes: Optional[list] = []
 
 
 class GenerateKeyRequest(KeyRequestBase):
@@ -816,6 +819,8 @@ class NewUserResponse(GenerateKeyResponse):
     teams: Optional[list] = None
     user_alias: Optional[str] = None
     model_max_budget: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
@@ -1144,6 +1149,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1491,6 +1497,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
+    allowed_routes: Optional[list] = []
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}

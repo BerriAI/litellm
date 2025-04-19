@@ -4563,6 +4563,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
+                output_cost_per_reasoning_token=_model_info.get(
+                    "output_cost_per_reasoning_token", None
+                ),
                 output_cost_per_token_above_128k_tokens=_model_info.get(
                     "output_cost_per_token_above_128k_tokens", None
                 ),
@@ -6602,6 +6605,8 @@ class ProviderConfigManager:
     ) -> Optional[BaseResponsesAPIConfig]:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE == provider:
+            return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod

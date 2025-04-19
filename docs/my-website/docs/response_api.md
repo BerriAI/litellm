@@ -24,7 +24,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 <TabItem value="litellm-sdk" label="LiteLLM SDK">
 
 #### Non-streaming
-```python
+```python showLineNumbers
 import litellm
 
 # Non-streaming response
@@ -38,7 +38,7 @@ print(response)
 ```
 
 #### Streaming
-```python
+```python showLineNumbers
 import litellm
 
 # Streaming response
@@ -56,7 +56,7 @@ for event in response:
 <TabItem value="proxy" label="OpenAI SDK with LiteLLM Proxy">
 
 First, add this to your litellm proxy config.yaml:
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: o1-pro
     litellm_params:
@@ -74,7 +74,7 @@ litellm --config /path/to/config.yaml
 Then use the OpenAI SDK pointed to your proxy:
 
 #### Non-streaming
-```python
+```python showLineNumbers
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -93,7 +93,7 @@ print(response)
 ```
 
 #### Streaming
-```python
+```python showLineNumbers
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -115,3 +115,11 @@ for event in response:
 
 </TabItem>
 </Tabs>
+
+
+## **Supported Providers**
+
+| Provider    | Link to Usage      |
+|-------------|--------------------|
+| OpenAI|   [Usage](#usage)                 |
+| Azure OpenAI|   [Usage](../docs/providers/azure#responses-api)                 |  

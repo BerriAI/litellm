@@ -1,18 +1,13 @@
 model_list:
-  - model_name: anhropic-auto-inject-cache-user-message
+  - model_name: openai/*
     litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
-      api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
-  
-  - model_name: anhropic-auto-inject-cache-system-message
+      model: openai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
-      api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
-
-
+      model: anthropic/*
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+litellm_settings:
+  drop_params: true
+      

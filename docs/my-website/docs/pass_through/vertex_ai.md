@@ -13,6 +13,15 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |
 
+## Supported Endpoints
+
+LiteLLM supports 2 vertex ai passthrough routes:
+
+1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
+2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
+
+## How to use
+
 Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
 
 LiteLLM supports 3 flows for calling Vertex AI endpoints via pass-through:

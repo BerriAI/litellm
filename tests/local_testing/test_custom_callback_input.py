@@ -450,12 +450,12 @@ def test_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
         )
         # test streaming
         response = litellm.completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
             stream=True,
         )
@@ -464,7 +464,7 @@ def test_chat_azure_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -491,12 +491,12 @@ async def test_async_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
         )
         ## test streaming
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
             stream=True,
         )
@@ -507,7 +507,7 @@ async def test_async_chat_azure_stream():
         # test failure callback
         try:
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -1018,7 +1018,7 @@ async def test_async_completion_azure_caching():
     litellm.callbacks = [customHandler_caching]
     unique_time = time.time()
     response1 = await litellm.acompletion(
-        model="azure/chatgpt-v-2",
+        model="azure/chatgpt-v-3",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -1027,7 +1027,7 @@ async def test_async_completion_azure_caching():
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
-        model="azure/chatgpt-v-2",
+        model="azure/chatgpt-v-3",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -1056,7 +1056,7 @@ async def test_async_completion_azure_caching_streaming():
     litellm.callbacks = [customHandler_caching]
     unique_time = uuid.uuid4()
     response1 = await litellm.acompletion(
-        model="azure/chatgpt-v-2",
+        model="azure/chatgpt-v-3",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -1069,7 +1069,7 @@ async def test_async_completion_azure_caching_streaming():
     initial_customhandler_caching_states = len(customHandler_caching.states)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
-        model="azure/chatgpt-v-2",
+        model="azure/chatgpt-v-3",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -1207,7 +1207,7 @@ def test_turn_off_message_logging():
     "model",
     [
         "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
-    ],  # "gpt-3.5-turbo", "azure/chatgpt-v-2",
+    ],  # "gpt-3.5-turbo", "azure/chatgpt-v-3",
 )
 @pytest.mark.parametrize(
     "turn_off_message_logging",
