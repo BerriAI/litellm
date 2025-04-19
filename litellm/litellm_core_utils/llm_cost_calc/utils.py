@@ -267,6 +267,7 @@ def generic_cost_per_token(
     ## CALCULATE OUTPUT COST
     text_tokens = usage.completion_tokens
     audio_tokens = 0
+    reasoning_tokens = 0
     if usage.completion_tokens_details is not None:
         audio_tokens = (
             cast(
@@ -282,12 +283,22 @@ def generic_cost_per_token(
             )
             or usage.completion_tokens  # default to completion tokens, if this field is not set
         )
-
+        reasoning_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
+            )
+            or 0
+        )
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
     _output_cost_per_audio_token: Optional[float] = model_info.get(
         "output_cost_per_audio_token"
+    )
+
+    _output_cost_per_reasoning_token: Optional[float] = model_info.get(
+        "output_cost_per_reasoning_token"
     )
 
     ## AUDIO COST
@@ -297,5 +308,13 @@ def generic_cost_per_token(
         and audio_tokens > 0
     ):
         completion_cost += float(audio_tokens) * _output_cost_per_audio_token
+
+    ## REASONING COST
+    if (
+        _output_cost_per_reasoning_token is not None
+        and reasoning_tokens
+        and reasoning_tokens > 0
+    ):
+        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
 
     return prompt_cost, completion_cost
