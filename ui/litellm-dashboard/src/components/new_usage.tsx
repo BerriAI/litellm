@@ -17,7 +17,7 @@ import {
 } from "@tremor/react";
 import { AreaChart } from "@tremor/react";
 
-import { userDailyActivityCall } from "./networking";
+import { userDailyActivityCall, tagListCall } from "./networking";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from './activity_metrics';
@@ -25,6 +25,7 @@ import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetr
 import EntityUsage from './entity_usage';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
 import { Team } from "./key_team_helpers/key_list";
+import { EntityList } from "./entity_usage";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -49,6 +50,23 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
+
+  const [allTags, setAllTags] = useState<EntityList[]>([]); 
+
+  const getAllTags = async () => {
+    if (!accessToken) {
+      return;
+    }
+    const tags = await tagListCall(accessToken);
+    setAllTags(Object.keys(tags).map((tag) => ({
+      label: tag,
+      value: tag
+    })));
+  };
+
+  useEffect(() => {
+    getAllTags();
+  }, [accessToken]);
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -488,7 +506,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               entityType="tag"
               userID={userID}
               userRole={userRole}
-              entityList={null}
+              entityList={allTags}
             />
           </TabPanel>
 

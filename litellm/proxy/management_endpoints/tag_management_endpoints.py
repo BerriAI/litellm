@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import datetime
 import json
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -301,6 +301,7 @@ async def info_tag(
     "/tag/list",
     tags=["tag management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=List[TagConfig],
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

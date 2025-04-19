@@ -49,7 +49,7 @@ interface EntitySpendData {
   };
 }
 
-interface EntityList {
+export interface EntityList {
   label: string;
   value: string;
 }
