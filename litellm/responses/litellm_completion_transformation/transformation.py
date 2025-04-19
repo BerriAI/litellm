@@ -405,8 +405,6 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Chat Completion tools into a Responses API tools
         """
-        import json
-
         all_chat_completion_tools: List[ChatCompletionMessageToolCall] = []
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
