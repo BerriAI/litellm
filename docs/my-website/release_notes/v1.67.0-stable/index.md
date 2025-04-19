@@ -33,10 +33,10 @@ hide_table_of_contents: false
     2. Fix response_format check for 2025+ api versions - [PR](https://github.com/BerriAI/litellm/pull/9993)
     3. Add gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o3, o3-mini, o4-mini pricing
 - **VLLM**
-    1. Files - Support 'file' message type for VLLM video url's - [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10129)
-    2. Passthrough - new `/vllm/` passthrough endpoint support [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10002)
+    1. Files - Support 'file' message type for VLLM video url's - [Get Started](../../docs/providers/vllm#send-video-url-to-vllm), [PR](https://github.com/BerriAI/litellm/pull/10129)
+    2. Passthrough - new `/vllm/` passthrough endpoint support [Get Started](../../docs/pass_through/vllm), [PR](https://github.com/BerriAI/litellm/pull/10002)
 - **Mistral**
-    1. new `/mistral` passthrough endpoint support [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10002)
+    1. new `/mistral` passthrough endpoint support [Get Started](../../docs/pass_through/mistral), [PR](https://github.com/BerriAI/litellm/pull/10002)
 - **AWS**
     1. New mapped bedrock regions - [PR](https://github.com/BerriAI/litellm/pull/9430)
 - **VertexAI / Google AI Studio**
