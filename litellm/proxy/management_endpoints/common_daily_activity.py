@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
@@ -39,6 +39,7 @@ def update_breakdown_metrics(
     provider_metadata: Dict[str, Dict[str, Any]],
     api_key_metadata: Dict[str, Dict[str, Any]],
     entity_id_field: Optional[str] = None,
+    entity_metadata_field: Optional[Dict[str, dict]] = None,
 ) -> BreakdownMetrics:
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
@@ -74,7 +75,8 @@ def update_breakdown_metrics(
             metadata=KeyMetadata(
                 key_alias=api_key_metadata.get(record.api_key, {}).get(
                     "key_alias", None
-                )
+                ),
+                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
             ),  # Add any api_key-specific metadata here
         )
     breakdown.api_keys[record.api_key].metrics = update_metrics(
@@ -87,7 +89,10 @@ def update_breakdown_metrics(
         if entity_value:
             if entity_value not in breakdown.entities:
                 breakdown.entities[entity_value] = MetricWithMetadata(
-                    metrics=SpendMetrics(), metadata={}
+                    metrics=SpendMetrics(),
+                    metadata=entity_metadata_field.get(entity_value, {})
+                    if entity_metadata_field
+                    else {},
                 )
             breakdown.entities[entity_value].metrics = update_metrics(
                 breakdown.entities[entity_value].metrics, record
@@ -96,17 +101,32 @@ def update_breakdown_metrics(
     return breakdown
 
 
+async def get_api_key_metadata(
+    prisma_client: PrismaClient,
+    api_keys: Set[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Update api key metadata for a single record."""
+    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"token": {"in": list(api_keys)}}
+    )
+    return {
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+    }
+
+
 async def get_daily_activity(
     prisma_client: Optional[PrismaClient],
     table_name: str,
     entity_id_field: str,
     entity_id: Optional[Union[str, List[str]]],
+    entity_metadata_field: Optional[Dict[str, dict]],
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
     api_key: Optional[str],
     page: int,
     page_size: int,
+    exclude_entity_ids: Optional[List[str]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
     if prisma_client is None:
@@ -139,6 +159,10 @@ async def get_daily_activity(
                 where_conditions[entity_id_field] = {"in": entity_id}
             else:
                 where_conditions[entity_id_field] = entity_id
+        if exclude_entity_ids:
+            where_conditions.setdefault(entity_id_field, {})["not"] = {
+                "in": exclude_entity_ids
+            }
 
         # Get total count for pagination
         total_count = await getattr(prisma_client.db, table_name).count(
@@ -166,12 +190,7 @@ async def get_daily_activity(
         model_metadata: Dict[str, Dict[str, Any]] = {}
         provider_metadata: Dict[str, Dict[str, Any]] = {}
         if api_keys:
-            key_records = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": list(api_keys)}}
-            )
-            api_key_metadata.update(
-                {k.token: {"key_alias": k.key_alias} for k in key_records}
-            )
+            api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
 
         # Process results
         results = []
@@ -198,6 +217,7 @@ async def get_daily_activity(
                 provider_metadata,
                 api_key_metadata,
                 entity_id_field=entity_id_field,
+                entity_metadata_field=entity_metadata_field,
             )
 
             # Update total metrics

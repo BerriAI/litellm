@@ -1284,7 +1284,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
     "model, base_model",
     [
         ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-default"),
-        ("fireworks_ai/mixtral-8x7b-instruct", "fireworks-ai-moe-up-to-56b"),
+        ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1294,7 +1294,7 @@ def test_get_model_params_fireworks_ai(model, base_model):
 
 @pytest.mark.parametrize(
     "model",
-    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/mixtral-8x7b-instruct"],
+    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/llama4-maverick-instruct-basic"],
 )
 def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

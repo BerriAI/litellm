@@ -229,13 +229,17 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        provider_config: Optional[BaseConfig] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
         extra_body: Optional[dict] = optional_params.pop("extra_body", None)
         fake_stream = fake_stream or optional_params.pop("fake_stream", False)
 
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        provider_config = (
+            provider_config
+            or ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=litellm.LlmProviders(custom_llm_provider)
+            )
         )
         if provider_config is None:
             raise ValueError(
@@ -462,7 +466,7 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
-            model_response: (ModelResponse) = provider_config.transform_response(
+            model_response: ModelResponse = provider_config.transform_response(
                 model=model,
                 raw_response=response,
                 model_response=litellm.ModelResponse(),
@@ -595,7 +599,7 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
-            model_response: (ModelResponse) = provider_config.transform_response(
+            model_response: ModelResponse = provider_config.transform_response(
                 model=model,
                 raw_response=response,
                 model_response=litellm.ModelResponse(),
@@ -1055,9 +1059,16 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
             model=model,
+            optional_params=response_api_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1078,9 +1089,6 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-
-        # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
 
         try:
             if stream:
@@ -1170,9 +1178,16 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
             model=model,
+            optional_params=response_api_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1193,8 +1208,6 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-        # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
 
         try:
             if stream:

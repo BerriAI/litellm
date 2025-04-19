@@ -86,3 +86,4 @@ litellm/proxy/db/migrations/0_init/migration.sql
 litellm/proxy/db/migrations/*
 litellm/proxy/migrations/*config.yaml
 litellm/proxy/migrations/*
+tests/litellm/litellm_core_utils/llm_cost_calc/log.txt

@@ -49,8 +49,15 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
+
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+)
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -461,6 +468,12 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["redacted_thinking"]]
+    data: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
     city: str
     """Free text input for the city of the user, e.g. `San Francisco`."""
@@ -678,6 +691,11 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
     cache_control: ChatCompletionCachedContent
 
 
+class GenericChatCompletionMessage(TypedDict, total=False):
+    role: Required[str]
+    content: Required[Union[str, List]]
+
+
 ValidUserMessageContentTypes = [
     "text",
     "image_url",
@@ -785,7 +803,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionUsageBlock(TypedDict):
@@ -803,12 +823,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[
-        Union[str, float]
-    ] = None  # Scaling factor for the learning rate
-    n_epochs: Optional[
-        Union[str, int]
-    ] = None  # "The number of epochs to train the model for"
+    learning_rate_multiplier: Optional[Union[str, float]] = (
+        None  # Scaling factor for the learning rate
+    )
+    n_epochs: Optional[Union[str, int]] = (
+        None  # "The number of epochs to train the model for"
+    )
 
 
 class FineTuningJobCreate(BaseModel):
@@ -835,18 +855,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[
-        Hyperparameters
-    ] = None  # "The hyperparameters used for the fine-tuning job."
-    suffix: Optional[
-        str
-    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    validation_file: Optional[
-        str
-    ] = None  # "The ID of an uploaded file that contains validation data."
-    integrations: Optional[
-        List[str]
-    ] = None  # "A list of integrations to enable for your fine-tuning job."
+    hyperparameters: Optional[Hyperparameters] = (
+        None  # "The hyperparameters used for the fine-tuning job."
+    )
+    suffix: Optional[str] = (
+        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    )
+    validation_file: Optional[str] = (
+        None  # "The ID of an uploaded file that contains validation data."
+    )
+    integrations: Optional[List[str]] = (
+        None  # "A list of integrations to enable for your fine-tuning job."
+    )
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -887,7 +907,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
     tool_choice: Optional[ToolChoice]
-    tools: Optional[Iterable[ToolParam]]
+    tools: Optional[List[ToolParam]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
@@ -898,20 +918,6 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
     input: Union[str, ResponseInputParam]
     model: str
-
-
-class BaseLiteLLMOpenAIResponseObject(BaseModel):
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-    def items(self):
-        return self.__dict__.items()
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -958,11 +964,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: List[ResponseOutputItem]
+    output: Union[
+        List[ResponseOutputItem],
+        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+    ]
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
-    tools: List[Tool]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
     top_p: Optional[float]
     max_output_tokens: Optional[int]
     previous_response_id: Optional[str]

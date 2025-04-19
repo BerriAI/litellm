@@ -25,6 +25,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -34,8 +36,6 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
-    DailySpendData,
-    DailySpendMetadata,
     KeyMetadata,
     KeyMetricWithMetadata,
     LiteLLM_DailyUserSpend,
@@ -1382,136 +1382,22 @@ async def get_user_daily_activity(
         )
 
     try:
-        # Build filter conditions
-        where_conditions: Dict[str, Any] = {
-            "date": {
-                "gte": start_date,
-                "lte": end_date,
-            }
-        }
+        entity_id: Optional[str] = None
+        if not _user_has_admin_view(user_api_key_dict):
+            entity_id = user_api_key_dict.user_id
 
-        if model:
-            where_conditions["model"] = model
-        if api_key:
-            where_conditions["api_key"] = api_key
-
-        if (
-            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        ):
-            where_conditions[
-                "user_id"
-            ] = user_api_key_dict.user_id  # only allow access to own data
-
-        # Get total count for pagination
-        total_count = await prisma_client.db.litellm_dailyuserspend.count(
-            where=where_conditions
-        )
-
-        # Fetch paginated results
-        daily_spend_data = await prisma_client.db.litellm_dailyuserspend.find_many(
-            where=where_conditions,
-            order=[
-                {"date": "desc"},
-            ],
-            skip=(page - 1) * page_size,
-            take=page_size,
-        )
-
-        daily_spend_data_pydantic_list = [
-            LiteLLM_DailyUserSpend(**record.model_dump()) for record in daily_spend_data
-        ]
-
-        # Get all unique API keys from the spend data
-        api_keys = set()
-        for record in daily_spend_data_pydantic_list:
-            if record.api_key:
-                api_keys.add(record.api_key)
-
-        # Fetch key aliases in bulk
-
-        api_key_metadata: Dict[str, Dict[str, Any]] = {}
-        model_metadata: Dict[str, Dict[str, Any]] = {}
-        provider_metadata: Dict[str, Dict[str, Any]] = {}
-        if api_keys:
-            key_records = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": list(api_keys)}}
-            )
-            api_key_metadata.update(
-                {k.token: {"key_alias": k.key_alias} for k in key_records}
-            )
-        # Process results
-        results = []
-        total_metrics = SpendMetrics()
-
-        # Group data by date and other dimensions
-
-        grouped_data: Dict[str, Dict[str, Any]] = {}
-        for record in daily_spend_data_pydantic_list:
-            date_str = record.date
-            if date_str not in grouped_data:
-                grouped_data[date_str] = {
-                    "metrics": SpendMetrics(),
-                    "breakdown": BreakdownMetrics(),
-                }
-
-            # Update metrics
-            grouped_data[date_str]["metrics"] = update_metrics(
-                grouped_data[date_str]["metrics"], record
-            )
-            # Update breakdowns
-            grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
-                grouped_data[date_str]["breakdown"],
-                record,
-                model_metadata,
-                provider_metadata,
-                api_key_metadata,
-            )
-
-            # Update total metrics
-            total_metrics.spend += record.spend
-            total_metrics.prompt_tokens += record.prompt_tokens
-            total_metrics.completion_tokens += record.completion_tokens
-            total_metrics.total_tokens += (
-                record.prompt_tokens + record.completion_tokens
-            )
-            total_metrics.cache_read_input_tokens += record.cache_read_input_tokens
-            total_metrics.cache_creation_input_tokens += (
-                record.cache_creation_input_tokens
-            )
-            total_metrics.api_requests += record.api_requests
-            total_metrics.successful_requests += record.successful_requests
-            total_metrics.failed_requests += record.failed_requests
-
-        # Convert grouped data to response format
-        for date_str, data in grouped_data.items():
-            results.append(
-                DailySpendData(
-                    date=datetime.strptime(date_str, "%Y-%m-%d").date(),
-                    metrics=data["metrics"],
-                    breakdown=data["breakdown"],
-                )
-            )
-
-        # Sort results by date
-        results.sort(key=lambda x: x.date, reverse=True)
-
-        return SpendAnalyticsPaginatedResponse(
-            results=results,
-            metadata=DailySpendMetadata(
-                total_spend=total_metrics.spend,
-                total_prompt_tokens=total_metrics.prompt_tokens,
-                total_completion_tokens=total_metrics.completion_tokens,
-                total_tokens=total_metrics.total_tokens,
-                total_api_requests=total_metrics.api_requests,
-                total_successful_requests=total_metrics.successful_requests,
-                total_failed_requests=total_metrics.failed_requests,
-                total_cache_read_input_tokens=total_metrics.cache_read_input_tokens,
-                total_cache_creation_input_tokens=total_metrics.cache_creation_input_tokens,
-                page=page,
-                total_pages=-(-total_count // page_size),  # Ceiling division
-                has_more=(page * page_size) < total_count,
-            ),
+        return await get_daily_activity(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            model=model,
+            api_key=api_key,
+            page=page,
+            page_size=page_size,
         )
 
     except Exception as e:

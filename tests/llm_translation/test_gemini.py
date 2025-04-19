@@ -17,6 +17,9 @@ from litellm import completion
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.0-flash"}
+    
+    def get_base_completion_call_args_with_reasoning_model(self) -> dict:
+        return {"model": "gemini/gemini-2.5-flash-preview-04-17"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -83,5 +86,6 @@ def test_gemini_image_generation():
         modalities=["image", "text"],
     )
     assert response.choices[0].message.content is not None
+
 
 
