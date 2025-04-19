@@ -75,7 +75,8 @@ def update_breakdown_metrics(
             metadata=KeyMetadata(
                 key_alias=api_key_metadata.get(record.api_key, {}).get(
                     "key_alias", None
-                )
+                ),
+                team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
             ),  # Add any api_key-specific metadata here
         )
     breakdown.api_keys[record.api_key].metrics = update_metrics(
@@ -180,7 +181,10 @@ async def get_daily_activity(
                 where={"token": {"in": list(api_keys)}}
             )
             api_key_metadata.update(
-                {k.token: {"key_alias": k.key_alias} for k in key_records}
+                {
+                    k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
+                    for k in key_records
+                }
             )
 
         # Process results

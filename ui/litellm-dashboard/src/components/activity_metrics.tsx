@@ -243,6 +243,13 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
   );
 };
 
+// Helper function to format key label
+const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string => {
+  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+  const teamId = modelData.metadata.team_id;
+  return teamId ? `${keyAlias} (team_id: ${teamId})` : keyAlias;
+};
+
 // Process data function
 export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
@@ -252,7 +259,7 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }, key
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
           label: key === 'api_keys' 
-            ? (modelData as KeyMetricWithMetadata).metadata.key_alias || `key-hash-${model}`
+            ? formatKeyLabel(modelData as KeyMetricWithMetadata, model)
             : model,
           total_requests: 0,
           total_successful_requests: 0,
