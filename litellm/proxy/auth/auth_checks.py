@@ -88,7 +88,7 @@ async def common_checks(
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _model = request_body.get("model", None)
+    _model: Optional[str] = cast(Optional[str], request_body.get("model", None))
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -112,7 +112,7 @@ async def common_checks(
             )
 
     ## 2.1 If user can call model (if personal key)
-    if team_object is None and user_object is not None:
+    if _model and team_object is None and user_object is not None:
         await can_user_call_model(
             model=_model,
             llm_router=llm_router,
