@@ -43,9 +43,9 @@ hide_table_of_contents: false
     1. Gemini - Response format - Retain schema field ordering for google gemini and vertex by specifying propertyOrdering - [Get Started](../../docs/providers/vertex#json-schema), [PR](https://github.com/BerriAI/litellm/pull/9828)
     2. Gemini-2.5-flash - return reasoning content [Google AI Studio](../../docs/providers/gemini#usage---thinking--reasoning_content), [Vertex AI](../../docs/providers/vertex#thinking--reasoning_content)
     3. Gemini-2.5-flash - pricing + model information [PR](https://github.com/BerriAI/litellm/pull/10125)
-    4. Passthrough - new `/vertex_ai/discovery` route - enables calling AgentBuilder API routes [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10084)
+    4. Passthrough - new `/vertex_ai/discovery` route - enables calling AgentBuilder API routes [Get Started](../../docs/pass_through/vertex_ai#supported-api-endpoints), [PR](https://github.com/BerriAI/litellm/pull/10084)
 - **Fireworks AI**
-    1. return tool calling responses in `tool_calls` field (fireworks incorrectly returns this as a json str in content)  - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/10130)
+    1. return tool calling responses in `tool_calls` field (fireworks incorrectly returns this as a json str in content) [PR](https://github.com/BerriAI/litellm/pull/10130)
 - **Triton**
     1. Remove fixed remove bad_words / stop words from `/generate` call - [Get Started](../../docs/providers/triton-inference-server#triton-generate---chat-completion), [PR](https://github.com/BerriAI/litellm/pull/10163)
 - **Other**
@@ -56,7 +56,7 @@ hide_table_of_contents: false
 ## Spend Tracking Improvements
 
 - **Cost Control** - inject cache control points in prompt for cost reduction [Get Started](../../docs/tutorials/prompt_caching), [PR](https://github.com/BerriAI/litellm/pull/10000)
-- **Spend Tags** - spend tags in headers - support x-litellm-tags even if tag based routing not enabled [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/10000)
+- **Spend Tags** - spend tags in headers - support x-litellm-tags even if tag based routing not enabled [Get Started](../../docs/proxy/request_headers#litellm-headers), [PR](https://github.com/BerriAI/litellm/pull/10000)
 - **Gemini-2.5-flash** - support cost calculation for reasoning tokens [PR](https://github.com/BerriAI/litellm/pull/10141)
 
 ## Management Endpoints / UI
