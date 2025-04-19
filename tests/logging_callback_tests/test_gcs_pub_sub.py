@@ -29,6 +29,79 @@ from litellm.types.utils import (
 
 verbose_logger.setLevel(logging.DEBUG)
 
+ignored_keys = [
+    "request_id",
+    "startTime",
+    "endTime",
+    "completionStartTime",
+    "endTime",
+    "metadata.model_map_information",
+    "metadata.usage_object",
+]
+
+
+def _compare_nested_dicts(
+    actual: dict, expected: dict, path: str = "", ignore_keys: list[str] = []
+) -> list[str]:
+    """Compare nested dictionaries and return a list of differences in a human-friendly format."""
+    differences = []
+
+    # Check if current path should be ignored
+    if path in ignore_keys:
+        return differences
+
+    # Check for keys in actual but not in expected
+    for key in actual.keys():
+        current_path = f"{path}.{key}" if path else key
+        if current_path not in ignore_keys and key not in expected:
+            differences.append(f"Extra key in actual: {current_path}")
+
+    for key, expected_value in expected.items():
+        current_path = f"{path}.{key}" if path else key
+        if current_path in ignore_keys:
+            continue
+        if key not in actual:
+            differences.append(f"Missing key: {current_path}")
+            continue
+
+        actual_value = actual[key]
+
+        # Try to parse JSON strings
+        if isinstance(expected_value, str):
+            try:
+                expected_value = json.loads(expected_value)
+            except json.JSONDecodeError:
+                pass
+        if isinstance(actual_value, str):
+            try:
+                actual_value = json.loads(actual_value)
+            except json.JSONDecodeError:
+                pass
+
+        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
+            differences.extend(
+                _compare_nested_dicts(
+                    actual_value, expected_value, current_path, ignore_keys
+                )
+            )
+        elif isinstance(expected_value, dict) or isinstance(actual_value, dict):
+            differences.append(
+                f"Type mismatch at {current_path}: expected dict, got {type(actual_value).__name__}"
+            )
+        else:
+            # For non-dict values, only report if they're different
+            if actual_value != expected_value:
+                # Format the values to be more readable
+                actual_str = str(actual_value)
+                expected_str = str(expected_value)
+                if len(actual_str) > 50 or len(expected_str) > 50:
+                    actual_str = f"{actual_str[:50]}..."
+                    expected_str = f"{expected_str[:50]}..."
+                differences.append(
+                    f"Value mismatch at {current_path}:\n  expected: {expected_str}\n  got:      {actual_str}"
+                )
+    return differences
+
 
 def assert_gcs_pubsub_request_matches_expected(
     actual_request_body: dict,
@@ -49,24 +122,11 @@ def assert_gcs_pubsub_request_matches_expected(
         expected_request_body = json.load(f)
 
     # Replace dynamic values in actual request body
-    dynamic_fields = [
-        "startTime",
-        "endTime",
-        "completionStartTime",
-        "request_id",
-        "id",
-        "response_time",
-    ]
-    for field in dynamic_fields:
-        if field in actual_request_body:
-            actual_request_body[field] = expected_request_body[field]
-
-    # Assert the entire request body matches
-    print("actual_request_body", actual_request_body)
-    assert (
-        actual_request_body == expected_request_body
-    ), f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"
-
+    differences = _compare_nested_dicts(
+        actual_request_body, expected_request_body, ignore_keys=ignored_keys
+    )
+    if differences:
+        assert False, f"Dictionary mismatch: {differences}"
 
 def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
     actual_request_body: dict,
