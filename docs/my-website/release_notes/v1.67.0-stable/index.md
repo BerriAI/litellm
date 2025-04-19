@@ -19,8 +19,8 @@ hide_table_of_contents: false
 ## New Models / Updated Models
 
 - **OpenAI**
-    1. gpt-4.1 pricing - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/9990)
-    2. o4 - correctly map o4 to openai o_series model [Get Started](ADD DOCS HERE)
+    1. gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o3, o3-mini, o4-mini pricing - [Get Started](../../docs/providers/openai#usage), [PR](https://github.com/BerriAI/litellm/pull/9990)
+    2. o4 - correctly map o4 to openai o_series model
 - **Azure AI**
     1. Phi-4 output cost per token fix - [PR](https://github.com/BerriAI/litellm/pull/9880)
     2. Responses API support [Get Started](../../docs/providers/azure#azure-responses-api),[PR](https://github.com/BerriAI/litellm/pull/10116)
@@ -31,6 +31,7 @@ hide_table_of_contents: false
 - **Azure**
     1. Support azure tenant_id/client_id env vars - [Get Started](../../docs/providers/azure#entra-id---use-tenant_id-client_id-client_secret), [PR](https://github.com/BerriAI/litellm/pull/9993)
     2. Fix response_format check for 2025+ api versions - [PR](https://github.com/BerriAI/litellm/pull/9993)
+    3. Add gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o3, o3-mini, o4-mini pricing
 - **VLLM**
     1. Files - Support 'file' message type for VLLM video url's - [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10129)
     2. Passthrough - new `/vllm/` passthrough endpoint support [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/10002)
@@ -48,7 +49,7 @@ hide_table_of_contents: false
 - **Triton**
     1. Remove fixed remove bad_words / stop words from `/generate` call - [Get Started](../../docs/providers/triton-inference-server#triton-generate---chat-completion), [PR](https://github.com/BerriAI/litellm/pull/10163)
 - **Other**
-    1. Support for all litellm providers on Responses API (works with Codex) - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/10132)
+    1. Support for all litellm providers on Responses API (works with Codex) - [Get Started](../../docs/tutorials/openai_codex), [PR](https://github.com/BerriAI/litellm/pull/10132)
     2. Fix combining multiple tool calls in streaming response - [Get Started](../../docs/completion/stream#helper-function), [PR](https://github.com/BerriAI/litellm/pull/10040)
 
 
