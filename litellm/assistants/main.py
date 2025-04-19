@@ -304,6 +304,11 @@ def create_assistants(
         "response_format": response_format,
     }
 
+    # only send params that are not None
+    create_assistant_data = {
+        k: v for k, v in create_assistant_data.items() if v is not None
+    }
+
     response: Optional[Union[Coroutine[Any, Any, Assistant], Assistant]] = None
     if custom_llm_provider == "openai":
         api_base = (
