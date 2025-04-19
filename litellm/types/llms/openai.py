@@ -49,10 +49,14 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
-from litellm.types.responses.main import GenericResponseOutputItem
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+)
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -894,7 +898,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
     tool_choice: Optional[ToolChoice]
-    tools: Optional[Iterable[ToolParam]]
+    tools: Optional[List[ToolParam]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
@@ -965,11 +969,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: Union[List[ResponseOutputItem], List[GenericResponseOutputItem]]
+    output: Union[
+        List[ResponseOutputItem],
+        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+    ]
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
-    tools: List[Tool]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
     top_p: Optional[float]
     max_output_tokens: Optional[int]
     previous_response_id: Optional[str]
