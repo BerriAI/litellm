@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 from openai.types.responses.tool_param import FunctionToolParam
 
 from litellm.caching import InMemoryCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesAPISessionElement,
     SessionHandler,
@@ -87,6 +88,18 @@ class LiteLLMCompletionResponsesConfig:
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
         }
+
+        # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
+        if stream is True:
+            stream_options = {
+                "include_usage": True,
+            }
+            litellm_completion_request["stream_options"] = stream_options
+            litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+                "litellm_logging_obj"
+            )
+            if litellm_logging_obj:
+                litellm_logging_obj.stream_options = stream_options
 
         # only pass non-None values
         litellm_completion_request = {
