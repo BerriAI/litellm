@@ -68,20 +68,24 @@ Ensure your LiteLLM Proxy is properly configured to route to your desired models
 
 ```yaml
 model_list:
-  - model_name: openai/*
+  - model_name: o3-mini
     litellm_params:
-      model: openai/*
-  - model_name: anthropic/*
+      model: openai/o3-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-3-7-sonnet-latest
     litellm_params:
-      model: anthropic/*
-  - model_name: gemini/*
+      model: anthropic/claude-3-7-sonnet-latest
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gemini-2.0-flash
     litellm_params:
-      model: gemini/*
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+
 litellm_settings:
   drop_params: true
 ```
 
-This configuration enables routing to OpenAI, Anthropic, and Gemini models.
+This configuration enables routing to specific OpenAI, Anthropic, and Gemini models with explicit names.
 
 ## 4. Configure Codex to Use LiteLLM Proxy
 
@@ -100,7 +104,7 @@ export OPENAI_API_KEY="sk-1234"
 With everything configured, you can now run Codex with Gemini:
 
 ```bash
-codex --model gemini/gemini-2.0-flash --full-auto
+codex --model gemini-flash --full-auto
 ```
 
 <Image img={require('../../img/litellm_codex.gif')} />
@@ -115,19 +119,10 @@ You can use any model configured in your LiteLLM proxy:
 
 ```bash
 # Use Claude models
-codex --model anthropic/claude-3-opus-20240229
+codex --model claude-3-7-sonnet-latest
 
-# Use OpenAI models
-codex --model openai/gpt-4o
-```
-
-### Enabling Debugging
-
-For troubleshooting, enable verbose output:
-
-```bash
-export DEBUG=1
-codex --model gemini/gemini-2.0-flash --full-auto
+# Use Google AI Studio Gemini models
+codex --model gemini/gemini-2.0-flash
 ```
 
 ## Troubleshooting
