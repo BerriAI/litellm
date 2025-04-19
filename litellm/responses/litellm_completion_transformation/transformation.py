@@ -31,10 +31,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
+    GenericResponseOutputItemContentAnnotation,
     OutputFunctionToolCall,
     OutputText,
 )
 from litellm.types.utils import (
+    ChatCompletionAnnotation,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -329,7 +331,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
         content: Any,
-    ) -> Union[str, List[Dict[str, Any]]]:
+    ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
         """
         Transform a Responses API content into a Chat Completion content
         """
@@ -337,7 +339,7 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
-            content_list = []
+            content_list: List[Union[str, Dict[str, Any]]] = []
             for item in content:
                 if isinstance(item, str):
                     content_list.append(item)
@@ -392,7 +394,7 @@ class LiteLLMCompletionResponsesConfig:
                         name=tool["name"],
                         description=tool.get("description") or "",
                         parameters=tool.get("parameters", {}),
-                        strict=tool.get("strict", None),
+                        strict=tool.get("strict", False),
                     ),
                 )
             )
@@ -425,6 +427,7 @@ class LiteLLMCompletionResponsesConfig:
                         name=function_definition.name or "",
                         arguments=function_definition.get("arguments") or "",
                         call_id=tool.id or "",
+                        id=tool.id or "",
                         type="function_call",  # critical this is "function_call" to work with tools like openai codex
                         status=function_definition.get("status") or "completed",
                     )
@@ -536,8 +539,8 @@ class LiteLLMCompletionResponsesConfig:
             ]
         ] = []
         output_items = responses_api_output.output
-        for output_item in output_items:
-            output_item = dict(output_item)
+        for _output_item in output_items:
+            output_item: dict = dict(_output_item)
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(
@@ -577,7 +580,38 @@ class LiteLLMCompletionResponsesConfig:
         return OutputText(
             type="output_text",
             text=message.content,
+            annotations=LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=message.annotations
+            ),
         )
+
+    @staticmethod
+    def _transform_chat_completion_annotations_to_response_output_annotations(
+        annotations: Optional[List[ChatCompletionAnnotation]],
+    ) -> List[GenericResponseOutputItemContentAnnotation]:
+        response_output_annotations: List[
+            GenericResponseOutputItemContentAnnotation
+        ] = []
+
+        if annotations is None:
+            return response_output_annotations
+
+        for annotation in annotations:
+            annotation_type = annotation.get("type")
+            if annotation_type == "url_citation" and "url_citation" in annotation:
+                url_citation = annotation["url_citation"]
+                response_output_annotations.append(
+                    GenericResponseOutputItemContentAnnotation(
+                        type=annotation_type,
+                        start_index=url_citation.get("start_index"),
+                        end_index=url_citation.get("end_index"),
+                        url=url_citation.get("url"),
+                        title=url_citation.get("title"),
+                    )
+                )
+            # Handle other annotation types here
+
+        return response_output_annotations
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
