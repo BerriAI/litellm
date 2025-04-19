@@ -7,6 +7,9 @@ import httpx
 import litellm
 from litellm.constants import (
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -276,11 +279,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if reasoning_effort is None:
             return None
         elif reasoning_effort == "low":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=1024)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            )
         elif reasoning_effort == "medium":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=2048)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            )
         elif reasoning_effort == "high":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=4096)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 

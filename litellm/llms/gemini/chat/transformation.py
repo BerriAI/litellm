@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType, PartType
+from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -67,7 +68,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -83,6 +84,10 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "frequency_penalty",
             "modalities",
         ]
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        return supported_params
 
     def map_openai_params(
         self,
