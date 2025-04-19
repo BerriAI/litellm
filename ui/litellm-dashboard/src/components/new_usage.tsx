@@ -250,7 +250,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     fetchUserSpendData();
   }, [accessToken, dateValue]);
 
-  const modelMetrics = processActivityData(userSpendData);
+  const modelMetrics = processActivityData(userSpendData, "models");
 
   return (
     <div style={{ width: "100%" }} className="p-8">

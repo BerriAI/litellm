@@ -82,8 +82,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   });
 
-  const modelMetrics = processActivityData(spendData);
-
+  const modelMetrics = processActivityData(spendData, "models");
+  const keyMetrics = processActivityData(spendData, "api_keys");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
@@ -311,7 +311,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
-          <Tab>Activity</Tab>
+          <Tab>Model Activity</Tab>
+          <Tab>Key Activity</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -522,6 +523,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </TabPanel>
           <TabPanel>
           <ActivityMetrics modelMetrics={modelMetrics} />
+          </TabPanel>
+          <TabPanel>
+          <ActivityMetrics modelMetrics={keyMetrics} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

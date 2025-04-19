@@ -35,6 +35,7 @@ export interface KeyMetricWithMetadata {
 }
 
 export interface ModelActivityData {
+  label: string;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
