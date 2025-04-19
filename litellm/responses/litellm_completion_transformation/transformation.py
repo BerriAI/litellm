@@ -4,9 +4,22 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 from typing import Any, Dict, List, Optional, Union
 
+from openai.types.responses.tool_param import FunctionToolParam
+
+from litellm.caching import InMemoryCache
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesAPISessionElement,
+    SessionHandler,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     Reasoning,
@@ -16,14 +29,24 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponseTextConfig,
 )
-from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+    OutputText,
+)
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
+    Function,
     Message,
     ModelResponse,
-    ModelResponseStream,
     Usage,
 )
+
+########### Initialize Classes used for Responses API  ###########
+TOOL_CALLS_CACHE = InMemoryCache()
+RESPONSES_API_SESSION_HANDLER = SessionHandler()
+########### End of Initialize Classes used for Responses API  ###########
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -44,10 +67,13 @@ class LiteLLMCompletionResponsesConfig:
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
+                previous_response_id=responses_api_request.get("previous_response_id"),
             ),
             "model": model,
             "tool_choice": responses_api_request.get("tool_choice"),
-            "tools": responses_api_request.get("tools"),
+            "tools": LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                responses_api_request.get("tools") or []  # type: ignore
+            ),
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
@@ -56,6 +82,8 @@ class LiteLLMCompletionResponsesConfig:
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
+            # litellm specific params
+            "custom_llm_provider": custom_llm_provider,
         }
 
         # only pass non-None values
@@ -69,13 +97,26 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_input_to_messages(
         input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
-    ) -> List[Union[AllMessageValues, GenericChatCompletionMessage]]:
+        previous_response_id: Optional[str] = None,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
         """
         Transform a Responses API input into a list of messages
         """
-        messages: List[Union[AllMessageValues, GenericChatCompletionMessage]] = []
-
-        # if instructions are provided, add a system message
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
         if responses_api_request.get("instructions"):
             messages.append(
                 LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
@@ -83,21 +124,207 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
-        # if input is a string, add a user message
+        if previous_response_id:
+            previous_response_pairs = (
+                RESPONSES_API_SESSION_HANDLER.get_chain_of_previous_input_output_pairs(
+                    previous_response_id=previous_response_id
+                )
+            )
+            if previous_response_pairs:
+                for previous_response_pair in previous_response_pairs:
+                    chat_completion_input_messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+                        input=previous_response_pair[0],
+                    )
+                    chat_completion_output_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_outputs_to_chat_completion_messages(
+                        responses_api_output=previous_response_pair[1],
+                    )
+
+                    messages.extend(chat_completion_input_messages)
+                    messages.extend(chat_completion_output_messages)
+
+        messages.extend(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+                input=input,
+            )
+        )
+
+        return messages
+
+    @staticmethod
+    def _transform_response_input_param_to_chat_completion_message(
+        input: Union[str, ResponseInputParam],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        Transform a ResponseInputParam into a Chat Completion message
+        """
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
+        tool_call_output_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
+
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             for _input in input:
-                messages.append(
-                    GenericChatCompletionMessage(
-                        role=_input.get("role") or "user",
-                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                            _input.get("content")
-                        ),
-                    )
+                chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                    input_item=_input
                 )
+                if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+                    input_item=_input
+                ):
+                    tool_call_output_messages.extend(chat_completion_messages)
+                else:
+                    messages.extend(chat_completion_messages)
 
+        messages.extend(tool_call_output_messages)
         return messages
+
+    @staticmethod
+    def _ensure_tool_call_output_has_corresponding_tool_call(
+        messages: List[Union[AllMessageValues, GenericChatCompletionMessage]],
+    ) -> bool:
+        """
+        If any tool call output is present, ensure there is a corresponding tool call/tool_use block
+        """
+        for message in messages:
+            if message.get("role") == "tool":
+                return True
+        return False
+
+    @staticmethod
+    def _transform_responses_api_input_item_to_chat_completion_message(
+        input_item: Any,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        Transform a Responses API input item into a Chat Completion message
+
+        - EasyInputMessageParam
+        - Message
+        - ResponseOutputMessageParam
+        - ResponseFileSearchToolCallParam
+        - ResponseComputerToolCallParam
+        - ComputerCallOutput
+        - ResponseFunctionWebSearchParam
+        - ResponseFunctionToolCallParam
+        - FunctionCallOutput
+        - ResponseReasoningItemParam
+        - ItemReference
+        """
+        if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
+            # handle executed tool call results
+            return LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+                tool_call_output=input_item
+            )
+        else:
+            return [
+                GenericChatCompletionMessage(
+                    role=input_item.get("role") or "user",
+                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                        input_item.get("content")
+                    ),
+                )
+            ]
+
+    @staticmethod
+    def _is_input_item_tool_call_output(input_item: Any) -> bool:
+        """
+        Check if the input item is a tool call output
+        """
+        return input_item.get("type") in [
+            "function_call_output",
+            "web_search_call",
+            "computer_call_output",
+        ]
+
+    @staticmethod
+    def _transform_responses_api_tool_call_output_to_chat_completion_message(
+        tool_call_output: Dict[str, Any],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        ChatCompletionToolMessage is used to indicate the output from a tool call
+        """
+        tool_output_message = ChatCompletionToolMessage(
+            role="tool",
+            content=tool_call_output.get("output") or "",
+            tool_call_id=tool_call_output.get("call_id") or "",
+        )
+
+        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
+            key=tool_call_output.get("call_id") or "",
+        )
+        if _tool_use_definition:
+            """
+            Append the tool use definition to the list of messages
+
+
+            Providers like Anthropic require the tool use definition to be included with the tool output
+
+            - Input:
+                {'function':
+                    arguments:'{"command": ["echo","<html>\\n<head>\\n  <title>Hello</title>\\n</head>\\n<body>\\n  <h1>Hi</h1>\\n</body>\\n</html>",">","index.html"]}',
+                    name='shell',
+                    'id': 'toolu_018KFWsEySHjdKZPdUzXpymJ',
+                    'type': 'function'
+                }
+            - Output:
+                {
+                    "id": "toolu_018KFWsEySHjdKZPdUzXpymJ",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
+                        }
+                }
+
+            """
+            function: dict = _tool_use_definition.get("function") or {}
+            tool_call_chunk = ChatCompletionToolCallChunk(
+                id=_tool_use_definition.get("id") or "",
+                type=_tool_use_definition.get("type") or "function",
+                function=ChatCompletionToolCallFunctionChunk(
+                    name=function.get("name") or "",
+                    arguments=function.get("arguments") or "",
+                ),
+                index=0,
+            )
+            chat_completion_response_message = ChatCompletionResponseMessage(
+                tool_calls=[tool_call_chunk],
+                role="assistant",
+            )
+            return [chat_completion_response_message, tool_output_message]
+
+        return [tool_output_message]
 
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
@@ -148,13 +375,74 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
     @staticmethod
+    def transform_responses_api_tools_to_chat_completion_tools(
+        tools: Optional[List[FunctionToolParam]],
+    ) -> List[ChatCompletionToolParam]:
+        """
+        Transform a Responses API tools into a Chat Completion tools
+        """
+        if tools is None:
+            return []
+        chat_completion_tools: List[ChatCompletionToolParam] = []
+        for tool in tools:
+            chat_completion_tools.append(
+                ChatCompletionToolParam(
+                    type="function",
+                    function=ChatCompletionToolParamFunctionChunk(
+                        name=tool["name"],
+                        description=tool.get("description") or "",
+                        parameters=tool.get("parameters", {}),
+                        strict=tool.get("strict", None),
+                    ),
+                )
+            )
+        return chat_completion_tools
+
+    @staticmethod
+    def transform_chat_completion_tools_to_responses_tools(
+        chat_completion_response: ModelResponse,
+    ) -> List[OutputFunctionToolCall]:
+        """
+        Transform a Chat Completion tools into a Responses API tools
+        """
+        import json
+
+        all_chat_completion_tools: List[ChatCompletionMessageToolCall] = []
+        for choice in chat_completion_response.choices:
+            if isinstance(choice, Choices):
+                if choice.message.tool_calls:
+                    all_chat_completion_tools.extend(choice.message.tool_calls)
+                    for tool_call in choice.message.tool_calls:
+                        TOOL_CALLS_CACHE.set_cache(
+                            key=tool_call.id,
+                            value=tool_call,
+                        )
+
+        responses_tools: List[OutputFunctionToolCall] = []
+        for tool in all_chat_completion_tools:
+            if tool.type == "function":
+                function_definition = tool.function
+                responses_tools.append(
+                    OutputFunctionToolCall(
+                        name=function_definition.name or "",
+                        arguments=function_definition.get("arguments") or "",
+                        call_id=tool.id or "",
+                        type="function_call",  # critical this is "function_call" to work with tools like openai codex
+                        status=function_definition.get("status") or "completed",
+                    )
+                )
+        return responses_tools
+
+    @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
+        request_input: Union[str, ResponseInputParam],
+        responses_api_request: ResponsesAPIOptionalRequestParams,
         chat_completion_response: ModelResponse,
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
         """
-        return ResponsesAPIResponse(
+        responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
@@ -192,12 +480,25 @@ class LiteLLMCompletionResponsesConfig:
             user=getattr(chat_completion_response, "user", None),
         )
 
+        RESPONSES_API_SESSION_HANDLER.add_completed_response_to_cache(
+            response_id=responses_api_response.id,
+            session_element=ResponsesAPISessionElement(
+                input=request_input,
+                output=responses_api_response,
+                response_id=responses_api_response.id,
+                previous_response_id=responses_api_request.get("previous_response_id"),
+            ),
+        )
+        return responses_api_response
+
     @staticmethod
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[GenericResponseOutputItem]:
-        responses_output: List[GenericResponseOutputItem] = []
+    ) -> List[Union[GenericResponseOutputItem, OutputFunctionToolCall]]:
+        responses_output: List[
+            Union[GenericResponseOutputItem, OutputFunctionToolCall]
+        ] = []
         for choice in choices:
             responses_output.append(
                 GenericResponseOutputItem(
@@ -212,7 +513,64 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
             )
+
+        tool_calls = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response
+        )
+        responses_output.extend(tool_calls)
         return responses_output
+
+    @staticmethod
+    def _transform_responses_api_outputs_to_chat_completion_messages(
+        responses_api_output: ResponsesAPIResponse,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ]
+    ]:
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+            ]
+        ] = []
+        output_items = responses_api_output.output
+        for output_item in output_items:
+            output_item = dict(output_item)
+            if output_item.get("type") == "function_call":
+                # handle function call output
+                messages.append(
+                    LiteLLMCompletionResponsesConfig._transform_responses_output_tool_call_to_chat_completion_output_tool_call(
+                        tool_call=output_item
+                    )
+                )
+            else:
+                # transform as generic ResponseOutputItem
+                messages.append(
+                    GenericChatCompletionMessage(
+                        role=str(output_item.get("role")) or "user",
+                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            output_item.get("content")
+                        ),
+                    )
+                )
+        return messages
+
+    @staticmethod
+    def _transform_responses_output_tool_call_to_chat_completion_output_tool_call(
+        tool_call: dict,
+    ) -> ChatCompletionMessageToolCall:
+        return ChatCompletionMessageToolCall(
+            id=tool_call.get("id") or "",
+            type="function",
+            function=Function(
+                name=tool_call.get("name") or "",
+                arguments=tool_call.get("arguments") or "",
+            ),
+        )
 
     @staticmethod
     def _transform_chat_message_to_response_output_text(
