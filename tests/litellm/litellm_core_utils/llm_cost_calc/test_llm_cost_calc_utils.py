@@ -26,6 +26,47 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.types.utils import Usage
 
 
+def test_reasoning_tokens_no_price_set():
+    model = "o1-mini"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model_cost_map = litellm.model_cost[model]
+    usage = Usage(
+        completion_tokens=1578,
+        prompt_tokens=17,
+        total_tokens=1595,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=952,
+            rejected_prediction_tokens=None,
+            text_tokens=626,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=None, text_tokens=17, image_tokens=None
+        ),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
+        10,
+    )
+    print(f"completion_cost: {completion_cost}")
+    expected_completion_cost = (
+        model_cost_map["output_cost_per_token"] * usage.completion_tokens
+    )
+    print(f"expected_completion_cost: {expected_completion_cost}")
+    assert round(completion_cost, 10) == round(
+        expected_completion_cost,
+        10,
+    )
+
+
 def test_reasoning_tokens_gemini():
     model = "gemini-2.5-flash-preview-04-17"
     custom_llm_provider = "gemini"

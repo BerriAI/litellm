@@ -587,14 +587,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _content_str += "data:{};base64,{}".format(
                     part["inlineData"]["mimeType"], part["inlineData"]["data"]
                 )
-            if part.get("thought") is True:
-                if reasoning_content_str is None:
-                    reasoning_content_str = ""
-                reasoning_content_str += _content_str
-            else:
-                if content_str is None:
-                    content_str = ""
-                content_str += _content_str
+            if len(_content_str) > 0:
+                if part.get("thought") is True:
+                    if reasoning_content_str is None:
+                        reasoning_content_str = ""
+                    reasoning_content_str += _content_str
+                else:
+                    if content_str is None:
+                        content_str = ""
+                    content_str += _content_str
 
         return content_str, reasoning_content_str
 
