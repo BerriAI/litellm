@@ -395,7 +395,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           index="metadata.alias"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
-                          valueFormatter={(value) => `$${value.toFixed(7)}`}
+                          valueFormatter={(value) => `$${value.toFixed(4)}`}
                           layout="vertical"
                           showLegend={false}
                           yAxisWidth={100}
@@ -418,7 +418,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                               .map((entity) => (
                                 <TableRow key={entity.metadata.id}>
                                   <TableCell>{entity.metadata.alias}</TableCell>
-                                  <TableCell>${entity.metrics.spend.toFixed(7)}</TableCell>
+                                  <TableCell>${entity.metrics.spend.toFixed(4)}</TableCell>
                                   <TableCell className="text-green-600">
                                     {entity.metrics.successful_requests.toLocaleString()}
                                   </TableCell>
