@@ -57,53 +57,66 @@ class SensitiveDataFilter(logging.Filter):
     ]
 
     def filter(self, record):
-        if not hasattr(record, "msg") or not record.msg:
+        try:
+            if not hasattr(record, "msg") or not record.msg:
+                return True
+
+            # If the message is a format string with args, we need to format it first
+            if record.args:
+                msg = record.msg % record.args
+            else:
+                msg = str(record.msg)
+
+            # Redact sensitive information
+            for key in self.SENSITIVE_KEYS:
+                # Create patterns for compound keys (e.g., openai_api_key)
+                key_pattern = f"[a-zA-Z0-9_/\\\\-]*{key}[a-zA-Z0-9_/\\\\-]*"
+
+                # Handle JSON-like strings with double quotes
+                json_pattern = f'"({key_pattern})":\\s*"[^"]*"'
+                msg = re.sub(
+                    json_pattern, r'"\1": "REDACTED"', msg, flags=re.IGNORECASE
+                )
+
+                # Handle dictionary-like strings with single quotes
+                dict_pattern = f"'({key_pattern})':\\s*'[^']*'"
+                msg = re.sub(
+                    dict_pattern, r"'\1': 'REDACTED'", msg, flags=re.IGNORECASE
+                )
+
+                # Handle mixed quote styles
+                mixed_pattern = f"\"({key_pattern})\":\\s*'[^']*'"
+                msg = re.sub(
+                    mixed_pattern, r'"\1": \'REDACTED\'', msg, flags=re.IGNORECASE
+                )
+
+                # Handle key-value pairs in plain text
+                # Convert snake_case and special characters to flexible matching
+                display_key = key.replace("_", "[-_ ]")
+                # Match both original and display versions of the key, preserving the separator and spacing
+                plain_pattern = (
+                    f"\\b({key_pattern}|{display_key})\\s*([:=])\\s*[^,\\s][^,]*"
+                )
+                msg = re.sub(
+                    plain_pattern,
+                    lambda m: f"{m.group(1)}{m.group(2)}{' ' if m.group(2) == ':' else ''}REDACTED",
+                    msg,
+                    flags=re.IGNORECASE,
+                )
+
+                # Handle mixed quotes without escaping
+                msg = msg.replace('\\"', '"').replace("\\'", "'")
+
+            # Set the message and clear args since we've already formatted it
+            record.msg = msg
+            record.args = None
             return True
-
-        # If the message is a format string with args, we need to format it first
-        if record.args:
-            msg = record.msg % record.args
-        else:
-            msg = str(record.msg)
-
-        # Redact sensitive information
-        for key in self.SENSITIVE_KEYS:
-            # Create patterns for compound keys (e.g., openai_api_key)
-            key_pattern = f"[a-zA-Z0-9_/\\\\-]*{key}[a-zA-Z0-9_/\\\\-]*"
-
-            # Handle JSON-like strings with double quotes
-            json_pattern = f'"({key_pattern})":\\s*"[^"]*"'
-            msg = re.sub(json_pattern, r'"\1": "REDACTED"', msg, flags=re.IGNORECASE)
-
-            # Handle dictionary-like strings with single quotes
-            dict_pattern = f"'({key_pattern})':\\s*'[^']*'"
-            msg = re.sub(dict_pattern, r"'\1': 'REDACTED'", msg, flags=re.IGNORECASE)
-
-            # Handle mixed quote styles
-            mixed_pattern = f"\"({key_pattern})\":\\s*'[^']*'"
-            msg = re.sub(mixed_pattern, r'"\1": \'REDACTED\'', msg, flags=re.IGNORECASE)
-
-            # Handle key-value pairs in plain text
-            # Convert snake_case and special characters to flexible matching
-            display_key = key.replace("_", "[-_ ]")
-            # Match both original and display versions of the key, preserving the separator and spacing
-            plain_pattern = (
-                f"\\b({key_pattern}|{display_key})\\s*([:=])\\s*[^,\\s][^,]*"
+        except Exception as e:
+            # If any error occurs during filtering, log the error and continue
+            logging.getLogger("litellm").error(
+                f"Error in SensitiveDataFilter: {str(e)}"
             )
-            msg = re.sub(
-                plain_pattern,
-                lambda m: f"{m.group(1)}{m.group(2)}{' ' if m.group(2) == ':' else ''}REDACTED",
-                msg,
-                flags=re.IGNORECASE,
-            )
-
-            # Handle mixed quotes without escaping
-            msg = msg.replace('\\"', '"').replace("\\'", "'")
-
-        # Set the message and clear args since we've already formatted it
-        record.msg = msg
-        record.args = None
-        return True
+            return True
 
 
 # Function to set up exception handlers for JSON logging
@@ -236,3 +249,36 @@ def _is_debugging_on() -> bool:
     if verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True:
         return True
     return False
+
+
+class ResilientLogger(logging.Logger):
+    """A logger that continues to work even if filters fail"""
+
+    def handle(self, record):
+        """
+        Handle a record by passing it to all handlers.
+        If a filter fails, log the error and continue.
+        """
+        if self.disabled:
+            return
+
+        # Try to filter the record
+        try:
+            if not self.filter(record):
+                return
+        except Exception as e:
+            # If filter fails, log the error and continue
+            logging.getLogger("litellm").error(f"Filter failed: {str(e)}")
+
+        # If we get here, either filtering passed or failed gracefully
+        # Now pass to handlers
+        for handler in self.handlers:
+            try:
+                if handler.filter(record):
+                    handler.handle(record)
+            except Exception as e:
+                logging.getLogger("litellm").error(f"Handler failed: {str(e)}")
+
+
+# Replace the default logger class with our resilient one
+logging.setLoggerClass(ResilientLogger)

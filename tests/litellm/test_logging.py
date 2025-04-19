@@ -194,3 +194,27 @@ def test_sensitive_data_filter_with_format_strings():
         assert (
             record.msg == test_case["expected"]
         ), f"Failed for input: {test_case['input']} with args: {test_case['args']}"
+
+
+def test_sensitive_data_filter_reliability():
+    # Create a test logger
+    logger = logging.getLogger("test_logger")
+    logger.setLevel(logging.DEBUG)
+
+    # Create a SensitiveDataFilter and break its regex pattern to cause failure
+    sensitive_filter = SensitiveDataFilter()
+    sensitive_filter.SENSITIVE_KEYS = [
+        ")"
+    ]  # Invalid regex pattern that will cause failure
+
+    # Add the filter
+    logger.addFilter(sensitive_filter)
+
+    # Try to log a message - this should not raise an exception
+    try:
+        logger.debug("Test message with sensitive data: api_key=sk-1234567890")
+    except Exception as e:
+        pytest.fail(f"Logging failed with exception: {str(e)}")
+
+    # Clean up
+    logger.removeFilter(sensitive_filter)
