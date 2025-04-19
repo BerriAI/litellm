@@ -108,7 +108,8 @@ class TestProxyInitializationHelpers:
             args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
                 "localhost", 8000
             )
-            assert args["log_config"] is None
+            assert args["log_config"]["formatters"]["default"]["()"] == "litellm.proxy.json_logging.JsonFormatter"
+            assert args["log_config"]["formatters"]["access"]["()"] == "litellm.proxy.json_logging.AccessJsonFormatter"
 
     @patch("asyncio.run")
     @patch("builtins.print")
