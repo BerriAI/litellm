@@ -581,7 +581,7 @@ class LiteLLMCompletionResponsesConfig:
             type="output_text",
             text=message.content,
             annotations=LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=message.annotations
+                annotations=getattr(message, "annotations", None)
             ),
         )
 
