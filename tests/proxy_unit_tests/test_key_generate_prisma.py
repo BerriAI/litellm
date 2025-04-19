@@ -1581,7 +1581,7 @@ def test_call_with_key_over_budget(prisma_client):
             assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
@@ -1705,7 +1705,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
