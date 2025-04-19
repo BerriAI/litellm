@@ -23,14 +23,14 @@ Install the OpenAI Codex CLI tool globally using npm:
 <Tabs>
 <TabItem value="npm" label="npm">
 
-```bash
+```bash showLineNumbers
 npm i -g @openai/codex
 ```
 
 </TabItem>
 <TabItem value="yarn" label="yarn">
 
-```bash
+```bash showLineNumbers
 yarn global add @openai/codex
 ```
 
@@ -42,7 +42,7 @@ yarn global add @openai/codex
 <Tabs>
 <TabItem value="docker" label="Docker">
 
-```bash
+```bash showLineNumbers
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
     -p 4000:4000 \
@@ -53,7 +53,7 @@ docker run \
 </TabItem>
 <TabItem value="pip" label="LiteLLM CLI">
 
-```bash
+```bash showLineNumbers
 litellm --config /path/to/config.yaml
 ```
 
@@ -66,7 +66,7 @@ LiteLLM should now be running on [http://localhost:4000](http://localhost:4000)
 
 Ensure your LiteLLM Proxy is properly configured to route to your desired models. Create a `litellm_config.yaml` file with the following content:
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: o3-mini
     litellm_params:
@@ -103,7 +103,7 @@ export OPENAI_API_KEY="sk-1234"
 
 With everything configured, you can now run Codex with Gemini:
 
-```bash
+```bash showLineNumbers
 codex --model gemini-flash --full-auto
 ```
 
