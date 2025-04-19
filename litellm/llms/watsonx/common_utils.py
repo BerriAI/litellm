@@ -114,10 +114,10 @@ def _get_api_params(
             or get_secret_str("SPACE_ID")
         )
 
-    if project_id is None:
+    if project_id is None and space_id is None:
         raise WatsonXAIError(
             status_code=401,
-            message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
+            message="Error: At least one of project_id or space_id must be set. Set WX_PROJECT_ID or WX_SPACE_ID in environment variables or pass in as a parameter.",
         )
 
     return WatsonXAPIParams(
@@ -279,13 +279,13 @@ class IBMWatsonXMixin:
 
     def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
         payload: dict = {}
+        payload["space_id"] = api_params["space_id"]
         if model.startswith("deployment/"):
             if api_params["space_id"] is None:
                 raise WatsonXAIError(
                     status_code=401,
                     message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
                 )
-            payload["space_id"] = api_params["space_id"]
             return payload
         payload["model_id"] = model
         payload["project_id"] = api_params["project_id"]
