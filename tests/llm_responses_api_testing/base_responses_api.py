@@ -133,7 +133,7 @@ class BaseResponsesAPITest(ABC):
         validate_responses_api_response(response, final_chunk=True)
 
 
-    @pytest.mark.parametrize("sync_mode", [True])
+    @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
@@ -177,6 +177,15 @@ class BaseResponsesAPITest(ABC):
 
         # assert the response completed event includes the usage
         assert response_completed_event.response.usage is not None
+
+        # basic test assert the usage seems reasonable
+        print("response_completed_event.response.usage=", response_completed_event.response.usage)
+        assert response_completed_event.response.usage.input_tokens > 0 and response_completed_event.response.usage.input_tokens < 100
+        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 100
+        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 1000
+
+        # total tokens should be the sum of input and output tokens
+        assert response_completed_event.response.usage.total_tokens == response_completed_event.response.usage.input_tokens + response_completed_event.response.usage.output_tokens
 
 
 
