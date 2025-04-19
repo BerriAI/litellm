@@ -95,17 +95,19 @@ export async function makeOpenAIResponsesRequest(
           }
         }
         
-        // Handle usage data at the end
-        if (event.type === "response.end" && 'usage' in event) {
-          const usage = event.usage;
+        // Handle usage data at the response.completed event
+        if (event.type === "response.completed" && 'response' in event) {
+          const response_obj = event.response;
+          const usage = response_obj.usage;
+          console.log("Usage data:", usage);
           if (usage && onUsageData) {
             console.log("Usage data:", usage);
             
             // Extract usage data safely
             const usageData: TokenUsage = {
-              completionTokens: typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0,
-              promptTokens: typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0,
-              totalTokens: typeof usage.total_tokens === 'number' ? usage.total_tokens : 0
+              completionTokens: usage.output_tokens,
+              promptTokens: usage.input_tokens,
+              totalTokens: usage.total_tokens
             };
             
             // Add reasoning tokens if available
