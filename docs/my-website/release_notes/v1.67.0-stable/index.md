@@ -27,7 +27,7 @@ hide_table_of_contents: false
 - **Anthropic**
     1. redacted message thinking support - [Get Started](../../docs/providers/anthropic#usage---thinking--reasoning_content),[PR](https://github.com/BerriAI/litellm/pull/10129)
 - **Cohere**
-    1. `/v2/chat` Passthrough endpoint support w/ cost tracking - [ADD DOCS HERE], [PR](https://github.com/BerriAI/litellm/pull/9997)
+    1. `/v2/chat` Passthrough endpoint support w/ cost tracking - [Get Started](../../docs/pass_through/cohere), [PR](https://github.com/BerriAI/litellm/pull/9997)
 - **Azure**
     1. Support azure tenant_id/client_id env vars - [Get Started](../../docs/providers/azure#entra-id---use-tenant_id-client_id-client_secret), [PR](https://github.com/BerriAI/litellm/pull/9993)
     2. Fix response_format check for 2025+ api versions - [PR](https://github.com/BerriAI/litellm/pull/9993)
