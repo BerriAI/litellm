@@ -39,6 +39,7 @@ class KeyMetadata(BaseModel):
     """Metadata for a key"""
 
     key_alias: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class KeyMetricWithMetadata(MetricBase):
