@@ -26,6 +26,7 @@ import {
 import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -297,7 +298,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     try {
       if (selectedModel) {
-        // Use EndpointType enum for comparison
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -322,6 +322,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal
+          );
+        } else if (endpointType === EndpointType.RESPONSES) {
+          // Create chat history for API call - strip out model field and isImage field
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          
+          await makeOpenAIResponsesRequest(
+            apiChatHistory,
+            (chunk, model) => updateTextUI("assistant", chunk, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData
           );
         }
       }
