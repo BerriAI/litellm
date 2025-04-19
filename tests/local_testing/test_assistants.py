@@ -236,11 +236,18 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
     """
     import openai
 
+
+
     try:
+        get_assistants_data = {
+            "custom_llm_provider": provider,
+        }
+        if provider == "azure":
+            get_assistants_data = _add_azure_related_dynamic_params(get_assistants_data)
         if sync_mode:
-            assistants = litellm.get_assistants(custom_llm_provider=provider)
+            assistants = litellm.get_assistants(**get_assistants_data)
         else:
-            assistants = await litellm.aget_assistants(custom_llm_provider=provider)
+            assistants = await litellm.aget_assistants(**get_assistants_data)
 
         ## get the first assistant ###
         try:
