@@ -358,20 +358,45 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
               {/* Daily Spend Chart */}
               <Col numColSpan={2}>
-                <Card>
-                  <Title>Daily Spend</Title>
-                  <BarChart
-                    data={[...spendData.results].sort((a, b) => 
-                      new Date(a.date).getTime() - new Date(b.date).getTime()
-                    )}
-                    index="date"
-                    categories={["metrics.spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
-                    yAxisWidth={100}
-                    showLegend={false}
-                  />
-                </Card>
+              <Card>
+                        <Title>Daily Spend</Title>
+                        <BarChart
+                          data={[...spendData.results].sort((a, b) => 
+                            new Date(a.date).getTime() - new Date(b.date).getTime()
+                          )}
+                          index="date"
+                          categories={["metrics.spend"]}
+                          colors={["cyan"]}
+                          valueFormatter={(value) => `$${value.toFixed(2)}`}
+                          yAxisWidth={100}
+                          showLegend={false}
+                          customTooltip={({ payload, active }) => {
+                            if (!active || !payload?.[0]) return null;
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                <p className="font-bold">{data.date}</p>
+                                <p className="text-cyan-500">Total Spend: ${data.metrics.spend.toFixed(2)}</p>
+                                <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
+                                <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
+                                <div className="mt-2 border-t pt-2">
+                                  <p className="font-semibold">Spend by {entityType === 'tag' ? 'Tag' : 'Team'}:</p>
+                                  {Object.entries(data.breakdown.entities || {}).map(([entity, entityData]) => {
+                                    const metrics = entityData as EntityMetrics;
+                                    return (
+                                      <p key={entity} className="text-sm text-gray-600">
+                                        {metrics.metadata.team_alias || entity}: ${metrics.metrics.spend.toFixed(2)}
+                                      </p>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          }}
+                        />
+                      </Card>
               </Col>
 
               {/* Entity Breakdown Section */}
