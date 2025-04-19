@@ -385,7 +385,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_param: AnthropicThinkingParam,
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
-        thinking_budget = thinking_param.get("budgetTokens")
+        thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
         if thinking_enabled:
