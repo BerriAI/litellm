@@ -239,3 +239,23 @@ def test_vertex_ai_thinking_output_part():
     content, reasoning_content = v.get_assistant_content_message(parts=parts)
     assert content == "Hello world"
     assert reasoning_content == "I'm thinking..."
+
+
+def test_vertex_ai_empty_content():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "arguments": "{}",
+            },
+        ),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content is None
+    assert reasoning_content is None
