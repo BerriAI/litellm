@@ -111,7 +111,7 @@ export OPENAI_API_KEY="sk-1234"
 With everything configured, you can now run Codex with Gemini:
 
 ```bash showLineNumbers
-codex --model gemini-flash --full-auto
+codex --model gemini-2.0-flash --full-auto
 ```
 
 <Image img={require('../../img/litellm_codex.gif')} />
