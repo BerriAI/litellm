@@ -39,7 +39,7 @@ pip install openai==0.28.01
 
 **Step 3: Set OpenAI API Base & Key**
 ```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
+$ export OPENAI_BASE_URL=http://0.0.0.0:8000
 ```
 
 LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for running benchmarks
@@ -74,7 +74,7 @@ $ litellm --model huggingface/bigcode/starcoder
 
 **Step 2: Set OpenAI API Base & Key**
 ```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
+$ export OPENAI_BASE_URL=http://0.0.0.0:8000
 ```
 
 Set this to anything since the proxy has the credentials
@@ -93,12 +93,12 @@ cd FastEval
 
 **Set API Base on FastEval**
 
-On FastEval make the following **2 line code change** to set `OPENAI_API_BASE`
+On FastEval make the following **2 line code change** to set `OPENAI_BASE_URL`
 
 https://github.com/FastEval/FastEval/pull/90/files
 ```python
 try:
-    api_base = os.environ["OPENAI_API_BASE"] #changed: read api base from .env
+    api_base = os.environ["OPENAI_BASE_URL"] #changed: read api base from .env
     if api_base == None:
         api_base = "https://api.openai.com/v1"
     response = await self.reply_two_attempts_with_different_max_new_tokens(
@@ -130,7 +130,7 @@ $ litellm --model huggingface/bigcode/starcoder
 
 **Step 2: Set OpenAI API Base & Key**
 ```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
+$ export OPENAI_BASE_URL=http://0.0.0.0:8000
 ```
 
 **Step 3 Run with FLASK** 
