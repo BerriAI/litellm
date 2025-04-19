@@ -443,6 +443,7 @@ const sidebars = {
       label: "Tutorials",
       items: [
         "tutorials/openweb_ui",
+        "tutorials/openai_codex",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",

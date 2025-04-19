@@ -1,6 +1,13 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: openai/*
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: openai/*
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+litellm_settings:
+  drop_params: true
+      
