@@ -685,7 +685,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Form.Item label={
                     <span>
                       Models{' '}
-                      <Tooltip title="These are the models that your selected organization has access to">
+                      <Tooltip title="These are the models that your selected team has access to">
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
