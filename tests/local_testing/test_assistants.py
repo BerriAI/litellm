@@ -71,7 +71,7 @@ async def test_create_delete_assistants(provider, sync_mode):
     model = "gpt-4-turbo"
     if provider == "azure":
         os.environ["AZURE_API_VERSION"] = "2024-05-01-preview"
-        model = "chatgpt-v-2"
+        model = "chatgpt-v-3"
 
     if sync_mode == True:
         assistant = litellm.create_assistants(

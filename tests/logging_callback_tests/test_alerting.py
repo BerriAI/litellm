@@ -56,7 +56,7 @@ def test_get_api_base_unit_test(model, optional_params, expected_api_base):
 async def test_get_api_base():
     _pl = ProxyLogging(user_api_key_cache=DualCache())
     _pl.update_values(alerting=["slack"], alerting_threshold=100, redis_cache=None)
-    model = "chatgpt-v-2"
+    model = "chatgpt-v-3"
     messages = [{"role": "user", "content": "Hey how's it going?"}]
     litellm_params = {
         "acompletion": True,
