@@ -2,7 +2,7 @@ from typing import Literal
 
 from typing_extensions import Any, List, Optional, TypedDict
 
-from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):

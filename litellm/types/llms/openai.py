@@ -53,6 +53,7 @@ from openai.types.responses.response_function_tool_call import ResponseFunctionT
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputFunctionToolCall,
@@ -909,20 +910,6 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
     input: Union[str, ResponseInputParam]
     model: str
-
-
-class BaseLiteLLMOpenAIResponseObject(BaseModel):
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-    def items(self):
-        return self.__dict__.items()
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
