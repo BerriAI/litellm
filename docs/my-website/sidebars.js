@@ -447,6 +447,7 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/scim_litellm",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",
