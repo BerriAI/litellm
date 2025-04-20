@@ -15,6 +15,9 @@ authors:
 tags: ["sso", "unified_file_id", "cost_tracking", "security"]
 hide_table_of_contents: false
 ---
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 ## New Models / Updated Models
 
@@ -65,25 +68,31 @@ hide_table_of_contents: false
 - **Virtual Keys**
     1. Filter by key alias - https://github.com/BerriAI/litellm/pull/10085
 - **Usage Tab**
-    [ADD IMAGE/GIF HERE]
+
     1. Team based usage
-        1. New `LiteLLM_DailyTeamSpend` Table for aggregate team based usage logging - [PR](https://github.com/BerriAI/litellm/pull/10039)
-        2. New Team based usage dashboard + new `/team/daily/activity` API - [PR](https://github.com/BerriAI/litellm/pull/10081)
-        3. Return team alias on /team/daily/activity API - [PR](https://github.com/BerriAI/litellm/pull/10157)
-        4. allow internal user view spend for teams they belong to - [PR](https://github.com/BerriAI/litellm/pull/10157)
-        5. allow viewing top keys by team
+        
+        - New `LiteLLM_DailyTeamSpend` Table for aggregate team based usage logging - [PR](https://github.com/BerriAI/litellm/pull/10039)
+        
+        - New Team based usage dashboard + new `/team/daily/activity` API - [PR](https://github.com/BerriAI/litellm/pull/10081)
+        - Return team alias on /team/daily/activity API - [PR](https://github.com/BerriAI/litellm/pull/10157)
+        - allow internal user view spend for teams they belong to - [PR](https://github.com/BerriAI/litellm/pull/10157)
+        - allow viewing top keys by team - [PR](https://github.com/BerriAI/litellm/pull/10157)
+
+        <Image img={require('../../img/release_notes/new_team_usage.png')}/>
+
     2. Tag Based Usage
-        1. New `LiteLLM_DailyTagSpend` Table for aggregate tag based usage logging - [PR](https://github.com/BerriAI/litellm/pull/10071)
-        2. Restrict to only Proxy Admins - [PR](https://github.com/BerriAI/litellm/pull/10157)
-        3. allow viewing top keys by tag
-        4. Return tags passed in request (i.e. dynamic tags) on `/tag/list` 
-    3. Track prompt caching metrics in daily user, team, tag tables - https://github.com/BerriAI/litellm/pull/10029
-    4. Show usage by key (on all up, team, and tag usage dashboards) - https://github.com/BerriAI/litellm/pull/10157
+        - New `LiteLLM_DailyTagSpend` Table for aggregate tag based usage logging - [PR](https://github.com/BerriAI/litellm/pull/10071)
+        - Restrict to only Proxy Admins - [PR](https://github.com/BerriAI/litellm/pull/10157)
+        - allow viewing top keys by tag
+        - Return tags passed in request (i.e. dynamic tags) on `/tag/list` API - [PR](https://github.com/BerriAI/litellm/pull/10157)
+        <Image img={require('../../img/release_notes/new_tag_usage.png')}/>
+    3. Track prompt caching metrics in daily user, team, tag tables - [PR](https://github.com/BerriAI/litellm/pull/10029)
+    4. Show usage by key (on all up, team, and tag usage dashboards) - [PR](https://github.com/BerriAI/litellm/pull/10157)
     5. swap old usage with new usage tab
 - **Models**
-    1. Make columns resizable/hideable - https://github.com/BerriAI/litellm/pull/10119
+    1. Make columns resizable/hideable - [PR](https://github.com/BerriAI/litellm/pull/10119)
 - **API Playground**
-    1. Allow internal user to call api playground - https://github.com/BerriAI/litellm/pull/10157
+    1. Allow internal user to call api playground - [PR](https://github.com/BerriAI/litellm/pull/10157)
 - **SCIM**
     1. Add LiteLLM SCIM Integration for Team and User management - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/10072)
 
@@ -99,7 +108,7 @@ hide_table_of_contents: false
 ## General Proxy Improvements
 
 - **Support setting `litellm.modify_params` via env var** [PR](https://github.com/BerriAI/litellm/pull/9964)
-- **Model Discovery** - Check provider’s `/models` endpoints when calling proxy’s `/v1/models` endpoint - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/9958)
+- **Model Discovery** - Check provider’s `/models` endpoints when calling proxy’s `/v1/models` endpoint - [Get Started](../../docs/proxy/model_discovery), [PR](https://github.com/BerriAI/litellm/pull/9958)
 - **`/utils/token_counter`** - fix retrieving custom tokenizer for db models - [Get Started](../../docs/proxy/configs#set-custom-tokenizer), [PR](https://github.com/BerriAI/litellm/pull/10047)
 - **Prisma migrate** - handle existing columns in db table - [PR](https://github.com/BerriAI/litellm/pull/10138)
 
