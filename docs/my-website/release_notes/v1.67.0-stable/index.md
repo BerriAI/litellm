@@ -116,7 +116,7 @@ This release improves team and tag based usage tracking at 1m+ spend logs, makin
 - **API Playground**
     1. Allow internal user to call api playground - [PR](https://github.com/BerriAI/litellm/pull/10157)
 - **SCIM**
-    1. Add LiteLLM SCIM Integration for Team and User management - [Get Started](ADD DOCS HERE), [PR](https://github.com/BerriAI/litellm/pull/10072)
+    1. Add LiteLLM SCIM Integration for Team and User management - [Get Started](../../docs/tutorials/scim_litellm), [PR](https://github.com/BerriAI/litellm/pull/10072)
 
 
 ## Logging / Guardrail Integrations
