@@ -892,6 +892,19 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
 
 
+class ComputerToolParam(TypedDict, total=False):
+    display_height: Required[float]
+    """The height of the computer display."""
+
+    display_width: Required[float]
+    """The width of the computer display."""
+
+    environment: Required[Union[Literal["mac", "windows", "ubuntu", "browser"], str]]
+    """The type of computer environment to control."""
+
+    type: Required[Union[Literal["computer_use_preview"], str]]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -907,7 +920,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
     tool_choice: Optional[ToolChoice]
-    tools: Optional[List[ToolParam]]
+    tools: Optional[List[Union[ToolParam, ComputerToolParam]]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]

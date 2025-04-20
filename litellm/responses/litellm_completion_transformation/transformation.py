@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 from openai.types.responses.tool_param import FunctionToolParam
 
 from litellm.caching import InMemoryCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesAPISessionElement,
     SessionHandler,
@@ -52,6 +53,26 @@ RESPONSES_API_SESSION_HANDLER = SessionHandler()
 
 
 class LiteLLMCompletionResponsesConfig:
+    @staticmethod
+    def get_supported_openai_params(model: str) -> list:
+        """
+        LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
+        """
+        return [
+            "input",
+            "model",
+            "instructions",
+            "max_output_tokens",
+            "metadata",
+            "parallel_tool_calls",
+            "previous_response_id",
+            "stream",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p",
+            "user",
+        ]
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -87,6 +108,18 @@ class LiteLLMCompletionResponsesConfig:
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
         }
+
+        # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
+        if stream is True:
+            stream_options = {
+                "include_usage": True,
+            }
+            litellm_completion_request["stream_options"] = stream_options
+            litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+                "litellm_logging_obj"
+            )
+            if litellm_logging_obj:
+                litellm_logging_obj.stream_options = stream_options
 
         # only pass non-None values
         litellm_completion_request = {
