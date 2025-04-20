@@ -216,6 +216,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 _message_content = assistant_msg.get("content", None)
+                reasoning_content = assistant_msg.get("reasoning_content", None)
+                if reasoning_content is not None:
+                    assistant_content.append(
+                        PartType(thought=True, text=reasoning_content)
+                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -223,6 +228,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+
                     assistant_content.extend(_parts)
                 elif (
                     _message_content is not None
