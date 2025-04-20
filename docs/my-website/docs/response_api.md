@@ -24,7 +24,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 <TabItem value="openai" label="OpenAI">
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="OpenAI Non-streaming Response"
 import litellm
 
 # Non-streaming response
@@ -38,7 +38,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="OpenAI Streaming Response"
 import litellm
 
 # Streaming response
@@ -57,7 +57,7 @@ for event in response:
 <TabItem value="anthropic" label="Anthropic">
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Anthropic Non-streaming Response"
 import litellm
 import os
 
@@ -75,7 +75,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Anthropic Streaming Response"
 import litellm
 import os
 
@@ -98,7 +98,7 @@ for event in response:
 <TabItem value="vertex" label="Vertex AI">
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Vertex AI Non-streaming Response"
 import litellm
 import os
 
@@ -118,7 +118,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Vertex AI Streaming Response"
 import litellm
 import os
 
@@ -143,7 +143,7 @@ for event in response:
 <TabItem value="bedrock" label="AWS Bedrock">
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="AWS Bedrock Non-streaming Response"
 import litellm
 import os
 
@@ -163,7 +163,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="AWS Bedrock Streaming Response"
 import litellm
 import os
 
@@ -188,7 +188,7 @@ for event in response:
 <TabItem value="gemini" label="Google AI Studio">
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Google AI Studio Non-streaming Response"
 import litellm
 import os
 
@@ -206,7 +206,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Google AI Studio Streaming Response"
 import litellm
 import os
 
@@ -231,7 +231,7 @@ for event in response:
 
 First, set up and start your LiteLLM proxy server.
 
-```bash
+```bash title="Start LiteLLM Proxy Server"
 litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
@@ -241,7 +241,7 @@ litellm --config /path/to/config.yaml
 <TabItem value="openai" label="OpenAI">
 
 First, add this to your litellm proxy config.yaml:
-```yaml showLineNumbers
+```yaml showLineNumbers title="OpenAI Proxy Configuration"
 model_list:
   - model_name: openai/o1-pro
     litellm_params:
@@ -250,7 +250,7 @@ model_list:
 ```
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="OpenAI Proxy Non-streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -269,7 +269,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="OpenAI Proxy Streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -294,7 +294,7 @@ for event in response:
 <TabItem value="anthropic" label="Anthropic">
 
 First, add this to your litellm proxy config.yaml:
-```yaml showLineNumbers
+```yaml showLineNumbers title="Anthropic Proxy Configuration"
 model_list:
   - model_name: anthropic/claude-3-5-sonnet-20240620
     litellm_params:
@@ -303,7 +303,7 @@ model_list:
 ```
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Anthropic Proxy Non-streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -322,7 +322,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Anthropic Proxy Streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -347,7 +347,7 @@ for event in response:
 <TabItem value="vertex" label="Vertex AI">
 
 First, add this to your litellm proxy config.yaml:
-```yaml showLineNumbers
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
 model_list:
   - model_name: vertex_ai/gemini-1.5-pro
     litellm_params:
@@ -357,7 +357,7 @@ model_list:
 ```
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Vertex AI Proxy Non-streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -376,7 +376,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Vertex AI Proxy Streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -401,7 +401,7 @@ for event in response:
 <TabItem value="bedrock" label="AWS Bedrock">
 
 First, add this to your litellm proxy config.yaml:
-```yaml showLineNumbers
+```yaml showLineNumbers title="AWS Bedrock Proxy Configuration"
 model_list:
   - model_name: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
     litellm_params:
@@ -412,7 +412,7 @@ model_list:
 ```
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="AWS Bedrock Proxy Non-streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -431,7 +431,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="AWS Bedrock Proxy Streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -456,7 +456,7 @@ for event in response:
 <TabItem value="gemini" label="Google AI Studio">
 
 First, add this to your litellm proxy config.yaml:
-```yaml showLineNumbers
+```yaml showLineNumbers title="Google AI Studio Proxy Configuration"
 model_list:
   - model_name: gemini/gemini-1.5-flash
     litellm_params:
@@ -465,7 +465,7 @@ model_list:
 ```
 
 #### Non-streaming
-```python showLineNumbers
+```python showLineNumbers title="Google AI Studio Proxy Non-streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
@@ -484,7 +484,7 @@ print(response)
 ```
 
 #### Streaming
-```python showLineNumbers
+```python showLineNumbers title="Google AI Studio Proxy Streaming Response"
 from openai import OpenAI
 
 # Initialize client with your proxy URL
