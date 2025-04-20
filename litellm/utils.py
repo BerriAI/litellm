@@ -4557,6 +4557,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_token_thinking=_model_info.get(
+                    "output_cost_per_token_thinking", None
+                ),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),

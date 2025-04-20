@@ -128,6 +128,10 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
             except Exception:
                 continue
 
+    output_cost_per_token_thinking = model_info.get("output_cost_per_token_thinking")
+    if usage.get("thinking_enabled") and output_cost_per_token_thinking is not None:
+        completion_base_cost = output_cost_per_token_thinking
+
     return prompt_base_cost, completion_base_cost
 
 
