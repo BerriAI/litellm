@@ -102,6 +102,7 @@ const sidebars = {
             "proxy/admin_ui_sso",
             "proxy/self_serve",
             "proxy/public_teams",
+            "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
             "proxy/ui_logs"
@@ -447,7 +448,6 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
-        "tutorials/scim_litellm",
         "tutorials/msft_sso",
         "tutorials/prompt_caching",
         "tutorials/tag_management",
