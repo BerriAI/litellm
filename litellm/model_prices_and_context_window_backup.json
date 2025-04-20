@@ -1493,7 +1493,7 @@
         "supports_native_streaming": false,
         "supports_reasoning": true
     },
-    "azure/gpt-4o-audio-preview": {
+    "azure/gpt-4o-audio-preview-2024-12-17": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
@@ -1516,7 +1516,7 @@
         "supports_native_streaming": true,
         "supports_reasoning": false
     },
-    "azure/gpt-4o-mini-audio-preview": {
+    "azure/gpt-4o-mini-audio-preview-2024-12-17": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
