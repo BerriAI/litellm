@@ -506,3 +506,19 @@ for event in response:
 
 </TabItem>
 </Tabs>
+
+## Supported Responses API Parameters
+
+| Provider | Supported Parameters |
+|----------|---------------------|
+| `openai` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
+| `azure` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
+| `anthropic` | See supported parameters here |
+| `bedrock` | See supported parameters here |
+| `gemini` | See supported parameters here |
+| `vertex_ai` | See supported parameters here |
+| `azure_ai` | See supported parameters here |
+
+
+
+
