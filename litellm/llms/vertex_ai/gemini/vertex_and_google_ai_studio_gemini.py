@@ -365,17 +365,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
@@ -388,9 +385,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
-        if thinking_enabled:
-            params["includeThoughts"] = True
-        if thinking_budget:
+        if not thinking_enabled:
+            params["thinkingBudget"] = 0
+        elif thinking_budget is not None:
             params["thinkingBudget"] = thinking_budget
 
         return params
