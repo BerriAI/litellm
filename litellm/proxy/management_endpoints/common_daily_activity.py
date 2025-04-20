@@ -154,7 +154,7 @@ async def get_daily_activity(
             where_conditions["model"] = model
         if api_key:
             where_conditions["api_key"] = api_key
-        if entity_id:
+        if entity_id is not None:
             if isinstance(entity_id, list):
                 where_conditions[entity_id_field] = {"in": entity_id}
             else:
