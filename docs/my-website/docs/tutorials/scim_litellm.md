@@ -1,11 +1,22 @@
 
 import Image from '@theme/IdealImage';
 
-# SCIM with Litellm
+# SCIM with LiteLLM
 
 Enables identity providers (Okta, Azure AD, OneLogin, etc.) to automate user and team (group) provisioning, updates, and deprovisioning on LiteLLM.
 
-# Usage
+
+This tutorial will walk you through the steps to connect your IDP to LiteLLM SCIM Endpoints.
+
+### Supported SSO Providers for SCIM
+Below is a list of supported SSO providers for connecting to LiteLLM SCIM Endpoints.
+- Microsoft Entra ID (Azure AD)
+- Okta
+- Google Workspace
+- OneLogin
+- Keycloak
+- Auth0
+
 
 ## 1. Get your SCIM Tenant URL and Bearer Token
 
