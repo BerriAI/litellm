@@ -19,6 +19,28 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## Key Highlights
+
+- **Team and Tag based usage tracking**: You can now see usage and spend by team and tag at 1M+ spend logs.
+- **SCIM Integration**: Enables identity providers (Okta, Azure AD, OneLogin, etc.) to automate user and team (group) provisioning, updates, and deprovisioning
+- **Unified Responses API**: Support for calling Anthropic, Gemini, Groq, etc. via OpenAI's new Responses API.
+
+Let's dive in.
+
+## Team and Tag based usage tracking
+
+<Image img={require('../../img/release_notes/new_team_usage_highlight.jpg')}/>
+
+
+This release improves team and tag based usage tracking at 1m+ spend logs, making it easy to monitor your LLM API Spend in production. This covers:
+
+- **Admins** can view spend across all teams + tags
+- **Admins** can now see spend across multiple tags
+- **Admins** can now check the activity by key, within teams
+- **Internal Users** can now view spend of teams they’re a member of
+
+[Read more](#management-endpoints--ui)
+
 ## New Models / Updated Models
 
 - **OpenAI**
