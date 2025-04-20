@@ -53,6 +53,26 @@ RESPONSES_API_SESSION_HANDLER = SessionHandler()
 
 
 class LiteLLMCompletionResponsesConfig:
+    @staticmethod
+    def get_supported_openai_params(model: str) -> list:
+        """
+        LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
+        """
+        return [
+            "input",
+            "model",
+            "instructions",
+            "max_output_tokens",
+            "metadata",
+            "parallel_tool_calls",
+            "previous_response_id",
+            "stream",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p",
+            "user",
+        ]
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
