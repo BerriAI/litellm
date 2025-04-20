@@ -39,6 +39,7 @@ class PartType(TypedDict, total=False):
     file_data: FileDataType
     function_call: FunctionCall
     function_response: FunctionResponse
+    thought: bool
 
 
 class HttpxFunctionCall(TypedDict):
