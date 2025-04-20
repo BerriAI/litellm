@@ -6191,6 +6191,12 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
         if _model_group_info is not None:
             model_groups.append(_model_group_info)
+        else:
+            model_group_info = ModelGroupInfo(
+                model_group=model,
+                providers=[],
+            )
+            model_groups.append(model_group_info)
     return model_groups
 
 
@@ -6388,7 +6394,6 @@ async def model_group_info(
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
     )
-
     model_groups: List[ModelGroupInfo] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
