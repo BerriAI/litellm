@@ -34,10 +34,10 @@ Let's dive in.
 
 This release improves team and tag based usage tracking at 1m+ spend logs, making it easy to monitor your LLM API Spend in production. This covers:
 
-- **Admins** can view spend across all teams + tags
-- **Admins** can now see spend across multiple tags
-- **Admins** can now check the activity by key, within teams
-- **Internal Users** can now view spend of teams they’re a member of
+- View **daily spend** by teams + tags
+- View **usage / spend by key**, within teams
+- View **spend by multiple tags**
+- Allow **internal users** to view spend of teams they're a member of
 
 [Read more](#management-endpoints--ui)
 
