@@ -15,9 +15,9 @@ On LiteLLM, navigate to the Settings > Admin Settings > SCIM. On this page you w
 
 ## 2. Connect your IDP to LiteLLM SCIM Endpoints
 
-On your IDP provider, navigate your your SSO application and select `Provisioning` > `New provisioning configuration`.
+On your IDP provider, navigate to your SSO application and select `Provisioning` > `New provisioning configuration`.
 
-On this page, pase in your litellm scim tenant url and bearer token.
+On this page, paste in your litellm scim tenant url and bearer token.
 
 Once this is pasted in, click on `Test Connection` to ensure your IDP can authenticate to the LiteLLM SCIM endpoints.
 
@@ -41,7 +41,7 @@ Once you've selected your litellm app, click on `Users and Groups` > `Add user/g
 
 <br />
 
-Now select the group you created in step 1.1. And add it to the LiteLLM Enterprise App. At this point we have added `Production LLM Evals Group` to the LiteLLM Enterprise App. The next steps is having LiteLLM automatically create the `Production LLM Evals Group` on the LiteLLM DB when a new user signs in.
+Now select the group you created in step 1.1. And add it to the LiteLLM Enterprise App. At this point we have added `Production LLM Evals Group` to the LiteLLM Enterprise App. The next step is having LiteLLM automatically create the `Production LLM Evals Group` on the LiteLLM DB when a new user signs in.
 
 <Image img={require('../../img/msft_enterprise_select_group.png')}  style={{ width: '800px', height: 'auto' }} />
 
