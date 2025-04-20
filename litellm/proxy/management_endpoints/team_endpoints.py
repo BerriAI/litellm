@@ -2149,6 +2149,7 @@ async def get_team_daily_activity(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=user_api_key_dict.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
         )
         if user_info is None:
             raise HTTPException(
@@ -2157,6 +2158,7 @@ async def get_team_daily_activity(
                     "error": "User= {} not found".format(user_api_key_dict.user_id)
                 },
             )
+
         if team_ids_list is None:
             team_ids_list = user_info.teams
         else:

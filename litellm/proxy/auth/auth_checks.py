@@ -644,6 +644,7 @@ async def get_user_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
     sso_user_id: Optional[str] = None,
     user_email: Optional[str] = None,
+    check_db_only: Optional[bool] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -655,12 +656,13 @@ async def get_user_object(
         return None
 
     # check if in cache
-    cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-    if cached_user_obj is not None:
-        if isinstance(cached_user_obj, dict):
-            return LiteLLM_UserTable(**cached_user_obj)
-        elif isinstance(cached_user_obj, LiteLLM_UserTable):
-            return cached_user_obj
+    if not check_db_only:
+        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        if cached_user_obj is not None:
+            if isinstance(cached_user_obj, dict):
+                return LiteLLM_UserTable(**cached_user_obj)
+            elif isinstance(cached_user_obj, LiteLLM_UserTable):
+                return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
