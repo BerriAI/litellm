@@ -766,14 +766,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
         )
+        completion_tokens = completion_response["usageMetadata"].get(
+            "candidatesTokenCount", 0
+        )
+        if reasoning_tokens:
+            # Usage(...) constructor expects that completion_tokens includes the reasoning_tokens.
+            # However the Vertex AI usage metadata does not include reasoning tokens in candidatesTokenCount.
+            # Reportedly, this is different from the Gemini API.
+            completion_tokens += reasoning_tokens
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
+            completion_tokens=completion_tokens,
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
