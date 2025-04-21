@@ -295,7 +295,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
+  if (userID == null) {
+    return (
+      <h1>User ID is not set</h1>
+    );
+  }
+
+  if (token == null) {
     // user is not logged in as yet 
     console.log("All cookies before redirect:", document.cookie);
     
