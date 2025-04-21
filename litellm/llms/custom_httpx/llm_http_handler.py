@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
@@ -228,11 +229,17 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        provider_config: Optional[BaseConfig] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
+        extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+        fake_stream = fake_stream or optional_params.pop("fake_stream", False)
 
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        provider_config = (
+            provider_config
+            or ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=litellm.LlmProviders(custom_llm_provider)
+            )
         )
         if provider_config is None:
             raise ValueError(
@@ -266,6 +273,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        if extra_body is not None:
+            data = {**data, **extra_body}
 
         headers = provider_config.sign_request(
             headers=headers,
@@ -313,6 +323,7 @@ class BaseLLMHTTPHandler:
                     ),
                     litellm_params=litellm_params,
                     json_mode=json_mode,
+                    optional_params=optional_params,
                 )
 
             else:
@@ -374,6 +385,7 @@ class BaseLLMHTTPHandler:
                 ),
                 litellm_params=litellm_params,
                 json_mode=json_mode,
+                optional_params=optional_params,
             )
             return CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -422,6 +434,7 @@ class BaseLLMHTTPHandler:
         model: str,
         messages: list,
         logging_obj,
+        optional_params: dict,
         litellm_params: dict,
         timeout: Union[float, httpx.Timeout],
         fake_stream: bool = False,
@@ -453,10 +466,21 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(),
-                sync_stream=True,
+            model_response: ModelResponse = provider_config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ModelResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=None,
                 json_mode=json_mode,
+            )
+
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
@@ -487,6 +511,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         data: dict,
         litellm_params: dict,
+        optional_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
@@ -505,6 +530,7 @@ class BaseLLMHTTPHandler:
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
+            model=model,
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
@@ -516,6 +542,8 @@ class BaseLLMHTTPHandler:
             fake_stream=fake_stream,
             client=client,
             litellm_params=litellm_params,
+            optional_params=optional_params,
+            json_mode=json_mode,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -527,6 +555,7 @@ class BaseLLMHTTPHandler:
 
     async def make_async_call_stream_helper(
         self,
+        model: str,
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
@@ -536,8 +565,10 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        optional_params: dict,
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
+        json_mode: Optional[bool] = None,
     ) -> Tuple[Any, httpx.Headers]:
         """
         Helper function for making an async call with stream.
@@ -568,8 +599,21 @@ class BaseLLMHTTPHandler:
         )
 
         if fake_stream is True:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=False
+            model_response: ModelResponse = provider_config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ModelResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=None,
+                json_mode=json_mode,
+            )
+
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
@@ -594,8 +638,12 @@ class BaseLLMHTTPHandler:
         """
         Some providers like Bedrock invoke do not support the stream parameter in the request body, we only pass `stream` in the request body the provider supports it.
         """
+
         if fake_stream is True:
-            return data
+            # remove 'stream' from data
+            new_data = data.copy()
+            new_data.pop("stream", None)
+            return new_data
         if provider_config.supports_stream_param_in_request_body is True:
             data["stream"] = True
         return data
@@ -1011,9 +1059,16 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
             model=model,
+            optional_params=response_api_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1034,9 +1089,6 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-
-        # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
 
         try:
             if stream:
@@ -1126,9 +1178,16 @@ class BaseLLMHTTPHandler:
         if extra_headers:
             headers.update(extra_headers)
 
+        # Check if streaming is requested
+        stream = response_api_optional_request_params.get("stream", False)
+
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            api_key=litellm_params.api_key,
             model=model,
+            optional_params=response_api_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1149,8 +1208,6 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
-        # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
 
         try:
             if stream:

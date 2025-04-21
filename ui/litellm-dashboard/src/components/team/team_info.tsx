@@ -32,7 +32,7 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-
+import { isAdminRole } from "@/utils/roles";
 
 export interface TeamData {
   team_id: string;
@@ -232,7 +232,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <TabGroup defaultIndex={editTeam ? 2 : 0}>
+      <TabGroup defaultIndex={editTeam ? 3 : 0}>
         <TabList className="mb-4">
           {[
             <Tab key="overview">Overview</Tab>,
@@ -296,13 +296,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </TabPanel>
 
           {/* Member Permissions Panel */}
-          <TabPanel>
-            <MemberPermissions 
-              teamId={teamId}
-              accessToken={accessToken}
-              canEditTeam={canEditTeam}
-            />
-          </TabPanel>
+          {canEditTeam && (
+            <TabPanel>
+              <MemberPermissions 
+                teamId={teamId}
+                accessToken={accessToken}
+                canEditTeam={canEditTeam}
+              />
+            </TabPanel>
+          )}
 
           {/* Settings Panel */}
           <TabPanel>
@@ -351,8 +353,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
+                      {userModels.map((model, idx) => (
+                        <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
                       ))}

@@ -683,6 +683,7 @@ async def pass_through_request(  # noqa: PLR0915
                 end_time=end_time,
                 logging_obj=logging_obj,
                 cache_hit=False,
+                request_body=_parsed_body,
                 **kwargs,
             )
         )

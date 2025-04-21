@@ -313,13 +313,20 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
+    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
     if not file_id:
         return None
     try:
-        if file_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+        transformed_file_id = (
+            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
+        )
+        if transformed_file_id.startswith(
+            SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
+        ):
             match = re.match(
                 f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:(.*?);unified_id",
-                file_id,
+                transformed_file_id,
             )
             if match:
                 return match.group(1)
@@ -343,6 +350,7 @@ def update_messages_with_model_file_ids(
         }
     }
     """
+
     for message in messages:
         if message.get("role") == "user":
             content = message.get("content")
@@ -463,3 +471,59 @@ def unpack_defs(schema, defs):
                 unpack_defs(ref, defs)
                 value["items"] = ref
                 continue
+
+
+def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+    """
+    Get mime type for common image URLs
+    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
+
+    Supported by Gemini:
+     application/pdf
+    audio/mpeg
+    audio/mp3
+    audio/wav
+    image/png
+    image/jpeg
+    image/webp
+    text/plain
+    video/mov
+    video/mpeg
+    video/mp4
+    video/mpg
+    video/avi
+    video/wmv
+    video/mpegps
+    video/flv
+    """
+    url = url.lower()
+
+    # Map file extensions to mime types
+    mime_types = {
+        # Images
+        (".jpg", ".jpeg"): "image/jpeg",
+        (".png",): "image/png",
+        (".webp",): "image/webp",
+        # Videos
+        (".mp4",): "video/mp4",
+        (".mov",): "video/mov",
+        (".mpeg", ".mpg"): "video/mpeg",
+        (".avi",): "video/avi",
+        (".wmv",): "video/wmv",
+        (".mpegps",): "video/mpegps",
+        (".flv",): "video/flv",
+        # Audio
+        (".mp3",): "audio/mp3",
+        (".wav",): "audio/wav",
+        (".mpeg",): "audio/mpeg",
+        # Documents
+        (".pdf",): "application/pdf",
+        (".txt",): "text/plain",
+    }
+
+    # Check each extension group against the URL
+    for extensions, mime_type in mime_types.items():
+        if any(url.endswith(ext) for ext in extensions):
+            return mime_type
+
+    return None
