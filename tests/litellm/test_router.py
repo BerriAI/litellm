@@ -52,3 +52,29 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
 
     # 3) metadata lands under "metadata"
     assert kwargs["litellm_metadata"] == {"baz": 123}
+
+
+def test_router_with_model_info_and_model_group():
+    """
+    Test edge case where user specifies model_group in model_info
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "tpm": 1000,
+                    "rpm": 1000,
+                    "model_group": "gpt-3.5-turbo",
+                },
+            }
+        ],
+    )
+
+    router._set_model_group_info(
+        model_group="gpt-3.5-turbo",
+        user_facing_model_group_name="gpt-3.5-turbo",
+    )
