@@ -734,10 +734,10 @@ def _compare_nested_dicts(
 
 
 @pytest.mark.asyncio
-async def test_global_spend_keys_endpoint(client, monkeypatch):
+async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
     """
     Test to ensure that the global_spend_keys endpoint is protected against SQL injection attacks.
-    Verifies that SQL injection attempts are properly parameterized and not directly interpolated.
+    Verifies that the limit parameter is properly parameterized and not directly interpolated.
     """
     # Create a simple mock for prisma client with empty response
     mock_prisma_client = MagicMock()

@@ -2407,7 +2407,7 @@ async def global_spend_keys(
     except ValueError as e:
         raise HTTPException(
             status_code=422, detail={"error": f"Invalid limit: {limit}, error: {e}"}
-        )
+        ) from e
 
     return response
 
