@@ -295,11 +295,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null) {
-    return (
-      <h1>User ID is not set</h1>
-    );
-  }
 
   if (token == null) {
     // user is not logged in as yet 
@@ -319,6 +314,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   } else if (accessToken == null) {
     return null;
   }
+
+  if (userID == null) {
+    return (
+      <h1>User ID is not set</h1>
+    );
+  }
+
 
   if (userRole == null) {
     setUserRole("App Owner");
