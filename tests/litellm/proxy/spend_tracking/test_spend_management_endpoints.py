@@ -731,3 +731,66 @@ def _compare_nested_dicts(
                     f"Value mismatch at {current_path}:\n  expected: {expected_str}\n  got:      {actual_str}"
                 )
     return differences
+
+
+@pytest.mark.asyncio
+async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
+    """
+    Test to ensure that the global_spend_keys endpoint is protected against SQL injection attacks.
+    Verifies that the limit parameter is properly parameterized and not directly interpolated.
+    """
+    # Create a simple mock for prisma client with empty response
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_query_raw = MagicMock()
+    mock_query_raw.return_value = asyncio.Future()
+    mock_query_raw.return_value.set_result([])
+    mock_db.query_raw = mock_query_raw
+    mock_prisma_client.db = mock_db
+    # Apply the mock to the prisma_client module
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Call the endpoint without specifying a limit
+    no_limit_response = client.get("/global/spend/keys")
+    assert no_limit_response.status_code == 200
+    mock_query_raw.assert_called_once_with('SELECT * FROM "Last30dKeysBySpend";')
+    # Reset the mock for the next test
+    mock_query_raw.reset_mock()
+    # Test with valid input
+    normal_limit = "10"
+    good_input_response = client.get(f"/global/spend/keys?limit={normal_limit}")
+    assert good_input_response.status_code == 200
+    # Verify the mock was called with the correct parameters
+    mock_query_raw.assert_called_once_with(
+        'SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;', 10
+    )
+    # Reset the mock for the next test
+    mock_query_raw.reset_mock()
+    # Test with SQL injection payload
+    sql_injection_limit = "10; DROP TABLE spend_logs; --"
+    response = client.get(f"/global/spend/keys?limit={sql_injection_limit}")
+    # Verify the response is a validation error (422)
+    assert response.status_code == 422
+    # Verify the mock was not called with the SQL injection payload
+    # This confirms that the validation happens before the database query
+    mock_query_raw.assert_not_called()
+    # Reset the mock for the next test
+    mock_query_raw.reset_mock()
+    # Test with non-numeric input
+    non_numeric_limit = "abc"
+    response = client.get(f"/global/spend/keys?limit={non_numeric_limit}")
+    assert response.status_code == 422
+    mock_query_raw.assert_not_called()
+    mock_query_raw.reset_mock()
+    # Test with negative number
+    negative_limit = "-5"
+    response = client.get(f"/global/spend/keys?limit={negative_limit}")
+    assert response.status_code == 422
+    mock_query_raw.assert_not_called()
+    mock_query_raw.reset_mock()
+    # Test with zero
+    zero_limit = "0"
+    response = client.get(f"/global/spend/keys?limit={zero_limit}")
+    assert response.status_code == 422
+    mock_query_raw.assert_not_called()
+    mock_query_raw.reset_mock()
