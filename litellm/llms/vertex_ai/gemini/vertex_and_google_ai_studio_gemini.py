@@ -949,6 +949,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = self._process_candidates(
                     _candidates, model_response, litellm_params
                 )
+            else:
+                model_response.choices.append(litellm.Choices())
 
             usage = self._calculate_usage(completion_response=completion_response)
             setattr(model_response, "usage", usage)
