@@ -30,6 +30,7 @@ from litellm.types.llms.openai import (
     REASONING_EFFORT,
     AllMessageValues,
     ChatCompletionCachedContent,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionSystemMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -575,13 +576,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Tuple[
         str,
         Optional[List[Any]],
-        Optional[List[ChatCompletionThinkingBlock]],
+        Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
         Optional[str],
         List[ChatCompletionToolCallChunk],
     ]:
         text_content = ""
         citations: Optional[List[Any]] = None
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None
         reasoning_content: Optional[str] = None
         tool_calls: List[ChatCompletionToolCallChunk] = []
         for idx, content in enumerate(completion_response["content"]):
@@ -600,20 +609,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         index=idx,
                     )
                 )
-            ## CITATIONS
-            if content.get("citations", None) is not None:
-                if citations is None:
-                    citations = []
-                citations.append(content["citations"])
-            if content.get("thinking", None) is not None:
+
+            elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
                 thinking_blocks.append(cast(ChatCompletionThinkingBlock, content))
+            elif content["type"] == "redacted_thinking":
+                if thinking_blocks is None:
+                    thinking_blocks = []
+                thinking_blocks.append(
+                    cast(ChatCompletionRedactedThinkingBlock, content)
+                )
+
+            ## CITATIONS
+            if content.get("citations") is not None:
+                if citations is None:
+                    citations = []
+                citations.append(content["citations"])
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
-                if "thinking" in block:
-                    reasoning_content += block["thinking"]
+                thinking_content = cast(Optional[str], block.get("thinking"))
+                if thinking_content is not None:
+                    reasoning_content += thinking_content
+
         return text_content, citations, thinking_blocks, reasoning_content, tool_calls
 
     def calculate_usage(
@@ -703,7 +722,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             text_content = ""
             citations: Optional[List[Any]] = None
-            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+            thinking_blocks: Optional[
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+            ] = None
             reasoning_content: Optional[str] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
 

@@ -19,8 +19,9 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
 }) => {
   // Map endpoint types to their display labels
   const endpointOptions = [
-    { value: EndpointType.CHAT, label: '/chat/completions' },
-    { value: EndpointType.IMAGE, label: '/images/generations' }
+    { value: EndpointType.CHAT, label: '/v1/chat/completions' },
+    { value: EndpointType.RESPONSES, label: '/v1/responses' },
+    { value: EndpointType.IMAGE, label: '/v1/images/generations' },
   ];
 
   return (

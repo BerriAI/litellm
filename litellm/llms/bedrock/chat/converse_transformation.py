@@ -22,6 +22,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionThinkingBlock,
@@ -627,9 +628,11 @@ class AmazonConverseConfig(BaseConfig):
 
     def _transform_thinking_blocks(
         self, thinking_blocks: List[BedrockConverseReasoningContentBlock]
-    ) -> List[ChatCompletionThinkingBlock]:
+    ) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
         """Return a consistent format for thinking blocks between Anthropic and Bedrock."""
-        thinking_blocks_list: List[ChatCompletionThinkingBlock] = []
+        thinking_blocks_list: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
         for block in thinking_blocks:
             if "reasoningText" in block:
                 _thinking_block = ChatCompletionThinkingBlock(type="thinking")
@@ -640,6 +643,11 @@ class AmazonConverseConfig(BaseConfig):
                 if _signature is not None:
                     _thinking_block["signature"] = _signature
                 thinking_blocks_list.append(_thinking_block)
+            elif "redactedContent" in block:
+                _redacted_block = ChatCompletionRedactedThinkingBlock(
+                    type="redacted_thinking", data=block["redactedContent"]
+                )
+                thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
     def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:

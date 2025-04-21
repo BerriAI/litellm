@@ -454,3 +454,22 @@ async def test_google_ai_studio_gemini_message_caching_with_tools_async(
     assert transformed_request.get("tools") is None
     assert transformed_request.get("tool_choice") is None
 
+
+def test_vertex_ai_empty_content():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "arguments": "{}",
+            },
+        ),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content is None
+    assert reasoning_content is None

@@ -89,3 +89,31 @@ def test_gemini_image_generation():
 
 
 
+def test_gemini_thinking():
+    litellm._turn_on_debug()
+    from litellm.types.utils import Message, CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    messages = [
+        {"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}
+    ]
+    reasoning_content = "I'm thinking about Occam's Razor."
+    assistant_message = Message(content='Okay, let\'s break down Occam\'s Razor.', reasoning_content=reasoning_content, role='assistant', tool_calls=None, function_call=None, provider_specific_fields=None)
+
+    messages.append(assistant_message)
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "messages": messages,
+        }
+    )
+    assert reasoning_content in json.dumps(raw_request)
+    response = completion(
+        model="gemini/gemini-2.5-flash-preview-04-17",
+        messages=messages, # make sure call works
+    )
+    print(response.choices[0].message)
+    assert response.choices[0].message.content is not None
