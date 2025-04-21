@@ -43,6 +43,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    UserListResponse,
+)
 
 router = APIRouter()
 
@@ -903,11 +906,13 @@ async def get_user_key_counts(
     "/user/get_users",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserListResponse,
 )
 @router.get(
     "/user/list",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserListResponse,
 )
 async def get_users(
     role: Optional[str] = fastapi.Query(
