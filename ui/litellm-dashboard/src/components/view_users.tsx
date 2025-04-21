@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Card,
   Title,
@@ -32,6 +32,7 @@ import {
   userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
+  userFilterUICall,
 } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -50,6 +51,7 @@ import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import BulkCreateUsers from "./bulk_create_users_button";
 import SSOSettings from "./SSOSettings";
+import debounce from "lodash/debounce";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -120,6 +122,54 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
     setIsDeleteModalOpen(true);
+  };
+
+  // Create a debounced version of the search function
+  const debouncedSearch = useCallback(
+    debounce(async (searchValue: string) => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return;
+      }
+      try {
+        const params = new URLSearchParams();
+        if (searchValue) {
+          params.append('user_email', searchValue);
+        }
+        const filteredUsers = await userFilterUICall(accessToken, params);
+        
+        // Update the user list with filtered results
+        if (filteredUsers) {
+          setUserData(filteredUsers);
+          setUserListResponse(prev => ({
+            ...prev,
+            users: filteredUsers,
+            total: filteredUsers.length,
+            page: 1,
+            page_size: defaultPageSize,
+            total_pages: Math.ceil(filteredUsers.length / defaultPageSize)
+          }));
+        }
+      } catch (error) {
+        console.error("Error searching users:", error);
+      }
+    }, 300), // 300ms delay
+    [accessToken, token, userRole, userID]
+  );
+
+  // Cleanup the debounced function on component unmount
+  useEffect(() => {
+    return () => {
+      debouncedSearch.cancel();
+    };
+  }, [debouncedSearch]);
+
+  const handleSearch = (value: string) => {
+    setSearchTerm(value);
+    if (value === "") {
+      refreshUserData(); // Reset to original data when search is cleared
+    } else {
+      debouncedSearch(value);
+    }
   };
 
   const confirmDelete = async () => {
@@ -298,7 +348,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             <div className="bg-white rounded-lg shadow">
               <div className="border-b px-6 py-4">
                 <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-                  <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-4 w-full">
+                    <div className="flex-1 max-w-md">
+                      <TextInput
+                        placeholder="Search by email..."
+                        value={searchTerm}
+                        onChange={(e) => handleSearch(e.target.value)}
+                        className="w-full"
+                      />
+                    </div>
                     <span className="text-sm text-gray-700">
                       Showing{" "}
                       {userListResponse && userListResponse.users && userListResponse.users.length > 0
