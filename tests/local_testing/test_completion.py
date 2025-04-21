@@ -2671,7 +2671,7 @@ def test_completion_azure():
         )
         print(f"response: {response}")
         print(f"response hidden params: {response._hidden_params}")
-        ## Test azure flag for backwards-compat
+        ## Test azure flag for backwards-compatibility
         # response = completion(
         #     model="chatgpt-v-3",
         #     messages=messages,
