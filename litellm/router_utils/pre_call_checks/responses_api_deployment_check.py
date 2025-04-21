@@ -1,4 +1,12 @@
 """
+For Responses API, we need routing affinity when a user sends a previous_response_id.
+
+eg. If proxy admins are load balancing between N gpt-4.1-turbo deployments, and a user sends a previous_response_id,
+we want to route to the same gpt-4.1-turbo deployment.
+
+This is different from the normal behavior of the router, which does not have routing affinity for previous_response_id.
+
+
 If previous_response_id is provided, route to the deployment that returned the previous response
 """
 
