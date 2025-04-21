@@ -4983,8 +4983,12 @@ class Router:
                 )
 
             if model_group_info is None:
-                model_group_info = ModelGroupInfo(
-                    model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
+                model_group_info = ModelGroupInfo(  # type: ignore
+                    **{
+                        "model_group": user_facing_model_group_name,
+                        "providers": [llm_provider],
+                        **model_info,
+                    }
                 )
             else:
                 # if max_input_tokens > curr
