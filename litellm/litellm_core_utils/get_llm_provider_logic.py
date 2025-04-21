@@ -121,6 +121,12 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
+        # Handle vertex_ai prefix - allows model format vertex_ai/claude-3-7-sonnet@20250219
+        if model.split("/", 1)[0].lower() == "vertex_ai":
+            base_model = model.split("/", 1)[1]
+            custom_llm_provider = "vertex_ai"
+            return base_model, custom_llm_provider, dynamic_api_key, api_base
+
         ### Handle cases when custom_llm_provider is set to cohere/command-r-plus but it should use cohere_chat route
         model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
             model, custom_llm_provider
