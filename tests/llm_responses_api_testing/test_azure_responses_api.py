@@ -109,6 +109,7 @@ async def test_responses_api_routing_with_previous_response_id():
                 },
             },
         ],
+        optional_pre_call_checks=["responses_api_deployment_check"],
     )
     MODEL = "azure-computer-use-preview"
 
@@ -126,6 +127,8 @@ async def test_responses_api_routing_with_previous_response_id():
             input="Hello, how are you?",
             truncation="auto",
         )
+
+        await asyncio.sleep(2)
         
         # Store the model_id from the response
         expected_model_id = response._hidden_params["model_id"]
