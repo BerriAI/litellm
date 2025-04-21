@@ -2393,9 +2393,21 @@ async def global_spend_keys(
         return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
+    sql_query = """SELECT * FROM "Last30dKeysBySpend";"""
 
-    response = await prisma_client.db.query_raw(sql_query, int(limit))
+    if limit is None:
+        response = await prisma_client.db.query_raw(sql_query)
+        return response
+    try:
+        limit = int(limit)
+        if limit < 1:
+            raise ValueError(f"Invalid limit: {limit}, must be greater than 0")
+        sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
+        response = await prisma_client.db.query_raw(sql_query, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail={"error": f"Invalid limit: {limit}, error: {e}"}
+        )
 
     return response
 
