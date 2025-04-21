@@ -2401,7 +2401,7 @@ async def global_spend_keys(
     try:
         limit = int(limit)
         if limit < 1:
-            raise ValueError(f"Limit must be greater than 0")
+            raise ValueError("Limit must be greater than 0")
         sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
         response = await prisma_client.db.query_raw(sql_query, limit)
     except ValueError as e:
