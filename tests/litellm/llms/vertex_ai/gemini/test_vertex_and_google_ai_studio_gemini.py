@@ -259,3 +259,59 @@ def test_vertex_ai_empty_content():
     content, reasoning_content = v.get_assistant_content_message(parts=parts)
     assert content is None
     assert reasoning_content is None
+
+
+def test_vertex_ai_thinking_disabled():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    optional_params = v.map_openai_params(
+        non_default_params={
+            "thinking": AnthropicThinkingParam(type="enabled", budget_tokens=0),
+        },
+        optional_params={},
+        model="gemini-2.5-flash-preview-04-17",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["thinkingBudget"] == 0
+
+    optional_params = v.map_openai_params(
+        non_default_params={
+            "thinking": AnthropicThinkingParam(type="enabled"),
+        },
+        optional_params={},
+        model="gemini-2.5-flash-preview-04-17",
+        drop_params=False,
+    )
+    assert "thinkingBudget" not in optional_params["thinkingConfig"]
+
+    optional_params = v.map_openai_params(
+        non_default_params={
+            "thinking": AnthropicThinkingParam(type="enabled", budget_tokens=1024),
+        },
+        optional_params={},
+        model="gemini-2.5-flash-preview-04-17",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["thinkingBudget"] == 1024
+
+    optional_params = v.map_openai_params(
+        non_default_params={
+            "thinking": cast(AnthropicThinkingParam, {"type": "invalid"}),
+        },
+        optional_params={},
+        model="gemini-2.5-flash-preview-04-17",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["thinkingBudget"] == 0
+
+    optional_params = v.map_openai_params(
+        non_default_params={},
+        optional_params={},
+        model="gemini-2.5-flash-preview-04-17",
+        drop_params=False,
+    )
+    assert "thinkingConfig" not in optional_params
