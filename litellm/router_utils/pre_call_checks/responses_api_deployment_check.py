@@ -86,10 +86,7 @@ class ResponsesApiDeploymentCheck(CustomLogger):
     ):
         await self.cache.async_set_cache(
             key=self.get_cache_key_for_response_id(response_id),
-            value={
-                "response_id": response_id,
-                "model_id": model_id,
-            },
+            value=model_id,
         )
 
     async def async_get_response_id_from_cache(self, response_id: str) -> Optional[str]:
