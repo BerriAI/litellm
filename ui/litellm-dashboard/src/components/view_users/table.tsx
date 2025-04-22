@@ -50,7 +50,7 @@ export function UserDataTable({
     state: {
       sorting,
     },
-    onSortingChange: (newSorting) => {
+    onSortingChange: (newSorting: any) => {
       setSorting(newSorting);
       if (newSorting.length > 0) {
         const sortState = newSorting[0];

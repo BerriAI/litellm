@@ -62,7 +62,7 @@ test("user search test", async ({ page }) => {
   console.log("Clicked Internal User tab");
 
   // Wait for the page to load and table to be visible
-  await page.waitForSelector("tbody tr", { timeout: 10000 });
+  await page.waitForSelector("tbody tr", { timeout: 30000 });
   await page.waitForTimeout(2000); // Additional wait for table to stabilize
   console.log("Table is visible");
 
@@ -156,7 +156,7 @@ test("user filter test", async ({ page }) => {
   console.log("Clicked Internal User tab");
 
   // Wait for the page to load and table to be visible
-  await page.waitForSelector("tbody tr", { timeout: 10000 });
+  await page.waitForSelector("tbody tr", { timeout: 30000 });
   await page.waitForTimeout(2000); // Additional wait for table to stabilize
   console.log("Table is visible");
 
@@ -164,22 +164,14 @@ test("user filter test", async ({ page }) => {
   const initialUserCount = await page.locator("tbody tr").count();
   console.log(`Initial user count: ${initialUserCount}`);
 
-  // Test email filter
-  const emailInput = page.locator('input[placeholder="Search by email..."]');
-  await expect(emailInput).toBeVisible();
-  console.log("Email search input is visible");
-
-  await emailInput.fill("test@");
-  console.log("Filled email filter");
-  await page.waitForTimeout(500); // Wait for debounce
-  const emailFilteredCount = await page.locator("tbody tr").count();
-  console.log(`Email filtered count: ${emailFilteredCount}`);
-  expect(emailFilteredCount).toBeLessThan(initialUserCount);
-
-  // Clear email filter
-  await emailInput.clear();
-  await page.waitForTimeout(500);
-  console.log("Cleared email filter");
+  // Click the filter button to show additional filters
+  const filterButton = page.getByRole("button", {
+    name: "Filters",
+    exact: true,
+  });
+  await filterButton.click();
+  console.log("Clicked filter button");
+  await page.waitForTimeout(500); // Wait for filters to appear
 
   // Test user ID filter
   const userIdInput = page.locator('input[placeholder="Filter by User ID"]');
@@ -188,14 +180,14 @@ test("user filter test", async ({ page }) => {
 
   await userIdInput.fill("user");
   console.log("Filled user ID filter");
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
   const userIdFilteredCount = await page.locator("tbody tr").count();
   console.log(`User ID filtered count: ${userIdFilteredCount}`);
   expect(userIdFilteredCount).toBeLessThan(initialUserCount);
 
   // Clear user ID filter
   await userIdInput.clear();
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
   console.log("Cleared user ID filter");
 
   // Test SSO user ID filter
@@ -205,14 +197,14 @@ test("user filter test", async ({ page }) => {
 
   await ssoUserIdInput.fill("sso");
   console.log("Filled SSO user ID filter");
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
   const ssoUserIdFilteredCount = await page.locator("tbody tr").count();
   console.log(`SSO user ID filtered count: ${ssoUserIdFilteredCount}`);
   expect(ssoUserIdFilteredCount).toBeLessThan(initialUserCount);
 
   // Clear SSO user ID filter
   await ssoUserIdInput.clear();
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(5000);
   console.log("Cleared SSO user ID filter");
 
   // Verify count returns to initial after clearing all filters

@@ -322,6 +322,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         filters.email || null,
         filters.user_role || null,
         filters.team || null,
+        filters.sso_user_id || null,
         filters.sort_by,
         filters.sort_order
       );
@@ -361,6 +362,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             filters.email || null,
             filters.user_role || null,
             filters.team || null,
+            filters.sso_user_id || null,
             filters.sort_by,
             filters.sort_order
           );
