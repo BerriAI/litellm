@@ -1,7 +1,5 @@
 import base64
-from typing import Any, Dict, Optional, Tuple, Union, cast, get_type_hints
-
-from typing_extensions import TypedDict
+from typing import Any, Dict, Optional, Union, cast, get_type_hints
 
 import litellm
 from litellm._logging import verbose_logger
