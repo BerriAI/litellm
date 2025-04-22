@@ -1347,10 +1347,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             create_key_response = await prisma_client.insert_data(
                 data=key_data, table_name="key"
             )
+
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
             )
+            key_data["created_at"] = getattr(create_key_response, "created_at", None)
+            key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
