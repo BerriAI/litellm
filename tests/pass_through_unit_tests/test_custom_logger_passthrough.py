@@ -90,5 +90,66 @@ async def test_assistants_passthrough_logging():
     # assert that the request method is correct
     assert passthrough_logging_payload["request_method"] == TARGET_METHOD
 
+@pytest.mark.asyncio
+async def test_threads_passthrough_logging():
+    test_custom_logger = TestCustomLogger()
+    litellm._async_success_callback = [test_custom_logger]
+
+    TARGET_URL = "https://api.openai.com/v1/threads"
+    REQUEST_BODY = {} 
+    TARGET_METHOD = "POST"
+
+    result = await pass_through_request(
+        request=Request(
+            scope={
+                "type": "http",
+                "method": TARGET_METHOD,
+                "path": "/v1/threads",
+                "query_string": b"",
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"authorization", f"Bearer {os.getenv('OPENAI_API_KEY')}".encode()),
+                    (b"openai-beta", b"assistants=v2")
+                ]
+            },
+        ),
+        target=TARGET_URL,
+        custom_headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+            "OpenAI-Beta": "assistants=v2"
+        },
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test",
+            user_id="test",
+            team_id="test",
+            end_user_id="test",
+        ),
+        custom_body=REQUEST_BODY,
+        forward_headers=False,
+        merge_query_params=False,
+    )
+
+    print("got result", result)
+    print("result status code", result.status_code)
+    print("result content", result.body)
+    
+    await asyncio.sleep(1)
+
+    assert test_custom_logger.logged_kwargs is not None
+    passthrough_logging_payload = test_custom_logger.logged_kwargs["passthrough_logging_payload"]
+    assert passthrough_logging_payload is not None
+    
+    # Fix for TypedDict access errors
+    assert passthrough_logging_payload.get("url") == TARGET_URL
+    assert passthrough_logging_payload.get("request_body") == REQUEST_BODY
+
+    # Fix for json.loads error with potential memoryview
+    response_body = result.body
+    client_facing_response_body = json.loads(response_body)
+    
+    assert passthrough_logging_payload.get("response_body") == client_facing_response_body
+    assert passthrough_logging_payload.get("request_method") == TARGET_METHOD
+
 
 
