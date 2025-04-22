@@ -631,10 +631,3 @@ follow_up = client.responses.create(
 
 </TabItem>
 </Tabs>
-
-#### How It Works
-
-1. When a user makes an initial request to the Responses API, LiteLLM caches which model deployment that returned the specific response. (Stored in Redis if you connected LiteLLM to Redis)
-2. When a subsequent request includes `previous_response_id`, LiteLLM automatically routes it to the same deployment
-3. If the original deployment is unavailable, or if the `previous_response_id` isn't found in the cache, LiteLLM falls back to normal routing
-
