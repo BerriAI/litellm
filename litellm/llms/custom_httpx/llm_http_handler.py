@@ -36,6 +36,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -1064,11 +1065,6 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
-            model=model,
-            optional_params=response_api_optional_request_params,
-            litellm_params=dict(litellm_params),
-            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1183,11 +1179,6 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
-            model=model,
-            optional_params=response_api_optional_request_params,
-            litellm_params=dict(litellm_params),
-            stream=stream,
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1261,6 +1252,77 @@ class BaseLLMHTTPHandler:
 
         return responses_api_provider_config.transform_response_api_response(
             model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def delete_response_api_handler(
+        self,
+        response_id: str,
+        custom_llm_provider: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> DeleteResponseResult:
+        """
+        Async version of the responses API handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=extra_headers or {},
+            model="None",
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+        )
+
+        url, data = responses_api_provider_config.transform_delete_response_api_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=api_base, headers=headers, data=json.dumps(data), timeout=timeout
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        return responses_api_provider_config.transform_delete_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
