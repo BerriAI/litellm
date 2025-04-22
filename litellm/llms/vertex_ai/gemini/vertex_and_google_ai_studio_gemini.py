@@ -743,6 +743,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _calculate_usage(
         self,
         completion_response: GenerateContentResponseBody,
+        is_thinking_enabled: Optional[
+            bool
+        ] = None,  # gemini-2.5-flash has thinking enabled by default
     ) -> Usage:
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
@@ -763,11 +766,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             reasoning_tokens = completion_response["usageMetadata"][
                 "thoughtsTokenCount"
             ]
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
         )
+
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
@@ -779,6 +784,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
+            completion_tokens_details={"thinking_enabled": is_thinking_enabled},
         )
 
         return usage
@@ -848,6 +854,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response.choices.append(choice)
 
         return grounding_metadata, safety_ratings, citation_metadata
+
+    def _is_thinking_enabled_function(self, optional_params: Dict) -> Optional[bool]:
+        """
+        Returns true if thinking is enabled for the model
+        """
+        thinking_config = cast(
+            Optional[GeminiThinkingConfig], optional_params.get("thinkingConfig", None)
+        )
+
+        if thinking_config is None:
+            return None
+
+        thinking_budget = thinking_config.get("thinkingBudget")
+        if thinking_budget == 0:
+            return False
+
+        return True
 
     def transform_response(
         self,
@@ -923,7 +946,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _candidates, model_response, litellm_params
                 )
 
-            usage = self._calculate_usage(completion_response=completion_response)
+            thinking_enabled = self._is_thinking_enabled_function(optional_params)
+            usage = self._calculate_usage(
+                completion_response=completion_response,
+                is_thinking_enabled=thinking_enabled,
+            )
             setattr(model_response, "usage", usage)
 
             ## ADD METADATA TO RESPONSE ##

@@ -3521,3 +3521,96 @@ def test_litellm_api_base(monkeypatch, provider, route):
 
         mock_client.assert_called()
         assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
+
+
+def vertex_httpx_mock_post_valid_response_with_thinking_enabled(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+            "content": {
+                "role": "model",
+                "parts": [
+                {
+                    "text": "Hello! It's nice to hear from you. How can I help you today?"
+                }
+                ]
+            },
+            "finishReason": "STOP",
+            "avgLogprobs": -6.8490977817111549
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 4,
+            "candidatesTokenCount": 18,
+            "totalTokenCount": 278,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [
+            {
+                "modality": "TEXT",
+                "tokenCount": 4
+            }
+            ],
+            "candidatesTokensDetails": [
+            {
+                "modality": "TEXT",
+                "tokenCount": 18
+            }
+            ],
+            "thoughtsTokenCount": 256
+        },
+        "modelVersion": "gemini-2.5-flash-preview-04-17",
+        "createTime": "2025-04-22T03:22:20.094867Z",
+        "responseId": "bAsHaJPlBcCWm9IP_6inqAk"
+    }
+    return mock_response
+
+
+
+def test_vertex_ai_gemini_2_5_flash():
+    """
+    Test that the vertex_ai/gemini-2.5-flash-preview-04-17 model is working correctly
+    """
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    client = HTTPHandler()
+
+    with patch.object(client, "post", side_effect=vertex_httpx_mock_post_valid_response_with_thinking_enabled) as mock_client:
+        response = completion(
+            model="vertex_ai/gemini-2.5-flash-preview-04-17",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            client=client,
+        )
+
+        mock_client.assert_called()
+        assert response.usage is not None
+        assert response.usage.completion_tokens_details.thinking_enabled is None
+
+
+    with patch.object(client, "post", side_effect=vertex_httpx_mock_post_valid_response_with_thinking_enabled) as mock_client:
+        response = completion(
+            model="vertex_ai/gemini-2.5-flash-preview-04-17",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            client=client,
+        )
+
+        mock_client.assert_called()
+        assert response.usage is not None
+        assert response.usage.completion_tokens_details.thinking_enabled is True
+
+
+    # with patch.object(client, "post", side_effect=vertex_httpx_mock_post_valid_response_with_thinking_enabled) as mock_client:
+    #     response = completion(
+    #         model="vertex_ai/gemini-2.5-flash-preview-04-17",
+    #         messages=[{"role": "user", "content": "Hello, world!"}],
+    #         thinking={"type": "enabled", "budget_tokens": 0},
+    #         client=client,
+    #     )
+
+    #     mock_client.assert_called()
+    #     assert response.usage is not None
+    #     assert response.usage.completion_tokens_details.thinking_enabled is False
