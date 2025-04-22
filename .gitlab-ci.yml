@@ -51,10 +51,12 @@ Generate Version:
     environment: development
     GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
   script:
-    # 1. Authenticate to Vault using GitLab JWT
+    # 1. Authenticate to Vault using GitLab JWT (using VAULT_ID_TOKEN like Onyx example)
     - |
+      echo "Checking VAULT_ID_TOKEN variable..."
+      if [ -z "${VAULT_ID_TOKEN}" ]; then echo "ERROR: VAULT_ID_TOKEN is empty!"; exit 1; else echo "VAULT_ID_TOKEN is present."; fi
       echo "Logging into Vault... with role: ${VAULT_ROLE}" # Use the VAULT_ROLE variable defined in the specific job
-      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${VAULT_ROLE} jwt=${CI_JOB_JWT_V2})
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${VAULT_ROLE} jwt=${VAULT_ID_TOKEN})
       if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi
       echo "Vault login successful."
     # 2. Get GCP Access Token from Vault
