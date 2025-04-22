@@ -278,6 +278,35 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
   };
 
+  const handlePageChange = async (newPage: number) => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+    
+    try {
+      const userDataResponse = await userListCall(
+        accessToken,
+        filters.user_id ? [filters.user_id] : null,
+        newPage,
+        defaultPageSize,
+        filters.email || null,
+        filters.user_role || null,
+        filters.team || null
+      );
+      
+      // Update session storage with new data
+      sessionStorage.setItem(
+        `userList_${newPage}`,
+        JSON.stringify(userDataResponse)
+      );
+      
+      setUserListResponse(userDataResponse);
+      setCurrentPage(newPage);
+    } catch (error) {
+      console.error("Error changing page:", error);
+    }
+  };
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -515,8 +544,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     </div>
                   )}
 
-                  {/* Results Count */}
-                  <div className="flex justify-end">
+                  {/* Results Count and Pagination */}
+                  <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-700">
                       Showing{" "}
                       {userListResponse && userListResponse.users && userListResponse.users.length > 0
@@ -531,6 +560,32 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         : 0}{" "}
                       of {userListResponse ? userListResponse.total : 0} results
                     </span>
+                    
+                    {/* Pagination Buttons */}
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage === 1
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={!userListResponse || currentPage >= userListResponse.total_pages}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          !userListResponse || currentPage >= userListResponse.total_pages
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        Next
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
