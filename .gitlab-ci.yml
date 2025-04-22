@@ -1,8 +1,9 @@
-# .gitlab-ci.yml
-include:
- - project: 'ccoe/photon/pipelines'
-   ref: new_photon_runners
-   file: 'terraform_single_repo_multiple_environments.yml'
+default:
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://gitlab.photon.thalescloud.io
+  tags:
+    - photon_new_runners
 
 variables:
   # Define variables based on your environment and naming conventions
@@ -18,9 +19,6 @@ variables:
 stages:
   - version
   - build
-  - plan
-  - deploy
-  - test
 
 # Job to generate the version tag based on timestamp
 Generate Version:
