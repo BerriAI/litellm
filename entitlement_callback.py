@@ -34,21 +34,20 @@ class EntitlementCallback(CustomLogger):
         # Construct full URL for the entitlement API endpoint
         self.auth_url = f"{self.api_base}/v1/entitlement/authorize"
         # Optionally, define a default action or other constants
-        self.default_action = os.environ.get("ENTITLEMENT_ACTION", "answer")
+        self.default_action = os.environ.get("ENTITLEMENT_ACTION", "read")
         super().__init__()  # initialize base class if needed
     
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
-    ) -> Any:
-        model = data["model"]
-        external_customer_id = data["user"]
-        import pdb; pdb.set_trace()
-        response_cost = float(data["metadata"]['hidden_params']['response_cost'])
-        self.handle_entitlement_check(external_customer_id, response_cost)
-        return data
+    # async def async_post_call_success_hook(
+    #     self,
+    #     data: dict,
+    #     user_api_key_dict: UserAPIKeyAuth,
+    #     response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+    # ) -> Any:
+        # model = data["model"]
+        # external_customer_id = data["user"]
+        # response_cost = float(data["metadata"]['hidden_params']['response_cost'])
+        # self.handle_entitlement_check(external_customer_id, response_cost)
+        # return data
         
     # async def async_post_call_streaming_hook(
     #     self,
@@ -80,14 +79,18 @@ class EntitlementCallback(CustomLogger):
             "type": "article",
             "author": "any.email@is.fine",
             "tags": [],
-            "amount": response_cost * 10000 # for testing
+            "amount": response_cost * 100
         }
         
         payload = {
             "external_customer_id": external_customer_id,
             "publisher_id": self.publisher_id,
             "action_name": self.default_action,
+            "context": [],
             "resource": entitlement_resource,
+            "properties": {
+                "credits_in_cent": response_cost * 100
+            },
             "timestamp": int(time.time())
         }
 
@@ -100,7 +103,6 @@ class EntitlementCallback(CustomLogger):
                 response = await client.post(self.auth_url, json=payload, headers=headers)
                 print(f"Entitlement response: {response}")
                 print(f"response body: {response.text}")
-                import pdb; pdb.set_trace()
         except Exception as e:
             return f"Entitlement check error: {e}"
 
@@ -118,10 +120,7 @@ class EntitlementCallback(CustomLogger):
         response: Any,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        # request_data = {'stream': True, 'model': 'gemini-2.0-flash-lite', 'messages': [{'role': 'user', 'content': 'hello'}, {'role': 'assistant', 'content': 'Hello! How can I help you today?'}, {'role': 'user', 'content': 'who are you'}], 'user': {'name': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'id': 'b16b8dfc-7838-4e5b-8a8e-2e94daa677fe', 'email': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'role': 'user'}, 'proxy_server_request': {'url': 'http://localhost:4000/chat/completions', 'method': 'POST', 'headers': {'host': 'localhost:4000', 'content-type': 'application/json', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'user-agent': 'Python/3.11 aiohttp/3.11.11', 'content-length': '421'}, 'body': {'stream': True, 'model': 'gemini-2.0-flash-lite', 'messages': [{'role': 'user', 'content': 'hello'}, {'role': 'assistant', 'content': 'Hello! How can I help you today?'}, {'role': 'user', 'content': 'who are you'}], 'user': {'name': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'id': 'b16b8dfc-7838-4e5b-8a8e-2e94daa677fe', 'email': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'role': 'user'}}}, 'metadata': {'requester_metadata': {}, 'user_api_key_hash': '03aba17bfded56944d24dd00cdd2b1ce052bbe9b8708b79ba47f95ae328e5a84', 'user_api_key_alias': 'demo', 'user_api_key_team_id': None, 'user_api_key_user_id': 'default_user_id', 'user_api_key_org_id': None, 'user_api_key_team_alias': None, 'user_api_key_end_user_id': "{'name': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'id': 'b16b8dfc-7838-4e5b-8a8e-2e94daa677fe', 'email': '14a56377-0e0e-4226-a938-d2e727ee4355@monetanetwork.com', 'role': 'user'}", 'user_api_key_user_email': None, 'user_api_key': '03aba17bfded56944d24dd00cdd2b1ce052bbe9b8708b79ba47f95ae328e5a84', 'user_api_end_user_max_budget': None, 'litellm_api_version': '1.65.4.post1', 'global_max_parallel_requests': None, 'user_api_key_team_max_budget': None, 'user_api_key_team_spend': None, 'user_api_key_spend': 0.0010011749999999998, 'user_api_key_max_budget': None, 'user_api_key_model_max_budget': {}, 'user_api_key_metadata': {}, 'headers': {'host': 'localhost:4000', 'content-type': 'application/json', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'user-agent': 'Python/3.11 aiohttp/3.11.11', 'content-length': '421'}, 'endpoint': 'http://localhost:4000/chat/completions', 'litellm_parent_otel_span': None, 'requester_ip_address': '', 'model_group': 'gemini-2.0-flash-lite', 'model_group_size': 1, 'deployment': 'gemini/gemini-2.0-flash-lite', 'model_info': {'id': '3e3bc7b32bc5e8868a58b30e7b4d82aa80a72e046340863b47e6cbe72b809271', 'db_model': False}, 'caching_groups': None}, 'litellm_call_id': '32b694f4-10b4-4da2-a7f3-b179f4a498a8', 'litellm_logging_obj': <litellm.litellm_core_utils.litellm_logging.Logging object at 0x10e529940>, 'deployment': Deployment(model_name='gemini-2.0-flash-lite', litellm_params=LiteLLM_Params(api_key='AIzaSyCpgVr271A6OG4bT9C5Jcy_463gIs80sco', api_base=None, api_version=None, vertex_project=None, vertex_location=None, vertex_credentials=None, region_name=None, aws_access_key_id=None, aws_secret_access_key=None, aws_region_name=None, watsonx_region_name=None, custom_llm_provider=None, tpm=None, rpm=None, timeout=None, stream_timeout=None, max_retries=None, organization=None, configurable_clientside_auth_params=None, litellm_credential_name=None, litellm_trace_id=None, input_cost_per_token=None, output_cost_per_token=None, input_cost_per_second=None, output_cost_per_second=None, max_file_size_mb=None, max_budget=None, budget_duration=None, use_in_pass_through=False, merge_reasoning_content_in_choices=False, model_info=None, model='gemini/gemini-2.0-flash-lite'), model_info=ModelInfo(id='3e3bc7b32bc5e8868a58b30e7b4d82aa80a72e046340863b47e6cbe72b809271', db_model=False, updated_at=None, updated_by=None, created_at=None, created_by=None, base_model=None, tier=None, team_id=None, team_public_model_name=None))}
-        # handle lago from here.
         user_id = request_data["metadata"]["headers"]["x-openwebui-user-id"]
-        # user_id = "6af82351-ab67-4b45-8ef5-51aa17c79ef8"
         external_customer_id = user_id
         user_api_key_spend = request_data["metadata"]['user_api_key_spend']
         response_cost = user_api_key_spend
@@ -138,7 +137,6 @@ class EntitlementCallback(CustomLogger):
             access_denied = True
             error_detail = f"Entitlement check error: {e}"
         
-        # import pdb; pdb.set_trace()
         if access_denied:
              print(f"ACCESS DENIED for {external_customer_id} due to entitlement failure: {error_detail}")
              # Simplest approach: Yield a single final error chunk and stop.
@@ -159,9 +157,7 @@ class EntitlementCallback(CustomLogger):
 
         # If access was not denied, proceed with the original stream
         print("access granted")
-        # debug_items = [] # Keep commented unless debugging
         async for item in response:
-            # debug_items.append(item) # Keep commented unless debugging
             yield item
     
         
