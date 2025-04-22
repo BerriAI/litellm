@@ -46,3 +46,19 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
     content: List[OutputText]
+
+
+class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
+    """
+    Result of a delete response request
+
+    {
+        "id": "resp_6786a1bec27481909a17d673315b29f6",
+        "object": "response",
+        "deleted": true
+    }
+    """
+
+    id: Optional[str]
+    object: Optional[str]
+    deleted: Optional[bool]
