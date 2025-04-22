@@ -113,6 +113,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
+    "agentops",
     "anthropic_cache_control_hook",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
