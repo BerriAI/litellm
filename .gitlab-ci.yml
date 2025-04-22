@@ -1,3 +1,8 @@
+include:
+  - project: "ccoe/photon/pipelines"
+    file: "terraform_single_repo_multiple_environments.yml"
+    ref : new_photon_runners
+
 default:
   id_tokens:
     VAULT_ID_TOKEN:
@@ -19,6 +24,9 @@ variables:
 stages:
   - version
   - build
+  - plan
+  - deploy
+  - test
 
 # Job to generate the version tag based on timestamp
 Generate Version:
