@@ -107,17 +107,17 @@ types-requests = "*"
 types-setuptools = "*"
 types-redis = "*"
 types-PyYAML = "*"
-opentelemetry-api = "*"
-opentelemetry-sdk = "*"
-opentelemetry-exporter-otlp = "*"
+opentelemetry-api = "1.25.0"
+opentelemetry-sdk = "1.25.0"
+opentelemetry-exporter-otlp = "1.25.0"
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"
 hypercorn = "^0.15.0"
 prometheus-client = "0.20.0"
-opentelemetry-api = "*"
-opentelemetry-sdk = "*"
-opentelemetry-exporter-otlp = "*"
+opentelemetry-api = "1.25.0"
+opentelemetry-sdk = "1.25.0"
+opentelemetry-exporter-otlp = "1.25.0"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
