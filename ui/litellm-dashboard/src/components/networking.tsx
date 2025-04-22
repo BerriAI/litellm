@@ -676,6 +676,9 @@ export const userListCall = async (
   userIDs: string[] | null = null,
   page: number | null = null,
   page_size: number | null = null,
+  userEmail: string | null = null,
+  userRole: string | null = null,
+  team: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -697,6 +700,18 @@ export const userListCall = async (
     
     if (page_size) {
       queryParams.append('page_size', page_size.toString());
+    }
+
+    if (userEmail) {
+      queryParams.append('user_email', userEmail);
+    }
+
+    if (userRole) {
+      queryParams.append('role', userRole);
+    }
+
+    if (team) {
+      queryParams.append('team', team);
     }
     
     const queryString = queryParams.toString();
