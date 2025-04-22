@@ -9,6 +9,7 @@ variables:
   VAULT_ROLE_DEV: sre-synapse-development-infra # Confirmed Vault Role for Dev
   IMAGE_NAME: litellm # Name for the container image
   DOCKERFILE_PATH: Dockerfile # Path to the main Dockerfile
+  environment: $CI_ENVIRONMENT_NAME
 
 stages:
   - version
