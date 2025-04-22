@@ -230,7 +230,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - DELETE /v1/responses/{response_id}
         """
-        url = f"{api_base}/responses/{response_id}"
+        url = f"{api_base}/{response_id}"
         data = {}
         return url, data
 

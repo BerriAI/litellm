@@ -189,6 +189,75 @@ class BaseResponsesAPITest(ABC):
 
 
 
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_basic_openai_responses_delete_endpoint(self, sync_mode):
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        if sync_mode:
+            response = litellm.responses(
+                input="Basic ping", max_output_tokens=20,
+                **base_completion_call_args
+            )
+
+            # delete the response
+            if isinstance(response, ResponsesAPIResponse):
+                litellm.delete_responses(
+                    response_id=response.id,
+                )
+            else:
+                raise ValueError("response is not a ResponsesAPIResponse")
+        # else:
+        #     response = await litellm.aresponses(
+        #         input="Basic ping", max_output_tokens=20,
+        #         **base_completion_call_args
+        #     )
+
+        #     # async delete the response
+        #     await litellm.adelete_responses(
+        #         response_id=response.id,
+        #     )
+    
+
+    # @pytest.mark.parametrize("sync_mode", [True, False])
+    # @pytest.mark.asyncio
+    # async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
+    #     litellm._turn_on_debug()
+    #     litellm.set_verbose = True
+    #     base_completion_call_args = self.get_base_completion_call_args()
+    #     if sync_mode:
+    #         response_id = None
+    #         response = litellm.responses(
+    #             input="Basic ping", max_output_tokens=20,
+    #             stream=True,
+    #             **base_completion_call_args
+    #         )
+    #         for event in response:
+    #             if event.type == "response.completed":
+    #                 response_id = event.response.id
+    #                 break
+
+    #         # delete the response
+    #         litellm.delete_responses(
+    #             response_id=response_id,
+    #         )
+    #     else:
+    #         response = await litellm.aresponses(
+    #             input="Basic ping", max_output_tokens=20,
+    #             stream=True,
+    #             **base_completion_call_args
+    #         )
+    #         async for event in response:
+    #             if event.type == "response.completed":
+    #                 response_id = event.response.id
+    #                 break
+
+    #         # async delete the response
+    #         await litellm.adelete_responses(
+    #             response_id=response_id,
+    #         )
+
 
 
 

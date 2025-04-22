@@ -1259,10 +1259,10 @@ class BaseLLMHTTPHandler:
     def delete_response_api_handler(
         self,
         response_id: str,
-        custom_llm_provider: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str],
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -1313,7 +1313,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.delete(
-                url=api_base, headers=headers, data=json.dumps(data), timeout=timeout
+                url=url, headers=headers, data=json.dumps(data), timeout=timeout
             )
 
         except Exception as e:
