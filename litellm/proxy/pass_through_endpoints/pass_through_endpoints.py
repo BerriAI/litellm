@@ -534,6 +534,7 @@ async def pass_through_request(  # noqa: PLR0915
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
+            request_method=getattr(request, "method", None),
         )
         kwargs = _init_kwargs_for_pass_through_endpoint(
             user_api_key_dict=user_api_key_dict,

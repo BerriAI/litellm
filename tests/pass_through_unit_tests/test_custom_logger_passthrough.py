@@ -38,12 +38,13 @@ async def test_assistants_passthrough_logging():
         "tools": [{"type": "code_interpreter"}],
         "model": "gpt-4o"
     }
+    TARGET_METHOD = "POST"
 
     result = await pass_through_request(
         request=Request(
             scope={
                 "type": "http",
-                "method": "POST",
+                "method": TARGET_METHOD,
                 "path": "/v1/assistants",
                 "query_string": b"",
                 "headers": [
@@ -85,6 +86,9 @@ async def test_assistants_passthrough_logging():
     # assert that the response body content matches the response body content
     client_facing_response_body = json.loads(result.body)
     assert passthrough_logging_payload["response_body"]  == client_facing_response_body
+
+    # assert that the request method is correct
+    assert passthrough_logging_payload["request_method"] == TARGET_METHOD
 
 
 
