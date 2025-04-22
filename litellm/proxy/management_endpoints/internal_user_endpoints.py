@@ -973,17 +973,19 @@ async def get_users(
             "in": user_id_list,
         }
 
-    if user_email:
+    if user_email is not None and isinstance(user_email, str):
         where_conditions["user_email"] = {
             "contains": user_email,
             "mode": "insensitive",  # Case-insensitive search
         }
 
-    if team:
+    if team is not None and isinstance(team, str):
         where_conditions["teams"] = {
             "has": team  # Array contains for string arrays in Prisma
         }
 
+    ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
+    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
     users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
         skip=skip,
