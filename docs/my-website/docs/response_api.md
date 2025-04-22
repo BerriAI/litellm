@@ -520,3 +520,121 @@ for event in response:
 | `azure_ai` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 | All other llm api providers | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 
+## Load Balancing with Routing Affinity
+
+When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides routing affinity for conversations. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
+
+
+#### Example Usage
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python showLineNumbers title="Python SDK with Routing Affinity"
+import litellm
+
+# Set up router with multiple deployments of the same model
+router = litellm.Router(
+    model_list=[
+        {
+            "model_name": "azure-gpt4-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4-turbo",
+                "api_key": "your-api-key-1",
+                "api_version": "2024-06-01",
+                "api_base": "https://endpoint1.openai.azure.com",
+            },
+        },
+        {
+            "model_name": "azure-gpt4-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4-turbo",
+                "api_key": "your-api-key-2",
+                "api_version": "2024-06-01",
+                "api_base": "https://endpoint2.openai.azure.com",
+            },
+        },
+    ],
+    optional_pre_call_checks=["responses_api_deployment_check"],
+)
+
+# Initial request
+response = await router.aresponses(
+    model="azure-gpt4-turbo",
+    input="Hello, who are you?",
+    truncation="auto",
+)
+
+# Store the response ID
+response_id = response.id
+
+# Follow-up request - will be automatically routed to the same deployment
+follow_up = await router.aresponses(
+    model="azure-gpt4-turbo",
+    input="Tell me more about yourself",
+    truncation="auto",
+    previous_response_id=response_id  # This ensures routing to the same deployment
+)
+```
+
+</TabItem>
+<TabItem value="proxy-server" label="Proxy Server">
+
+#### 1. Setup routing affinity on proxy config.yaml
+
+To enable routing affinity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+
+```yaml showLineNumbers title="config.yaml with Responses API Routing Affinity"
+model_list:
+  - model_name: azure-gpt4-turbo
+    litellm_params:
+      model: azure/gpt-4-turbo
+      api_key: your-api-key-1
+      api_version: 2024-06-01
+      api_base: https://endpoint1.openai.azure.com
+  - model_name: azure-gpt4-turbo
+    litellm_params:
+      model: azure/gpt-4-turbo
+      api_key: your-api-key-2
+      api_version: 2024-06-01
+      api_base: https://endpoint2.openai.azure.com
+
+router_settings:
+  optional_pre_call_checks: ["responses_api_deployment_check"]
+```
+
+#### 2. Use the OpenAI Python SDK to make requests to LiteLLM Proxy
+
+```python showLineNumbers title="OpenAI Client with Proxy Server"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+# Initial request
+response = client.responses.create(
+    model="azure-gpt4-turbo",
+    input="Hello, who are you?"
+)
+
+response_id = response.id
+
+# Follow-up request - will be automatically routed to the same deployment
+follow_up = client.responses.create(
+    model="azure-gpt4-turbo",
+    input="Tell me more about yourself",
+    previous_response_id=response_id  # This ensures routing to the same deployment
+)
+```
+
+</TabItem>
+</Tabs>
+
+#### How It Works
+
+1. When a user makes an initial request to the Responses API, LiteLLM caches which model deployment that returned the specific response. (Stored in Redis if you connected LiteLLM to Redis)
+2. When a subsequent request includes `previous_response_id`, LiteLLM automatically routes it to the same deployment
+3. If the original deployment is unavailable, or if the `previous_response_id` isn't found in the cache, LiteLLM falls back to normal routing
+

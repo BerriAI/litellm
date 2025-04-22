@@ -709,7 +709,11 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+    ]
+]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):
