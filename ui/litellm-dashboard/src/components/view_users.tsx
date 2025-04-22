@@ -173,6 +173,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         
         if (data) {
           setUserListResponse(data);
+          console.log("called from debouncedSearch");
         }
       } catch (error) {
         console.error("Error searching users:", error);
@@ -270,7 +271,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         `userList_${currentPage}`,
         JSON.stringify(userDataResponse)
       );
-      
+      console.log("called from refreshUserData");
       setUserListResponse(userDataResponse);
     } catch (error) {
       console.error("Error refreshing user data:", error);
@@ -288,6 +289,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         if (cachedUserData) {
           const parsedData = JSON.parse(cachedUserData);
           setUserListResponse(parsedData);
+          console.log("called from useEffect");
         } else {
           // Fetch from API using userListCall with current filters
           const userDataResponse = await userListCall(
@@ -307,6 +309,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           );
 
           setUserListResponse(userDataResponse);
+          console.log("called from useEffect 2");
         }
 
         // Fetch roles if not cached
@@ -327,7 +330,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-  }, [accessToken, token, userRole, userID, currentPage, filters]);
+  }, [accessToken, token, userRole, userID]);
 
   if (!userListResponse) {
     return <div>Loading...</div>;
