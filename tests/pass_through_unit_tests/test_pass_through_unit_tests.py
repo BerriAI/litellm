@@ -115,6 +115,7 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
         litellm_call_id="test-call-id",
+        logging_obj=Mock(),
     )
 
     assert result["call_type"] == "pass_through_endpoint"
@@ -158,6 +159,7 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
         passthrough_logging_payload=passthrough_payload,
         _parsed_body=parsed_body,
         litellm_call_id="test-call-id",
+        logging_obj=Mock(),
     )
 
     # Check that litellm_metadata was merged with default metadata
@@ -183,6 +185,7 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_payload,
         litellm_call_id="test-call-id",
+        logging_obj=Mock(),
     )
 
     # Check that tags were added to metadata
