@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
 
 import httpx
 
@@ -353,7 +353,7 @@ def delete_responses(
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> DeleteResponseResult:
+) -> Union[DeleteResponseResult, Coroutine[Any, Any, DeleteResponseResult]]:
     """
     Synchronous version of the DELETE Responses API
 
@@ -364,7 +364,7 @@ def delete_responses(
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aresponses", False) is True
+        _is_async = kwargs.pop("adelete_responses", False) is True
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
