@@ -155,6 +155,7 @@ LITELLM_CHAT_PROVIDERS = [
     "custom",
     "litellm_proxy",
     "hosted_vllm",
+    "llamafile",
     "lm_studio",
     "galadriel",
 ]
@@ -244,6 +245,7 @@ openai_compatible_providers: List = [
     "github",
     "litellm_proxy",
     "hosted_vllm",
+    "llamafile",
     "lm_studio",
     "galadriel",
 ]
@@ -252,6 +254,7 @@ openai_text_completion_compatible_providers: List = (
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
+        "llamafile",
     ]
 )
 _openai_like_providers: List = [
