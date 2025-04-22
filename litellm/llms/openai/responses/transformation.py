@@ -232,7 +232,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - DELETE /v1/responses/{response_id}
         """
         url = f"{api_base}/{response_id}"
-        data = {}
+        data: Dict = {}
         return url, data
 
     def transform_delete_response_api_response(
