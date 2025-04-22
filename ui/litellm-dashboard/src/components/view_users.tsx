@@ -413,7 +413,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         ))}
                       </Select>
 
-                      {/* <Select
+                      <Select
                         value={filters.team}
                         onValueChange={(value) => handleFilterChange('team', value)}
                         placeholder="Select Team"
@@ -423,7 +423,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             {team.team_alias || team.team_id}
                           </SelectItem>
                         ))}
-                      </Select> */}
+                      </Select>
                     </div>
                   )}
 
