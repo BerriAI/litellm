@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card,
   Title,
@@ -23,6 +23,7 @@ import {
   DialogPanel,
   Icon,
   TextInput,
+  NumberInput,
 } from "@tremor/react";
 
 import { message } from "antd";
@@ -32,6 +33,7 @@ import {
   userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
+  userListCall,
 } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -50,6 +52,7 @@ import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import BulkCreateUsers from "./bulk_create_users_button";
 import SSOSettings from "./SSOSettings";
+import debounce from "lodash/debounce";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -77,6 +80,16 @@ interface CreateuserProps {
   onUserCreated: () => Promise<void>;
 }
 
+interface FilterState {
+  email: string;
+  user_id: string;
+  user_role: string;
+  team: string;
+  model: string;
+  min_spend: number | null;
+  max_spend: number | null;
+}
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -93,7 +106,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   setKeys,
 }) => {
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
-  const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
@@ -108,6 +120,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const defaultPageSize = 25;
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("users");
+  const [filters, setFilters] = useState<FilterState>({
+    email: "",
+    user_id: "",
+    user_role: "",
+    team: "",
+    model: "",
+    min_spend: null,
+    max_spend: null
+  });
+  const [showFilters, setShowFilters] = useState(false);
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
+  const [selectedFilter, setSelectedFilter] = useState("Email");
+  const filtersRef = useRef(null);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -122,15 +147,66 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setIsDeleteModalOpen(true);
   };
 
+  const handleFilterChange = (key: keyof FilterState, value: string | number | null) => {
+    const newFilters = { ...filters, [key]: value };
+    setFilters(newFilters);
+    debouncedSearch(newFilters);
+  };
+
+  // Create a debounced version of the search function
+  const debouncedSearch = useCallback(
+    debounce(async (filters: FilterState) => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return;
+      }
+      try {
+        // Make the API call using userListCall with all filter parameters
+        const data = await userListCall(
+          accessToken,
+          filters.user_id ? [filters.user_id] : null,
+          1, // Reset to first page when searching
+          defaultPageSize,
+          filters.email || null,
+          filters.user_role || null,
+          filters.team || null
+        );
+        
+        if (data) {
+          setUserListResponse(data);
+          console.log("called from debouncedSearch");
+        }
+      } catch (error) {
+        console.error("Error searching users:", error);
+      }
+    }, 300),
+    [accessToken, token, userRole, userID]
+  );
+
+  // Cleanup the debounced function on component unmount
+  useEffect(() => {
+    return () => {
+      debouncedSearch.cancel();
+    };
+  }, [debouncedSearch]);
+
+  const handleSearch = (value: string) => {
+    setSearchTerm(value);
+    if (value === "") {
+      refreshUserData(); // Reset to original data when search is cleared
+    } else {
+      debouncedSearch(filters);
+    }
+  };
+
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
         await userDeleteCall(accessToken, [userToDelete]);
         message.success("User deleted successfully");
         // Update the user list after deletion
-        if (userData) {
-          const updatedUserData = userData.filter(user => user.user_id !== userToDelete);
-          setUserData(updatedUserData);
+        if (userListResponse) {
+          const updatedUserData = userListResponse.users?.filter(user => user.user_id !== userToDelete);
+          setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
         }
       } catch (error) {
         console.error("Error deleting user:", error);
@@ -164,11 +240,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     } catch (error) {
       console.error("There was an error updating the user", error);
     }
-    if (userData) {
-      const updatedUserData = userData.map((user) =>
+    if (userListResponse) {
+      const updatedUserData = userListResponse.users?.map((user) =>
         user.user_id === editedUser.user_id ? editedUser : user
       );
-      setUserData(updatedUserData);
+      setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
     }
     setSelectedUser(null);
     setEditModalVisible(false);
@@ -195,11 +271,39 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         `userList_${currentPage}`,
         JSON.stringify(userDataResponse)
       );
-      
+      console.log("called from refreshUserData");
       setUserListResponse(userDataResponse);
-      setUserData(userDataResponse.users || []);
     } catch (error) {
       console.error("Error refreshing user data:", error);
+    }
+  };
+
+  const handlePageChange = async (newPage: number) => {
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+    
+    try {
+      const userDataResponse = await userListCall(
+        accessToken,
+        filters.user_id ? [filters.user_id] : null,
+        newPage,
+        defaultPageSize,
+        filters.email || null,
+        filters.user_role || null,
+        filters.team || null
+      );
+      
+      // Update session storage with new data
+      sessionStorage.setItem(
+        `userList_${newPage}`,
+        JSON.stringify(userDataResponse)
+      );
+      
+      setUserListResponse(userDataResponse);
+      setCurrentPage(newPage);
+    } catch (error) {
+      console.error("Error changing page:", error);
     }
   };
 
@@ -214,16 +318,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         if (cachedUserData) {
           const parsedData = JSON.parse(cachedUserData);
           setUserListResponse(parsedData);
-          setUserData(parsedData.users || []);
+          console.log("called from useEffect");
         } else {
-          // Fetch from API if not in cache
-          const userDataResponse = await userInfoCall(
+          // Fetch from API using userListCall with current filters
+          const userDataResponse = await userListCall(
             accessToken,
-            null,
-            userRole,
-            true,
+            filters.user_id ? [filters.user_id] : null,
             currentPage,
-            defaultPageSize
+            defaultPageSize,
+            filters.email || null,
+            filters.user_role || null,
+            filters.team || null
           );
 
           // Store in session storage
@@ -233,7 +338,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           );
 
           setUserListResponse(userDataResponse);
-          setUserData(userDataResponse.users || []);
+          console.log("called from useEffect 2");
         }
 
         // Fetch roles if not cached
@@ -254,9 +359,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-  }, [accessToken, token, userRole, userID, currentPage]);
+  }, [accessToken, token, userRole, userID]);
 
-  if (!userData) {
+  if (!userListResponse) {
     return <div>Loading...</div>;
   }
 
@@ -297,8 +402,150 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           <TabPanel>
             <div className="bg-white rounded-lg shadow">
               <div className="border-b px-6 py-4">
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-                  <div className="flex items-center space-x-4">
+                <div className="flex flex-col space-y-4">
+                  {/* Search and Filter Controls */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Email Search */}
+                    <div className="relative w-64">
+                      <input
+                        type="text"
+                        placeholder="Search by email..."
+                        className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        value={filters.email}
+                        onChange={(e) => handleFilterChange('email', e.target.value)}
+                      />
+                      <svg
+                        className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                        />
+                      </svg>
+                    </div>
+
+                    {/* Filter Button */}
+                    <button
+                      className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? 'bg-gray-100' : ''}`}
+                      onClick={() => setShowFilters(!showFilters)}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                        />
+                      </svg>
+                      Filters
+                      {(filters.user_id || filters.user_role || filters.team) && (
+                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                      )}
+                    </button>
+
+                    {/* Reset Filters Button */}
+                    <button
+                      className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                      onClick={() => {
+                        setFilters({
+                          email: "",
+                          user_id: "",
+                          user_role: "",
+                          team: "",
+                          model: "",
+                          min_spend: null,
+                          max_spend: null
+                        });
+                      }}
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                      Reset Filters
+                    </button>
+                  </div>
+
+                  {/* Additional Filters */}
+                  {showFilters && (
+                    <div className="flex flex-wrap items-center gap-3 mt-3">
+                      {/* User ID Search */}
+                      <div className="relative w-64">
+                        <input
+                          type="text"
+                          placeholder="Filter by User ID"
+                          className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={filters.user_id}
+                          onChange={(e) => handleFilterChange('user_id', e.target.value)}
+                        />
+                        <svg
+                          className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                      </div>
+
+                      {/* Role Dropdown */}
+                      <div className="w-64">
+                        <Select
+                          value={filters.user_role}
+                          onValueChange={(value) => handleFilterChange('user_role', value)}
+                          placeholder="Select Role"
+                        >
+                          {Object.entries(possibleUIRoles).map(([key, value]) => (
+                            <SelectItem key={key} value={key}>
+                              {value.ui_label}
+                            </SelectItem>
+                          ))}
+                        </Select>
+                      </div>
+
+                      {/* Team Dropdown */}
+                      <div className="w-64">
+                        <Select
+                          value={filters.team}
+                          onValueChange={(value) => handleFilterChange('team', value)}
+                          placeholder="Select Team"
+                        >
+                          {teams?.map((team) => (
+                            <SelectItem key={team.team_id} value={team.team_id}>
+                              {team.team_alias || team.team_id}
+                            </SelectItem>
+                          ))}
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Results Count and Pagination */}
+                  <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-700">
                       Showing{" "}
                       {userListResponse && userListResponse.users && userListResponse.users.length > 0
@@ -313,25 +560,28 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         : 0}{" "}
                       of {userListResponse ? userListResponse.total : 0} results
                     </span>
-                    <div className="flex items-center space-x-2">
+                    
+                    {/* Pagination Buttons */}
+                    <div className="flex space-x-2">
                       <button
-                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                        disabled={!userListResponse || currentPage <= 1}
-                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage === 1
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'hover:bg-gray-50'
+                        }`}
                       >
                         Previous
                       </button>
-                      <span className="text-sm text-gray-700">
-                        Page {userListResponse ? userListResponse.page : "-"} of{" "}
-                        {userListResponse ? userListResponse.total_pages : "-"}
-                      </span>
                       <button
-                        onClick={() => setCurrentPage((p) => p + 1)}
-                        disabled={
-                          !userListResponse ||
-                          currentPage >= userListResponse.total_pages
-                        }
-                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={!userListResponse || currentPage >= userListResponse.total_pages}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          !userListResponse || currentPage >= userListResponse.total_pages
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'hover:bg-gray-50'
+                        }`}
                       >
                         Next
                       </button>
@@ -339,10 +589,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   </div>
                 </div>
               </div>
+
               <UserDataTable
-                data={userData || []}
+                data={userListResponse.users || []}
                 columns={tableColumns}
-                isLoading={!userData}
+                isLoading={!userListResponse}
               />
             </div>
           </TabPanel>
