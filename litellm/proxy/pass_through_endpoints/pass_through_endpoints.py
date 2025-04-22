@@ -23,6 +23,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
@@ -38,11 +39,14 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
+    PassthroughStandardLoggingPayload,
+)
 from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
-from .types import EndpointType, PassthroughStandardLoggingPayload
 
 router = APIRouter()
 
@@ -530,6 +534,7 @@ async def pass_through_request(  # noqa: PLR0915
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
+            request_method=getattr(request, "method", None),
         )
         kwargs = _init_kwargs_for_pass_through_endpoint(
             user_api_key_dict=user_api_key_dict,
@@ -537,6 +542,7 @@ async def pass_through_request(  # noqa: PLR0915
             passthrough_logging_payload=passthrough_logging_payload,
             litellm_call_id=litellm_call_id,
             request=request,
+            logging_obj=logging_obj,
         )
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
@@ -741,6 +747,7 @@ def _init_kwargs_for_pass_through_endpoint(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     passthrough_logging_payload: PassthroughStandardLoggingPayload,
+    logging_obj: LiteLLMLoggingObj,
     _parsed_body: Optional[dict] = None,
     litellm_call_id: Optional[str] = None,
 ) -> dict:
@@ -775,6 +782,11 @@ def _init_kwargs_for_pass_through_endpoint(
         "litellm_call_id": litellm_call_id,
         "passthrough_logging_payload": passthrough_logging_payload,
     }
+
+    logging_obj.model_call_details["passthrough_logging_payload"] = (
+        passthrough_logging_payload
+    )
+
     return kwargs
 
 
