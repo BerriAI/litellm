@@ -903,12 +903,6 @@ async def get_user_key_counts(
 
 
 @router.get(
-    "/user/get_users",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=UserListResponse,
-)
-@router.get(
     "/user/list",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
@@ -921,15 +915,19 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    user_email: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by partial email match"
+    ),
+    team: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by team id"
+    ),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
 ):
     """
-    Get a paginated list of users, optionally filtered by role.
-
-    Used by the UI to populate the user lists.
+    Get a paginated list of users with filtering options.
 
     Parameters:
         role: Optional[str]
@@ -940,17 +938,17 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        user_email: Optional[str]
+            Filter users by partial email match
+        team: Optional[str]
+            Filter users by team id. Will match if user has this team in their teams array.
         page: int
             The page number to return
         page_size: int
             The number of items per page
 
-    Currently - admin-only endpoint.
-
-    Example curl:
-    ```
-    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
-    ```
+    Returns:
+        UserListResponse with filtered and paginated users
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -963,25 +961,30 @@ async def get_users(
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
-    # Prepare the query conditions
     # Build where conditions based on provided parameters
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = {
-            "contains": role,
-            "mode": "insensitive",  # Case-insensitive search
-        }
+        where_conditions["user_role"] = role  # Exact match instead of contains
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
-            "in": user_id_list,  # Now passing a list of strings as required by Prisma
+            "in": user_id_list,
         }
 
-    users: Optional[
-        List[LiteLLM_UserTable]
-    ] = await prisma_client.db.litellm_usertable.find_many(
+    if user_email:
+        where_conditions["user_email"] = {
+            "contains": user_email,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if team:
+        where_conditions["teams"] = {
+            "has": team  # Array contains for string arrays in Prisma
+        }
+
+    users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
@@ -989,9 +992,7 @@ async def get_users(
     )
 
     # Get total count of user rows
-    total_count = await prisma_client.db.litellm_usertable.count(
-        where=where_conditions  # type: ignore
-    )
+    total_count = await prisma_client.db.litellm_usertable.count(where=where_conditions)
 
     # Get key count for each user
     if users is not None:
@@ -1014,7 +1015,7 @@ async def get_users(
                 LiteLLM_UserTableWithKeyCount(
                     **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
                 )
-            )  # Return full key object
+            )
     else:
         user_list = []
 

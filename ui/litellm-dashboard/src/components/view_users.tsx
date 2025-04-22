@@ -23,6 +23,7 @@ import {
   DialogPanel,
   Icon,
   TextInput,
+  NumberInput,
 } from "@tremor/react";
 
 import { message } from "antd";
@@ -32,7 +33,7 @@ import {
   userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
-  userFilterUICall,
+  userListCall,
 } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -79,6 +80,16 @@ interface CreateuserProps {
   onUserCreated: () => Promise<void>;
 }
 
+interface FilterState {
+  email: string;
+  user_id: string;
+  user_role: string;
+  team: string;
+  model: string;
+  min_spend: number | null;
+  max_spend: number | null;
+}
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -110,6 +121,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const defaultPageSize = 25;
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("users");
+  const [filters, setFilters] = useState<FilterState>({
+    email: "",
+    user_id: "",
+    user_role: "",
+    team: "",
+    model: "",
+    min_spend: null,
+    max_spend: null
+  });
+  const [showFilters, setShowFilters] = useState(false);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -124,35 +145,38 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setIsDeleteModalOpen(true);
   };
 
+  const handleFilterChange = (key: keyof FilterState, value: string | number | null) => {
+    const newFilters = { ...filters, [key]: value };
+    setFilters(newFilters);
+    debouncedSearch(newFilters);
+  };
+
   // Create a debounced version of the search function
   const debouncedSearch = useCallback(
-    debounce(async (searchValue: string) => {
+    debounce(async (filters: FilterState) => {
       if (!accessToken || !token || !userRole || !userID) {
         return;
       }
       try {
-        const params = new URLSearchParams();
-        if (searchValue) {
-          params.append('user_email', searchValue);
-        }
-        const filteredUsers = await userFilterUICall(accessToken, params);
+        // Make the API call using userListCall with all filter parameters
+        const data = await userListCall(
+          accessToken,
+          filters.user_id ? [filters.user_id] : null,
+          1, // Reset to first page when searching
+          defaultPageSize,
+          filters.email || null,
+          filters.user_role || null,
+          filters.team || null
+        );
         
-        // Update the user list with filtered results
-        if (filteredUsers) {
-          setUserData(filteredUsers);
-          setUserListResponse(prev => ({
-            ...prev,
-            users: filteredUsers,
-            total: filteredUsers.length,
-            page: 1,
-            page_size: defaultPageSize,
-            total_pages: Math.ceil(filteredUsers.length / defaultPageSize)
-          }));
+        if (data) {
+          setUserData(data.users);
+          setUserListResponse(data);
         }
       } catch (error) {
         console.error("Error searching users:", error);
       }
-    }, 300), // 300ms delay
+    }, 300),
     [accessToken, token, userRole, userID]
   );
 
@@ -168,7 +192,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (value === "") {
       refreshUserData(); // Reset to original data when search is cleared
     } else {
-      debouncedSearch(value);
+      debouncedSearch(filters);
     }
   };
 
@@ -266,14 +290,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           setUserListResponse(parsedData);
           setUserData(parsedData.users || []);
         } else {
-          // Fetch from API if not in cache
-          const userDataResponse = await userInfoCall(
+          // Fetch from API using userListCall with current filters
+          const userDataResponse = await userListCall(
             accessToken,
-            null,
-            userRole,
-            true,
+            filters.user_id ? [filters.user_id] : null,
             currentPage,
-            defaultPageSize
+            defaultPageSize,
+            filters.email || null,
+            filters.user_role || null,
+            filters.team || null
           );
 
           // Store in session storage
@@ -304,7 +329,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-  }, [accessToken, token, userRole, userID, currentPage]);
+  }, [accessToken, token, userRole, userID, currentPage, filters]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -347,16 +372,63 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           <TabPanel>
             <div className="bg-white rounded-lg shadow">
               <div className="border-b px-6 py-4">
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-                  <div className="flex items-center space-x-4 w-full">
+                <div className="flex flex-col space-y-4">
+                  {/* Search and Filter Controls */}
+                  <div className="flex items-center justify-between">
                     <div className="flex-1 max-w-md">
                       <TextInput
                         placeholder="Search by email..."
-                        value={searchTerm}
-                        onChange={(e) => handleSearch(e.target.value)}
+                        value={filters.email}
+                        onChange={(e) => handleFilterChange('email', e.target.value)}
                         className="w-full"
                       />
                     </div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowFilters(!showFilters)}
+                      className="ml-4"
+                    >
+                      {showFilters ? "Hide Filters" : "Show Filters"}
+                    </Button>
+                  </div>
+
+                  {/* Advanced Filters */}
+                  {showFilters && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                      <TextInput
+                        placeholder="Filter by User ID"
+                        value={filters.user_id}
+                        onChange={(e) => handleFilterChange('user_id', e.target.value)}
+                      />
+                      
+                      <Select
+                        value={filters.user_role}
+                        onValueChange={(value) => handleFilterChange('user_role', value)}
+                        placeholder="Select Role"
+                      >
+                        {Object.entries(possibleUIRoles).map(([key, value]) => (
+                          <SelectItem key={key} value={key}>
+                            {value.ui_label}
+                          </SelectItem>
+                        ))}
+                      </Select>
+
+                      {/* <Select
+                        value={filters.team}
+                        onValueChange={(value) => handleFilterChange('team', value)}
+                        placeholder="Select Team"
+                      >
+                        {teams?.map((team) => (
+                          <SelectItem key={team.team_id} value={team.team_id}>
+                            {team.team_alias || team.team_id}
+                          </SelectItem>
+                        ))}
+                      </Select> */}
+                    </div>
+                  )}
+
+                  {/* Results Count */}
+                  <div className="flex justify-end">
                     <span className="text-sm text-gray-700">
                       Showing{" "}
                       {userListResponse && userListResponse.users && userListResponse.users.length > 0
@@ -371,32 +443,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         : 0}{" "}
                       of {userListResponse ? userListResponse.total : 0} results
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                        disabled={!userListResponse || currentPage <= 1}
-                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Previous
-                      </button>
-                      <span className="text-sm text-gray-700">
-                        Page {userListResponse ? userListResponse.page : "-"} of{" "}
-                        {userListResponse ? userListResponse.total_pages : "-"}
-                      </span>
-                      <button
-                        onClick={() => setCurrentPage((p) => p + 1)}
-                        disabled={
-                          !userListResponse ||
-                          currentPage >= userListResponse.total_pages
-                        }
-                        className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Next
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
+
               <UserDataTable
                 data={userData || []}
                 columns={tableColumns}
