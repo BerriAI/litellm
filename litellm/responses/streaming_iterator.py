@@ -42,7 +42,7 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
 
-    def _process_chunk(self, chunk):
+    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None

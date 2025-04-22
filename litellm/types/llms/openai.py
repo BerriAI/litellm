@@ -1235,6 +1235,7 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
         ErrorEvent,
+        GenericEvent,
     ],
     Discriminator("type"),
 ]
