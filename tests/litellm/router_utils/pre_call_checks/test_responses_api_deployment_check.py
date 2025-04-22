@@ -28,7 +28,7 @@ async def test_responses_api_routing_with_previous_response_id():
     Test that when using a previous_response_id, the request is sent to the same model_id
     """
     # Create a mock response that simulates Azure responses API
-    mock_response_id = "mock-resp-456"
+    mock_response_id = "resp_mock-resp-456"
 
     mock_response_data = {
         "id": mock_response_id,
@@ -116,14 +116,13 @@ async def test_responses_api_routing_with_previous_response_id():
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
         # Make the initial request
-        litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         response = await router.aresponses(
             model=MODEL,
             input="Hello, how are you?",
             truncation="auto",
         )
-
-        await asyncio.sleep(2)
+        print("RESPONSE", response)
 
         # Store the model_id from the response
         expected_model_id = response._hidden_params["model_id"]
