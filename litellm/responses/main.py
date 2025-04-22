@@ -277,6 +277,71 @@ def responses(
 
 
 @client
+async def adelete_responses(
+    response_id: str,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> DeleteResponseResult:
+    """
+    Async version of the DELETE Responses API
+
+    DELETE /v1/responses/{response_id} endpoint in the responses API
+
+    """
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["adelete_responses"] = True
+
+        # get custom llm provider from response_id
+        decoded_response_id: DecodedResponseId = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                response_id=response_id,
+            )
+        )
+        response_id = decoded_response_id.get("response_id") or response_id
+        custom_llm_provider = (
+            decoded_response_id.get("custom_llm_provider") or custom_llm_provider
+        )
+
+        func = partial(
+            delete_responses,
+            response_id=response_id,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
 def delete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
