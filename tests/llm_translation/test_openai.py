@@ -470,3 +470,4 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.OPENAI
+
