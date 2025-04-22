@@ -102,6 +102,7 @@ Build LiteLLM Image Dev:
     - if: '$CI_COMMIT_TAG == null'
       changes:
         - Dockerfile
+        - .gitlab-ci.yml
         - cloudbuild.yaml
         - requirements.txt
         - pyproject.toml
