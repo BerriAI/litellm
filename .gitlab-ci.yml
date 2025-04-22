@@ -1,0 +1,110 @@
+# .gitlab-ci.yml
+
+variables:
+  # Define variables based on your environment and naming conventions
+  APPSTACKCODE: synapse
+  BUSINESSLINE: sre
+  GCP_PROJECT_ID_DEV: thl-sre-d-synapse # Confirmed GCP Project ID for Dev
+  ARTIFACT_REGISTRY_DEV: europe-west1-docker.pkg.dev/thl-sre-d-synapse/litellm # Confirmed Artifact Registry Path for Dev
+  VAULT_ROLE_DEV: sre-synapse-development-infra # Confirmed Vault Role for Dev
+  IMAGE_NAME: litellm # Name for the container image
+  DOCKERFILE_PATH: Dockerfile # Path to the main Dockerfile
+
+stages:
+  - version
+  - build
+
+# Job to generate the version tag based on timestamp
+Generate Version:
+  stage: version
+  tags:
+    - new_photon_runners # Assuming you use the same runner tags
+  script:
+    - VERSION=$(date +"%Y.%m.%d-%H%M%S") # Added seconds for more uniqueness
+    - echo "Generated Version $VERSION"
+    - echo "VERSION=$VERSION" > version.env
+    # Optionally tag the git commit here if needed, similar to Onyx example
+    # - git config --global user.email "your-email@example.com"
+    # - git config --global user.name "GitLab CI"
+    # - git tag -a "$VERSION" -m "Version $VERSION"
+    # - git push --tags https://gitlab-ci-token:${GIT_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git
+  artifacts:
+    reports:
+      dotenv: version.env
+    paths:
+      - version.env
+  rules:
+    # Adjust rules as needed, e.g., run only on main/master or specific branches
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "master"' # Include master if used
+    - if: '$CI_COMMIT_BRANCH == "review"' # Include review if used
+
+# Template for Cloud Build job
+.cloudbuild:
+  stage: build
+  tags:
+    - new_photon_runners # Assuming you use the same runner tags
+  variables:
+    # Determine environment based on branch or other logic if needed
+    # For simplicity, defaulting to development here
+    environment: development
+    GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
+    VAULT_ROLE: $VAULT_ROLE_DEV
+  script:
+    # 1. Authenticate to Vault using GitLab JWT
+    - |
+      echo "Logging into Vault..."
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${VAULT_ROLE} jwt=${CI_JOB_JWT_V2})
+      if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi
+      echo "Vault login successful."
+    # 2. Get GCP Access Token from Vault
+    - |
+      echo "Fetching GCP token from Vault..."
+      GCP_TOKEN_JSON=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/${environment}/gcp/roleset/automation-rw/token)
+      if [ $? -ne 0 ]; then echo "Failed to read GCP token from Vault!"; exit 1; fi
+      export CLOUDSDK_AUTH_ACCESS_TOKEN=$(echo $GCP_TOKEN_JSON | jq -r '.data.token')
+      if [ -z "$CLOUDSDK_AUTH_ACCESS_TOKEN" ] || [ "$CLOUDSDK_AUTH_ACCESS_TOKEN" == "null" ]; then
+        echo "Extracted GCP token is empty or null!"
+        echo "Vault Response: $GCP_TOKEN_JSON"
+        exit 1
+      fi
+      export GOOGLE_OAUTH_ACCESS_TOKEN=$CLOUDSDK_AUTH_ACCESS_TOKEN
+      echo "GCP token obtained."
+    # 3. Submit build to Google Cloud Build
+    - |
+      echo "Submitting build to GCP Cloud Build..."
+      echo "Project ID: $GCP_PROJECT_ID"
+      echo "Image Name: $IMAGE_NAME"
+      echo "Dockerfile: $DOCKERFILE_PATH"
+      echo "Image Tag: $VERSION"
+      gcloud builds submit --project=$GCP_PROJECT_ID \
+        --config=cloudbuild.yaml \
+        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION}
+      if [ $? -ne 0 ]; then echo "Cloud Build submission failed!"; exit 1; fi
+      echo "Cloud Build submitted successfully."
+  dependencies:
+    - Generate Version
+  needs:
+    - job: Generate Version
+
+# Job to build the main LiteLLM image for Development
+Build LiteLLM Image Dev:
+  extends: .cloudbuild
+  variables:
+    environment: development
+    GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
+    VAULT_ROLE: $VAULT_ROLE_DEV
+  rules:
+    # Build on main/master branch
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    # Or build if relevant files change on any branch (except tags)
+    - if: '$CI_COMMIT_TAG == null'
+      changes:
+        - Dockerfile
+        - cloudbuild.yaml
+        - requirements.txt
+        - pyproject.toml
+        - poetry.lock
+        - litellm/**/* # Changes within the main litellm directory
+        - docker/**/* # Changes within the docker helper scripts directory
