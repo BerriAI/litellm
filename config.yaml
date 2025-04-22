@@ -1,0 +1,22 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/my_azure_deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: "os.environ/AZURE_API_KEY"
+      api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: "os.environ/GOOGLE_API_KEY"
+  - model_name: gemini-2.5-pro-preview-03-25
+    litellm_params:
+      model: gemini/gemini-2.5-pro-preview-03-25
+      api_key: "os.environ/GOOGLE_API_KEY"
+  - model_name: gemini-2.0-flash-lite
+    litellm_params:
+      model: gemini/gemini-2.0-flash-lite
+      api_key: "os.environ/GOOGLE_API_KEY"
+
+litellm_settings:
+  callbacks: ["entitlement_callback.entitlement_checker"]
