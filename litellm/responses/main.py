@@ -116,6 +116,13 @@ async def aresponses(
             response = await init_response
         else:
             response = init_response
+
+        # Update the responses_api_response_id with the model_id
+        if isinstance(response, ResponsesAPIResponse):
+            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=response,
+                kwargs=kwargs,
+            )
         return response
     except Exception as e:
         raise litellm.exception_type(
@@ -247,6 +254,13 @@ def responses(
                 model=model, stream=stream, custom_llm_provider=custom_llm_provider
             ),
         )
+
+        # Update the responses_api_response_id with the model_id
+        if isinstance(response, ResponsesAPIResponse):
+            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=response,
+                kwargs=kwargs,
+            )
 
         return response
     except Exception as e:
