@@ -133,6 +133,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState("Email");
   const filtersRef = useRef(null);
+  const lastSearchTimestamp = useRef(0);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -150,6 +151,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleFilterChange = (key: keyof FilterState, value: string | number | null) => {
     const newFilters = { ...filters, [key]: value };
     setFilters(newFilters);
+    console.log("called from handleFilterChange - newFilters:", JSON.stringify(newFilters));
     debouncedSearch(newFilters);
   };
 
@@ -159,6 +161,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       if (!accessToken || !token || !userRole || !userID) {
         return;
       }
+
+      const currentTimestamp = Date.now();
+      lastSearchTimestamp.current = currentTimestamp;
+
       try {
         // Make the API call using userListCall with all filter parameters
         const data = await userListCall(
@@ -171,9 +177,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           filters.team || null
         );
         
-        if (data) {
-          setUserListResponse(data);
-          console.log("called from debouncedSearch");
+        // Only update state if this is the most recent search
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          if (data) {
+            setUserListResponse(data);
+            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+            console.log("called from debouncedSearch data:", JSON.stringify(data));
+          }
         }
       } catch (error) {
         console.error("Error searching users:", error);
@@ -252,6 +262,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   };
 
   const refreshUserData = async () => {
+    console.log("called from refreshUserData");
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
