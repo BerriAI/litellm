@@ -49,12 +49,12 @@ Generate Version:
     # For simplicity, defaulting to development here
     environment: development
     GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
-    VAULT_ROLE: $VAULT_ROLE_DEV
   script:
     # 1. Authenticate to Vault using GitLab JWT
     - |
-      echo "Logging into Vault..."
-      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${VAULT_ROLE} jwt=${CI_JOB_JWT_V2})
+      role=${BUSINESSLINE}-${APPSTACKCODE}-${CI_ENVIRONMENT_NAME}-infra
+      echo "Logging into Vault... with role:$role"
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=$role jwt=${CI_JOB_JWT_V2})
       if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi
       echo "Vault login successful."
     # 2. Get GCP Access Token from Vault
