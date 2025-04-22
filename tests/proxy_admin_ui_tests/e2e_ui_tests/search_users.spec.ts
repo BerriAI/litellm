@@ -7,6 +7,7 @@ Tests:
 2. Verify search input exists
 3. Test search functionality
 4. Verify results update
+5. Test filtering by email, user ID, and SSO user ID
 */
 
 import { test, expect } from "@playwright/test";
@@ -116,4 +117,106 @@ test("user search test", async ({ page }) => {
   console.log(`Reset user count: ${resetUserCount}`);
 
   expect(resetUserCount).toBe(initialUserCount);
+});
+
+test("user filter test", async ({ page }) => {
+  // Set a longer timeout for the entire test
+  test.setTimeout(60000);
+
+  // Enable console logging
+  page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
+
+  // Login first
+  await page.goto("http://localhost:4000/ui");
+  console.log("Navigated to login page");
+
+  // Wait for login form to be visible
+  await page.waitForSelector('input[name="username"]', { timeout: 10000 });
+  console.log("Login form is visible");
+
+  await page.fill('input[name="username"]', "admin");
+  await page.fill('input[name="password"]', "gm");
+  console.log("Filled login credentials");
+
+  const loginButton = page.locator('input[type="submit"]');
+  await expect(loginButton).toBeEnabled();
+  await loginButton.click();
+  console.log("Clicked login button");
+
+  // Wait for navigation to complete and dashboard to load
+  await page.waitForLoadState("networkidle");
+  console.log("Page loaded after login");
+
+  // Navigate to Internal Users tab
+  const internalUserTab = page.locator("span.ant-menu-title-content", {
+    hasText: "Internal User",
+  });
+  await internalUserTab.waitFor({ state: "visible", timeout: 10000 });
+  await internalUserTab.click();
+  console.log("Clicked Internal User tab");
+
+  // Wait for the page to load and table to be visible
+  await page.waitForSelector("tbody tr", { timeout: 10000 });
+  await page.waitForTimeout(2000); // Additional wait for table to stabilize
+  console.log("Table is visible");
+
+  // Get initial user count
+  const initialUserCount = await page.locator("tbody tr").count();
+  console.log(`Initial user count: ${initialUserCount}`);
+
+  // Test email filter
+  const emailInput = page.locator('input[placeholder="Search by email..."]');
+  await expect(emailInput).toBeVisible();
+  console.log("Email search input is visible");
+
+  await emailInput.fill("test@");
+  console.log("Filled email filter");
+  await page.waitForTimeout(500); // Wait for debounce
+  const emailFilteredCount = await page.locator("tbody tr").count();
+  console.log(`Email filtered count: ${emailFilteredCount}`);
+  expect(emailFilteredCount).toBeLessThan(initialUserCount);
+
+  // Clear email filter
+  await emailInput.clear();
+  await page.waitForTimeout(500);
+  console.log("Cleared email filter");
+
+  // Test user ID filter
+  const userIdInput = page.locator('input[placeholder="Filter by User ID"]');
+  await expect(userIdInput).toBeVisible();
+  console.log("User ID filter is visible");
+
+  await userIdInput.fill("user");
+  console.log("Filled user ID filter");
+  await page.waitForTimeout(500);
+  const userIdFilteredCount = await page.locator("tbody tr").count();
+  console.log(`User ID filtered count: ${userIdFilteredCount}`);
+  expect(userIdFilteredCount).toBeLessThan(initialUserCount);
+
+  // Clear user ID filter
+  await userIdInput.clear();
+  await page.waitForTimeout(500);
+  console.log("Cleared user ID filter");
+
+  // Test SSO user ID filter
+  const ssoUserIdInput = page.locator('input[placeholder="Filter by SSO ID"]');
+  await expect(ssoUserIdInput).toBeVisible();
+  console.log("SSO user ID filter is visible");
+
+  await ssoUserIdInput.fill("sso");
+  console.log("Filled SSO user ID filter");
+  await page.waitForTimeout(500);
+  const ssoUserIdFilteredCount = await page.locator("tbody tr").count();
+  console.log(`SSO user ID filtered count: ${ssoUserIdFilteredCount}`);
+  expect(ssoUserIdFilteredCount).toBeLessThan(initialUserCount);
+
+  // Clear SSO user ID filter
+  await ssoUserIdInput.clear();
+  await page.waitForTimeout(500);
+  console.log("Cleared SSO user ID filter");
+
+  // Verify count returns to initial after clearing all filters
+  const finalUserCount = await page.locator("tbody tr").count();
+  console.log(`Final user count: ${finalUserCount}`);
+  expect(finalUserCount).toBe(initialUserCount);
 });
