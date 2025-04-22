@@ -1,15 +1,5 @@
 import base64
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Coroutine,
-    Dict,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    get_type_hints,
-)
+from typing import Any, Dict, Optional, Tuple, Union, cast, get_type_hints
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,11 +10,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import SpecialEnums, Usage
-
-if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-else:
-    BaseResponsesAPIStreamingIterator = Any
 
 
 class ResponsesAPIRequestUtils:
