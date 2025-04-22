@@ -104,12 +104,12 @@ async def test_router_with_caching():
         model_list = [
             {
                 "model_name": "azure/gpt-4",
-                "litellm_params": get_azure_params("chatgpt-v-2"),
+                "litellm_params": get_azure_params("chatgpt-v-3"),
                 "tpm": 100,
             },
             {
                 "model_name": "azure/gpt-4",
-                "litellm_params": get_azure_params("chatgpt-v-2"),
+                "litellm_params": get_azure_params("chatgpt-v-3"),
                 "tpm": 1000,
             },
         ]

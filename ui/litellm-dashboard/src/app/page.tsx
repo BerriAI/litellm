@@ -98,8 +98,8 @@ export default function CreateKeyPage() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
+  const [userID, setUserID] = useState<string | null>(null);
 
-  const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
 
   // Get page from URL, default to 'api-keys' if not present
@@ -176,6 +176,10 @@ export default function CreateKeyPage() {
 
       if (decoded.auth_header_name) {
         setGlobalLitellmHeaderName(decoded.auth_header_name);
+      }
+
+      if (decoded.user_id) {
+        setUserID(decoded.user_id);
       }
     }
   }, [token]);
@@ -300,6 +304,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
+                  proxySettings={proxySettings}
                 />
               ) : page == "api_ref" ? (
                 <APIRef proxySettings={proxySettings} />
@@ -369,6 +374,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   accessToken={accessToken}
+                  teams={teams as Team[] ?? []}
                 />
               ) : 
               (

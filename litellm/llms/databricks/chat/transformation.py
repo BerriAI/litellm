@@ -37,6 +37,7 @@ from litellm.types.llms.databricks import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -314,13 +315,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @staticmethod
     def extract_reasoning_content(
         content: Optional[AllDatabricksContentValues],
-    ) -> Tuple[Optional[str], Optional[List[ChatCompletionThinkingBlock]]]:
+    ) -> Tuple[
+        Optional[str],
+        Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
+    ]:
         """
         Extract and return the reasoning content and thinking blocks
         """
         if content is None:
             return None, None
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:

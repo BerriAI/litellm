@@ -1104,17 +1104,21 @@ class Router:
     ) -> None:
         """
         Adds default litellm params to kwargs, if set.
+
+        Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
         """
-        self.default_litellm_params[
-            metadata_variable_name
-        ] = self.default_litellm_params.pop("metadata", {})
-        for k, v in self.default_litellm_params.items():
-            if (
-                k not in kwargs and v is not None
-            ):  # prioritize model-specific params > default router params
-                kwargs[k] = v
-            elif k == metadata_variable_name:
-                kwargs[metadata_variable_name].update(v)
+        # 1) copy your defaults and pull out metadata
+        defaults = self.default_litellm_params.copy()
+        metadata_defaults = defaults.pop("metadata", {}) or {}
+
+        # 2) add any non-metadata defaults that aren't already in kwargs
+        for key, value in defaults.items():
+            if value is None:
+                continue
+            kwargs.setdefault(key, value)
+
+        # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
+        kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict
@@ -4979,8 +4983,12 @@ class Router:
                 )
 
             if model_group_info is None:
-                model_group_info = ModelGroupInfo(
-                    model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
+                model_group_info = ModelGroupInfo(  # type: ignore
+                    **{
+                        "model_group": user_facing_model_group_name,
+                        "providers": [llm_provider],
+                        **model_info,
+                    }
                 )
             else:
                 # if max_input_tokens > curr

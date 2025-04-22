@@ -44,7 +44,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   return (
     <>
       <Form.Item
-        label="Cache Control"
+        label="Cache Control Injection Points"
         name="cache_control"
         valuePropName="checked"
         className="mb-4"
@@ -56,8 +56,8 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
       {showCacheControl && (
         <div className="ml-6 pl-4 border-l-2 border-gray-200">
           <Text className="text-sm text-gray-500 block mb-4">
-            Specify either a role (to cache all messages of that role) or a specific message index. 
-            If both are provided, the index takes precedence.
+            Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, 
+            litellm can automatically add them for you as a cost saving feature.
           </Text>
           
           <Form.List
@@ -85,7 +85,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                       name={[field.name, 'role']}
                       className="mb-0"
                       style={{ width: '180px' }}
-                      tooltip="Select a role to cache all messages of this type"
+                      tooltip="LiteLLM will mark all messages of this role as cacheable"
                     >
                       <Select
                         placeholder="Select a role"
@@ -108,7 +108,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                       name={[field.name, 'index']}
                       className="mb-0"
                       style={{ width: '180px' }}
-                      tooltip="Specify a specific message index (optional)"
+                      tooltip="(Optional) If set litellm will mark the message at this index as cacheable"
                     >
                       <NumericalInput
                         type="number"
@@ -124,7 +124,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     
                     {fields.length > 1 && (
                       <MinusCircleOutlined 
-                        className="text-red-500 cursor-pointer text-lg mt-8" 
+                        className="text-red-500 cursor-pointer text-lg ml-12"
                         onClick={() => {
                           remove(field.name);
                           setTimeout(() => {

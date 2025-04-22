@@ -238,6 +238,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -1806,13 +1807,6 @@ class ProxyConfig:
 
             if master_key and master_key.startswith("os.environ/"):
                 master_key = get_secret(master_key)  # type: ignore
-
-                if not isinstance(master_key, str):
-                    raise Exception(
-                        "Master key must be a string. Current type - {}".format(
-                            type(master_key)
-                        )
-                    )
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = hash_token(master_key)
@@ -5290,10 +5284,7 @@ async def token_counter(request: TokenCountRequest):
         for _model in llm_router.model_list:
             if _model["model_name"] == request.model:
                 deployment = _model
-                model_info = llm_router.get_router_model_info(
-                    deployment=deployment,
-                    received_model_name=request.model,
-                )
+                model_info = deployment.get("model_info", {})
                 break
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
@@ -6169,6 +6160,7 @@ async def model_info_v1(  # noqa: PLR0915
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        llm_router=llm_router,
     )
 
     if len(all_models_str) > 0:
@@ -6193,6 +6185,7 @@ def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
 ) -> List[ModelGroupInfo]:
     model_groups: List[ModelGroupInfo] = []
+
     for model in all_models_str:
         if model_group is not None and model_group != model:
             continue
@@ -6200,6 +6193,12 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
         if _model_group_info is not None:
             model_groups.append(_model_group_info)
+        else:
+            model_group_info = ModelGroupInfo(
+                model_group=model,
+                providers=[],
+            )
+            model_groups.append(model_group_info)
     return model_groups
 
 
@@ -6396,8 +6395,8 @@ async def model_group_info(
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        llm_router=llm_router,
     )
-
     model_groups: List[ModelGroupInfo] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
@@ -6816,7 +6815,7 @@ async def login(request: Request):  # noqa: PLR0915
             master_key,
             algorithm="HS256",
         )
-        litellm_dashboard_ui += "?userID=" + user_id
+        litellm_dashboard_ui += "?login=success"
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
@@ -6892,7 +6891,7 @@ async def login(request: Request):  # noqa: PLR0915
                 master_key,
                 algorithm="HS256",
             )
-            litellm_dashboard_ui += "?userID=" + user_id
+            litellm_dashboard_ui += "?login=success"
             redirect_response = RedirectResponse(
                 url=litellm_dashboard_ui, status_code=303
             )
@@ -8179,6 +8178,7 @@ app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
+app.include_router(scim_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)

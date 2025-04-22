@@ -106,74 +106,63 @@ class ChunkProcessor:
     def get_combined_tool_content(
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
-        argument_list: List[str] = []
-        delta = tool_call_chunks[0]["choices"][0]["delta"]
-        id = None
-        name = None
-        type = None
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        prev_index = None
-        prev_name = None
-        prev_id = None
-        curr_id = None
-        curr_index = 0
+        tool_call_map: Dict[
+            int, Dict[str, Any]
+        ] = {}  # Map to store tool calls by index
+
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", "")
-                # Check if a tool call is present
-                if tool_calls and tool_calls[0].function is not None:
-                    if tool_calls[0].id:
-                        id = tool_calls[0].id
-                        curr_id = id
-                        if prev_id is None:
-                            prev_id = curr_id
-                    if tool_calls[0].index:
-                        curr_index = tool_calls[0].index
-                    if tool_calls[0].function.arguments:
-                        # Now, tool_calls is expected to be a dictionary
-                        arguments = tool_calls[0].function.arguments
-                        argument_list.append(arguments)
-                    if tool_calls[0].function.name:
-                        name = tool_calls[0].function.name
-                    if tool_calls[0].type:
-                        type = tool_calls[0].type
-            if prev_index is None:
-                prev_index = curr_index
-            if prev_name is None:
-                prev_name = name
-            if curr_index != prev_index:  # new tool call
-                combined_arguments = "".join(argument_list)
+                tool_calls = delta.get("tool_calls", [])
+
+                for tool_call in tool_calls:
+                    if not tool_call or not hasattr(tool_call, "function"):
+                        continue
+
+                    index = getattr(tool_call, "index", 0)
+                    if index not in tool_call_map:
+                        tool_call_map[index] = {
+                            "id": None,
+                            "name": None,
+                            "type": None,
+                            "arguments": [],
+                        }
+
+                    if hasattr(tool_call, "id") and tool_call.id:
+                        tool_call_map[index]["id"] = tool_call.id
+                    if hasattr(tool_call, "type") and tool_call.type:
+                        tool_call_map[index]["type"] = tool_call.type
+                    if hasattr(tool_call, "function"):
+                        if (
+                            hasattr(tool_call.function, "name")
+                            and tool_call.function.name
+                        ):
+                            tool_call_map[index]["name"] = tool_call.function.name
+                        if (
+                            hasattr(tool_call.function, "arguments")
+                            and tool_call.function.arguments
+                        ):
+                            tool_call_map[index]["arguments"].append(
+                                tool_call.function.arguments
+                            )
+
+        # Convert the map to a list of tool calls
+        for index in sorted(tool_call_map.keys()):
+            tool_call_data = tool_call_map[index]
+            if tool_call_data["id"] and tool_call_data["name"]:
+                combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
                 tool_calls_list.append(
                     ChatCompletionMessageToolCall(
-                        id=prev_id,
+                        id=tool_call_data["id"],
                         function=Function(
                             arguments=combined_arguments,
-                            name=prev_name,
+                            name=tool_call_data["name"],
                         ),
-                        type=type,
+                        type=tool_call_data["type"] or "function",
                     )
                 )
-                argument_list = []  # reset
-                prev_index = curr_index
-                prev_id = curr_id
-                prev_name = name
-
-        combined_arguments = (
-            "".join(argument_list) or "{}"
-        )  # base case, return empty dict
-
-        tool_calls_list.append(
-            ChatCompletionMessageToolCall(
-                id=id,
-                type="function",
-                function=Function(
-                    arguments=combined_arguments,
-                    name=name,
-                ),
-            )
-        )
 
         return tool_calls_list
 

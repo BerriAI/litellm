@@ -26,6 +26,7 @@ import {
 import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -137,20 +138,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
+    console.log("updateTextUI called with:", role, chunk, model);
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // if the last message is already from this same role, append
+      if (last && last.role === role && !last.isImage) {
+        // build a new object, but only set `model` if it wasn't there already
+        const updated: MessageType = {
+          ...last,
+          content: last.content + chunk,
+          model: last.model ?? model,      // ← only use the passed‐in model on the first chunk
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // otherwise start a brand new assistant bubble
         return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          { 
-            ...lastMessage,
-            content: lastMessage.content + chunk, 
-            model 
+          ...prev,
+          {
+            role,
+            content: chunk,
+            model,                          // model set exactly once here
           },
         ];
-      } else {
-        return [...prevHistory, { role, content: chunk, model }];
       }
     });
   };
@@ -297,7 +306,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     try {
       if (selectedModel) {
-        // Use EndpointType enum for comparison
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -322,6 +330,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal
+          );
+        } else if (endpointType === EndpointType.RESPONSES) {
+          // Create chat history for API call - strip out model field and isImage field
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          
+          await makeOpenAIResponsesRequest(
+            apiChatHistory,
+            (role, delta, model) => updateTextUI(role, delta, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData
           );
         }
       }
@@ -592,7 +615,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT 
+                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
                     ? "Type your message... (Shift+Enter for new line)" 
                     : "Describe the image you want to generate..."
                 }

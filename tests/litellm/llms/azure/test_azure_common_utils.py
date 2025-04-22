@@ -19,8 +19,8 @@ from litellm.types.utils import CallTypes
 @pytest.fixture
 def setup_mocks():
     with patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entrata_id"
-    ) as mock_entrata_token, patch(
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
+    ) as mock_entra_token, patch(
         "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password"
     ) as mock_username_password_token, patch(
         "litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc"
@@ -37,7 +37,7 @@ def setup_mocks():
         mock_litellm.AZURE_DEFAULT_API_VERSION = "2023-05-15"
         mock_litellm.enable_azure_ad_token_refresh = False
 
-        mock_entrata_token.return_value = lambda: "mock-entrata-token"
+        mock_entra_token.return_value = lambda: "mock-entra-token"
         mock_username_password_token.return_value = (
             lambda: "mock-username-password-token"
         )
@@ -49,7 +49,7 @@ def setup_mocks():
         )
 
         yield {
-            "entrata_token": mock_entrata_token,
+            "entra_token": mock_entra_token,
             "username_password_token": mock_username_password_token,
             "oidc_token": mock_oidc_token,
             "token_provider": mock_token_provider,
@@ -92,8 +92,8 @@ def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_entrata_id was called
-    setup_mocks["entrata_token"].assert_called_once_with(
+    # Verify that get_azure_ad_token_from_entra_id was called
+    setup_mocks["entra_token"].assert_called_once_with(
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
@@ -120,8 +120,8 @@ def test_initialize_with_tenant_credentials(setup_mocks):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_entrata_id was called
-    setup_mocks["entrata_token"].assert_called_once_with(
+    # Verify that get_azure_ad_token_from_entra_id was called
+    setup_mocks["entra_token"].assert_called_once_with(
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
