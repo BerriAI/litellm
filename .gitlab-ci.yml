@@ -14,9 +14,8 @@ variables:
   # Define variables based on your environment and naming conventions
   APPSTACKCODE: synapse
   BUSINESSLINE: sre
-  GCP_PROJECT_ID_DEV: thl-sre-d-synapse # Confirmed GCP Project ID for Dev
-  ARTIFACT_REGISTRY_DEV: europe-west1-docker.pkg.dev/thl-sre-d-synapse/litellm # Confirmed Artifact Registry Path for Dev
-  VAULT_ROLE_DEV: sre-synapse-development-infra # Confirmed Vault Role for Dev
+  GCP_PROJECT_ID_DEV: thl-sre-d-synapse
+  ARTIFACT_REGISTRY_DEV: europe-west1-docker.pkg.dev/thl-sre-d-synapse/general
   IMAGE_NAME: litellm # Name for the container image
   DOCKERFILE_PATH: Dockerfile # Path to the main Dockerfile
   environment: $CI_ENVIRONMENT_NAME
@@ -65,7 +64,6 @@ Generate Version:
     # For simplicity, defaulting to development here
     environment: development
     GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
-    # VAULT_ROLE: $VAULT_ROLE_DEV # VAULT_ROLE is now defined in the specific job
   # Request the OIDC token
   id_tokens:
     CI_JOB_JWT_V2: # Name of the variable to populate
@@ -120,7 +118,6 @@ Build LiteLLM Image Dev:
     # Override/set variables specific to this job
     environment: development # Explicitly set for clarity within this job scope if needed
     GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
-    VAULT_ROLE: $VAULT_ROLE_DEV # Keep this if needed elsewhere, but role for login is now constructed in script
   rules:
     # Build on main/master branch
     - if: '$CI_COMMIT_BRANCH == "main"'
