@@ -111,6 +111,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        litellm_params: dict,
     ) -> str:
         """
         Get the endpoint for OpenAI responses API

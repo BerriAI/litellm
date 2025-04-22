@@ -74,6 +74,7 @@ class BaseResponsesAPIConfig(ABC):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        litellm_params: dict,
     ) -> str:
         """
         OPTIONAL

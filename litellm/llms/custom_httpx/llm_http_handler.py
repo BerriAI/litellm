@@ -1067,6 +1067,7 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1186,6 +1187,7 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
         )
 
         data = responses_api_provider_config.transform_responses_api_request(
@@ -1303,6 +1305,7 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
         )
 
         url, data = responses_api_provider_config.transform_delete_response_api_request(
@@ -1386,6 +1389,7 @@ class BaseLLMHTTPHandler:
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
         )
 
         url, data = responses_api_provider_config.transform_delete_response_api_request(
