@@ -18,6 +18,7 @@ variables:
 stages:
   - version
   - build
+  - test
 
 # Job to generate the version tag based on timestamp
 Generate Version:
