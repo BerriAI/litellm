@@ -365,17 +365,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": True,
             }
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
@@ -388,9 +385,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
-        if thinking_enabled:
-            params["includeThoughts"] = True
-        if thinking_budget:
+        if not thinking_enabled:
+            params["thinkingBudget"] = 0
+        elif thinking_budget is not None:
             params["thinkingBudget"] = thinking_budget
 
         return params
@@ -743,6 +740,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _calculate_usage(
         self,
         completion_response: GenerateContentResponseBody,
+        thinking_enabled: bool | None,
     ) -> Usage:
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
@@ -768,17 +766,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
         )
+        completion_tokens = completion_response["usageMetadata"].get(
+            "candidatesTokenCount", 0
+        )
+        if reasoning_tokens:
+            # Usage(...) constructor expects that completion_tokens includes the reasoning_tokens.
+            # However the Vertex AI usage metadata does not include reasoning tokens in candidatesTokenCount.
+            # Reportedly, this is different from the Gemini API.
+            completion_tokens += reasoning_tokens
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
+            completion_tokens=completion_tokens,
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
+            thinking_enabled=thinking_enabled,
         )
 
         return usage
@@ -910,6 +915,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     completion_response=completion_response,
                 )
 
+        thinking_enabled = None
+        if "gemini-2.5-flash" in model:
+            # Only Gemini 2.5 Flash can have its thinking disabled by setting the thinking budget to zero
+            thinking_budget = (
+                request_data.get("generationConfig", {})
+                .get("thinkingConfig", {})
+                .get("thinkingBudget")
+            )
+            thinking_enabled = thinking_budget != 0
+
         model_response.choices = []
 
         try:
@@ -923,7 +938,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _candidates, model_response, litellm_params
                 )
 
-            usage = self._calculate_usage(completion_response=completion_response)
+            usage = self._calculate_usage(
+                completion_response=completion_response,
+                thinking_enabled=thinking_enabled,
+            )
             setattr(model_response, "usage", usage)
 
             ## ADD METADATA TO RESPONSE ##

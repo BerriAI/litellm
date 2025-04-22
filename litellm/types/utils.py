@@ -138,6 +138,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: Optional[float]
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
+    output_cost_per_token_thinking: Optional[
+        float
+    ]  # only for vertex ai gemini-2.5-flash models
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
