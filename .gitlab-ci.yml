@@ -1,8 +1,3 @@
-# include:
-#   - project: "ccoe/photon/pipelines"
-#     file: "terraform_single_repo_multiple_environments.yml"
-#     ref : new_photon_runners
-
 .vault:
   id_tokens:
       VAULT_ID_TOKEN:
@@ -11,7 +6,6 @@
     - photon_new_runners
 
 variables:
-  # Define variables based on your environment and naming conventions
   APPSTACKCODE: synapse
   BUSINESSLINE: sre
   GCP_PROJECT_ID_DEV: thl-sre-d-synapse
@@ -23,9 +17,6 @@ variables:
 stages:
   - version
   - build
-  # - plan
-  # - deploy
-  # - test
 
 # Job to generate the version tag based on timestamp
 Generate Version:
@@ -111,17 +102,14 @@ Generate Version:
 # Job to build the main LiteLLM image for Development
 Build LiteLLM Image Dev:
   extends: .cloudbuild
-  # Define the GitLab environment for this job
   environment:
     name: development
   variables:
-    # Override/set variables specific to this job
-    environment: development # Explicitly set for clarity within this job scope if needed
+    environment: development
     GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
   rules:
-    # Build on main/master branch
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_BRANCH == "master"'
+    # Build on review branch
+    - if: '$CI_COMMIT_BRANCH == "review"'
     # Or build if relevant files change on any branch (except tags)
     - if: '$CI_COMMIT_TAG == null'
       changes:
@@ -133,8 +121,3 @@ Build LiteLLM Image Dev:
         - poetry.lock
         - litellm/**/* # Changes within the main litellm directory
         - docker/**/* # Changes within the docker helper scripts directory
-
-# Deploy Staging:
-#   only:
-#     variables:
-#       - $DEPLOYMENT == "staging"
