@@ -53,9 +53,8 @@ Generate Version:
   script:
     # 1. Authenticate to Vault using GitLab JWT
     - |
-      role=${BUSINESSLINE}-${APPSTACKCODE}-${CI_ENVIRONMENT_NAME}-infra
-      echo "Logging into Vault... with role:$role"
-      vault login -no-print=true $(vault write -field=token auth/jwt/login role=$role jwt=${CI_JOB_JWT_V2})
+      echo "Logging into Vault... with role: ${VAULT_ROLE}" # Use the VAULT_ROLE variable defined in the specific job
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${VAULT_ROLE} jwt=${CI_JOB_JWT_V2})
       if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi
       echo "Vault login successful."
     # 2. Get GCP Access Token from Vault
