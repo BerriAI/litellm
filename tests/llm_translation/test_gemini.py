@@ -117,3 +117,21 @@ def test_gemini_thinking():
     )
     print(response.choices[0].message)
     assert response.choices[0].message.content is not None
+
+
+def test_gemini_thinking_budget_0():
+    litellm._turn_on_debug()
+    from litellm.types.utils import Message, CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "messages": [{"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}],
+            "thinking": {"type": "enabled", "budget_tokens": 0}
+        }
+    )
+    print(raw_request)
+    assert "0" in json.dumps(raw_request["raw_request_body"])
