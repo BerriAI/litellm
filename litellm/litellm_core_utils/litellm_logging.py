@@ -2871,6 +2871,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
+        
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
+                    return callback  # type: ignore
+            deepeval_logger = DeepEvalLogger()
+            _in_memory_loggers.append(deepeval_logger)
+            return deepeval_logger  # type: ignore
+        
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:
                 raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -3011,6 +3020,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
                     return callback
         elif logging_integration == "langsmith":
             for callback in _in_memory_loggers:
