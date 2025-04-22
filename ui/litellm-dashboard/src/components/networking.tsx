@@ -679,6 +679,8 @@ export const userListCall = async (
   userEmail: string | null = null,
   userRole: string | null = null,
   team: string | null = null,
+  sortBy: string | null = null,
+  sortOrder: 'asc' | 'desc' | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -712,6 +714,14 @@ export const userListCall = async (
 
     if (team) {
       queryParams.append('team', team);
+    }
+
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
     }
     
     const queryString = queryParams.toString();

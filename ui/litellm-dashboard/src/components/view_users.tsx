@@ -88,6 +88,8 @@ interface FilterState {
   model: string;
   min_spend: number | null;
   max_spend: number | null;
+  sort_by: string;
+  sort_order: 'asc' | 'desc';
 }
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -127,7 +129,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     team: "",
     model: "",
     min_spend: null,
-    max_spend: null
+    max_spend: null,
+    sort_by: "created_at",
+    sort_order: "desc"
   });
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
@@ -155,6 +159,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     debouncedSearch(newFilters);
   };
 
+  const handleSortChange = (sortBy: string, sortOrder: 'asc' | 'desc') => {
+    const newFilters = {
+      ...filters,
+      sort_by: sortBy,
+      sort_order: sortOrder
+    };
+    setFilters(newFilters);
+    debouncedSearch(newFilters);
+  };
+
   // Create a debounced version of the search function
   const debouncedSearch = useCallback(
     debounce(async (filters: FilterState) => {
@@ -174,7 +188,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           defaultPageSize,
           filters.email || null,
           filters.user_role || null,
-          filters.team || null
+          filters.team || null,
+          filters.sort_by,
+          filters.sort_order
         );
         
         // Only update state if this is the most recent search
@@ -302,7 +318,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         defaultPageSize,
         filters.email || null,
         filters.user_role || null,
-        filters.team || null
+        filters.team || null,
+        filters.sort_by,
+        filters.sort_order
       );
       
       // Update session storage with new data
@@ -339,7 +357,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             defaultPageSize,
             filters.email || null,
             filters.user_role || null,
-            filters.team || null
+            filters.team || null,
+            filters.sort_by,
+            filters.sort_order
           );
 
           // Store in session storage
@@ -475,7 +495,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           team: "",
                           model: "",
                           min_spend: null,
-                          max_spend: null
+                          max_spend: null,
+                          sort_by: "created_at",
+                          sort_order: "desc"
                         });
                       }}
                     >
@@ -602,9 +624,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               </div>
 
               <UserDataTable
-                data={userListResponse.users || []}
+                data={userListResponse?.users || []}
                 columns={tableColumns}
                 isLoading={!userListResponse}
+                onSortChange={handleSortChange}
+                currentSort={{
+                  sortBy: filters.sort_by,
+                  sortOrder: filters.sort_order
+                }}
               />
             </div>
           </TabPanel>
