@@ -6463,6 +6463,8 @@ class ProviderConfigManager:
             return litellm.AiohttpOpenAIChatConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
+        elif litellm.LlmProviders.LLAMAFILE == provider:
+            return litellm.LlamafileChatConfig()
         elif litellm.LlmProviders.LM_STUDIO == provider:
             return litellm.LMStudioChatConfig()
         elif litellm.LlmProviders.GALADRIEL == provider:
