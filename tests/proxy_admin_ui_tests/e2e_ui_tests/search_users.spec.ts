@@ -49,25 +49,9 @@ test("user search test", async ({ page }) => {
     hasText: "Internal User",
   });
 
-  // Wait for the tab to be visible
-  await internalUserTab.waitFor({ state: "visible", timeout: 10000 });
-  console.log("Internal User tab is visible");
-
-  // Take another screenshot before clicking
-  await page.screenshot({ path: "before-tab-click.png" });
-  console.log("Took screenshot before tab click");
-
-  await internalUserTab.click();
-  console.log("Clicked Internal User tab");
-
   // Wait for the page to load and table to be visible
   await page.waitForSelector("tbody tr", { timeout: 10000 });
   await page.waitForTimeout(2000); // Additional wait for table to stabilize
-  console.log("Table is visible");
-
-  // Take a final screenshot
-  await page.screenshot({ path: "after-tab-click.png" });
-  console.log("Took screenshot after tab click");
 
   // Verify search input exists
   const searchInput = page.locator('input[placeholder="Search by email..."]');
@@ -83,7 +67,7 @@ test("user search test", async ({ page }) => {
   await searchInput.fill(testEmail);
   console.log("Filled search input");
 
-  // Wait for the debounced search to complete
+  // Wait for the debounced search to complete (300ms debounce + buffer)
   await page.waitForTimeout(500);
   console.log("Waited for debounce");
 
@@ -94,15 +78,24 @@ test("user search test", async ({ page }) => {
   }, initialUserCount);
   console.log("Results updated");
 
+  // Wait for the results count to update
+  await page.waitForFunction((initialCount) => {
+    const currentCount = document.querySelectorAll("tbody tr").length;
+    return currentCount !== initialCount;
+  }, initialUserCount);
+
+  // Get the filtered user count
   const filteredUserCount = await page.locator("tbody tr").count();
   console.log(`Filtered user count: ${filteredUserCount}`);
 
+  // Verify that the search results have been updated
   expect(filteredUserCount).toBeDefined();
 
   // Clear the search
   await searchInput.clear();
   console.log("Cleared search");
 
+  // Wait for the debounced search to complete
   await page.waitForTimeout(500);
   console.log("Waited for debounce after clear");
 
@@ -112,6 +105,13 @@ test("user search test", async ({ page }) => {
   }, initialUserCount);
   console.log("Results reset");
 
+  // Wait for the results to return to initial state
+  await page.waitForFunction((initialCount) => {
+    const currentCount = document.querySelectorAll("tbody tr").length;
+    return currentCount === initialCount;
+  }, initialUserCount);
+
+  // Verify the list returns to its original state
   const resetUserCount = await page.locator("tbody tr").count();
   console.log(`Reset user count: ${resetUserCount}`);
 
