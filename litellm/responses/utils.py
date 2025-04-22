@@ -1,12 +1,30 @@
-from typing import Any, Dict, Union, cast, get_type_hints
+import base64
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Dict,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_type_hints,
+)
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import SpecialEnums, Usage
+
+if TYPE_CHECKING:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+else:
+    BaseResponsesAPIStreamingIterator = Any
 
 
 class ResponsesAPIRequestUtils:
@@ -76,6 +94,66 @@ class ResponsesAPIRequestUtils:
             k: v for k, v in params.items() if k in valid_keys and v is not None
         }
         return cast(ResponsesAPIOptionalRequestParams, filtered_params)
+
+    @staticmethod
+    def _update_responses_api_response_id_with_model_id(
+        responses_api_response: ResponsesAPIResponse,
+        kwargs: Dict[str, Any],
+    ) -> ResponsesAPIResponse:
+        """Update the responses_api_response_id with the model_id"""
+        litellm_metadata: Dict[str, Any] = kwargs.get("litellm_metadata", {}) or {}
+        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id")
+        updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            model_id=model_id,
+            response_id=responses_api_response.id,
+        )
+        responses_api_response.id = updated_id
+        return responses_api_response
+
+    @staticmethod
+    def _build_responses_api_response_id(
+        model_id: Optional[str],
+        response_id: str,
+    ) -> str:
+        """Build the responses_api_response_id"""
+        if model_id is None:
+            return response_id
+        assembled_id: str = str(
+            SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value
+        ).format(model_id, response_id)
+        base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode(
+            "utf-8"
+        )
+        return f"resp_{base64_encoded_id}"
+
+    @staticmethod
+    def _decode_responses_api_response_id(
+        response_id: str,
+    ) -> Tuple[Optional[str], str]:
+        """
+        Decode the responses_api_response_id
+
+        Returns:
+            Tuple of model_id, response_id (from upstream provider)
+        """
+        try:
+            # Remove prefix and decode
+            cleaned_id = response_id.replace("resp_", "")
+            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+
+            # Parse components using known prefixes
+            if ";" not in decoded_id:
+                return None, response_id
+
+            model_part, response_part = decoded_id.split(";", 1)
+            model_id = model_part.replace("litellm:model_id:", "")
+            decoded_response_id = response_part.replace("response_id:", "")
+
+            return model_id, decoded_response_id
+        except Exception as e:
+            verbose_logger.debug(f"Error decoding response_id '{response_id}': {e}")
+            return None, response_id
 
 
 class ResponseAPILoggingUtils:

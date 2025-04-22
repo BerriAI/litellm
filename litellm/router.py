@@ -769,9 +769,7 @@ class Router:
                         model_list=self.model_list,
                     )
                 elif pre_call_check == "responses_api_deployment_check":
-                    _callback = ResponsesApiDeploymentCheck(
-                        cache=self.cache,
-                    )
+                    _callback = ResponsesApiDeploymentCheck()
                 if _callback is not None:
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
