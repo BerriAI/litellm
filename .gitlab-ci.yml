@@ -18,6 +18,8 @@ variables:
 stages:
   - version
   - build
+  - plan
+  - deploy
   - test
 
 # Job to generate the version tag based on timestamp
