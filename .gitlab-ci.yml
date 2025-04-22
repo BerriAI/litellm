@@ -3,10 +3,10 @@ include:
     file: "terraform_single_repo_multiple_environments.yml"
     ref : new_photon_runners
 
-default:
+.vault:
   id_tokens:
-    VAULT_ID_TOKEN:
-      aud: https://gitlab.photon.thalescloud.io
+      VAULT_ID_TOKEN:
+        aud: https://gitlab.photon.thalescloud.io
   tags:
     - photon_new_runners
 
@@ -55,6 +55,8 @@ Generate Version:
 
 # Template for Cloud Build job
 .cloudbuild:
+  extends:
+    - .vault
   stage: build
   tags:
     - new_photon_runners # Assuming you use the same runner tags
@@ -134,3 +136,8 @@ Build LiteLLM Image Dev:
         - poetry.lock
         - litellm/**/* # Changes within the main litellm directory
         - docker/**/* # Changes within the docker helper scripts directory
+
+Deploy Staging:
+  only:
+    variables:
+      - $DEPLOYMENT == "staging"
