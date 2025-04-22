@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: litellm-service
+  namespace: gpt-portal
 spec:
   selector:
     app: litellm
@@ -9,4 +10,4 @@ spec:
     - protocol: TCP
       port: 4000
       targetPort: 4000
-  type: LoadBalancer
+  type: ClusterIP

@@ -2,8 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: litellm-deployment
+  namespace: gpt-portal
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: litellm
@@ -14,24 +15,18 @@ spec:
     spec:
       containers:
         - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
+          image: 767397923279.dkr.ecr.ap-southeast-1.amazonaws.com/gpt-portal/litellm:v1.0
           imagePullPolicy: Always
-          env:
-            - name: AZURE_API_KEY
-              value: "d6f****"
-            - name: AZURE_API_BASE
-              value: "https://openai"
-            - name: LITELLM_MASTER_KEY
-              value: "sk-1234"
-            - name: DATABASE_URL
-              value: "postgresql://ishaan*********"
+          envFrom:
+            - secretRef:
+                name: litellm-secrets
           args:
             - "--config"
-            - "/app/proxy_config.yaml"  # Update the path to mount the config file
-          volumeMounts:                 # Define volume mount for proxy_config.yaml
+            - "/app/config.yaml"  # Update the path to mount the config file
+          volumeMounts:
             - name: config-volume
-              mountPath: /app
-              readOnly: true
+              mountPath: /app/proxy_server_config.yaml
+              subPath: config.yaml
           livenessProbe:
             httpGet:
               path: /health/liveliness
@@ -53,4 +48,4 @@ spec:
       volumes:  # Define volume to mount proxy_config.yaml
         - name: config-volume
           configMap:
-            name: litellm-config  
+            name: litellm-config-file
