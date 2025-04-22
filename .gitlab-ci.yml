@@ -1,4 +1,8 @@
 # .gitlab-ci.yml
+include:
+ - project: 'ccoe/photon/pipelines'
+   ref: new_photon_runners
+   file: 'terraform_single_repo_multiple_environments.yml'
 
 variables:
   # Define variables based on your environment and naming conventions
@@ -62,7 +66,7 @@ Generate Version:
       vault_role=${BUSINESSLINE}-${APPSTACKCODE}-${environment}-infra
       echo "Logging into Vault... with role: ${vault_role}"
       # Use CI_JOB_JWT_V2 which should be populated by id_tokens
-      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${vault_role} jwt=${CI_JOB_JWT_V2})
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${vault_role} jwt=${VAULT_ID_TOKEN})
       if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi
       echo "Vault login successful."
     # 2. Get GCP Access Token from Vault
