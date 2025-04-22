@@ -40,6 +40,7 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -164,6 +165,7 @@ genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
+deepevalLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -1632,7 +1634,17 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-
+                    if callback == "deepeval":
+                        global deepevalLogger
+                        if deepevalLogger is None:
+                            deepevalLogger = DeepEvalLogger()
+                        print_verbose("reaches deepeval for success logging!")
+                        deepevalLogger.log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )                   
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2580,7 +2592,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -2666,6 +2678,9 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
+            elif callback == "deepeval":
+                deepevalLogger = DeepEvalLogger()
+                print_verbose("Initialized DeepEval Logger")
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
