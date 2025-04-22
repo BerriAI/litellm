@@ -951,6 +951,9 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    sso_user_ids: Optional[str] = fastapi.Query(
+        default=None, description="Get list of users by sso_user_id"
+    ),
     user_email: Optional[str] = fastapi.Query(
         default=None, description="Filter users by partial email match"
     ),
@@ -981,6 +984,8 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        sso_ids: Optional[str]
+            Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
         team: Optional[str]
@@ -1026,6 +1031,12 @@ async def get_users(
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {
             "has": team  # Array contains for string arrays in Prisma
+        }
+
+    if sso_user_ids is not None and isinstance(sso_user_ids, str):
+        sso_id_list = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
+        where_conditions["sso_user_id"] = {
+            "in": sso_id_list,
         }
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}

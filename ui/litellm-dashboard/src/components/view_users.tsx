@@ -84,6 +84,7 @@ interface FilterState {
   email: string;
   user_id: string;
   user_role: string;
+  sso_user_id: string;
   team: string;
   model: string;
   min_spend: number | null;
@@ -126,6 +127,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     email: "",
     user_id: "",
     user_role: "",
+    sso_user_id: "",
     team: "",
     model: "",
     min_spend: null,
@@ -189,6 +191,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           filters.email || null,
           filters.user_role || null,
           filters.team || null,
+          filters.sso_user_id || null,
           filters.sort_by,
           filters.sort_order
         );
@@ -493,6 +496,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           user_id: "",
                           user_role: "",
                           team: "",
+                          sso_user_id: "",
                           model: "",
                           min_spend: null,
                           max_spend: null,
@@ -573,6 +577,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             </SelectItem>
                           ))}
                         </Select>
+                      </div>
+                      
+                      {/* SSO ID Search */}
+                      <div className="relative w-64">
+                        <input
+                          type="text"
+                          placeholder="Filter by SSO ID"
+                          className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={filters.sso_user_id}
+                          onChange={(e) => handleFilterChange('sso_user_id', e.target.value)}
+                        />
                       </div>
                     </div>
                   )}

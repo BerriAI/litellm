@@ -679,6 +679,7 @@ export const userListCall = async (
   userEmail: string | null = null,
   userRole: string | null = null,
   team: string | null = null,
+  sso_user_id: string | null = null,
   sortBy: string | null = null,
   sortOrder: 'asc' | 'desc' | null = null,
 ) => {
@@ -714,6 +715,10 @@ export const userListCall = async (
 
     if (team) {
       queryParams.append('team', team);
+    }
+
+    if (sso_user_id) {
+      queryParams.append('sso_user_ids', sso_user_id);
     }
 
     if (sortBy) {
