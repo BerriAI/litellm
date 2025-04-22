@@ -310,3 +310,40 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+def test_empty_candidates_response():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    import litellm
+    import httpx
+
+    model_response = litellm.ModelResponse()
+
+    completion_response = {
+        "usageMetadata": {
+            "promptTokenCount": 9291,
+            "totalTokenCount": 9291,
+            "promptTokensDetails": [{
+                "modality": "TEXT",
+                "tokenCount": 9291
+            }]
+        },
+        "modelVersion": "gemini-2.5-pro-preview-03-25"
+    }
+
+    raw_response = httpx.Response(200, json=completion_response)
+
+    config = VertexGeminiConfig()
+    result = config.transform_response(
+        model="gemini-2.5-pro-preview-03-25",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None
+    )
+
+    assert len(result.choices) == 1
+    assert isinstance(result.choices[0], litellm.Choices)
