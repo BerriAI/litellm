@@ -2254,6 +2254,8 @@ class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
     LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
 
+    LITELLM_MANAGED_RESPONSE_COMPLETE_STR = "litellm:model_id:{};response_id:{}"
+
 
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
