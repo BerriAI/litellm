@@ -67,7 +67,7 @@ def test_user_daily_activity_types():
     """
     Assert all fiels in SpendMetrics are reported in DailySpendMetadata as "total_"
     """
-    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    from litellm.proxy.management_endpoints.common_daily_activity import (
         DailySpendMetadata,
         SpendMetrics,
     )

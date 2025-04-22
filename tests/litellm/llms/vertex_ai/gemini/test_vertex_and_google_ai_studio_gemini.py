@@ -1,16 +1,17 @@
 import asyncio
+from typing import List, cast
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.utils import ChoiceLogprobs
-from pydantic import BaseModel
-from typing import List, cast
+from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.utils import ChoiceLogprobs, Usage
 
 
 def test_top_logprobs():
@@ -64,7 +65,6 @@ def test_get_model_name_from_gemini_spec_model():
     model = "gemini/ft-uuid-123"
     result = VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
     assert result == "ft-uuid-123"
-
 
 
 def test_vertex_ai_response_schema_dict():
@@ -221,3 +221,92 @@ def test_vertex_ai_retain_property_ordering():
     schema = transformed_request["response_schema"]
     # should leave existing value alone, despite dictionary ordering
     assert schema["propertyOrdering"] == ["thought", "output"]
+
+
+def test_vertex_ai_thinking_output_part():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            thought=True,
+            text="I'm thinking...",
+        ),
+        HttpxPartType(text="Hello world"),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content == "Hello world"
+    assert reasoning_content == "I'm thinking..."
+
+
+def test_vertex_ai_empty_content():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "arguments": "{}",
+            },
+        ),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content is None
+    assert reasoning_content is None
+
+
+@pytest.mark.parametrize(
+    "usage_metadata, inclusive, expected_usage",
+    [
+        (
+            UsageMetadata(
+                promptTokenCount=10,
+                candidatesTokenCount=10,
+                totalTokenCount=20,
+                thoughtsTokenCount=5,
+            ),
+            True,
+            Usage(
+                prompt_tokens=10,
+                completion_tokens=10,
+                total_tokens=20,
+                reasoning_tokens=5,
+            ),
+        ),
+        (
+            UsageMetadata(
+                promptTokenCount=10,
+                candidatesTokenCount=5,
+                totalTokenCount=20,
+                thoughtsTokenCount=5,
+            ),
+            False,
+            Usage(
+                prompt_tokens=10,
+                completion_tokens=10,
+                total_tokens=20,
+                reasoning_tokens=5,
+            ),
+        ),
+    ],
+)
+def test_vertex_ai_candidate_token_count_inclusive(
+    usage_metadata, inclusive, expected_usage
+):
+    """
+    Test that the candidate token count is inclusive of the thinking token count
+    """
+    v = VertexGeminiConfig()
+    assert v.is_candidate_token_count_inclusive(usage_metadata) is inclusive
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    assert usage.prompt_tokens == expected_usage.prompt_tokens
+    assert usage.completion_tokens == expected_usage.completion_tokens
+    assert usage.total_tokens == expected_usage.total_tokens

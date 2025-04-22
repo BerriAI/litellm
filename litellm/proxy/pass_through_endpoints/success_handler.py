@@ -7,6 +7,9 @@ import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 from litellm.types.utils import StandardPassThroughResponseObject
 from litellm.utils import executor as thread_pool_executor
 
@@ -92,11 +95,15 @@ class PassThroughEndpointLogging:
         end_time: datetime,
         cache_hit: bool,
         request_body: dict,
+        passthrough_logging_payload: PassthroughStandardLoggingPayload,
         **kwargs,
     ):
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
         if self.is_vertex_route(url_route):
             vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler.vertex_passthrough_handler(

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
 import { AreaChart, BarChart } from '@tremor/react';
-import { SpendMetrics, DailyData, ModelActivityData } from './usage/types';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
 
 interface ActivityMetricsProps {
@@ -224,7 +224,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
             key={modelName} 
             header={
               <div className="flex justify-between items-center w-full">
-                <Title>{modelName || 'Unknown Model'}</Title>
+                <Title>{modelMetrics[modelName].label || 'Unknown Item'}</Title>
                 <div className="flex space-x-4 text-sm text-gray-500">
                   <span>${modelMetrics[modelName].total_spend.toFixed(2)}</span>
                   <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
@@ -243,14 +243,24 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
   );
 };
 
+// Helper function to format key label
+const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string => {
+  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+  const teamId = modelData.metadata.team_id;
+  return teamId ? `${keyAlias} (team_id: ${teamId})` : keyAlias;
+};
+
 // Process data function
-export const processActivityData = (dailyActivity: { results: DailyData[] }): Record<string, ModelActivityData> => {
+export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
   dailyActivity.results.forEach((day) => {
-    Object.entries(day.breakdown.models || {}).forEach(([model, modelData]) => {
+    Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
+          label: key === 'api_keys' 
+            ? formatKeyLabel(modelData as KeyMetricWithMetadata, model)
+            : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,
