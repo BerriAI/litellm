@@ -1,7 +1,9 @@
 import asyncio
+from typing import List, cast
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse
@@ -9,8 +11,6 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.utils import ChoiceLogprobs
-from pydantic import BaseModel
-from typing import List, cast
 
 
 def test_top_logprobs():
@@ -64,7 +64,6 @@ def test_get_model_name_from_gemini_spec_model():
     model = "gemini/ft-uuid-123"
     result = VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
     assert result == "ft-uuid-123"
-
 
 
 def test_vertex_ai_response_schema_dict():
@@ -221,3 +220,42 @@ def test_vertex_ai_retain_property_ordering():
     schema = transformed_request["response_schema"]
     # should leave existing value alone, despite dictionary ordering
     assert schema["propertyOrdering"] == ["thought", "output"]
+
+
+def test_vertex_ai_thinking_output_part():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            thought=True,
+            text="I'm thinking...",
+        ),
+        HttpxPartType(text="Hello world"),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content == "Hello world"
+    assert reasoning_content == "I'm thinking..."
+
+
+def test_vertex_ai_empty_content():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    parts = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "arguments": "{}",
+            },
+        ),
+    ]
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content is None
+    assert reasoning_content is None

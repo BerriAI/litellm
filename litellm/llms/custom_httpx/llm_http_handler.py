@@ -229,13 +229,17 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        provider_config: Optional[BaseConfig] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
         extra_body: Optional[dict] = optional_params.pop("extra_body", None)
         fake_stream = fake_stream or optional_params.pop("fake_stream", False)
 
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        provider_config = (
+            provider_config
+            or ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=litellm.LlmProviders(custom_llm_provider)
+            )
         )
         if provider_config is None:
             raise ValueError(

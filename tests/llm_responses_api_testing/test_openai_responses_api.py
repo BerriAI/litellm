@@ -936,3 +936,100 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
             assert request_body["model"] == "o1-pro"
             assert request_body["max_output_tokens"] == 20
             assert "stream" not in request_body
+
+
+def test_basic_computer_use_preview_tool_call():
+    """
+    Test that LiteLLM correctly handles a computer_use_preview tool call where the environment is set to "linux"
+
+    linux is an unsupported environment for the computer_use_preview tool, but litellm users should still be able to pass it to openai
+    """
+    # Mock response from OpenAI
+
+    mock_response = {
+        "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
+        "object": "response",
+        "created_at": 1742486999,
+        "status": "incomplete",
+        "error": None,
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "instructions": None,
+        "max_output_tokens": 20,
+        "model": "o1-pro-2025-03-19",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_67dc3de50f64819097450ed50a33d5f90e13d8bdc0e28d88",
+                "summary": [],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": "medium", "generate_summary": None},
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 73,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 20,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 93,
+        },
+        "user": None,
+        "metadata": {},
+    }
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=MockResponse(mock_response, 200),
+    ) as mock_post:
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call the responses API with computer_use_preview tool
+        response = litellm.responses(
+            model="openai/computer-use-preview",
+            tools=[{
+                "type": "computer_use_preview",
+                "display_width": 1024,
+                "display_height": 768,
+                "environment": "linux"  # other possible values: "mac", "windows", "ubuntu"
+            }],
+            input="Check the latest OpenAI news on bing.com.",
+            reasoning={"summary": "concise"},
+            truncation="auto"
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        
+        # Validate the request structure
+        assert request_body["model"] == "computer-use-preview"
+        assert len(request_body["tools"]) == 1
+        assert request_body["tools"][0]["type"] == "computer_use_preview"
+        assert request_body["tools"][0]["display_width"] == 1024
+        assert request_body["tools"][0]["display_height"] == 768
+        assert request_body["tools"][0]["environment"] == "linux"
+        
+        # Check that reasoning was passed correctly
+        assert request_body["reasoning"]["summary"] == "concise"
+        assert request_body["truncation"] == "auto"
+        
+        # Validate the input format
+        assert isinstance(request_body["input"], str)
+        assert request_body["input"] == "Check the latest OpenAI news on bing.com."
+        

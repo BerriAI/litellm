@@ -2661,7 +2661,7 @@ def test_re_use_openaiClient():
 
 def test_completion_azure():
     try:
-        print("azure gpt-3.5 test\n\n")
+        print("azure chatgpt-v-3 test\n\n")
         litellm.set_verbose = False
         ## Test azure call
         response = completion(

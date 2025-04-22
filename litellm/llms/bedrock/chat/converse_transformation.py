@@ -22,6 +22,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionThinkingBlock,
@@ -375,25 +376,27 @@ class AmazonConverseConfig(BaseConfig):
         system_content_blocks: List[SystemContentBlock] = []
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                _system_content_block: Optional[SystemContentBlock] = None
-                _cache_point_block: Optional[SystemContentBlock] = None
-                if isinstance(message["content"], str) and len(message["content"]) > 0:
-                    _system_content_block = SystemContentBlock(text=message["content"])
-                    _cache_point_block = self._get_cache_point_block(
+                system_prompt_indices.append(idx)
+                if isinstance(message["content"], str) and message["content"]:
+                    system_content_blocks.append(
+                        SystemContentBlock(text=message["content"])
+                    )
+                    cache_block = self._get_cache_point_block(
                         message, block_type="system"
                     )
+                    if cache_block:
+                        system_content_blocks.append(cache_block)
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
-                        if m.get("type", "") == "text" and len(m["text"]) > 0:
-                            _system_content_block = SystemContentBlock(text=m["text"])
-                            _cache_point_block = self._get_cache_point_block(
+                        if m.get("type") == "text" and m.get("text"):
+                            system_content_blocks.append(
+                                SystemContentBlock(text=m["text"])
+                            )
+                            cache_block = self._get_cache_point_block(
                                 m, block_type="system"
                             )
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                if _cache_point_block is not None:
-                    system_content_blocks.append(_cache_point_block)
-                system_prompt_indices.append(idx)
+                            if cache_block:
+                                system_content_blocks.append(cache_block)
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
                 messages.pop(idx)
@@ -627,9 +630,11 @@ class AmazonConverseConfig(BaseConfig):
 
     def _transform_thinking_blocks(
         self, thinking_blocks: List[BedrockConverseReasoningContentBlock]
-    ) -> List[ChatCompletionThinkingBlock]:
+    ) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
         """Return a consistent format for thinking blocks between Anthropic and Bedrock."""
-        thinking_blocks_list: List[ChatCompletionThinkingBlock] = []
+        thinking_blocks_list: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
         for block in thinking_blocks:
             if "reasoningText" in block:
                 _thinking_block = ChatCompletionThinkingBlock(type="thinking")
@@ -640,6 +645,11 @@ class AmazonConverseConfig(BaseConfig):
                 if _signature is not None:
                     _thinking_block["signature"] = _signature
                 thinking_blocks_list.append(_thinking_block)
+            elif "redactedContent" in block:
+                _redacted_block = ChatCompletionRedactedThinkingBlock(
+                    type="redacted_thinking", data=block["redactedContent"]
+                )
+                thinking_blocks_list.append(_redacted_block)
         return thinking_blocks_list
 
     def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:

@@ -68,16 +68,16 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "metadata": dict,
         "model": str,
         "object": str,
-        "temperature": (int, float),
+        "temperature": (int, float, type(None)),
         "tool_choice": (dict, str),
         "tools": list,
-        "top_p": (int, float),
+        "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),
         "reasoning": dict,
         "status": str,
         "text": ResponseTextConfig,
-        "truncation": str,
+        "truncation": (str, type(None)),
         "usage": ResponseAPIUsage,
         "user": (str, type(None)),
     }
@@ -133,11 +133,13 @@ class BaseResponsesAPITest(ABC):
         validate_responses_api_response(response, final_chunk=True)
 
 
-    @pytest.mark.parametrize("sync_mode", [True])
+    @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
+        collected_content_string = ""
+        response_completed_event = None
         if sync_mode:
             response = litellm.responses(
                 input="Basic ping",
@@ -146,6 +148,10 @@ class BaseResponsesAPITest(ABC):
             )
             for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
         else:
             response = await litellm.aresponses(
                 input="Basic ping",
@@ -154,5 +160,35 @@ class BaseResponsesAPITest(ABC):
             )
             async for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
+
+        # assert the delta chunks content had len(collected_content_string) > 0
+        # this content is typically rendered on chat ui's
+        assert len(collected_content_string) > 0
+
+        # assert the response completed event is not None
+        assert response_completed_event is not None
+
+        # assert the response completed event has a response
+        assert response_completed_event.response is not None
+
+        # assert the response completed event includes the usage
+        assert response_completed_event.response.usage is not None
+
+        # basic test assert the usage seems reasonable
+        print("response_completed_event.response.usage=", response_completed_event.response.usage)
+        assert response_completed_event.response.usage.input_tokens > 0 and response_completed_event.response.usage.input_tokens < 100
+        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 1000
+        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 1000
+
+        # total tokens should be the sum of input and output tokens
+        assert response_completed_event.response.usage.total_tokens == response_completed_event.response.usage.input_tokens + response_completed_event.response.usage.output_tokens
+
+
+
+
 
 

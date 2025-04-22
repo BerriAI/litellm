@@ -1200,6 +1200,7 @@ export const teamDailyActivityCall = async (accessToken: String, startTime: Date
     if (teamIds) {
       queryParams.append('team_ids', teamIds.join(','));
     }
+    queryParams.append('exclude_team_ids', 'litellm-dashboard');
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;

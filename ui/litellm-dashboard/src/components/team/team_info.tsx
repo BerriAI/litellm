@@ -353,8 +353,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
+                      {userModels.map((model, idx) => (
+                        <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
                       ))}

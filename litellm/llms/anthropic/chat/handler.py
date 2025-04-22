@@ -29,6 +29,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
 )
@@ -501,18 +502,19 @@ class ModelResponseIterator:
     ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
-        List[ChatCompletionThinkingBlock],
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
         Dict[str, Any],
     ]:
         """
         Helper function to handle the content block delta
         """
-
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields = {}
         content_block = ContentBlockDelta(**chunk)  # type: ignore
-        thinking_blocks: List[ChatCompletionThinkingBlock] = []
+        thinking_blocks: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
 
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
@@ -541,20 +543,25 @@ class ModelResponseIterator:
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
+
         return text, tool_use, thinking_blocks, provider_specific_fields
 
     def _handle_reasoning_content(
-        self, thinking_blocks: List[ChatCompletionThinkingBlock]
+        self,
+        thinking_blocks: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ],
     ) -> Optional[str]:
         """
         Handle the reasoning content
         """
         reasoning_content = None
         for block in thinking_blocks:
+            thinking_content = cast(Optional[str], block.get("thinking"))
             if reasoning_content is None:
                 reasoning_content = ""
-            if "thinking" in block:
-                reasoning_content += block["thinking"]
+            if thinking_content is not None:
+                reasoning_content += thinking_content
         return reasoning_content
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -567,7 +574,13 @@ class ModelResponseIterator:
             usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
-            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+            thinking_blocks: Optional[
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+            ] = None
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -605,6 +618,15 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                elif (
+                    content_block_start["content_block"]["type"] == "redacted_thinking"
+                ):
+                    thinking_blocks = [
+                        ChatCompletionRedactedThinkingBlock(
+                            type="redacted_thinking",
+                            data=content_block_start["content_block"]["data"],
+                        )
+                    ]
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
