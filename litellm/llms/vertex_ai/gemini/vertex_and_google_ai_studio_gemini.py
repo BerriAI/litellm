@@ -57,6 +57,7 @@ from litellm.types.llms.vertex_ai import (
     LogprobsResult,
     ToolConfig,
     Tools,
+    UsageMetadata,
 )
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
@@ -390,7 +391,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         params: GeminiThinkingConfig = {}
         if thinking_enabled:
             params["includeThoughts"] = True
-        if thinking_budget:
+        if thinking_budget is not None and isinstance(thinking_budget, int):
             params["thinkingBudget"] = thinking_budget
 
         return params
@@ -740,6 +741,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return model_response
 
+    def is_candidate_token_count_inclusive(self, usage_metadata: UsageMetadata) -> bool:
+        """
+        Check if the candidate token count is inclusive of the thinking token count
+
+        if prompttokencount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
+
+        else the candidate token count is exclusive of the thinking token count
+
+        Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
+        """
+        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+            "candidatesTokenCount", 0
+        ) == usage_metadata.get("totalTokenCount", 0):
+            return True
+        else:
+            return False
+
     def _calculate_usage(
         self,
         completion_response: GenerateContentResponseBody,
@@ -768,14 +786,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
         )
+
+        completion_tokens = completion_response["usageMetadata"].get(
+            "candidatesTokenCount", 0
+        )
+        if (
+            not self.is_candidate_token_count_inclusive(
+                completion_response["usageMetadata"]
+            )
+            and reasoning_tokens
+        ):
+            completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
+            completion_tokens=completion_tokens,
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
