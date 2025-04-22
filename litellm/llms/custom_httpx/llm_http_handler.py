@@ -1016,6 +1016,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
         fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> Union[
         ResponsesAPIResponse,
         BaseResponsesAPIStreamingIterator,
@@ -1042,6 +1043,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 fake_stream=fake_stream,
+                litellm_metadata=litellm_metadata,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1109,6 +1111,8 @@ class BaseLLMHTTPHandler:
                         model=model,
                         logging_obj=logging_obj,
                         responses_api_provider_config=responses_api_provider_config,
+                        litellm_metadata=litellm_metadata,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                 return SyncResponsesAPIStreamingIterator(
@@ -1116,6 +1120,8 @@ class BaseLLMHTTPHandler:
                     model=model,
                     logging_obj=logging_obj,
                     responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
+                    custom_llm_provider=custom_llm_provider,
                 )
             else:
                 # For non-streaming requests
@@ -1152,6 +1158,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
         """
         Async version of the responses API handler.
@@ -1225,6 +1232,8 @@ class BaseLLMHTTPHandler:
                         model=model,
                         logging_obj=logging_obj,
                         responses_api_provider_config=responses_api_provider_config,
+                        litellm_metadata=litellm_metadata,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                 # Return the streaming iterator
@@ -1233,6 +1242,8 @@ class BaseLLMHTTPHandler:
                     model=model,
                     logging_obj=logging_obj,
                     responses_api_provider_config=responses_api_provider_config,
+                    litellm_metadata=litellm_metadata,
+                    custom_llm_provider=custom_llm_provider,
                 )
             else:
                 # For non-streaming, proceed as before

@@ -86,15 +86,15 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
-        kwargs: Dict[str, Any],
         custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> ResponsesAPIResponse:
         """
         Update the responses_api_response_id with model_id and custom_llm_provider
 
         This builds a composite ID containing the custom LLM provider, model ID, and original response ID
         """
-        litellm_metadata: Dict[str, Any] = kwargs.get("litellm_metadata", {}) or {}
+        litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(

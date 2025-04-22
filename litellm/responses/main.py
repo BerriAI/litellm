@@ -122,7 +122,7 @@ async def aresponses(
         if isinstance(response, ResponsesAPIResponse):
             response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
-                kwargs=kwargs,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
         return response
@@ -255,13 +255,14 @@ def responses(
             fake_stream=responses_api_provider_config.should_fake_stream(
                 model=model, stream=stream, custom_llm_provider=custom_llm_provider
             ),
+            litellm_metadata=kwargs.get("litellm_metadata", {}),
         )
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
             response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
-                kwargs=kwargs,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
 
@@ -379,6 +380,9 @@ def delete_responses(
         custom_llm_provider = (
             decoded_response_id.get("custom_llm_provider") or custom_llm_provider
         )
+
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
         responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
