@@ -13,7 +13,9 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
@@ -122,9 +124,9 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details[
-                "custom_llm_provider"
-            ] = litellm.LlmProviders.ANTHROPIC.value
+            logging_obj.model_call_details["custom_llm_provider"] = (
+                litellm.LlmProviders.ANTHROPIC.value
+            )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
