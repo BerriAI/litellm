@@ -5,11 +5,11 @@ steps:
   # Enable Kaniko cache using a dedicated cache repository
   - '--cache=true'
   # Define the cache repository location (adjust project/repo name if needed)
-  - '--cache-repo=europe-west1-docker.pkg.dev/thl-sre-d-synapse/litellm/litellm-cache' # Added '-cache' suffix
+  - '--cache-repo=europe-west1-docker.pkg.dev/thl-sre-d-synapse/general/litellm-cache' # Added '-cache' suffix
   # Define the primary destination image (tag provided by GitLab CI)
-  - '--destination=europe-west1-docker.pkg.dev/thl-sre-d-synapse/litellm/${_IMAGE_NAME}:${_IMAGETAG}'
+  - '--destination=europe-west1-docker.pkg.dev/thl-sre-d-synapse/general/${_IMAGE_NAME}:${_IMAGETAG}'
   # Also tag as 'latest' for the development environment
-  - '--destination=europe-west1-docker.pkg.dev/thl-sre-d-synapse/litellm/${_IMAGE_NAME}:latest'
+  - '--destination=europe-west1-docker.pkg.dev/thl-sre-d-synapse/general/${_IMAGE_NAME}:latest'
   # Specify the Dockerfile to use (root Dockerfile)
   - '--dockerfile=${_DOCKERFILE}'
   # Specify the build context (root of the repository)
