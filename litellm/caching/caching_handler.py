@@ -66,9 +66,7 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = (
-        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    )
+    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
 
 
 class LLMCachingHandler:
@@ -738,7 +736,6 @@ class LLMCachingHandler:
         if self._should_store_result_in_cache(
             original_function=self.original_function, kwargs=new_kwargs
         ):
-
             litellm.cache.add_cache(result, **new_kwargs)
 
         return
@@ -865,9 +862,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params["preset_cache_key"] = (
-                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
-            )
+            litellm_params[
+                "preset_cache_key"
+            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
         else:
             litellm_params["preset_cache_key"] = None
 

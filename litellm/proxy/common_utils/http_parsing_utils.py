@@ -81,8 +81,13 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "scope") and "parsed_body" in request.scope:
-        return request.scope["parsed_body"]
+    if (
+        hasattr(request, "scope")
+        and "parsed_body" in request.scope
+        and isinstance(request.scope["parsed_body"], tuple)
+    ):
+        accepted_keys, parsed_body = request.scope["parsed_body"]
+        return {key: parsed_body[key] for key in accepted_keys}
     return None
 
 
@@ -93,7 +98,7 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.scope["parsed_body"] = parsed_body
+        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
@@ -142,10 +147,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[
+                Deployment
+            ] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment

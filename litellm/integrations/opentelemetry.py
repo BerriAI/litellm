@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,10 +23,10 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
-    Span = _Span
-    SpanExporter = _SpanExporter
-    UserAPIKeyAuth = _UserAPIKeyAuth
-    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
+    Span = Union[_Span, Any]
+    SpanExporter = Union[_SpanExporter, Any]
+    UserAPIKeyAuth = Union[_UserAPIKeyAuth, Any]
+    ManagementEndpointLoggingPayload = Union[_ManagementEndpointLoggingPayload, Any]
 else:
     Span = Any
     SpanExporter = Any
@@ -46,7 +46,6 @@ LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 @dataclass
 class OpenTelemetryConfig:
-
     exporter: Union[str, SpanExporter] = "console"
     endpoint: Optional[str] = None
     headers: Optional[str] = None
@@ -154,7 +153,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -215,7 +213,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -353,9 +350,9 @@ class OpenTelemetry(CustomLogger):
         """
         from opentelemetry import trace
 
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
         if not standard_callback_dynamic_params:
             return
 
@@ -722,7 +719,6 @@ class OpenTelemetry(CustomLogger):
         span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-
         kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
         custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
@@ -843,12 +839,14 @@ class OpenTelemetry(CustomLogger):
             headers=dynamic_headers or self.OTEL_HEADERS
         )
 
-        if isinstance(self.OTEL_EXPORTER, SpanExporter):
+        if hasattr(
+            self.OTEL_EXPORTER, "export"
+        ):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
-            return SimpleSpanProcessor(self.OTEL_EXPORTER)
+            return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
 
         if self.OTEL_EXPORTER == "console":
             verbose_logger.debug(
@@ -907,7 +905,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -961,7 +958,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 

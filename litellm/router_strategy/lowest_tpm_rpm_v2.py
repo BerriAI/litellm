@@ -20,7 +20,7 @@ from .base_routing_strategy import BaseRoutingStrategy
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -69,7 +69,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         Raises - RateLimitError if deployment over defined RPM limit
         """
         try:
-
             # ------------
             # Setup values
             # ------------

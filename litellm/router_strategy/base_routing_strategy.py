@@ -38,9 +38,9 @@ class BaseRoutingStrategy(ABC):
             except RuntimeError:  # No event loop in current thread
                 self._create_sync_thread(default_sync_interval)
 
-        self.in_memory_keys_to_update: set[str] = (
-            set()
-        )  # Set with max size of 1000 keys
+        self.in_memory_keys_to_update: set[
+            str
+        ] = set()  # Set with max size of 1000 keys
 
     async def _increment_value_in_current_window(
         self, key: str, value: Union[int, float], ttl: int

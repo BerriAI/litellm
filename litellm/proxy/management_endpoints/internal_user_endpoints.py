@@ -15,7 +15,7 @@ import asyncio
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -25,6 +25,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -32,6 +34,18 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    BreakdownMetrics,
+    KeyMetadata,
+    KeyMetricWithMetadata,
+    LiteLLM_DailyUserSpend,
+    MetricWithMetadata,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
+)
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    UserListResponse,
+)
 
 router = APIRouter()
 
@@ -81,9 +95,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
     is_internal_user = False
     if data.user_role and data.user_role.is_internal_user_role:
@@ -369,7 +383,6 @@ async def ui_get_available_role(
 
     _data_to_return = {}
     for role in LitellmUserRoles:
-
         # We only show a subset of roles on UI
         if role in [
             LitellmUserRoles.PROXY_ADMIN,
@@ -651,9 +664,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             duration_s = duration_in_seconds(
                 duration=non_default_values["budget_duration"]
             )
@@ -890,14 +903,10 @@ async def get_user_key_counts(
 
 
 @router.get(
-    "/user/get_users",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-@router.get(
     "/user/list",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserListResponse,
 )
 async def get_users(
     role: Optional[str] = fastapi.Query(
@@ -906,15 +915,19 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    user_email: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by partial email match"
+    ),
+    team: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by team id"
+    ),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
 ):
     """
-    Get a paginated list of users, optionally filtered by role.
-
-    Used by the UI to populate the user lists.
+    Get a paginated list of users with filtering options.
 
     Parameters:
         role: Optional[str]
@@ -925,17 +938,17 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        user_email: Optional[str]
+            Filter users by partial email match
+        team: Optional[str]
+            Filter users by team id. Will match if user has this team in their teams array.
         page: int
             The page number to return
         page_size: int
             The number of items per page
 
-    Currently - admin-only endpoint.
-
-    Example curl:
-    ```
-    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
-    ```
+    Returns:
+        UserListResponse with filtered and paginated users
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -948,35 +961,40 @@ async def get_users(
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
-    # Prepare the query conditions
     # Build where conditions based on provided parameters
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = {
-            "contains": role,
-            "mode": "insensitive",  # Case-insensitive search
-        }
+        where_conditions["user_role"] = role  # Exact match instead of contains
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
-            "in": user_id_list,  # Now passing a list of strings as required by Prisma
+            "in": user_id_list,
         }
 
-    users: Optional[List[LiteLLM_UserTable]] = (
-        await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
-        )
+    if user_email is not None and isinstance(user_email, str):
+        where_conditions["user_email"] = {
+            "contains": user_email,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if team is not None and isinstance(team, str):
+        where_conditions["teams"] = {
+            "has": team  # Array contains for string arrays in Prisma
+        }
+
+    ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
+    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+    users = await prisma_client.db.litellm_usertable.find_many(
+        where=where_conditions,
+        skip=skip,
+        take=page_size,
+        order={"created_at": "desc"},
     )
 
     # Get total count of user rows
-    total_count = await prisma_client.db.litellm_usertable.count(
-        where=where_conditions  # type: ignore
-    )
+    total_count = await prisma_client.db.litellm_usertable.count(where=where_conditions)
 
     # Get key count for each user
     if users is not None:
@@ -999,7 +1017,7 @@ async def get_users(
                 LiteLLM_UserTableWithKeyCount(
                     **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
                 )
-            )  # Return full key object
+            )
     else:
         user_list = []
 
@@ -1225,13 +1243,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:
@@ -1240,4 +1258,161 @@ async def ui_view_users(
         return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error searching users: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
+
+
+def update_metrics(
+    group_metrics: SpendMetrics, record: LiteLLM_DailyUserSpend
+) -> SpendMetrics:
+    group_metrics.spend += record.spend
+    group_metrics.prompt_tokens += record.prompt_tokens
+    group_metrics.completion_tokens += record.completion_tokens
+    group_metrics.cache_read_input_tokens += record.cache_read_input_tokens
+    group_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
+    group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
+    group_metrics.api_requests += record.api_requests
+    group_metrics.successful_requests += record.successful_requests
+    group_metrics.failed_requests += record.failed_requests
+    return group_metrics
+
+
+def update_breakdown_metrics(
+    breakdown: BreakdownMetrics,
+    record: LiteLLM_DailyUserSpend,
+    model_metadata: Dict[str, Dict[str, Any]],
+    provider_metadata: Dict[str, Dict[str, Any]],
+    api_key_metadata: Dict[str, Dict[str, Any]],
+) -> BreakdownMetrics:
+    """Updates breakdown metrics for a single record using the existing update_metrics function"""
+
+    # Update model breakdown
+    if record.model not in breakdown.models:
+        breakdown.models[record.model] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=model_metadata.get(
+                record.model, {}
+            ),  # Add any model-specific metadata here
+        )
+    breakdown.models[record.model].metrics = update_metrics(
+        breakdown.models[record.model].metrics, record
+    )
+
+    # Update provider breakdown
+    provider = record.custom_llm_provider or "unknown"
+    if provider not in breakdown.providers:
+        breakdown.providers[provider] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=provider_metadata.get(
+                provider, {}
+            ),  # Add any provider-specific metadata here
+        )
+    breakdown.providers[provider].metrics = update_metrics(
+        breakdown.providers[provider].metrics, record
+    )
+
+    # Update api key breakdown
+    if record.api_key not in breakdown.api_keys:
+        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=KeyMetadata(
+                key_alias=api_key_metadata.get(record.api_key, {}).get(
+                    "key_alias", None
+                )
+            ),  # Add any api_key-specific metadata here
+        )
+    breakdown.api_keys[record.api_key].metrics = update_metrics(
+        breakdown.api_keys[record.api_key].metrics, record
+    )
+
+    return breakdown
+
+
+@router.get(
+    "/user/daily/activity",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_user_daily_activity(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model",
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific API key",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Items per page", ge=1, le=1000
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Meant to optimize querying spend data for analytics for a user.
+
+    Returns:
+    (by date)
+    - spend
+    - prompt_tokens
+    - completion_tokens
+    - cache_read_input_tokens
+    - cache_creation_input_tokens
+    - total_tokens
+    - api_requests
+    - breakdown by model, api_key, provider
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        entity_id: Optional[str] = None
+        if not _user_has_admin_view(user_api_key_dict):
+            entity_id = user_api_key_dict.user_id
+
+        return await get_daily_activity(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            model=model,
+            api_key=api_key,
+            page=page,
+            page_size=page_size,
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/spend/daily/analytics: Exception occured - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )

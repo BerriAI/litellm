@@ -11,6 +11,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
@@ -207,3 +210,87 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             start_time=self.start_time,
             end_time=datetime.now(),
         )
+
+
+class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+    """
+    Mock iterator—fake a stream by slicing the full response text into
+    5 char deltas, then emit a completed event.
+
+    Models like o1-pro don't support streaming, so we fake it.
+    """
+
+    CHUNK_SIZE = 5
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        model: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        logging_obj: LiteLLMLoggingObj,
+    ):
+        super().__init__(
+            response=response,
+            model=model,
+            responses_api_provider_config=responses_api_provider_config,
+            logging_obj=logging_obj,
+        )
+
+        # one-time transform
+        transformed = (
+            self.responses_api_provider_config.transform_response_api_response(
+                model=self.model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        )
+        full_text = self._collect_text(transformed)
+
+        # build a list of 5‑char delta events
+        deltas = [
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                delta=full_text[i : i + self.CHUNK_SIZE],
+                item_id=transformed.id,
+                output_index=0,
+                content_index=0,
+            )
+            for i in range(0, len(full_text), self.CHUNK_SIZE)
+        ]
+
+        # append the completed event
+        self._events = deltas + [
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=transformed,
+            )
+        ]
+        self._idx = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        if self._idx >= len(self._events):
+            raise StopAsyncIteration
+        evt = self._events[self._idx]
+        self._idx += 1
+        return evt
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> ResponsesAPIStreamingResponse:
+        if self._idx >= len(self._events):
+            raise StopIteration
+        evt = self._events[self._idx]
+        self._idx += 1
+        return evt
+
+    def _collect_text(self, resp: ResponsesAPIResponse) -> str:
+        out = ""
+        for out_item in resp.output:
+            if out_item.type == "message":
+                for c in getattr(out_item, "content", []):
+                    out += c.text
+        return out

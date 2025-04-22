@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import NumericalInput from "../shared/numerical_input";
 import {
   Card,
   Title,
@@ -19,8 +20,10 @@ import {
   Table,
   Icon
 } from "@tremor/react";
+import TeamMembersComponent from "./team_member_view";
+import MemberPermissions from "./member_permissions";
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
-import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import {
   Select as Select2,
@@ -29,9 +32,9 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { isAdminRole } from "@/utils/roles";
 
-
-interface TeamData {
+export interface TeamData {
   team_id: string;
   team_info: {
     team_alias: string;
@@ -60,8 +63,9 @@ interface TeamData {
   team_memberships: any[];
 }
 
-interface TeamInfoProps {
+export interface TeamInfoProps {
   teamId: string;
+  onUpdate: (data: any) => void;
   onClose: () => void;
   accessToken: string | null;
   is_team_admin: boolean;
@@ -175,6 +179,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     try {
       if (!accessToken) return;
 
+      let parsedMetadata = {};
+      try {
+        parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
+      } catch (e) {
+        message.error("Invalid JSON in metadata field");
+        return;
+      }
+
       const updateData = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -184,7 +196,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget: values.max_budget,
         budget_duration: values.budget_duration,
         metadata: {
-          ...values.metadata,
+          ...parsedMetadata,
           guardrails: values.guardrails || []
         }
       };
@@ -220,12 +232,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <TabGroup defaultIndex={editTeam ? 2 : 0}>
+      <TabGroup defaultIndex={editTeam ? 3 : 0}>
         <TabList className="mb-4">
           {[
             <Tab key="overview">Overview</Tab>,
             ...(canEditTeam ? [
               <Tab key="members">Members</Tab>,
+              <Tab key="member-permissions">Member Permissions</Tab>,
               <Tab key="settings">Settings</Tab>
             ] : [])
           ]}
@@ -272,59 +285,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           {/* Members Panel */}
           <TabPanel>
-            <div className="space-y-4">
-              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {teamData.team_info.members_with_roles.map((member: Member, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_id}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_email}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text className="font-mono">{member.role}</Text>
-                        </TableCell>
-                        <TableCell>
-                          {canEditTeam && (
-                            <>
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditMember(member);
-                                  setIsEditMemberModalVisible(true);
-                                }}
-                              />
-                              <Icon
-                                onClick={() => handleMemberDelete(member)}
-                                icon={TrashIcon}
-                                size="sm"
-                              />
-                            </>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Card>
-              <TremorButton onClick={() => setIsAddMemberModalVisible(true)}>
-                Add Member
-              </TremorButton>
-            </div>
+            <TeamMembersComponent
+              teamData={teamData}
+              canEditTeam={canEditTeam}
+              handleMemberDelete={handleMemberDelete}
+              setSelectedEditMember={setSelectedEditMember}
+              setIsEditMemberModalVisible={setIsEditMemberModalVisible}
+              setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+            />
           </TabPanel>
+
+          {/* Member Permissions Panel */}
+          {canEditTeam && (
+            <TabPanel>
+              <MemberPermissions 
+                teamId={teamId}
+                accessToken={accessToken}
+                canEditTeam={canEditTeam}
+              />
+            </TabPanel>
+          )}
 
           {/* Settings Panel */}
           <TabPanel>
@@ -373,8 +353,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
+                      {userModels.map((model, idx) => (
+                        <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
                       ))}
@@ -382,7 +362,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -394,11 +374,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <InputNumber step={1} style={{ width: "100%" }} />
+                    <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item

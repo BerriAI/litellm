@@ -13,7 +13,9 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
@@ -25,7 +27,6 @@ else:
 
 
 class AnthropicPassthroughLoggingHandler:
-
     @staticmethod
     def anthropic_passthrough_handler(
         httpx_response: httpx.Response,

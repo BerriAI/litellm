@@ -131,7 +131,10 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     def is_model_o_series_model(self, model: str) -> bool:
         if model in litellm.open_ai_chat_completion_models and (
-            "o1" in model or "o3" in model
+            "o1" in model
+            or "o3" in model
+            or "o4"
+            in model  # [TODO] make this a more generic check (e.g. using `openai-o-series` as provider like gemini)
         ):
             return True
         return False

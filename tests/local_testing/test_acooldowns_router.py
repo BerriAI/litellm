@@ -26,7 +26,7 @@ model_list = [
     {  # list of model deployments
         "model_name": "gpt-3.5-turbo",  # openai model name
         "litellm_params": {  # params for litellm completion/embedding call
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
             "api_key": "bad-key",
             "api_version": os.getenv("AZURE_API_VERSION"),
             "api_base": os.getenv("AZURE_API_BASE"),
@@ -143,7 +143,7 @@ async def test_cooldown_same_model_name(sync_mode):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -153,7 +153,7 @@ async def test_cooldown_same_model_name(sync_mode):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -184,7 +184,7 @@ async def test_cooldown_same_model_name(sync_mode):
                 model_ids.append(model["model_info"]["id"])
             print("\n litellm model ids ", model_ids)
 
-            # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
+            # example litellm_model_names ['azure/chatgpt-v-3-ModelID-64321', 'azure/chatgpt-v-3-ModelID-63960']
             assert (
                 model_ids[0] != model_ids[1]
             )  # ensure both models have a uuid added, and they have different names
@@ -201,7 +201,7 @@ async def test_cooldown_same_model_name(sync_mode):
                 model_ids.append(model["model_info"]["id"])
             print("\n litellm model ids ", model_ids)
 
-            # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
+            # example litellm_model_names ['azure/chatgpt-v-3-ModelID-64321', 'azure/chatgpt-v-3-ModelID-63960']
             assert (
                 model_ids[0] != model_ids[1]
             )  # ensure both models have a uuid added, and they have different names

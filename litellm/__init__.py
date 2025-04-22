@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES #########
+### INIT VARIABLES ###########
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -56,6 +56,9 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SOFT_BUDGET,
+    DEFAULT_ALLOWED_FAILS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -63,6 +66,7 @@ from litellm.proxy._types import (
     KeyManagementSettings,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -109,6 +113,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
+    "agentops",
+    "anthropic_cache_control_hook",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -120,8 +126,12 @@ callbacks: List[
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
+require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
+gcs_pub_sub_use_v1: Optional[bool] = (
+    False  # if you want to use v1 gcs pubsub logged payload
+)
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Union[str, Callable, CustomLogger]] = (
     []
@@ -152,9 +162,9 @@ token: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
 telemetry = True
-max_tokens = 256  # OpenAI Defaults
+max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
-modify_params = False
+modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -245,7 +255,7 @@ budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
 default_soft_budget: float = (
-    50.0  # by default all litellm proxy keys have a soft budget of 50.0
+    DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
 )
 forward_traceparent_to_llm_provider: bool = False
 
@@ -269,6 +279,7 @@ default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 key_generation_settings: Optional[StandardKeyGenerationConfig] = None
 default_internal_user_params: Optional[Dict] = None
+default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
@@ -315,6 +326,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
+check_provider_endpoint = False
 
 
 ####### THREAD-SPECIFIC DATA ####################
@@ -404,6 +416,7 @@ deepseek_models: List = []
 azure_ai_models: List = []
 jina_ai_models: List = []
 voyage_models: List = []
+infinity_models: List = []
 databricks_models: List = []
 cloudflare_models: List = []
 codestral_models: List = []
@@ -545,6 +558,8 @@ def add_known_models():
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
             voyage_models.append(key)
+        elif value.get("litellm_provider") == "infinity":
+            infinity_models.append(key)
         elif value.get("litellm_provider") == "databricks":
             databricks_models.append(key)
         elif value.get("litellm_provider") == "cloudflare":
@@ -633,6 +648,7 @@ model_list = (
     + deepseek_models
     + azure_ai_models
     + voyage_models
+    + infinity_models
     + databricks_models
     + cloudflare_models
     + codestral_models
@@ -688,6 +704,7 @@ models_by_provider: dict = {
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
+    "infinity": infinity_models,
     "databricks": databricks_models,
     "cloudflare": cloudflare_models,
     "codestral": codestral_models,
@@ -756,12 +773,14 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_web_search,
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
     supports_audio_input,
     supports_audio_output,
     supports_system_messages,
+    supports_reasoning,
     get_litellm_params,
     acreate,
     get_max_tokens,
@@ -802,13 +821,13 @@ from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
-from .llms.huggingface.chat.transformation import (
-    HuggingfaceChatConfig as HuggingfaceConfig,
-)
+from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
+from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
+from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -844,6 +863,7 @@ from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     VertexGeminiConfig as VertexAIConfig,
 )
+from .llms.gemini.common_utils import GeminiModelInfo
 from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,
     GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
@@ -932,9 +952,11 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
@@ -945,6 +967,12 @@ from .llms.snowflake.chat.transformation import SnowflakeConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
+)
+from .llms.openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
+from .llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
 )
 
 openAIGPTConfig = OpenAIGPTConfig()
@@ -974,6 +1002,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
+from .llms.xai.common_utils import XAIModelInfo
 from .llms.volcengine import VolcEngineConfig
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
@@ -1035,6 +1064,7 @@ from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
+import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 

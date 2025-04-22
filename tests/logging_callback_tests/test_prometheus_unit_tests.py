@@ -39,7 +39,7 @@ import time
 
 
 @pytest.fixture
-def prometheus_logger():
+def prometheus_logger() -> PrometheusLogger:
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:
         REGISTRY.unregister(collector)
@@ -713,7 +713,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team_alias="test_team_alias",
         user="test_user",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -948,7 +948,7 @@ async def test_log_success_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_successful_fallbacks.labels().inc.assert_called_once()
 
@@ -985,7 +985,7 @@ async def test_log_failure_fallback_event(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         exception_status="429",
-        exception_class="RateLimitError",
+        exception_class="Openai.RateLimitError",
     )
     prometheus_logger.litellm_deployment_failed_fallbacks.labels().inc.assert_called_once()
 
@@ -1210,24 +1210,6 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
-
-
-def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
-    """
-    Test that _initialize_prometheus_startup_metrics handles case when no event loop exists
-    """
-    # Mock asyncio.get_running_loop to raise RuntimeError
-    litellm.prometheus_initialize_budget_metrics = True
-    with patch(
-        "asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")
-    ), patch("litellm._logging.verbose_logger.exception") as mock_logger:
-
-        # Call the function
-        prometheus_logger._initialize_prometheus_startup_metrics()
-
-        # Verify the error was logged
-        mock_logger.assert_called_once()
-        assert "No running event loop" in mock_logger.call_args[0][0]
 
 
 @pytest.mark.asyncio(scope="session")
@@ -1500,3 +1482,33 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
         "metadata_organization": None,
         "metadata_environment": None,
     }
+
+
+def test_get_exception_class_name(prometheus_logger):
+    """
+    Test that _get_exception_class_name correctly formats the exception class name
+    """
+    # Test case 1: Exception with llm_provider
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded",
+        llm_provider="openai",
+        model="gpt-3.5-turbo"
+    )
+    assert prometheus_logger._get_exception_class_name(rate_limit_error) == "Openai.RateLimitError"
+
+    # Test case 2: Exception with empty llm_provider
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="",
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(auth_error) == "AuthenticationError"
+
+    # Test case 3: Exception with None llm_provider
+    context_window_error = litellm.ContextWindowExceededError(
+        message="Context length exceeded",
+        llm_provider=None,
+        model="gpt-4"
+    )
+    assert prometheus_logger._get_exception_class_name(context_window_error) == "ContextWindowExceededError"
+

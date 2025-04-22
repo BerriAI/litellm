@@ -49,8 +49,15 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
+
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+)
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -234,6 +241,85 @@ class Thread(BaseModel):
     """The object type, which is always `thread`."""
 
 
+OpenAICreateFileRequestOptionalParams = Literal["purpose"]
+
+OpenAIFilesPurpose = Literal[
+    "assistants",
+    "assistants_output",
+    "batch",
+    "batch_output",
+    "fine-tune",
+    "fine-tune-results",
+    "vision",
+    "user_data",
+]
+
+
+class OpenAIFileObject(BaseModel):
+    id: str
+    """The file identifier, which can be referenced in the API endpoints."""
+
+    bytes: int
+    """The size of the file, in bytes."""
+
+    created_at: int
+    """The Unix timestamp (in seconds) for when the file was created."""
+
+    filename: str
+    """The name of the file."""
+
+    object: Literal["file"]
+    """The object type, which is always `file`."""
+
+    purpose: OpenAIFilesPurpose
+    """The intended purpose of the file.
+
+    Supported values are `assistants`, `assistants_output`, `batch`, `batch_output`,
+    `fine-tune`, `fine-tune-results`, `vision`, and `user_data`.
+    """
+
+    status: Literal["uploaded", "processed", "error"]
+    """Deprecated.
+
+    The current status of the file, which can be either `uploaded`, `processed`, or
+    `error`.
+    """
+
+    expires_at: Optional[int] = None
+    """The Unix timestamp (in seconds) for when the file will expire."""
+
+    status_details: Optional[str] = None
+    """Deprecated.
+
+    For details on why a fine-tuning training file failed validation, see the
+    `error` field on `fine_tuning.job`.
+    """
+
+    _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
+CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -250,8 +336,8 @@ class CreateFileRequest(TypedDict, total=False):
         timeout: Optional[float] = None
     """
 
-    file: FileTypes
-    purpose: Literal["assistants", "batch", "fine-tune"]
+    file: Required[FileTypes]
+    purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
@@ -382,6 +468,81 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["redacted_thinking"]]
+    data: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
+    city: str
+    """Free text input for the city of the user, e.g. `San Francisco`."""
+
+    country: str
+    """
+    The two-letter [ISO country code](https://en.wikipedia.org/wiki/ISO_3166-1) of
+    the user, e.g. `US`.
+    """
+
+    region: str
+    """Free text input for the region of the user, e.g. `California`."""
+
+    timezone: str
+    """
+    The [IANA timezone](https://timeapi.io/documentation/iana-timezones) of the
+    user, e.g. `America/Los_Angeles`.
+    """
+
+
+class WebSearchOptionsUserLocation(TypedDict, total=False):
+    approximate: Required[WebSearchOptionsUserLocationApproximate]
+    """Approximate location parameters for the search."""
+
+    type: Required[Literal["approximate"]]
+    """The type of location approximation. Always `approximate`."""
+
+
+class WebSearchOptions(TypedDict, total=False):
+    search_context_size: Literal["low", "medium", "high"]
+    """
+    High level guidance for the amount of context window space to use for the
+    search. One of `low`, `medium`, or `high`. `medium` is the default.
+    """
+
+    user_location: Optional[WebSearchOptionsUserLocation]
+    """Approximate location parameters for the search."""
+
+
+class FileSearchTool(TypedDict, total=False):
+    type: Literal["file_search"]
+    """The type of tool being defined: `file_search`"""
+
+    vector_store_ids: Optional[List[str]]
+    """The IDs of the vector stores to search."""
+
+
+class ChatCompletionAnnotationURLCitation(TypedDict, total=False):
+    end_index: int
+    """The index of the last character of the URL citation in the message."""
+
+    start_index: int
+    """The index of the first character of the URL citation in the message."""
+
+    title: str
+    """The title of the web resource."""
+
+    url: str
+    """The URL of the web resource."""
+
+
+class ChatCompletionAnnotation(TypedDict, total=False):
+    type: Literal["url_citation"]
+    """The type of the URL citation. Always `url_citation`."""
+
+    url_citation: ChatCompletionAnnotationURLCitation
+    """A URL citation when using web search."""
+
+
 class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
@@ -436,12 +597,25 @@ class ChatCompletionDocumentObject(TypedDict):
     citations: Optional[CitationsObject]
 
 
+class ChatCompletionFileObjectFile(TypedDict, total=False):
+    file_data: str
+    file_id: str
+    filename: str
+    format: str
+
+
+class ChatCompletionFileObject(TypedDict):
+    type: Literal["file"]
+    file: ChatCompletionFileObjectFile
+
+
 OpenAIMessageContentListBlock = Union[
     ChatCompletionTextObject,
     ChatCompletionImageObject,
     ChatCompletionAudioObject,
     ChatCompletionDocumentObject,
     ChatCompletionVideoObject,
+    ChatCompletionFileObject,
 ]
 
 OpenAIMessageContent = Union[
@@ -477,6 +651,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
+    reasoning_content: Optional[str]
 
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
@@ -517,12 +692,18 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
     cache_control: ChatCompletionCachedContent
 
 
+class GenericChatCompletionMessage(TypedDict, total=False):
+    role: Required[str]
+    content: Required[Union[str, List]]
+
+
 ValidUserMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",
     "document",
     "video_url",
+    "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
@@ -555,6 +736,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: dict
+    strict: bool
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -622,7 +804,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionUsageBlock(TypedDict):
@@ -640,12 +824,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -672,18 +856,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -697,11 +881,29 @@ class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
-    "language", "prompt", "temperature", "response_format", "timestamp_granularities"
+    "language",
+    "prompt",
+    "temperature",
+    "response_format",
+    "timestamp_granularities",
+    "include",
 ]
 
 
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
+
+
+class ComputerToolParam(TypedDict, total=False):
+    display_height: Required[float]
+    """The height of the computer display."""
+
+    display_width: Required[float]
+    """The width of the computer display."""
+
+    environment: Required[Union[Literal["mac", "windows", "ubuntu", "browser"], str]]
+    """The type of computer environment to control."""
+
+    type: Required[Union[Literal["computer_use_preview"], str]]
 
 
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
@@ -719,7 +921,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
     tool_choice: Optional[ToolChoice]
-    tools: Optional[Iterable[ToolParam]]
+    tools: Optional[List[Union[ToolParam, ComputerToolParam]]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
@@ -732,22 +934,18 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     model: str
 
 
-class BaseLiteLLMOpenAIResponseObject(BaseModel):
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-    def items(self):
-        return self.__dict__.items()
-
-
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int
+    reasoning_tokens: Optional[int] = None
+
+    text_tokens: Optional[int] = None
+
+    model_config = {"extra": "allow"}
+
+
+class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
 
@@ -756,10 +954,13 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
     """The number of input tokens."""
 
+    input_tokens_details: Optional[InputTokensDetails] = None
+    """A detailed breakdown of the input tokens."""
+
     output_tokens: int
     """The number of output tokens."""
 
-    output_tokens_details: Optional[OutputTokensDetails]
+    output_tokens_details: Optional[OutputTokensDetails] = None
     """A detailed breakdown of the output tokens."""
 
     total_tokens: int
@@ -777,11 +978,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: List[ResponseOutputItem]
+    output: Union[
+        List[ResponseOutputItem],
+        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+    ]
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
-    tools: List[Tool]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
     top_p: Optional[float]
     max_output_tokens: Optional[int]
     previous_response_id: Optional[str]
@@ -1024,4 +1228,24 @@ ResponsesAPIStreamingResponse = Annotated[
         ErrorEvent,
     ],
     Discriminator("type"),
+]
+
+
+REASONING_EFFORT = Literal["low", "medium", "high"]
+
+
+class OpenAIRealtimeStreamSessionEvents(TypedDict):
+    event_id: str
+    session: dict
+    type: Union[Literal["session.created"], Literal["session.updated"]]
+
+
+class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
+    event_id: str
+    response: dict
+    type: str
+
+
+OpenAIRealtimeStreamList = List[
+    Union[OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents]
 ]

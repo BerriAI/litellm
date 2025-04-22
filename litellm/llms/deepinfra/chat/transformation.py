@@ -1,6 +1,7 @@
 from typing import Optional, Tuple, Union
 
 import litellm
+from litellm.constants import MIN_NON_ZERO_TEMPERATURE
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -84,7 +85,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                 and value == 0
                 and model == "mistralai/Mistral-7B-Instruct-v0.1"
             ):  # this model does no support temperature == 0
-                value = 0.0001  # close to 0
+                value = MIN_NON_ZERO_TEMPERATURE  # close to 0
             if param == "tool_choice":
                 if (
                     value != "auto" and value != "none"

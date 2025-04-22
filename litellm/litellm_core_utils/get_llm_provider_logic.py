@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
+from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -256,10 +257,13 @@ def get_llm_provider(  # noqa: PLR0915
         elif model in litellm.cohere_chat_models:
             custom_llm_provider = "cohere_chat"
         ## replicate
-        elif model in litellm.replicate_models or (":" in model and len(model) > 64):
+        elif model in litellm.replicate_models or (
+            ":" in model and len(model) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+        ):
             model_parts = model.split(":")
             if (
-                len(model_parts) > 1 and len(model_parts[1]) == 64
+                len(model_parts) > 1
+                and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
                 custom_llm_provider = "replicate"
             elif model in litellm.replicate_models:

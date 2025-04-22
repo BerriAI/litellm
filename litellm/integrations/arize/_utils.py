@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -7,7 +7,7 @@ from litellm.types.utils import StandardLoggingPayload
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

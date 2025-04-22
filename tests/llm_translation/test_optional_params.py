@@ -67,6 +67,30 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
     assert len(optional_params) == expected_count
 
 
+
+
+def test_get_optional_params_with_allowed_openai_params():
+    """
+    Test if use can dynamically pass in allowed_openai_params to override default behavior
+    """
+    litellm.drop_params = True
+    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    response_format = {"type": "json"}
+    reasoning_effort = "low"
+    optional_params = get_optional_params(
+        model="cf/llama-3.1-70b-instruct", 
+        custom_llm_provider="cloudflare", 
+        allowed_openai_params=["tools", "reasoning_effort", "response_format"],
+        tools=tools,
+        response_format=response_format,
+        reasoning_effort=reasoning_effort,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tools"] == tools
+    assert optional_params["response_format"] == response_format
+    assert optional_params["reasoning_effort"] == reasoning_effort  
+
+
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
@@ -193,7 +217,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -372,7 +396,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -1379,3 +1403,59 @@ def test_azure_modalities_param():
     )
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+    
+
+
+
+def test_azure_response_format_param():
+    optional_params = litellm.get_optional_params(
+        model="azure/o_series/test-o3-mini",
+        custom_llm_provider="azure/o_series",
+        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    )
+
+    
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
+        ("claude-3-7-sonnet@20250219", "vertex_ai"),
+    ],
+)
+def test_anthropic_unified_reasoning_content(model, provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        reasoning_effort="high",
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+
+def test_azure_response_format(monkeypatch):
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
+    optional_params = get_optional_params(
+        model="azure/gpt-4o-mini",
+        custom_llm_provider="azure",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params["response_format"] == {"type": "json_object"}

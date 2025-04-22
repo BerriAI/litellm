@@ -188,11 +188,25 @@ Currently implemented for:
 - OpenAI (if OPENAI_API_KEY is set)
 - Fireworks AI (if FIREWORKS_AI_API_KEY is set)
 - LiteLLM Proxy (if LITELLM_PROXY_API_KEY is set)
+- Gemini (if GEMINI_API_KEY is set)
+- XAI (if XAI_API_KEY is set)   
+- Anthropic (if ANTHROPIC_API_KEY is set)
 
+You can also specify a custom provider to check:
+
+**All providers**:
 ```python
 from litellm import get_valid_models
 
 valid_models = get_valid_models(check_provider_endpoint=True)
+print(valid_models)
+```
+
+**Specific provider**:
+```python
+from litellm import get_valid_models
+
+valid_models = get_valid_models(check_provider_endpoint=True, custom_llm_provider="openai")
 print(valid_models)
 ```
 
