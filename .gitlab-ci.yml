@@ -137,7 +137,7 @@ Build LiteLLM Image Dev:
         - litellm/**/* # Changes within the main litellm directory
         - docker/**/* # Changes within the docker helper scripts directory
 
-Deploy Staging:
-  only:
-    variables:
-      - $DEPLOYMENT == "staging"
+# Deploy Staging:
+#   only:
+#     variables:
+#       - $DEPLOYMENT == "staging"
