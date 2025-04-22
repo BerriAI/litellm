@@ -17,7 +17,7 @@ import pytest
 import litellm
 from typing import AsyncGenerator
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.pass_through_endpoints.types import EndpointType
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -34,7 +34,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _init_kwargs_for_pass_through_endpoint,
     _update_metadata_with_tags_in_header,
 )
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 
 
 @pytest.fixture
