@@ -391,7 +391,7 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gemini-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
-    tools=[{"googleSearchRetrieval": {}}],
+    tools=[{"googleSearch": {}}],
 )
 
 print(response)
