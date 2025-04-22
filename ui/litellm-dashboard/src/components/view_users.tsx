@@ -106,7 +106,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   setKeys,
 }) => {
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
-  const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
@@ -173,7 +172,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         );
         
         if (data) {
-          setUserData(data.users);
           setUserListResponse(data);
         }
       } catch (error) {
@@ -205,9 +203,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         await userDeleteCall(accessToken, [userToDelete]);
         message.success("User deleted successfully");
         // Update the user list after deletion
-        if (userData) {
-          const updatedUserData = userData.filter(user => user.user_id !== userToDelete);
-          setUserData(updatedUserData);
+        if (userListResponse) {
+          const updatedUserData = userListResponse.users?.filter(user => user.user_id !== userToDelete);
+          setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
         }
       } catch (error) {
         console.error("Error deleting user:", error);
@@ -241,11 +239,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     } catch (error) {
       console.error("There was an error updating the user", error);
     }
-    if (userData) {
-      const updatedUserData = userData.map((user) =>
+    if (userListResponse) {
+      const updatedUserData = userListResponse.users?.map((user) =>
         user.user_id === editedUser.user_id ? editedUser : user
       );
-      setUserData(updatedUserData);
+      setUserListResponse({ ...userListResponse, users: updatedUserData || [] });
     }
     setSelectedUser(null);
     setEditModalVisible(false);
@@ -274,7 +272,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       );
       
       setUserListResponse(userDataResponse);
-      setUserData(userDataResponse.users || []);
     } catch (error) {
       console.error("Error refreshing user data:", error);
     }
@@ -291,7 +288,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         if (cachedUserData) {
           const parsedData = JSON.parse(cachedUserData);
           setUserListResponse(parsedData);
-          setUserData(parsedData.users || []);
         } else {
           // Fetch from API using userListCall with current filters
           const userDataResponse = await userListCall(
@@ -311,7 +307,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           );
 
           setUserListResponse(userDataResponse);
-          setUserData(userDataResponse.users || []);
         }
 
         // Fetch roles if not cached
@@ -334,7 +329,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   }, [accessToken, token, userRole, userID, currentPage, filters]);
 
-  if (!userData) {
+  if (!userListResponse) {
     return <div>Loading...</div>;
   }
 
@@ -538,9 +533,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               </div>
 
               <UserDataTable
-                data={userData || []}
+                data={userListResponse.users || []}
                 columns={tableColumns}
-                isLoading={!userData}
+                isLoading={!userListResponse}
               />
             </div>
           </TabPanel>
