@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  llmlite-service
+
+  SAM Template for llmlite-service
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 600
+    MemorySize: 128
+    Environment:
+      Variables:
+        WORKER_CONFIG: !Ref WorkerConfigParameter
+
+Parameters:
+  AliasParameter:
+    Type: String
+    Default: live
+  WorkerConfigParameter:
+    Type: String
+    Description: Sample environment variable
+    Default: '{"model": null, "alias": null, "api_base": null, "api_version": "2023-07-01-preview", "debug": false, "temperature": null, "max_tokens": null, "request_timeout": 600, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": null, "use_queue": false}'
+
+Resources:
+  MyUrlFunctionPermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref URL
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-function"
+      CodeUri: "./litellm"
+      Handler: proxy/lambda.handler
+      Runtime: python3.11
+      AutoPublishAlias: !Ref AliasParameter
+      Architectures:
+       - x86_64
+      DeploymentPreference:
+        Type: AllAtOnce
+        Alarms:
+          - !Ref NewVersionErrorMetricGreaterThanZeroAlarm
+
+  NewVersionErrorMetricGreaterThanZeroAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: Lambda Function Error > 0
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${Function}:live"
+        - Name: FunctionName
+          Value: !Ref Function
+        - Name: ExecutedVersion
+          Value: !GetAtt Function.Version.Version
+      EvaluationPeriods: 1
+      Unit: Count
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+
+  URL:
+    Type: AWS::Lambda::Url
+    DependsOn: FunctionAliaslive
+    Properties:
+      AuthType: NONE
+      Qualifier: live
+      TargetFunctionArn: !GetAtt Function.Arn
+
+Outputs:
+  FunctionARN:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt Function.Arn
+
+  FunctionUrl:
+    Description: "Lambda Function URL Endpoint"
+    Value:
+      Fn::GetAtt: URL.FunctionUrl
+
+  FunctionVersion:
+    Description: "Lambda Function Version"
+    Value: !GetAtt Function.Version.Version
+  
+  FunctionNewAlarmARN:
+    Description: "Lambda Function New Alarm ARN"
+    Value: !GetAtt NewVersionErrorMetricGreaterThanZeroAlarm.Arn

@@ -1,0 +1,29 @@
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource client {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model LiteLLM_SpendLogs {
+  request_id        String   @id
+  call_type         String
+  api_key           String   @default("")
+  spend             Float    @default(0.0)
+  total_tokens      Int      @default(0)
+  prompt_tokens     Int      @default(0)
+  completion_tokens Int      @default(0)
+  startTime         DateTime
+  endTime           DateTime
+  model             String   @default("")
+  api_base          String   @default("")
+  user              String   @default("")
+  metadata          Json     @default("{}")
+  cache_hit         String   @default("")
+  cache_key         String   @default("")
+  request_tags      Json     @default("[]")
+  team_id           String?
+  end_user          String?
+}

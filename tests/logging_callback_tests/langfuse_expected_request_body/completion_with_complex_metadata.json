@@ -1,0 +1,126 @@
+{
+    "batch": [
+        {
+            "id": "9ee9100b-c4aa-4e40-a10d-bc189f8b4242",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-c414db10-dd68-406e-9d9e-03839bc2f346",
+                "timestamp": "2025-01-22T17:27:51.702596Z",
+                "name": "litellm-acompletion",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-22T17:27:51.702716Z"
+        },
+        {
+            "id": "f8d20489-ed58-429f-b609-87380e223746",
+            "type": "generation-create",
+            "body": {
+                "traceId": "litellm-test-c414db10-dd68-406e-9d9e-03839bc2f346",
+                "name": "litellm-acompletion",
+                "startTime": "2025-01-22T09:27:51.150898-08:00",
+                "metadata": {
+                    "string_value": "hello",
+                    "int_value": 42,
+                    "float_value": 3.14,
+                    "bool_value": true,
+                    "nested_dict": {
+                        "key1": "value1",
+                        "key2": {
+                            "inner_key": "inner_value"
+                        }
+                    },
+                    "list_value": [
+                        1,
+                        2,
+                        3
+                    ],
+                    "set_value": [
+                        1,
+                        2,
+                        3
+                    ],
+                    "complex_list": [
+                        {
+                            "dict_in_list": "value"
+                        },
+                        "simple_string",
+                        [
+                            1,
+                            2,
+                            3
+                        ]
+                    ],
+                    "user": {
+                        "name": "John",
+                        "age": 30,
+                        "tags": [
+                            "customer",
+                            "active"
+                        ]
+                    },
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {},
+                        "litellm_overhead_time_ms": null
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "level": "DEFAULT",
+                "id": "time-09-27-51-150898_chatcmpl-b783291c-dc76-4660-bfef-b79be9d54e57",
+                "endTime": "2025-01-22T09:27:51.702048-08:00",
+                "completionStartTime": "2025-01-22T09:27:51.702048-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 5.4999999999999995e-05
+                }
+            },
+            "timestamp": "2025-01-22T17:27:51.703046Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-e02aaea3-8668-4c9f-8c69-771a4ea1f5c9"
+    }
+}

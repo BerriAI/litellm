@@ -1,0 +1,127 @@
+[tool.poetry]
+name = "litellm"
+version = "1.67.1"
+description = "Library to easily interface with LLM API providers"
+authors = ["BerriAI"]
+license = "MIT"
+readme = "README.md"
+packages = [
+    { include = "litellm" },
+    { include = "litellm/py.typed"},
+]
+
+[tool.poetry.urls]
+homepage = "https://litellm.ai"
+Homepage = "https://litellm.ai"
+repository = "https://github.com/BerriAI/litellm"
+Repository = "https://github.com/BerriAI/litellm"
+documentation = "https://docs.litellm.ai"
+Documentation = "https://docs.litellm.ai"
+
+[tool.poetry.dependencies]
+python = ">=3.8.1,<4.0, !=3.9.7"
+httpx = ">=0.23.0"
+openai = ">=1.68.2"
+python-dotenv = ">=0.2.0"
+tiktoken = ">=0.7.0"
+importlib-metadata = ">=6.8.0"
+tokenizers = "*"
+click = "*"
+jinja2 = "^3.1.2"
+aiohttp = "*"
+pydantic = "^2.0.0"
+jsonschema = "^4.22.0"
+
+uvicorn = {version = "^0.29.0", optional = true}
+uvloop = {version = "^0.21.0", optional = true}
+gunicorn = {version = "^23.0.0", optional = true}
+fastapi = {version = "^0.115.5", optional = true}
+backoff = {version = "*", optional = true}
+pyyaml = {version = "^6.0.1", optional = true}
+rq = {version = "*", optional = true}
+orjson = {version = "^3.9.7", optional = true}
+apscheduler = {version = "^3.10.4", optional = true}
+fastapi-sso = { version = "^0.16.0", optional = true }
+PyJWT = { version = "^2.8.0", optional = true }
+python-multipart = { version = "^0.0.18", optional = true}
+cryptography = {version = "^43.0.1", optional = true}
+prisma = {version = "0.11.0", optional = true}
+azure-identity = {version = "^1.15.0", optional = true}
+azure-keyvault-secrets = {version = "^4.8.0", optional = true}
+google-cloud-kms = {version = "^2.21.3", optional = true}
+resend = {version = "^0.8.0", optional = true}
+pynacl = {version = "^1.5.0", optional = true}
+websockets = {version = "^13.1.0", optional = true}
+boto3 = {version = "1.34.34", optional = true}
+redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
+mcp = {version = "1.5.0", optional = true, python = ">=3.10"}
+litellm-proxy-extras = {version = "0.1.11", optional = true}
+
+[tool.poetry.extras]
+proxy = [
+    "gunicorn",
+    "uvicorn",
+    "uvloop",
+    "fastapi",
+    "backoff",
+    "pyyaml",
+    "rq",
+    "orjson",
+    "apscheduler",
+    "fastapi-sso",
+    "PyJWT",
+    "python-multipart",
+    "cryptography",
+    "pynacl",
+    "websockets",
+    "boto3",
+    "mcp",
+    "litellm-proxy-extras"
+]
+
+extra_proxy = [
+    "prisma",
+    "azure-identity",
+    "azure-keyvault-secrets",
+    "google-cloud-kms",
+    "resend",
+    "redisvl"
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.poetry.scripts]
+litellm = 'litellm:run_server'
+
+[tool.poetry.group.dev.dependencies]
+flake8 = "^6.1.0"
+black = "^23.12.0"
+mypy = "^1.0"
+pytest = "^7.4.3"
+pytest-mock = "^3.12.0"
+pytest-asyncio = "^0.21.1"
+respx = "^0.22.0"
+ruff = "^0.1.0"
+types-requests = "*"
+types-setuptools = "*"
+types-redis = "*"
+types-PyYAML = "*"
+
+[tool.poetry.group.proxy-dev.dependencies]
+prisma = "0.11.0"
+hypercorn = "^0.15.0"
+prometheus-client = "0.20.0"
+
+[build-system]
+requires = ["poetry-core", "wheel"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.commitizen]
+version = "1.67.1"
+version_files = [
+    "pyproject.toml:^version"
+]
+
+[tool.mypy]
+plugins = "pydantic.mypy"

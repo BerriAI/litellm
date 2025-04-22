@@ -1,0 +1,16 @@
+model_list:
+  - model_name: azure-computer-use-preview
+    litellm_params:
+      model: azure/computer-use-preview
+      api_key: mock-api-key
+      api_version: mock-api-version
+      api_base: https://mock-endpoint.openai.azure.com
+  - model_name: azure-computer-use-preview
+    litellm_params:
+      model: azure/computer-use-preview-2
+      api_key: mock-api-key-2
+      api_version: mock-api-version-2
+      api_base: https://mock-endpoint-2.openai.azure.com
+
+router_settings:
+  optional_pre_call_checks: ["responses_api_deployment_check"]

@@ -1,0 +1,46 @@
+[flake8]
+ignore =
+    # The following ignores can be removed when formatting using black
+    W191,W291,W292,W293,W391,W504
+    E101,E111,E114,E116,E117,E121,E122,E123,E124,E125,E126,E127,E128,E129,E131,
+    E201,E202,E221,E222,E225,E226,E231,E241,E251,E252,E261,E265,E271,E272,E275,
+    E301,E302,E303,E305,E306,
+    # line break before binary operator
+    W503,
+    # inline comment should start with '# '
+    E262,
+    # too many leading '#' for block comment
+    E266,
+    # multiple imports on one line
+    E401,
+    # module level import not at top of file
+    E402,
+    # Line too long (82 > 79 characters)
+    E501,
+    # comparison to None should be 'if cond is None:'
+    E711,
+    # comparison to True should be 'if cond is True:' or 'if cond:'
+    E712,
+    # do not compare types, for exact checks use `is` / `is not`, for instance checks use `isinstance()`
+    E721,
+    # do not use bare 'except'
+    E722,
+    # x is imported but unused
+    F401,
+    # 'from . import *' used; unable to detect undefined names
+    F403,
+    # x may be undefined, or defined from star imports:
+    F405,
+    # f-string is missing placeholders
+    F541,
+    # dictionary key '' repeated with different values
+    F601,
+    # redefinition of unused x from line 123
+    F811,
+    # undefined name x
+    F821,
+    # local variable x is assigned to but never used
+    F841,
+
+# https://black.readthedocs.io/en/stable/guides/using_black_with_other_tools.html#flake8
+extend-ignore = E203

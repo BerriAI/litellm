@@ -1,0 +1,425 @@
+datasource client {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+// Budget / Rate Limits for an org
+model LiteLLM_BudgetTable {
+  budget_id String @id @default(uuid())
+  max_budget Float?
+  soft_budget Float?
+  max_parallel_requests Int?
+  tpm_limit     BigInt?
+  rpm_limit     BigInt?
+  model_max_budget Json?
+  budget_duration String? 
+  budget_reset_at DateTime?
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+  organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
+  keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
+  end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
+  team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
+}
+
+// Models on proxy
+model LiteLLM_CredentialsTable {
+  credential_id String @id @default(uuid())
+  credential_name String @unique
+  credential_values Json
+  credential_info Json? 
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
+// Models on proxy
+model LiteLLM_ProxyModelTable {
+  model_id String @id @default(uuid())
+  model_name String 
+  litellm_params Json
+  model_info Json? 
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
+model LiteLLM_OrganizationTable {
+		organization_id String @id @default(uuid())
+    organization_alias  String
+    budget_id String
+    metadata  Json  @default("{}")
+    models     String[]
+    spend      Float    @default(0.0)
+    model_spend      Json @default("{}")
+    created_at    DateTime               @default(now()) @map("created_at")
+    created_by String
+    updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+    updated_by String
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+    teams LiteLLM_TeamTable[] 
+    users LiteLLM_UserTable[]
+    keys LiteLLM_VerificationToken[]
+    members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
+}
+
+// Model info for teams, just has model aliases for now.
+model LiteLLM_ModelTable {
+  id Int @id @default(autoincrement())
+  model_aliases Json? @map("aliases")
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+  team LiteLLM_TeamTable?
+}
+
+
+// Assign prod keys to groups, not individuals 
+model LiteLLM_TeamTable {
+		team_id    String @id @default(uuid())
+    team_alias  String? 
+    organization_id String?
+    admins String[]
+    members String[]
+    members_with_roles Json @default("{}")
+    metadata  Json  @default("{}")
+    max_budget Float?
+    spend      Float    @default(0.0)
+    models     String[]
+    max_parallel_requests Int?
+    tpm_limit     BigInt?
+    rpm_limit     BigInt?
+    budget_duration String? 
+    budget_reset_at DateTime?
+    blocked Boolean @default(false)
+    created_at    DateTime               @default(now()) @map("created_at")
+    updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
+    team_member_permissions String[] @default([])
+    model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
+}
+
+// Track spend, rate limit, budget Users
+model LiteLLM_UserTable {
+		user_id    String @id
+    user_alias String? 
+    team_id    String?
+    sso_user_id String? @unique
+    organization_id String?
+    password  String?
+    teams    String[] @default([])
+    user_role  String?
+		max_budget Float?
+    spend      Float    @default(0.0)
+    user_email    String?
+    models     String[]
+    metadata  Json  @default("{}")
+    max_parallel_requests Int?
+    tpm_limit     BigInt?
+    rpm_limit     BigInt?
+    budget_duration String? 
+    budget_reset_at DateTime?
+    allowed_cache_controls String[] @default([])
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
+    created_at      DateTime?               @default(now()) @map("created_at")
+    updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+
+    // relations
+    litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
+    organization_memberships LiteLLM_OrganizationMembership[]
+    invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
+    invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
+    invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
+}
+
+// Generate Tokens for Proxy
+model LiteLLM_VerificationToken {
+    token      String   @id
+    key_name   String?
+    key_alias   String?
+    soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
+    spend      Float    @default(0.0)
+    expires    DateTime?
+    models     String[]
+    aliases    Json  @default("{}")
+    config     Json  @default("{}")
+    user_id    String?
+    team_id    String?
+    permissions Json @default("{}")
+    max_parallel_requests Int?
+    metadata   Json  @default("{}")
+    blocked Boolean?
+    tpm_limit     BigInt?
+    rpm_limit     BigInt?
+    max_budget Float?    
+    budget_duration String? 
+    budget_reset_at DateTime?
+    allowed_cache_controls String[] @default([])
+    allowed_routes   String[] @default([])
+    model_spend      Json @default("{}")
+    model_max_budget Json @default("{}")
+    budget_id String?
+    organization_id String?
+    created_at      DateTime?               @default(now()) @map("created_at")
+    created_by String?
+    updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+    updated_by String?
+    litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+}
+
+model LiteLLM_EndUserTable {
+  user_id String @id
+  alias    String? // admin-facing alias
+  spend      Float    @default(0.0)
+  allowed_model_region String? // require all user requests to use models in this specific region
+  default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  blocked Boolean @default(false)
+}
+
+// store proxy config.yaml
+model LiteLLM_Config {
+  param_name String @id
+  param_value Json?
+}
+
+// View spend, model, api_key per request
+model LiteLLM_SpendLogs {
+  request_id          String @id
+  call_type           String
+  api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
+  spend               Float    @default(0.0)
+  total_tokens        Int     @default(0)
+  prompt_tokens       Int     @default(0)
+  completion_tokens   Int     @default(0)
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
+  completionStartTime DateTime? // Assuming completionStartTime is a DateTime field
+  model               String   @default("")
+  model_id            String?   @default("") // the model id stored in proxy model db
+  model_group         String?   @default("") // public model_name / model_group
+  custom_llm_provider String?   @default("") // litellm used custom_llm_provider
+  api_base            String?   @default("")
+  user                String?   @default("")
+  metadata            Json?     @default("{}")
+  cache_hit           String?   @default("")
+  cache_key           String?   @default("")
+  request_tags        Json?     @default("[]")
+  team_id             String? 
+  end_user            String?
+  requester_ip_address String?
+  messages            Json?     @default("{}")
+  response            Json?     @default("{}")
+  @@index([startTime])
+  @@index([end_user])
+}
+
+// View spend, model, api_key per request
+model LiteLLM_ErrorLogs {
+  request_id          String   @id @default(uuid())
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
+  api_base            String   @default("") 
+  model_group         String   @default("")      // public model_name / model_group
+  litellm_model_name  String   @default("")      // model passed to litellm
+  model_id            String   @default("")      // ID of model in ProxyModelTable
+  request_kwargs      Json     @default("{}")
+  exception_type      String   @default("")
+  exception_string    String   @default("")
+  status_code         String   @default("")
+}
+
+// Beta - allow team members to request access to a model
+model LiteLLM_UserNotifications {
+  request_id          String @id
+  user_id             String 
+  models              String[]
+  justification       String
+  status              String // approved, disapproved, pending
+}
+
+model LiteLLM_TeamMembership {
+  // Use this table to track the Internal User's Spend within a Team + Set Budgets, rpm limits for the user within the team
+  user_id    String
+  team_id    String
+  spend      Float    @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  @@id([user_id, team_id])
+}
+
+model LiteLLM_OrganizationMembership {
+  // Use this table to track Internal User and Organization membership. Helps tracking a users role within an Organization
+  user_id         String
+  organization_id String
+  user_role       String?
+  spend           Float?    @default(0.0)
+  budget_id       String?
+  created_at      DateTime?               @default(now()) @map("created_at")
+  updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+
+  // relations
+  user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
+  organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id])
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  
+  
+
+  @@id([user_id, organization_id])
+  @@unique([user_id, organization_id])
+}
+
+model LiteLLM_InvitationLink {
+  // use this table to track invite links sent by admin for people to join the proxy
+  id String   @id @default(uuid())
+  user_id String
+  is_accepted Boolean @default(false)
+  accepted_at DateTime? // when link is claimed (user successfully onboards via link)
+  expires_at  DateTime // till when is link valid
+  created_at DateTime // when did admin create the link
+  created_by String // who created the link
+  updated_at DateTime // when was invite status updated
+  updated_by String // who updated the status (admin/user who accepted invite)
+
+  // Relations
+  liteLLM_user_table_user    LiteLLM_UserTable  @relation("UserId", fields: [user_id], references: [user_id])
+  liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
+  liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
+}
+
+
+model LiteLLM_AuditLog {
+  id                 String   @id @default(uuid())
+  updated_at         DateTime @default(now())
+  changed_by         String   @default("")   // user or system that performed the action
+  changed_by_api_key String   @default("")   // api key hash that performed the action
+  action             String      // create, update, delete
+  table_name         String      // on of  LitellmTableNames.TEAM_TABLE_NAME, LitellmTableNames.USER_TABLE_NAME, LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+  object_id          String      // id of the object being audited. This can be the key id, team id, user id, model id
+  before_value       Json?       // value of the row 
+  updated_values     Json?       // value of the row after change
+}
+
+// Track daily user spend metrics per model and key
+model LiteLLM_DailyUserSpend {
+  id                  String   @id @default(uuid())
+  user_id             String
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  cache_read_input_tokens     Int      @default(0)
+  cache_creation_input_tokens Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([user_id, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([user_id])
+  @@index([api_key])
+  @@index([model])
+}
+
+// Track daily team spend metrics per model and key
+model LiteLLM_DailyTeamSpend {
+  id                  String   @id @default(uuid())
+  team_id             String
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  cache_read_input_tokens     Int      @default(0)
+  cache_creation_input_tokens Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([team_id, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([team_id])
+  @@index([api_key])
+  @@index([model])
+}
+
+// Track daily team spend metrics per model and key
+model LiteLLM_DailyTagSpend {
+  id                  String   @id @default(uuid())
+  tag                 String   
+  date                String
+  api_key             String   
+  model               String   
+  model_group         String?  
+  custom_llm_provider String?  
+  prompt_tokens       Int      @default(0)
+  completion_tokens   Int      @default(0)
+  cache_read_input_tokens     Int      @default(0)
+  cache_creation_input_tokens Int      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        Int      @default(0)
+  successful_requests Int      @default(0)
+  failed_requests     Int      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([tag, date, api_key, model, custom_llm_provider])
+  @@index([date])
+  @@index([tag])
+  @@index([api_key])
+  @@index([model])
+}
+
+
+// Track the status of cron jobs running. Only allow one pod to run the job at a time
+model LiteLLM_CronJob {
+  cronjob_id            String   @id @default(cuid()) // Unique ID for the record
+  pod_id         String   // Unique identifier for the pod acting as the leader
+  status        JobStatus @default(INACTIVE) // Status of the cron job (active or inactive)
+  last_updated   DateTime @default(now()) // Timestamp for the last update of the cron job record
+  ttl           DateTime // Time when the leader's lease expires
+}
+
+enum JobStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model LiteLLM_ManagedFileTable {
+  id String @id @default(uuid())
+  unified_file_id String @unique // The base64 encoded unified file ID
+  file_object Json // Stores the OpenAIFileObject
+  model_mappings Json // Stores the mapping of model_id -> provider_file_id
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([unified_file_id])
+}
+

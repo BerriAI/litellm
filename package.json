@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "prism-react-renderer": "^2.4.1",
+    "prisma": "^5.17.0",
+    "react-copy-to-clipboard": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/react-copy-to-clipboard": "^5.0.7"
+  }
+}
