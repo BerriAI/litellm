@@ -36,7 +36,7 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
         pass
 
-    async def test_basic_openai_responses_get_endpoint(self, sync_mode):
+    async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
         pass
     
 
