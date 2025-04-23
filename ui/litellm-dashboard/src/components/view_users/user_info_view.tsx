@@ -203,14 +203,14 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
               <Card>
                 <Text>Teams</Text>
                 <div className="mt-2">
-                  <Text>{userData.teams.length} teams</Text>
+                  <Text>{userData.teams?.length || 0} teams</Text>
                 </div>
               </Card>
 
               <Card>
                 <Text>API Keys</Text>
                 <div className="mt-2">
-                  <Text>{userData.keys.length} keys</Text>
+                  <Text>{userData.keys?.length || 0} keys</Text>
                 </div>
               </Card>
             </Grid>
@@ -248,8 +248,8 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                 <div>
                   <Text className="font-medium">Teams</Text>
                   <div className="flex flex-wrap gap-2 mt-1">
-                    {userData.teams.length > 0 ? (
-                      userData.teams.map((team, index) => (
+                    {userData.teams?.length && userData.teams?.length > 0 ? (
+                      userData.teams?.map((team, index) => (
                         <span
                           key={index}
                           className="px-2 py-1 bg-blue-100 rounded text-xs"
@@ -266,7 +266,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                 <div>
                   <Text className="font-medium">API Keys</Text>
                   <div className="flex flex-wrap gap-2 mt-1">
-                    {userData.keys.length > 0 ? (
+                    {userData.keys?.length && userData.keys?.length > 0 ? (
                       userData.keys.map((key, index) => (
                         <span
                           key={index}
