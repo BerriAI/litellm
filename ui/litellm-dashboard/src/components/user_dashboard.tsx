@@ -311,8 +311,46 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     window.location.href = url;
 
     return null;
-  } else if (accessToken == null) {
-    return null;
+  } else {
+    // Check if token is expired
+    try {
+      const decoded = jwtDecode(token) as { [key: string]: any };
+      const expTime = decoded.exp;
+      const currentTime = Math.floor(Date.now() / 1000);
+      
+      if (expTime && currentTime >= expTime) {
+        console.log("Token expired, redirecting to login");
+        
+        // Clear token cookies
+        clearTokenCookies();
+        
+        const url = proxyBaseUrl
+          ? `${proxyBaseUrl}/sso/key/generate`
+          : `/sso/key/generate`;
+        
+        console.log("Full URL for expired token:", url);
+        window.location.href = url;
+        
+        return null;
+      }
+    } catch (error) {
+      console.error("Error decoding token:", error);
+      // If there's an error decoding the token, consider it invalid
+      clearTokenCookies();
+      
+      const url = proxyBaseUrl
+        ? `${proxyBaseUrl}/sso/key/generate`
+        : `/sso/key/generate`;
+      
+      console.log("Full URL after token decode error:", url);
+      window.location.href = url;
+      
+      return null;
+    }
+    
+    if (accessToken == null) {
+      return null;
+    }
   }
 
   if (userID == null) {
