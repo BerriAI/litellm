@@ -644,6 +644,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 data={userListResponse?.users || []}
                 columns={tableColumns}
                 isLoading={!userListResponse}
+                accessToken={accessToken}
+                userRole={userRole}
                 onSortChange={handleSortChange}
                 currentSort={{
                   sortBy: filters.sort_by,

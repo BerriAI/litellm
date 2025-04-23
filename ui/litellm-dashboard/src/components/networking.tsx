@@ -766,8 +766,10 @@ export const userInfoCall = async (
   userRole: String,
   viewAll: Boolean = false,
   page: number | null,
-  page_size: number | null
+  page_size: number | null,
+  lookup_user_id: boolean = false
 ) => {
+  console.log(`userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`)
   try {
     let url: string;
     
@@ -781,7 +783,7 @@ export const userInfoCall = async (
     } else {
       // Use /user/info endpoint for individual user info
       url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if (userRole === "Admin" || userRole === "Admin Viewer") {
+      if ((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) {
         // do nothing 
       } else if (userID) {
         url += `?user_id=${userID}`;
