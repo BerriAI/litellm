@@ -43,6 +43,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    UserListResponse,
+)
 
 router = APIRouter()
 
@@ -899,15 +902,47 @@ async def get_user_key_counts(
     return result
 
 
-@router.get(
-    "/user/get_users",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
+def _validate_sort_params(
+    sort_by: Optional[str], sort_order: str
+) -> Optional[Dict[str, str]]:
+    order_by: Dict[str, str] = {}
+
+    if sort_by is None:
+        return None
+    # Validate sort_by is a valid column
+    valid_columns = [
+        "user_id",
+        "user_email",
+        "created_at",
+        "spend",
+        "user_alias",
+        "user_role",
+    ]
+    if sort_by not in valid_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort column. Must be one of: {', '.join(valid_columns)}"
+            },
+        )
+
+    # Validate sort_order
+    if sort_order.lower() not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
+        )
+
+    order_by[sort_by] = sort_order.lower()
+
+    return order_by
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserListResponse,
 )
 async def get_users(
     role: Optional[str] = fastapi.Query(
@@ -916,15 +951,29 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    sso_user_ids: Optional[str] = fastapi.Query(
+        default=None, description="Get list of users by sso_user_id"
+    ),
+    user_email: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by partial email match"
+    ),
+    team: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by team id"
+    ),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
+    sort_by: Optional[str] = fastapi.Query(
+        default=None,
+        description="Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')",
+    ),
+    sort_order: str = fastapi.Query(
+        default="asc", description="Sort order ('asc' or 'desc')"
+    ),
 ):
     """
-    Get a paginated list of users, optionally filtered by role.
-
-    Used by the UI to populate the user lists.
+    Get a paginated list of users with filtering and sorting options.
 
     Parameters:
         role: Optional[str]
@@ -935,17 +984,20 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        sso_ids: Optional[str]
+            Get list of users by sso_ids. Comma separated list of sso_ids.
+        user_email: Optional[str]
+            Filter users by partial email match
+        team: Optional[str]
+            Filter users by team id. Will match if user has this team in their teams array.
         page: int
             The page number to return
         page_size: int
             The number of items per page
-
-    Currently - admin-only endpoint.
-
-    Example curl:
-    ```
-    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
-    ```
+        sort_by: Optional[str]
+            Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')
+        sort_order: Optional[str]
+            Sort order ('asc' or 'desc')
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -958,35 +1010,57 @@ async def get_users(
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
-    # Prepare the query conditions
     # Build where conditions based on provided parameters
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = {
-            "contains": role,
-            "mode": "insensitive",  # Case-insensitive search
-        }
+        where_conditions["user_role"] = role  # Exact match instead of contains
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
-            "in": user_id_list,  # Now passing a list of strings as required by Prisma
+            "in": user_id_list,
         }
 
-    users: Optional[
-        List[LiteLLM_UserTable]
-    ] = await prisma_client.db.litellm_usertable.find_many(
+    if user_email is not None and isinstance(user_email, str):
+        where_conditions["user_email"] = {
+            "contains": user_email,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if team is not None and isinstance(team, str):
+        where_conditions["teams"] = {
+            "has": team  # Array contains for string arrays in Prisma
+        }
+
+    if sso_user_ids is not None and isinstance(sso_user_ids, str):
+        sso_id_list = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
+        where_conditions["sso_user_id"] = {
+            "in": sso_id_list,
+        }
+
+    ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
+    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+
+    # Build order_by conditions
+
+    order_by: Optional[Dict[str, str]] = (
+        _validate_sort_params(sort_by, sort_order)
+        if sort_by is not None and isinstance(sort_by, str)
+        else None
+    )
+
+    users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
-        order={"created_at": "desc"},
+        order=order_by
+        if order_by
+        else {"created_at": "desc"},  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
-    total_count = await prisma_client.db.litellm_usertable.count(
-        where=where_conditions  # type: ignore
-    )
+    total_count = await prisma_client.db.litellm_usertable.count(where=where_conditions)
 
     # Get key count for each user
     if users is not None:
@@ -1009,7 +1083,7 @@ async def get_users(
                 LiteLLM_UserTableWithKeyCount(
                     **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
                 )
-            )  # Return full key object
+            )
     else:
         user_list = []
 

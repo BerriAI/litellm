@@ -28,6 +28,7 @@ from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
+
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -36,6 +37,7 @@ from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     _select_model_name_for_cost_calc,
 )
+from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2685,7 +2687,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     """
     try:
         custom_logger_init_args = custom_logger_init_args or {}
-        if logging_integration == "lago":
+        if logging_integration == "agentops":  # Add AgentOps initialization
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AgentOps):
+                    return callback  # type: ignore
+
+            agentops_logger = AgentOps()
+            _in_memory_loggers.append(agentops_logger)
+            return agentops_logger  # type: ignore
+        elif logging_integration == "lago":
             for callback in _in_memory_loggers:
                 if isinstance(callback, LagoLogger):
                     return callback  # type: ignore

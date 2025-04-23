@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
@@ -10,6 +10,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -73,11 +74,7 @@ class BaseResponsesAPIConfig(ABC):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
     ) -> str:
         """
         OPTIONAL
@@ -121,6 +118,31 @@ class BaseResponsesAPIConfig(ABC):
         Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
         """
         pass
+
+    #########################################################
+    ########## DELETE RESPONSE API TRANSFORMATION ##############
+    #########################################################
+    @abstractmethod
+    def transform_delete_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_delete_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> DeleteResponseResult:
+        pass
+
+    #########################################################
+    ########## END DELETE RESPONSE API TRANSFORMATION ##########
+    #########################################################
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

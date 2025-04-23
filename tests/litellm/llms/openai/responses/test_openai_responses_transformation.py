@@ -203,9 +203,6 @@ class TestOpenAIResponsesAPIConfig:
 
         result = self.config.get_complete_url(
             api_base=api_base,
-            model=self.model,
-            api_key="test_api_key",
-            optional_params={},
             litellm_params={},
         )
 
@@ -215,9 +212,6 @@ class TestOpenAIResponsesAPIConfig:
         with patch("litellm.api_base", "https://litellm-api-base.example.com/v1"):
             result = self.config.get_complete_url(
                 api_base=None,
-                model=self.model,
-                api_key="test_api_key",
-                optional_params={},
                 litellm_params={},
             )
 
@@ -231,9 +225,6 @@ class TestOpenAIResponsesAPIConfig:
             ):
                 result = self.config.get_complete_url(
                     api_base=None,
-                    model=self.model,
-                    api_key="test_api_key",
-                    optional_params={},
                     litellm_params={},
                 )
 
@@ -247,9 +238,6 @@ class TestOpenAIResponsesAPIConfig:
             ):
                 result = self.config.get_complete_url(
                     api_base=None,
-                    model=self.model,
-                    api_key="test_api_key",
-                    optional_params={},
                     litellm_params={},
                 )
 
@@ -260,9 +248,6 @@ class TestOpenAIResponsesAPIConfig:
 
         result = self.config.get_complete_url(
             api_base=api_base,
-            model=self.model,
-            api_key="test_api_key",
-            optional_params={},
             litellm_params={},
         )
 

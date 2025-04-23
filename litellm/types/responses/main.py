@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -46,3 +47,30 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
     content: List[OutputText]
+
+
+class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
+    """
+    Result of a delete response request
+
+    {
+        "id": "resp_6786a1bec27481909a17d673315b29f6",
+        "object": "response",
+        "deleted": true
+    }
+    """
+
+    id: Optional[str]
+    object: Optional[str]
+    deleted: Optional[bool]
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class DecodedResponseId(TypedDict, total=False):
+    """Structure representing a decoded response ID"""
+
+    custom_llm_provider: Optional[str]
+    model_id: Optional[str]
+    response_id: str
