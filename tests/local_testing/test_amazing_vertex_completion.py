@@ -1784,7 +1784,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     data = {
-        "model": "vertex_ai/gemini-pro",
+        "model": "vertex_ai/gemini-1.5-flash",
         "messages": [
             {
                 "role": "user",
