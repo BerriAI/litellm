@@ -1,11 +1,14 @@
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
+from litellm.types.responses.main import *
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 if TYPE_CHECKING:
@@ -41,11 +44,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -92,3 +91,48 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    #########################################################
+    ########## DELETE RESPONSE API TRANSFORMATION ##############
+    #########################################################
+    def transform_delete_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the delete response API request into a URL and data
+
+        Azure OpenAI API expects the following request:
+        - DELETE /openai/responses/{response_id}?api-version=xxx
+
+        This function handles URLs with query parameters by inserting the response_id
+        at the correct location (before any query parameters).
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        # Parse the URL to separate its components
+        parsed_url = urlparse(api_base)
+
+        # Insert the response_id at the end of the path component
+        # Remove trailing slash if present to avoid double slashes
+        path = parsed_url.path.rstrip("/")
+        new_path = f"{path}/{response_id}"
+
+        # Reconstruct the URL with all original components but with the modified path
+        delete_url = urlunparse(
+            (
+                parsed_url.scheme,  # http, https
+                parsed_url.netloc,  # domain name, port
+                new_path,  # path with response_id added
+                parsed_url.params,  # parameters
+                parsed_url.query,  # query string
+                parsed_url.fragment,  # fragment
+            )
+        )
+
+        data: Dict = {}
+        verbose_logger.debug(f"delete response url={delete_url}")
+        return delete_url, data

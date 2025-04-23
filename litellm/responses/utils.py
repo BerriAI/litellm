@@ -1,5 +1,5 @@
 import base64
-from typing import Any, Dict, Optional, Tuple, Union, cast, get_type_hints
+from typing import Any, Dict, Optional, Union, cast, get_type_hints
 
 import litellm
 from litellm._logging import verbose_logger
@@ -9,6 +9,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
+from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import SpecialEnums, Usage
 
 
@@ -83,30 +84,36 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
-        kwargs: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> ResponsesAPIResponse:
-        """Update the responses_api_response_id with the model_id"""
-        litellm_metadata: Dict[str, Any] = kwargs.get("litellm_metadata", {}) or {}
+        """
+        Update the responses_api_response_id with model_id and custom_llm_provider
+
+        This builds a composite ID containing the custom LLM provider, model ID, and original response ID
+        """
+        litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
+            custom_llm_provider=custom_llm_provider,
             response_id=responses_api_response.id,
         )
+
         responses_api_response.id = updated_id
         return responses_api_response
 
     @staticmethod
     def _build_responses_api_response_id(
+        custom_llm_provider: Optional[str],
         model_id: Optional[str],
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
-        if model_id is None:
-            return response_id
         assembled_id: str = str(
             SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value
-        ).format(model_id, response_id)
+        ).format(custom_llm_provider, model_id, response_id)
         base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode(
             "utf-8"
         )
@@ -115,12 +122,12 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _decode_responses_api_response_id(
         response_id: str,
-    ) -> Tuple[Optional[str], str]:
+    ) -> DecodedResponseId:
         """
         Decode the responses_api_response_id
 
         Returns:
-            Tuple of model_id, response_id (from upstream provider)
+            DecodedResponseId: Structured tuple with custom_llm_provider, model_id, and response_id
         """
         try:
             # Remove prefix and decode
@@ -129,16 +136,45 @@ class ResponsesAPIRequestUtils:
 
             # Parse components using known prefixes
             if ";" not in decoded_id:
-                return None, response_id
+                return DecodedResponseId(
+                    custom_llm_provider=None,
+                    model_id=None,
+                    response_id=response_id,
+                )
 
-            model_part, response_part = decoded_id.split(";", 1)
-            model_id = model_part.replace("litellm:model_id:", "")
-            decoded_response_id = response_part.replace("response_id:", "")
+            parts = decoded_id.split(";")
 
-            return model_id, decoded_response_id
+            # Format: litellm:custom_llm_provider:{};model_id:{};response_id:{}
+            custom_llm_provider = None
+            model_id = None
+
+            if (
+                len(parts) >= 3
+            ):  # Full format with custom_llm_provider, model_id, and response_id
+                custom_llm_provider_part = parts[0]
+                model_id_part = parts[1]
+                response_part = parts[2]
+
+                custom_llm_provider = custom_llm_provider_part.replace(
+                    "litellm:custom_llm_provider:", ""
+                )
+                model_id = model_id_part.replace("model_id:", "")
+                decoded_response_id = response_part.replace("response_id:", "")
+            else:
+                decoded_response_id = response_id
+
+            return DecodedResponseId(
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+                response_id=decoded_response_id,
+            )
         except Exception as e:
             verbose_logger.debug(f"Error decoding response_id '{response_id}': {e}")
-            return None, response_id
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=response_id,
+            )
 
 
 class ResponseAPILoggingUtils:
