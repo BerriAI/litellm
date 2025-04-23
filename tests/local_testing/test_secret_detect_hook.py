@@ -29,7 +29,7 @@ from litellm import Router, mock_completion
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.enterprise.enterprise_hooks.secret_detection import (
+from enterprise.enterprise_hooks.secret_detection import (
     _ENTERPRISE_SecretDetection,
 )
 from litellm_proxy.proxy_server import chat_completion

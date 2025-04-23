@@ -16,7 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm_proxy.enterprise.enterprise_hooks.openai_moderation import (
+from enterprise.enterprise_hooks.openai_moderation import (
     _ENTERPRISE_OpenAI_Moderation,
 )
 from litellm import Router, mock_completion

@@ -29,7 +29,7 @@ from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.enterprise.enterprise_hooks.blocked_user_list import (
+from enterprise.enterprise_hooks.blocked_user_list import (
     _ENTERPRISE_BlockedUserList,
 )
 from litellm_proxy.management_endpoints.internal_user_endpoints import (

@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm_proxy.enterprise.enterprise_hooks.banned_keywords import (
+from enterprise.enterprise_hooks.banned_keywords import (
     _ENTERPRISE_BannedKeywords,
 )
 from litellm import Router, mock_completion

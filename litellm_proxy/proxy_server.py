@@ -372,15 +372,7 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 # import enterprise folder
-try:
-    # when using litellm cli
-    import litellm_proxy.enterprise as enterprise
-except Exception:
-    # when using litellm docker image
-    try:
-        import enterprise  # type: ignore
-    except Exception:
-        pass
+import enterprise
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
