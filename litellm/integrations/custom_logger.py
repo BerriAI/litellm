@@ -25,14 +25,16 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
-from litellm_proxy._types import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm_proxy._types import UserAPIKeyAuth
+
     Span = Union[_Span, Any]
 else:
     Span = Any
+    UserAPIKeyAuth = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
