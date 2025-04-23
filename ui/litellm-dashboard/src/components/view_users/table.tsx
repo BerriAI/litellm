@@ -18,6 +18,7 @@ import {
 } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { UserInfo } from "./types";
+import UserInfoView from "./user_info_view";
 
 interface UserDataTableProps {
   data: UserInfo[];
@@ -28,6 +29,8 @@ interface UserDataTableProps {
     sortBy: string;
     sortOrder: 'asc' | 'desc';
   };
+  accessToken: string | null;
+  userRole: string | null;
 }
 
 export function UserDataTable({
@@ -36,6 +39,8 @@ export function UserDataTable({
   isLoading = false,
   onSortChange,
   currentSort,
+  accessToken,
+  userRole,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { 
@@ -43,6 +48,7 @@ export function UserDataTable({
       desc: currentSort?.sortOrder === "desc" 
     }
   ]);
+  const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
 
   const table = useReactTable({
     data,
@@ -64,6 +70,14 @@ export function UserDataTable({
     enableSorting: true,
   });
 
+  const handleUserClick = (userId: string) => {
+    setSelectedUserId(userId);
+  };
+
+  const handleCloseUserInfo = () => {
+    setSelectedUserId(null);
+  };
+
   // Update local sorting state when currentSort prop changes
   React.useEffect(() => {
     if (currentSort) {
@@ -73,6 +87,17 @@ export function UserDataTable({
       }]);
     }
   }, [currentSort]);
+
+  if (selectedUserId) {
+    return (
+      <UserInfoView
+        userId={selectedUserId}
+        onClose={handleCloseUserInfo}
+        accessToken={accessToken}
+        userRole={userRole}
+      />
+    );
+  }
 
   return (
     <div className="rounded-lg custom-border relative">
@@ -138,6 +163,15 @@ export function UserDataTable({
                           ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
                           : ''
                       }`}
+                      onClick={() => {
+                        if (cell.column.id === 'user_id') {
+                          handleUserClick(cell.getValue() as string);
+                        }
+                      }}
+                      style={{
+                        cursor: cell.column.id === 'user_id' ? 'pointer' : 'default',
+                        color: cell.column.id === 'user_id' ? '#3b82f6' : 'inherit',
+                      }}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
