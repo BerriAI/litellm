@@ -902,6 +902,42 @@ async def get_user_key_counts(
     return result
 
 
+def _validate_sort_params(
+    sort_by: Optional[str], sort_order: str
+) -> Optional[Dict[str, str]]:
+    order_by: Dict[str, str] = {}
+
+    if sort_by is None:
+        return None
+    # Validate sort_by is a valid column
+    valid_columns = [
+        "user_id",
+        "user_email",
+        "created_at",
+        "spend",
+        "user_alias",
+        "user_role",
+    ]
+    if sort_by not in valid_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort column. Must be one of: {', '.join(valid_columns)}"
+            },
+        )
+
+    # Validate sort_order
+    if sort_order.lower() not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
+        )
+
+    order_by[sort_by] = sort_order.lower()
+
+    return order_by
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -915,6 +951,9 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    sso_user_ids: Optional[str] = fastapi.Query(
+        default=None, description="Get list of users by sso_user_id"
+    ),
     user_email: Optional[str] = fastapi.Query(
         default=None, description="Filter users by partial email match"
     ),
@@ -925,9 +964,16 @@ async def get_users(
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
+    sort_by: Optional[str] = fastapi.Query(
+        default=None,
+        description="Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')",
+    ),
+    sort_order: str = fastapi.Query(
+        default="asc", description="Sort order ('asc' or 'desc')"
+    ),
 ):
     """
-    Get a paginated list of users with filtering options.
+    Get a paginated list of users with filtering and sorting options.
 
     Parameters:
         role: Optional[str]
@@ -938,6 +984,8 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        sso_ids: Optional[str]
+            Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
         team: Optional[str]
@@ -946,9 +994,10 @@ async def get_users(
             The page number to return
         page_size: int
             The number of items per page
-
-    Returns:
-        UserListResponse with filtered and paginated users
+        sort_by: Optional[str]
+            Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')
+        sort_order: Optional[str]
+            Sort order ('asc' or 'desc')
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -984,13 +1033,25 @@ async def get_users(
             "has": team  # Array contains for string arrays in Prisma
         }
 
+    if sso_user_ids is not None and isinstance(sso_user_ids, str):
+        sso_id_list = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
+        where_conditions["sso_user_id"] = {
+            "in": sso_id_list,
+        }
+
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
     where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+
+    # Build order_by conditions
+    order_by: Optional[Dict[str, str]] = _validate_sort_params(sort_by, sort_order)
+
     users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
-        order={"created_at": "desc"},
+        order=order_by
+        if order_by
+        else {"created_at": "desc"},  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
