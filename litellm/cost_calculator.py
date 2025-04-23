@@ -1104,7 +1104,7 @@ def default_image_cost_calculator(
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality = (
-        f"{ImageGenerationRequestQuality.MEDIUM}/{base_model_name}"
+        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
     )
 
     verbose_logger.debug(
