@@ -1,7 +1,7 @@
 """
 Translates from OpenAI's `/v1/embeddings` to BitdeerAI's `/v1/embeddings`
 """
-
+from typing import Optional
 
 class BitdeerAIEmbeddingConfig:
     @classmethod
@@ -14,6 +14,6 @@ class BitdeerAIEmbeddingConfig:
             non_default_params: dict,
             optional_params: dict,
             model: str,
-            drop_params: dict = None,
+            drop_params: Optional[dict] = None,
     ) -> dict:
         return optional_params
