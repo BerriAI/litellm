@@ -2086,8 +2086,9 @@ def _get_non_default_params(
         if (
             k in default_params
             and v != default_params[k]
-            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
-            is False
+            and not _should_drop_param(
+                k=k, additional_drop_params=additional_drop_params
+            )
         ):
             non_default_params[k] = v
 
@@ -2572,6 +2573,92 @@ def _remove_unsupported_params(
     return non_default_params
 
 
+def _get_optional_params_defaults() -> dict[str, Any]:
+    """Return a dictionary of default parameter names and values, which are associated with get_optional_params"""
+    return {
+        "additional_drop_params": None,
+        "allowed_openai_params": None,
+        "api_version": None,
+        "audio": None,
+        "custom_llm_provider": "",
+        "drop_params": None,
+        "extra_headers": None,
+        "frequency_penalty": None,
+        "function_call": None,
+        "functions": None,
+        "logit_bias": None,
+        "logprobs": None,
+        "max_completion_tokens": None,
+        "max_retries": None,
+        "max_tokens": None,
+        "messages": None,
+        "modalities": None,
+        "model": None,
+        "n": None,
+        "parallel_tool_calls": None,
+        "prediction": None,
+        "presence_penalty": None,
+        "reasoning_effort": None,
+        "response_format": None,
+        "seed": None,
+        "stop": None,
+        "stream": False,
+        "stream_options": None,
+        "temperature": None,
+        "thinking": None,
+        "tool_choice": None,
+        "tools": None,
+        "top_logprobs": None,
+        "top_p": None,
+        "user": None,
+    }
+
+
+def _get_optional_params_non_default_params(
+    passed_params: dict[str, Any],
+    default_params: dict[str, Any],
+    additional_drop_params=None,
+):
+    """Filter parameters supplied to get_optional_params for non-default values.
+
+    Args:
+        passed_params (dict): Dictionary of parameters passed to the calling function (get_optional_params).
+        default_params (dict, optional): Dictionary of default parameters for get_optional_params.
+        additional_drop_params (list, optional): Additional parameters specified by the end user to exclude
+            from the result.
+    Returns:
+        dict: Parameters that are non-default and not excluded.
+    Raises:
+        ValueError: If any of the excluded parameters are not valid keys in the default_params for get_optional_params.
+    """
+
+    excluded_non_default_params = {
+        "additional_drop_params",
+        "allowed_openai_params",
+        "api_version",
+        "custom_llm_provider",
+        "drop_params",
+        "messages",
+        "model",
+    }
+
+    # From the parameters passed into this function, filter for parameters with non-default values.
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (
+            k in default_params
+            and k not in excluded_non_default_params
+            and v != default_params[k]
+            and not _should_drop_param(
+                k=k, additional_drop_params=additional_drop_params
+            )
+        )
+    }
+
+    return non_default_params
+
+
 def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -2660,122 +2747,56 @@ def get_optional_params(  # noqa: PLR0915
                 non_default_params=passed_params, optional_params=optional_params
             )
 
-    default_params = {
-        "functions": None,
-        "function_call": None,
-        "temperature": None,
-        "top_p": None,
-        "n": None,
-        "stream": None,
-        "stream_options": None,
-        "stop": None,
-        "max_tokens": None,
-        "max_completion_tokens": None,
-        "modalities": None,
-        "prediction": None,
-        "audio": None,
-        "presence_penalty": None,
-        "frequency_penalty": None,
-        "logit_bias": None,
-        "user": None,
-        "model": None,
-        "custom_llm_provider": "",
-        "response_format": None,
-        "seed": None,
-        "tools": None,
-        "tool_choice": None,
-        "max_retries": None,
-        "logprobs": None,
-        "top_logprobs": None,
-        "extra_headers": None,
-        "api_version": None,
-        "parallel_tool_calls": None,
-        "drop_params": None,
-        "allowed_openai_params": None,
-        "additional_drop_params": None,
-        "messages": None,
-        "reasoning_effort": None,
-        "thinking": None,
-    }
-
-    # filter out those parameters that were passed with non-default values
-
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (
-            k != "model"
-            and k != "custom_llm_provider"
-            and k != "api_version"
-            and k != "drop_params"
-            and k != "allowed_openai_params"
-            and k != "additional_drop_params"
-            and k != "messages"
-            and k in default_params
-            and v != default_params[k]
-            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
-            is False
-        )
-    }
+    default_params = _get_optional_params_defaults()
+    non_default_params = _get_optional_params_non_default_params(
+        passed_params=passed_params,
+        default_params=default_params,
+        additional_drop_params=additional_drop_params,
+    )
 
     ## raise exception if function calling passed in for a provider that doesn't support it
-    if (
-        "functions" in non_default_params
-        or "function_call" in non_default_params
-        or "tools" in non_default_params
+    if any(
+        param_name in non_default_params
+        for param_name in ("functions", "function_call", "tools")
     ):
+        # Key to store function data which can be used for providers that don't support function calling via params
+        functions_unsupported_model_key = "functions_unsupported_model"
+
+        # Handle Ollama as a special case (ollama actually supports JSON output so we can emulate function calling)
+        if custom_llm_provider == "ollama":
+            optional_params["format"] = "json"
+            # NOTE: This adjusts global state in LiteLLM.
+            litellm.add_function_to_prompt = (
+                True  # so that main.py adds the function call to the prompt
+            )
+            non_default_params.pop(
+                "tool_choice", None
+            )  # causes ollama requests to hang when used later, so remove.
+
+        # If the function isn't going to be added to the prompt, handle all providers that are not OpenAI-compatible
         if (
-            custom_llm_provider == "ollama"
-            and custom_llm_provider != "text-completion-openai"
-            and custom_llm_provider != "azure"
-            and custom_llm_provider != "vertex_ai"
-            and custom_llm_provider != "anyscale"
-            and custom_llm_provider != "together_ai"
-            and custom_llm_provider != "groq"
-            and custom_llm_provider != "nvidia_nim"
-            and custom_llm_provider != "cerebras"
-            and custom_llm_provider != "xai"
-            and custom_llm_provider != "ai21_chat"
-            and custom_llm_provider != "volcengine"
-            and custom_llm_provider != "deepseek"
-            and custom_llm_provider != "codestral"
-            and custom_llm_provider != "mistral"
-            and custom_llm_provider != "anthropic"
-            and custom_llm_provider != "cohere_chat"
-            and custom_llm_provider != "cohere"
-            and custom_llm_provider != "bedrock"
-            and custom_llm_provider != "ollama_chat"
-            and custom_llm_provider != "openrouter"
-            and custom_llm_provider not in litellm.openai_compatible_providers
+                not litellm.add_function_to_prompt
+                and custom_llm_provider not in litellm.openai_compatible_providers
         ):
-            if custom_llm_provider == "ollama":
-                # ollama actually supports json output
-                optional_params["format"] = "json"
-                litellm.add_function_to_prompt = (
-                    True  # so that main.py adds the function call to the prompt
-                )
-                if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
-                    non_default_params.pop(
-                        "tool_choice", None
-                    )  # causes ollama requests to hang
-                elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
-            elif (
-                litellm.add_function_to_prompt
-            ):  # if user opts to add it to prompt instead
-                optional_params["functions_unsupported_model"] = non_default_params.pop(
-                    "tools", non_default_params.pop("functions", None)
-                )
-            else:
-                raise UnsupportedParamsError(
-                    status_code=500,
-                    message=f"Function calling is not supported by {custom_llm_provider}.",
-                )
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"Function calling is not supported by {custom_llm_provider}.",
+            )
+
+        # Attempt to add the supplied function call to the prompt, preferring tools > functions > function_call.
+        # The assumption is that we want to remove them all regardless of which parameter supplied the value.
+        if "function_call" in non_default_params:
+            optional_params[functions_unsupported_model_key] = non_default_params.pop(
+                "function_call"
+            )
+        if "functions" in non_default_params:
+            optional_params[functions_unsupported_model_key] = non_default_params.pop(
+                "functions"
+            )
+        if "tools" in non_default_params:
+            optional_params[functions_unsupported_model_key] = non_default_params.pop(
+                "tools"
+            )
 
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
