@@ -180,10 +180,18 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
-with resources.open_text(
-    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
-) as f:
-    json_data = json.load(f)
+try:
+    # Python 3.9+
+    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
+        "anthropic_tokenizer.json"
+    ).open("r") as f:
+        json_data = json.load(f)
+except (ImportError, AttributeError, TypeError):
+    with resources.open_text(
+        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+    ) as f:
+        json_data = json.load(f)
+
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
