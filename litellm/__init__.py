@@ -48,7 +48,6 @@ from litellm.constants import (
     huggingface_models,
     empower_models,
     together_ai_models,
-    bitdeerai_models,
     baseten_models,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
