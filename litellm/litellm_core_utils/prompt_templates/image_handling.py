@@ -33,7 +33,7 @@ def _process_image_response(response: Response, url: str) -> str:
     img_type = response.headers.get("Content-Type")
     if img_type not in img_type_map:
         _img_type = url.split('?')[0].split(".")[-1].lower()
-        img_type = img_type_map.get(img_type)
+        img_type = img_type_map.get(_img_type)
         if img_type is None:
             raise Exception(
                 f"Error: Unsupported image format. Format={_img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
