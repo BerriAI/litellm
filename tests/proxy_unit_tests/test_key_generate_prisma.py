@@ -3295,7 +3295,7 @@ async def test_aadmin_only_routes(prisma_client):
         "allowed_routes": ["/embeddings", "/key/generate"],
         "admin_only_routes": ["/key/generate"],
     }
-    from litellm.proxy import proxy_server
+    from litellm_proxy import proxy_server
 
     initial_general_settings = getattr(proxy_server, "general_settings")
 

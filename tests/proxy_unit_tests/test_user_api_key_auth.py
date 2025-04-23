@@ -287,7 +287,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     general_settings = {"allowed_routes": ["/embeddings"]}
     from fastapi import Request
 
-    from litellm.proxy import proxy_server
+    from litellm_proxy import proxy_server
 
     initial_general_settings = getattr(proxy_server, "general_settings")
 

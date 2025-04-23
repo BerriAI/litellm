@@ -129,7 +129,7 @@ async def test_chat_completion_request_with_redaction(route, body):
 
     Ensures that the secret is redacted EVEN on the callback
     """
-    from litellm.proxy import proxy_server
+    from litellm_proxy import proxy_server
 
     setattr(proxy_server, "llm_router", router)
     _test_logger = testLogger()
