@@ -141,9 +141,34 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     #########################################################
-    ########## END DELETE RESPONSE API TRANSFORMATION ##########
+    ########## END DELETE RESPONSE API TRANSFORMATION #######
     #########################################################
 
+    #########################################################
+    ########## GET RESPONSE API TRANSFORMATION ###############
+    #########################################################
+    @abstractmethod
+    def transform_get_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+    
+    @abstractmethod
+    def transform_get_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## END GET RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
