@@ -18,6 +18,7 @@
     "@tremor/react": "^3.13.3",
     "@types/papaparse": "^5.3.15",
     "antd": "^5.13.2",
+    "cva": "^1.0.0-beta.3",
     "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
@@ -29,7 +30,8 @@
     "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "react-syntax-highlighter": "^15.6.1"
+    "react-syntax-highlighter": "^15.6.1",
+    "tailwind-merge": "^3.2.0"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",
