@@ -321,7 +321,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """
         Checks if the user is a premium user, raises an error if not
         """
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(

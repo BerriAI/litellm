@@ -16,7 +16,7 @@ sys.path.insert(
 
 from unittest.mock import Mock
 
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
+from litellm_proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 
 
 @pytest.mark.asyncio

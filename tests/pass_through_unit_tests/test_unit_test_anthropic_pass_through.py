@@ -15,7 +15,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Import the class we're testing
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+from litellm_proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
 
@@ -207,7 +207,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
     [{"litellm_metadata": {"user": "test"}}, {"metadata": {"user_id": "test"}}],
 )
 def test_get_user_from_metadata(end_user_id):
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    from litellm_proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
         PassthroughStandardLoggingPayload,
     )
@@ -310,7 +310,7 @@ def all_chunks():
 
 
 def test_handle_logging_anthropic_collected_chunks(all_chunks):
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    from litellm_proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
         PassthroughStandardLoggingPayload,
         EndpointType,
@@ -357,7 +357,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
 
 
 def test_build_complete_streaming_response(all_chunks):
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    from litellm_proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
     from litellm.types.utils import ModelResponse

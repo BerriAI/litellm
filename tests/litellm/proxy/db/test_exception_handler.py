@@ -26,8 +26,8 @@ sys.path.insert(
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy.db.exception_handler import PrismaDBExceptionHandler
 
 
 # Test is_database_connection_error method
@@ -95,7 +95,7 @@ def test_is_database_connection_generic_errors():
 
 # Test should_allow_request_on_db_unavailable method
 @patch(
-    "litellm.proxy.proxy_server.general_settings",
+    "litellm_proxy.proxy_server.general_settings",
     {"allow_requests_on_db_unavailable": True},
 )
 def test_should_allow_request_on_db_unavailable_true():
@@ -103,7 +103,7 @@ def test_should_allow_request_on_db_unavailable_true():
 
 
 @patch(
-    "litellm.proxy.proxy_server.general_settings",
+    "litellm_proxy.proxy_server.general_settings",
     {"allow_requests_on_db_unavailable": False},
 )
 def test_should_allow_request_on_db_unavailable_false():
@@ -111,7 +111,7 @@ def test_should_allow_request_on_db_unavailable_false():
 
 
 @patch(
-    "litellm.proxy.proxy_server.general_settings",
+    "litellm_proxy.proxy_server.general_settings",
     {"allow_requests_on_db_unavailable": True},
 )
 def test_handle_db_exception_with_connection_error():
@@ -124,7 +124,7 @@ def test_handle_db_exception_with_connection_error():
 
 
 @patch(
-    "litellm.proxy.proxy_server.general_settings",
+    "litellm_proxy.proxy_server.general_settings",
     {"allow_requests_on_db_unavailable": False},
 )
 def test_handle_db_exception_raises_error():

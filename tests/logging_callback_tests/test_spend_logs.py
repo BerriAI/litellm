@@ -25,8 +25,8 @@ from typing import Optional
 import pytest
 
 import litellm
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm_proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm_proxy._types import SpendLogsMetadata, SpendLogsPayload
 
 
 @pytest.mark.parametrize(
@@ -323,7 +323,7 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     Test that messages and responses are logged in spend logs when store_prompts_in_spend_logs is enabled
     """
     # Mock general_settings
-    from litellm.proxy.proxy_server import general_settings
+    from litellm_proxy.proxy_server import general_settings
 
     general_settings["store_prompts_in_spend_logs"] = True
 

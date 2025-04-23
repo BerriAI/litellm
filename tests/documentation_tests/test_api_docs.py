@@ -109,7 +109,7 @@ def analyze_function(func_info: FunctionInfo) -> Dict:
 
     for name, type_name in func_info.parameters:
         if type_name.endswith("Request") or type_name.endswith("Response"):
-            pydantic_model = getattr(litellm.proxy._types, type_name, None)
+            pydantic_model = getattr(litellm_proxy._types, type_name, None)
             if pydantic_model is not None:
                 for param in pydantic_model.model_fields.keys():
                     pydantic_params.add(param)

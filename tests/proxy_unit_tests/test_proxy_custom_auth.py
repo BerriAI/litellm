@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
-from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+from litellm_proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     ProxyConfig,
     initialize,
     router,
@@ -35,7 +35,7 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
 # Make sure the fixture returns TestClient(app)
 @pytest.fixture(scope="function")
 def client():
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm_proxy.proxy_server import cleanup_router_config_variables
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))

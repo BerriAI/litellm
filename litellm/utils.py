@@ -259,13 +259,13 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
+from .types.utils import AllowedModelRegion, KeyManagementSystem
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.

@@ -29,8 +29,8 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_checks import get_user_object
-from litellm.proxy.management_endpoints.key_management_endpoints import (
+from litellm_proxy.auth.auth_checks import get_user_object
+from litellm_proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
@@ -38,18 +38,18 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
     update_key_fn,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.organization_endpoints import (
+from litellm_proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm_proxy.management_endpoints.organization_endpoints import (
     new_organization,
     organization_member_add,
 )
 
-from litellm.proxy.management_endpoints.team_endpoints import (
+from litellm_proxy.management_endpoints.team_endpoints import (
     new_team,
     team_info,
     update_team,
 )
-from litellm.proxy.proxy_server import (
+from litellm_proxy.proxy_server import (
     LitellmUserRoles,
     audio_transcriptions,
     chat_completion,
@@ -60,10 +60,10 @@ from litellm.proxy.proxy_server import (
     moderations,
     user_api_key_auth,
 )
-from litellm.proxy.management_endpoints.customer_endpoints import (
+from litellm_proxy.management_endpoints.customer_endpoints import (
     new_end_user,
 )
-from litellm.proxy.spend_tracking.spend_management_endpoints import (
+from litellm_proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
     global_spend_logs,
     global_spend_models,
@@ -74,21 +74,21 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from starlette.datastructures import URL
 
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import *
+from litellm_proxy._types import *
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 
 @pytest.fixture
 def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
+    from litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -101,11 +101,11 @@ def prisma_client():
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
-    # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
+    # Reset litellm_proxy.proxy_server.prisma_client to None
+    litellm_proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
+    litellm_proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
 
@@ -139,10 +139,10 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
     Add a member to an organization and assert the user object is created with the correct organization memberships / roles
     """
     master_key = "sk-1234"
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", master_key)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
     created_user_id = f"new-user-{uuid.uuid4()}"
 
@@ -201,10 +201,10 @@ async def test_org_admin_create_team_permissions(prisma_client):
     import json
 
     master_key = "sk-1234"
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", master_key)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
     response = await new_organization(
         data=NewOrganizationRequest(
@@ -272,10 +272,10 @@ async def test_org_admin_create_user_permissions(prisma_client):
     import json
 
     master_key = "sk-1234"
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", master_key)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
     # create new org
     response = await new_organization(
@@ -343,10 +343,10 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     import json
 
     master_key = "sk-1234"
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", master_key)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     created_user_id = f"new-user-{uuid.uuid4()}"
     response = await new_organization(
         data=NewOrganizationRequest(
@@ -486,9 +486,9 @@ async def test_user_role_permissions(prisma_client, route, user_role, expected_r
     """Test user role based permissions for different routes"""
     try:
         # Setup
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-        await litellm.proxy.proxy_server.prisma_client.connect()
+        setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+        await litellm_proxy.proxy_server.prisma_client.connect()
 
         # Admin - admin creates a new user
         user_api_key_dict = UserAPIKeyAuth(

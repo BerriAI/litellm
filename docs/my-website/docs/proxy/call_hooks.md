@@ -17,7 +17,7 @@ This function is called just before a litellm completion call is made, and allow
 ```python
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
-from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
+from litellm_proxy.proxy_server import UserAPIKeyAuth, DualCache
 from typing import Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy

@@ -5,8 +5,8 @@ Utils used for slack alerting
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
+from litellm_proxy._types import AlertType
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
@@ -17,7 +17,7 @@ else:
 
 
 def process_slack_alerting_variables(
-    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]]
+    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]],
 ) -> Optional[Dict[AlertType, Union[List[str], str]]]:
     """
     process alert_to_webhook_url

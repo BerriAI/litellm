@@ -13,10 +13,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
+from litellm_proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):

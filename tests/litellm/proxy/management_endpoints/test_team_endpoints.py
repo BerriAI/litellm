@@ -13,20 +13,20 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
-from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles
-from litellm.proxy.management_endpoints.team_endpoints import (
+from litellm_proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
+from litellm_proxy._types import LiteLLM_TeamTable, LitellmUserRoles
+from litellm_proxy.management_endpoints.team_endpoints import (
     user_api_key_auth,  # Assuming this dependency is needed
 )
-from litellm.proxy.management_endpoints.team_endpoints import (
+from litellm_proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     router,
 )
-from litellm.proxy.management_helpers.team_member_permission_checks import (
+from litellm_proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
-from litellm.proxy.proxy_server import app
+from litellm_proxy.proxy_server import app
 
 # Setup TestClient
 client = TestClient(app)
@@ -39,7 +39,7 @@ mock_prisma_client = MagicMock()
 @pytest.fixture(autouse=True)
 def mock_db_client():
     with patch(
-        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        "litellm_proxy.proxy_server.prisma_client", mock_prisma_client
     ):  # Mock in both places if necessary
         yield mock_prisma_client
     mock_prisma_client.reset_mock()
@@ -77,7 +77,7 @@ async def test_get_team_permissions_list_success(mock_db_client, mock_admin_auth
 
     # Mock the get_team_object function used in the endpoint
     with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        "litellm_proxy.management_endpoints.team_endpoints.get_team_object",
         new_callable=AsyncMock,
         return_value=mock_team_row,
     ):
@@ -150,7 +150,7 @@ async def test_update_team_permissions_success(mock_db_client, mock_admin_auth):
 
     # Mock the get_team_object function used in the endpoint
     with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        "litellm_proxy.management_endpoints.team_endpoints.get_team_object",
         new_callable=AsyncMock,
         return_value=mock_existing_team_row,
     ):

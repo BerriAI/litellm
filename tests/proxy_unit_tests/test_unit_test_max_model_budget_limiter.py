@@ -20,10 +20,10 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 import pytest
 from litellm.caching.caching import DualCache
-from litellm.proxy.hooks.model_max_budget_limiter import (
+from litellm_proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 import litellm
 
 

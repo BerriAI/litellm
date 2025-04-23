@@ -15,7 +15,6 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
@@ -26,6 +25,7 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
+from litellm_proxy._types import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span

@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._experimental.mcp_server.tool_registry import MCPToolRegistry
+from litellm_proxy._experimental.mcp_server.tool_registry import MCPToolRegistry
 
 
 # Test handler function

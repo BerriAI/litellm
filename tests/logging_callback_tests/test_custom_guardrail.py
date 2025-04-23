@@ -30,10 +30,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.proxy.guardrails.guardrail_endpoints import _get_guardrails_list_response
+from litellm_proxy.guardrails.guardrail_endpoints import _get_guardrails_list_response
 from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
 
 

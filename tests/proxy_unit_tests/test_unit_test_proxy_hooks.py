@@ -4,7 +4,7 @@ import sys
 from unittest.mock import Mock, patch, AsyncMock
 import pytest
 from fastapi import Request
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+from litellm_proxy.utils import _get_redoc_url, _get_docs_url
 from datetime import datetime
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -20,10 +20,10 @@ async def test_disable_spend_logs():
     mock_prisma_client = Mock()
     mock_prisma_client.spend_log_transactions = []
 
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    with patch("litellm_proxy.proxy_server.disable_spend_logs", True), patch(
+        "litellm_proxy.proxy_server.prisma_client", mock_prisma_client
     ):
-        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm_proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         db_spend_update_writer = DBSpendUpdateWriter()
 
         # Call update_database with disable_spend_logs=True

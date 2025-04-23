@@ -15,7 +15,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+from litellm_proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
 )
 

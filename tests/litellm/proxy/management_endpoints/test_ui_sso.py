@@ -15,19 +15,19 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.proxy._types import NewTeamRequest
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    GoogleSSOHandler,
-    MicrosoftSSOHandler,
-    SSOAuthenticationHandler,
-)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
+)
+from litellm_proxy._types import NewTeamRequest
+from litellm_proxy.auth.handle_jwt import JWTHandler
+from litellm_proxy.management_endpoints.types import CustomOpenID
+from litellm_proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    GoogleSSOHandler,
+    MicrosoftSSOHandler,
+    SSOAuthenticationHandler,
 )
 
 
@@ -254,7 +254,7 @@ async def test_get_user_groups_from_graph_api():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -306,7 +306,7 @@ async def test_get_user_groups_pagination():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -338,7 +338,7 @@ async def test_get_user_groups_empty_response():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -360,7 +360,7 @@ async def test_get_user_groups_error_handling():
         raise Exception("API Error")
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -447,7 +447,7 @@ async def test_default_team_params(team_params):
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch("litellm_proxy.proxy_server.prisma_client", mock_prisma):
         # Act
         team_id = str(uuid.uuid4())
         await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
@@ -495,7 +495,7 @@ async def test_create_team_without_default_params():
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch("litellm_proxy.proxy_server.prisma_client", mock_prisma):
         # Act
         team_id = str(uuid.uuid4())
         await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(

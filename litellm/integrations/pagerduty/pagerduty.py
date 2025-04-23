@@ -19,7 +19,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.pagerduty import (
     AlertingConfig,
     PagerDutyInternalEvent,
@@ -30,6 +29,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
+from litellm_proxy._types import UserAPIKeyAuth
 
 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD = 60
 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS = 60
@@ -46,7 +46,7 @@ class PagerDutyAlerting(SlackAlerting):
     def __init__(
         self, alerting_args: Optional[Union[AlertingConfig, dict]] = None, **kwargs
     ):
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")

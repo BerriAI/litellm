@@ -14,11 +14,11 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm.proxy.management_endpoints.scim.scim_transformations import (
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
+from litellm_proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
+from litellm_proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
 
 
 # Mock data
@@ -115,7 +115,7 @@ class TestScimTransformations:
 
         mock_find_unique.side_effect = [team1, team2]
 
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+        with patch("litellm_proxy.proxy_server.prisma_client", mock_client):
             scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
                 mock_user
             )
@@ -145,7 +145,7 @@ class TestScimTransformations:
         )
         mock_find_unique.return_value = team1
 
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+        with patch("litellm_proxy.proxy_server.prisma_client", mock_client):
             scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
                 mock_user_with_scim_metadata
             )
@@ -159,7 +159,7 @@ class TestScimTransformations:
     ):
         mock_client, _ = mock_prisma_client
 
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+        with patch("litellm_proxy.proxy_server.prisma_client", mock_client):
             scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
                 mock_team
             )

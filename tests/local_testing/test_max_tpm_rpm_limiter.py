@@ -17,10 +17,10 @@
 # import pytest
 # import litellm
 # from litellm import Router
-# from litellm.proxy.utils import ProxyLogging, hash_token
-# from litellm.proxy._types import UserAPIKeyAuth
+# from litellm_proxy.utils import ProxyLogging, hash_token
+# from litellm_proxy._types import UserAPIKeyAuth
 # from litellm.caching.caching import DualCache, RedisCache
-# from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
+# from litellm_proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 # from datetime import datetime
 
 
@@ -133,19 +133,19 @@
 #     - test if default namespace set via `proxyconfig._init_cache`
 #     - respected for tpm/rpm caching
 #     """
-#     from litellm.proxy.proxy_server import ProxyConfig
+#     from litellm_proxy.proxy_server import ProxyConfig
 
 #     redis_usage_cache: Optional[RedisCache] = None
 #     cache_params = {"type": "redis", "namespace": "litellm_default"}
 
 #     ## INIT CACHE ##
 #     proxy_config = ProxyConfig()
-#     setattr(litellm.proxy.proxy_server, "proxy_config", proxy_config)
+#     setattr(litellm_proxy.proxy_server, "proxy_config", proxy_config)
 
 #     proxy_config._init_cache(cache_params=cache_params)
 
 #     redis_cache: Optional[RedisCache] = getattr(
-#         litellm.proxy.proxy_server, "redis_usage_cache"
+#         litellm_proxy.proxy_server, "redis_usage_cache"
 #     )
 
 #     ## CHECK IF NAMESPACE SET ##

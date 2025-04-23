@@ -4,7 +4,7 @@ This is a file for the AWS Secret Manager Integration
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
 
 Requires:
-* `os.environ["AWS_REGION_NAME"], 
+* `os.environ["AWS_REGION_NAME"],
 * `pip install boto3>=1.28.57`
 """
 
@@ -15,7 +15,7 @@ import re
 from typing import Any, Dict, Optional
 
 import litellm
-from litellm.proxy._types import KeyManagementSystem
+from litellm_proxy._types import KeyManagementSystem
 
 
 def validate_environment():

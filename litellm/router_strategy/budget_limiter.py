@@ -10,11 +10,11 @@ This means you can use this with weighted-pick, lowest-latency, simple-shuffle, 
 Example:
 ```
 openai:
-	budget_limit: 0.000000000001
-	time_period: 1d
+        budget_limit: 0.000000000001
+        time_period: 1d
 anthropic:
-	budget_limit: 100
-	time_period: 7d
+        budget_limit: 100
+        time_period: 7d
 ```
 """
 
@@ -53,9 +53,9 @@ class RouterBudgetLimiting(CustomLogger):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-        self.provider_budget_config: Optional[
-            GenericBudgetConfigType
-        ] = provider_budget_config
+        self.provider_budget_config: Optional[GenericBudgetConfigType] = (
+            provider_budget_config
+        )
         self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
         self.tag_budget_config: Optional[GenericBudgetConfigType] = None
         self._init_provider_budgets()
@@ -797,7 +797,7 @@ class RouterBudgetLimiting(CustomLogger):
     def _init_tag_budgets(self):
         if litellm.tag_budget_config is None:
             return
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(

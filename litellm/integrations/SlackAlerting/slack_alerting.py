@@ -26,8 +26,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
 from litellm.types.integrations.slack_alerting import *
+from litellm_proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
@@ -823,9 +823,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[
-            ProviderRegionOutageModel
-        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
+        outage_value: Optional[ProviderRegionOutageModel] = (
+            await self.internal_usage_cache.async_get_cache(key=cache_key)
+        )
 
         if (
             getattr(exception, "status_code", None) is None
@@ -1148,7 +1148,7 @@ Model Info:
         email_logo_url: Optional[str] = None,
         email_support_contact: Optional[str] = None,
     ):
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
@@ -1161,7 +1161,7 @@ Model Info:
         self, webhook_event: WebhookEvent
     ) -> bool:
         try:
-            from litellm.proxy.utils import send_email
+            from litellm_proxy.utils import send_email
 
             if self.alerting is None or "email" not in self.alerting:
                 # do nothing if user does not want email alerts
@@ -1170,7 +1170,7 @@ Model Info:
                     self.alerting,
                 )
                 return False
-            from litellm.proxy.proxy_server import premium_user, prisma_client
+            from litellm_proxy.proxy_server import premium_user, prisma_client
 
             email_logo_url = os.getenv(
                 "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1271,8 +1271,8 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        from litellm.proxy.proxy_server import premium_user
-        from litellm.proxy.utils import send_email
+        from litellm_proxy.proxy_server import premium_user
+        from litellm_proxy.utils import send_email
 
         email_logo_url = os.getenv(
             "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1406,9 +1406,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[
-                Union[str, List[str]]
-            ] = self.alert_to_webhook_url[alert_type]
+            slack_webhook_url: Optional[Union[str, List[str]]] = (
+                self.alert_to_webhook_url[alert_type]
+            )
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
@@ -1598,7 +1598,7 @@ Model Info:
             return
 
         try:
-            from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            from litellm_proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,
             )
 
@@ -1662,7 +1662,7 @@ Model Info:
         try:
             from calendar import monthrange
 
-            from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            from litellm_proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,
             )
 

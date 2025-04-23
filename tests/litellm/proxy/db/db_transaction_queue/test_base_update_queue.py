@@ -11,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT
-from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
+from litellm_proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
 
 
 @pytest.mark.asyncio

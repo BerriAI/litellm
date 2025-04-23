@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
-from litellm.proxy._types import LiteLLM_UserTableWithKeyCount
+from litellm_proxy._types import LiteLLM_UserTableWithKeyCount
 
 
 class UserListResponse(BaseModel):

@@ -61,7 +61,7 @@ def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     )
 
     # Verify the credentials were properly set
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         passthrough_endpoint_router,
     )
 
@@ -148,7 +148,7 @@ def test_add_vertex_pass_through_deployment():
     router.add_deployment(deployment)
 
     # Get the vertex credentials from the router
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         passthrough_endpoint_router,
     )
 

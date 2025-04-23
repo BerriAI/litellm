@@ -17,7 +17,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
-from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+from litellm_proxy.proxy_cli import ProxyInitializationHelpers
 
 
 class TestProxyInitializationHelpers:
@@ -93,7 +93,7 @@ class TestProxyInitializationHelpers:
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             "localhost", 8000
         )
-        assert args["app"] == "litellm.proxy.proxy_server:app"
+        assert args["app"] == "litellm_proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
 

@@ -18,13 +18,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
-from litellm.proxy.proxy_server import token_counter
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy.proxy_server import token_counter
+from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from litellm.proxy._types import TokenCountRequest, TokenCountResponse
+from litellm_proxy._types import TokenCountRequest, TokenCountResponse
 
 
 from litellm import Router
@@ -51,7 +51,7 @@ async def test_vLLM_token_counting():
         ]
     )
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", llm_router)
 
     response = await token_counter(
         request=TokenCountRequest(
@@ -86,7 +86,7 @@ async def test_token_counting_model_not_in_model_list():
         ]
     )
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", llm_router)
 
     response = await token_counter(
         request=TokenCountRequest(
@@ -121,7 +121,7 @@ async def test_gpt_token_counting():
         ]
     )
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", llm_router)
 
     response = await token_counter(
         request=TokenCountRequest(

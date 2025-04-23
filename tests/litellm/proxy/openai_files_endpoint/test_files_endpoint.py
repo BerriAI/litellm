@@ -14,15 +14,15 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
-from litellm.proxy.hooks import get_proxy_hook
-from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
-from litellm.proxy.proxy_server import app
+from litellm_proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm_proxy.hooks import get_proxy_hook
+from litellm_proxy.management_endpoints.internal_user_endpoints import ui_view_users
+from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
-from litellm.proxy.proxy_server import hash_token
-from litellm.proxy.utils import ProxyLogging
+from litellm_proxy.proxy_server import hash_token
+from litellm_proxy.utils import ProxyLogging
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ def setup_proxy_logging_object(monkeypatch, llm_router: Router) -> ProxyLogging:
     )
     proxy_logging_object._add_proxy_hooks(llm_router)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_object
+        "litellm_proxy.proxy_server.proxy_logging_obj", proxy_logging_object
     )
     return proxy_logging_object
 
@@ -104,7 +104,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     Asserts 'create_file' is called with the correct arguments
     """
     from litellm import Router
-    from litellm.proxy.utils import ProxyLogging
+    from litellm_proxy.utils import ProxyLogging
 
     mock_create_file = mocker.patch("litellm.files.main.create_file")
 
@@ -114,9 +114,9 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
 
     proxy_logging_obj._add_proxy_hooks(llm_router)
 
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr("litellm_proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        "litellm_proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
 
     # Create a simple test file content
@@ -183,7 +183,7 @@ def test_create_file_and_call_chat_completion_e2e(
     try:
         from litellm.types.llms.openai import OpenAIFileObject
 
-        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr("litellm_proxy.proxy_server.llm_router", llm_router)
         proxy_logging_object = setup_proxy_logging_object(monkeypatch, llm_router)
 
         # Create a simple test file content
@@ -326,12 +326,12 @@ def test_create_file_for_each_model(
     import asyncio
 
     from litellm import CreateFileRequest
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
+    from litellm_proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm_proxy.openai_files_endpoints.files_endpoints import (
         create_file_for_each_model,
     )
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
+    from litellm_proxy.utils import ProxyLogging
 
     # Setup proxy logging
     proxy_logging_obj = ProxyLogging(
@@ -339,7 +339,7 @@ def test_create_file_for_each_model(
     )
     proxy_logging_obj._add_proxy_hooks(llm_router)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        "litellm_proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
 
     # Mock user API key dict

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 import litellm
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting, AlertingConfig
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio

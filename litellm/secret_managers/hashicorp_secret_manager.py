@@ -12,14 +12,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import KeyManagementSystem
+from litellm_proxy._types import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 
 
 class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")

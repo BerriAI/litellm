@@ -14,7 +14,7 @@ sys.path.insert(
 
 
 import litellm
-from litellm.proxy.common_utils.http_parsing_utils import (
+from litellm_proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_parsed_body,
     _safe_set_request_parsed_body,

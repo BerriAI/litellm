@@ -15,12 +15,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
+from litellm_proxy.enterprise.enterprise_hooks.banned_keywords import (
     _ENTERPRISE_BannedKeywords,
 )
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy.utils import ProxyLogging, hash_token
+from litellm_proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 
 

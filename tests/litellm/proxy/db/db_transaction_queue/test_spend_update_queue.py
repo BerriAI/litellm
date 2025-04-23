@@ -7,8 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
-from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
-from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm_proxy._types import Litellm_EntityType, SpendUpdateQueueItem
+from litellm_proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 
 sys.path.insert(
     0, os.path.abspath("../../..")

@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from litellm.proxy.db.prisma_client import should_update_prisma_schema
+from litellm_proxy.db.prisma_client import should_update_prisma_schema
 
 
 def test_should_update_prisma_schema(monkeypatch):

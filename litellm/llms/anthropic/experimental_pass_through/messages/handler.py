@@ -37,14 +37,14 @@ class AnthropicMessagesHandler:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from datetime import datetime
 
-        from litellm.proxy.pass_through_endpoints.streaming_handler import (
-            PassThroughStreamingHandler,
-        )
-        from litellm.proxy.pass_through_endpoints.success_handler import (
-            PassThroughEndpointLogging,
-        )
         from litellm.types.passthrough_endpoints.pass_through_endpoints import (
             EndpointType,
+        )
+        from litellm_proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+        from litellm_proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
         )
 
         # Create success handler object

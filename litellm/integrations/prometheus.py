@@ -18,10 +18,10 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
+from litellm_proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -38,7 +38,7 @@ class PrometheusLogger(CustomLogger):
         try:
             from prometheus_client import Counter, Gauge, Histogram
 
-            from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+            from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
             if premium_user is not True:
                 verbose_logger.warning(
@@ -456,7 +456,7 @@ class PrometheusLogger(CustomLogger):
             and isinstance(user_api_key, str)
             and user_api_key.startswith("sk-")
         ):
-            from litellm.proxy.utils import hash_token
+            from litellm_proxy.utils import hash_token
 
             user_api_key = hash_token(user_api_key)
 
@@ -661,7 +661,7 @@ class PrometheusLogger(CustomLogger):
         kwargs: dict,
         metadata: dict,
     ):
-        from litellm.proxy.common_utils.callback_utils import (
+        from litellm_proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
 
@@ -1363,7 +1363,7 @@ class PrometheusLogger(CustomLogger):
             set_metrics_function: Function to set metrics for the fetched data.
             data_type: String representing the type of data ("teams" or "keys") for logging purposes.
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm_proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             return
@@ -1398,10 +1398,10 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize team budget metrics by reusing the generic pagination logic.
         """
-        from litellm.proxy.management_endpoints.team_endpoints import (
+        from litellm_proxy.management_endpoints.team_endpoints import (
             get_paginated_teams,
         )
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm_proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             verbose_logger.debug(
@@ -1432,10 +1432,10 @@ class PrometheusLogger(CustomLogger):
         from typing import Union
 
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
+        from litellm_proxy.management_endpoints.key_management_endpoints import (
             _list_key_helper,
         )
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm_proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             verbose_logger.debug(
@@ -1480,7 +1480,7 @@ class PrometheusLogger(CustomLogger):
         - If redis cache is not available, we initialize the metrics directly.
         """
         from litellm.constants import PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME
-        from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm_proxy.proxy_server import proxy_logging_obj
 
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
 
@@ -1561,8 +1561,8 @@ class PrometheusLogger(CustomLogger):
         Fields not available in metadata:
         - `budget_reset_at`
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm_proxy.auth.auth_checks import get_team_object
+        from litellm_proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_team_spend = (spend or 0) + response_cost
         team_object = LiteLLM_TeamTable(
@@ -1711,8 +1711,8 @@ class PrometheusLogger(CustomLogger):
         """
         Assemble a UserAPIKeyAuth object
         """
-        from litellm.proxy.auth.auth_checks import get_key_object
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm_proxy.auth.auth_checks import get_key_object
+        from litellm_proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_key_spend = (key_spend or 0) + response_cost
         user_api_key_dict = UserAPIKeyAuth(
@@ -1803,8 +1803,8 @@ class PrometheusLogger(CustomLogger):
         from prometheus_client import make_asgi_app
 
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy._types import CommonProxyErrors
-        from litellm.proxy.proxy_server import app
+        from litellm_proxy._types import CommonProxyErrors
+        from litellm_proxy.proxy_server import app
 
         if premium_user is not True:
             verbose_proxy_logger.warning(

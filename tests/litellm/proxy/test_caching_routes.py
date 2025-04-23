@@ -12,7 +12,7 @@ sys.path.insert(
 
 import litellm
 from litellm.caching import RedisCache
-from litellm.proxy.proxy_server import app
+from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 

@@ -32,7 +32,7 @@ import gc
 from typing import Type
 from pydantic import BaseModel
 
-from litellm.proxy.proxy_server import app
+from litellm_proxy.proxy_server import app
 
 
 async def get_memory_usage() -> float:

@@ -6,7 +6,7 @@ from unittest import mock
 from dotenv import load_dotenv
 
 import litellm.proxy
-import litellm.proxy.proxy_server
+import litellm_proxy.proxy_server
 
 load_dotenv()
 import io
@@ -40,12 +40,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+from litellm_proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     app,
     initialize,
     save_worker_config,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm_proxy.utils import ProxyLogging
 
 # Your bearer token
 token = "sk-1234"
@@ -95,21 +95,21 @@ example_image_generation_result = {
 
 def mock_patch_acompletion():
     return mock.patch(
-        "litellm.proxy.proxy_server.llm_router.acompletion",
+        "litellm_proxy.proxy_server.llm_router.acompletion",
         return_value=example_completion_result,
     )
 
 
 def mock_patch_aembedding():
     return mock.patch(
-        "litellm.proxy.proxy_server.llm_router.aembedding",
+        "litellm_proxy.proxy_server.llm_router.aembedding",
         return_value=example_embedding_result,
     )
 
 
 def mock_patch_aimage_generation():
     return mock.patch(
-        "litellm.proxy.proxy_server.llm_router.aimage_generation",
+        "litellm_proxy.proxy_server.llm_router.aimage_generation",
         return_value=example_image_generation_result,
     )
 
@@ -127,8 +127,8 @@ def fake_env_vars(monkeypatch):
 
 @pytest.fixture(scope="function")
 def client_no_auth(fake_env_vars):
-    # Assuming litellm.proxy.proxy_server is an object
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    # Assuming litellm_proxy.proxy_server is an object
+    from litellm_proxy.proxy_server import cleanup_router_config_variables
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
@@ -202,7 +202,7 @@ def test_add_headers_to_request(litellm_key_header_name):
     from fastapi import Request
     from starlette.datastructures import URL
     import json
-    from litellm.proxy.litellm_pre_call_utils import (
+    from litellm_proxy.litellm_pre_call_utils import (
         clean_headers,
         LiteLLMProxyRequestSetup,
     )
@@ -237,13 +237,13 @@ def test_chat_completion_forward_headers(
     global headers
     try:
         if forward_headers:
-            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs = getattr(litellm_proxy.proxy_server, "general_settings")
             gs["forward_client_headers_to_llm_api"] = True
-            setattr(litellm.proxy.proxy_server, "general_settings", gs)
+            setattr(litellm_proxy.proxy_server, "general_settings", gs)
         if litellm_key_header_name is not None:
-            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs = getattr(litellm_proxy.proxy_server, "general_settings")
             gs["litellm_key_header_name"] = litellm_key_header_name
-            setattr(litellm.proxy.proxy_server, "general_settings", gs)
+            setattr(litellm_proxy.proxy_server, "general_settings", gs)
         # Your test data
         test_data = {
             "model": "gpt-3.5-turbo",
@@ -300,14 +300,14 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
 
-    from litellm.proxy._types import (
+    from litellm_proxy._types import (
         LiteLLM_TeamTable,
         LiteLLM_TeamTableCachedObj,
         ProxyException,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm_proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm_proxy.proxy_server import hash_token, user_api_key_cache
 
     _team_id = "1234"
     user_key = "sk-12345678"
@@ -328,9 +328,9 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm_proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -352,8 +352,8 @@ from test_custom_callback_input import CompletionCustomHandler
 
 @mock_patch_acompletion()
 def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm_proxy._types import UserAPIKeyAuth
+    from litellm_proxy.proxy_server import hash_token, user_api_key_cache
 
     rpm_limit = 0
 
@@ -365,16 +365,16 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
     mock_logger = CustomLogger()
     mock_logger_unit_tests = CompletionCustomHandler()
     proxy_logging_obj: ProxyLogging = getattr(
-        litellm.proxy.proxy_server, "proxy_logging_obj"
+        litellm_proxy.proxy_server, "proxy_logging_obj"
     )
 
     litellm.callbacks = [mock_logger, mock_logger_unit_tests]
     proxy_logging_obj._init_litellm_callbacks(llm_router=None)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
-    setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    setattr(litellm_proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm_proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     with patch.object(
         mock_logger, "async_log_failure_event", new=AsyncMock()
@@ -529,7 +529,7 @@ def test_openai_deployments_model_chat_completions_azure(
 @mock_patch_aembedding()
 def test_embedding(mock_aembedding, client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth
+    from litellm_proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -557,7 +557,7 @@ def test_embedding(mock_aembedding, client_no_auth):
 @mock_patch_aembedding()
 def test_bedrock_embedding(mock_aembedding, client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth
+    from litellm_proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -584,7 +584,7 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
 @pytest.mark.skip(reason="AWS Suspended Account")
 def test_sagemaker_embedding(client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth
+    from litellm_proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -610,7 +610,7 @@ def test_sagemaker_embedding(client_no_auth):
 @mock_patch_aimage_generation()
 def test_img_gen(mock_aimage_generation, client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth
+    from litellm_proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -744,11 +744,11 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
 
 
 # Test Reading config.yaml file
-from litellm.proxy.proxy_server import ProxyConfig
+from litellm_proxy.proxy_server import ProxyConfig
 
 
 @pytest.mark.skip(reason="local variable conflicts. needs to be refactored.")
-@mock.patch("litellm.proxy.proxy_server.litellm.Cache")
+@mock.patch("litellm_proxy.proxy_server.litellm.Cache")
 def test_load_router_config(mock_cache, fake_env_vars):
     mock_cache.return_value.cache.__dict__ = {"redis_client": None}
     mock_cache.return_value.supported_call_types = [
@@ -858,11 +858,11 @@ async def test_team_update_redis():
     Tests if team update, updates the redis cache if set
     """
     from litellm.caching.caching import DualCache, RedisCache
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm_proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm_proxy.auth.auth_checks import _cache_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
-        litellm.proxy.proxy_server, "proxy_logging_obj"
+        litellm_proxy.proxy_server, "proxy_logging_obj"
     )
 
     redis_cache = RedisCache()
@@ -888,10 +888,10 @@ async def test_get_team_redis(client_no_auth):
     Tests if get_team_object gets value from redis cache, if set
     """
     from litellm.caching.caching import DualCache, RedisCache
-    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm_proxy.auth.auth_checks import get_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
-        litellm.proxy.proxy_server, "proxy_logging_obj"
+        litellm_proxy.proxy_server, "proxy_logging_obj"
     )
 
     redis_cache = RedisCache()
@@ -919,14 +919,14 @@ import random
 import uuid
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
-from litellm.proxy._types import (
+from litellm_proxy._types import (
     LitellmUserRoles,
     NewUserRequest,
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+from litellm_proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm_proxy.management_endpoints.team_endpoints import team_member_add
 from test_key_generate_prisma import prisma_client
 
 
@@ -937,17 +937,17 @@ from test_key_generate_prisma import prisma_client
 @pytest.mark.asyncio
 async def test_create_user_default_budget(prisma_client, user_role):
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     request = NewUserRequest(
         user_id=user, user_role=user_role
     )  # create a key with no budget
     with patch.object(
-        litellm.proxy.proxy_server.prisma_client, "insert_data", new=AsyncMock()
+        litellm_proxy.proxy_server.prisma_client, "insert_data", new=AsyncMock()
     ) as mock_client:
         await new_user(
             request,
@@ -980,14 +980,14 @@ async def test_create_team_member_add(prisma_client, new_member_method):
 
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm_proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
+    from litellm_proxy.proxy_server import hash_token, user_api_key_cache
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     team_obj = LiteLLM_TeamTableCachedObj(
@@ -999,7 +999,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
     # user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm_proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
         data = {
             "team_id": _team_id,
@@ -1013,10 +1013,10 @@ async def test_create_team_member_add(prisma_client, new_member_method):
     team_member_add_request = TeamMemberAddRequest(**data)
 
     with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+        "litellm_proxy.proxy_server.prisma_client.db.litellm_usertable",
         new_callable=AsyncMock,
     ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+        "litellm_proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
     ) as mock_team_obj:
 
@@ -1029,9 +1029,9 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
         team_mock_client = AsyncMock()
         original_val = getattr(
-            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
+            litellm_proxy.proxy_server.prisma_client.db, "litellm_teamtable"
         )
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
+        litellm_proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
@@ -1059,7 +1059,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             == litellm.internal_user_budget_duration
         )
 
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
+        litellm_proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
 
 
 @pytest.mark.parametrize("team_member_role", ["admin", "user"])
@@ -1072,19 +1072,19 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, Member
-    from litellm.proxy.proxy_server import (
+    from litellm_proxy._types import LiteLLM_TeamTableCachedObj, Member
+    from litellm_proxy.proxy_server import (
         ProxyException,
         hash_token,
         user_api_key_auth,
         user_api_key_cache,
     )
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
@@ -1106,7 +1106,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm_proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
     ## TEST IF TEAM ADMIN ALLOWED TO CALL /MEMBER_ADD ENDPOINT
     import json
@@ -1142,12 +1142,12 @@ async def test_create_team_member_add_team_admin(
 
     from fastapi import Request
 
-    from litellm.proxy._types import (
+    from litellm_proxy._types import (
         LiteLLM_TeamTableCachedObj,
         LiteLLM_UserTable,
         Member,
     )
-    from litellm.proxy.proxy_server import (
+    from litellm_proxy.proxy_server import (
         HTTPException,
         ProxyException,
         hash_token,
@@ -1155,11 +1155,11 @@ async def test_create_team_member_add_team_admin(
         user_api_key_cache,
     )
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
@@ -1183,7 +1183,7 @@ async def test_create_team_member_add_team_admin(
 
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm_proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     if new_member_method == "user_id":
         data = {
             "team_id": _team_id,
@@ -1197,10 +1197,10 @@ async def test_create_team_member_add_team_admin(
     team_member_add_request = TeamMemberAddRequest(**data)
 
     with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+        "litellm_proxy.proxy_server.prisma_client.db.litellm_usertable",
         new_callable=AsyncMock,
     ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+        "litellm_proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
         new=AsyncMock(return_value=team_obj),
     ) as mock_team_obj:
         mock_client = AsyncMock(
@@ -1213,9 +1213,9 @@ async def test_create_team_member_add_team_admin(
 
         team_mock_client = AsyncMock()
         original_val = getattr(
-            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
+            litellm_proxy.proxy_server.prisma_client.db, "litellm_teamtable"
         )
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
+        litellm_proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
@@ -1250,22 +1250,22 @@ async def test_create_team_member_add_team_admin(
             == litellm.internal_user_budget_duration
         )
 
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
+        litellm_proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
 
 
 @pytest.mark.asyncio
 async def test_user_info_team_list(prisma_client):
     """Assert user_info for admin calls team_list function"""
-    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm_proxy._types import LiteLLM_UserTable
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+    from litellm_proxy.management_endpoints.internal_user_endpoints import user_info
 
     with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.list_team",
+        "litellm_proxy.management_endpoints.team_endpoints.list_team",
         new_callable=AsyncMock,
     ) as mock_client:
 
@@ -1303,11 +1303,11 @@ async def test_add_callback_via_key(prisma_client):
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.proxy_server import chat_completion
+    from litellm_proxy.proxy_server import chat_completion
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
     litellm.set_verbose = True
 
@@ -1396,13 +1396,13 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm_proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    proxy_config = getattr(litellm_proxy.proxy_server, "proxy_config")
 
     request = Request(scope={"type": "http", "method": "POST", "headers": {}})
     request._url = URL(url="/chat/completions")
@@ -1519,7 +1519,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     ],
 )
 async def test_disable_fallbacks_by_key(disable_fallbacks_set):
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm_proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     key_metadata = {"disable_fallbacks": disable_fallbacks_set}
     existing_data = {
@@ -1552,13 +1552,13 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm_proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    proxy_config = getattr(litellm_proxy.proxy_server, "proxy_config")
 
     request = Request(scope={"type": "http", "method": "POST", "headers": {}})
     request._url = URL(url="/chat/completions")
@@ -1685,13 +1685,13 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm_proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    proxy_config = getattr(litellm_proxy.proxy_server, "proxy_config")
 
     request = Request(scope={"type": "http", "method": "POST", "headers": {}})
     request._url = URL(url="/chat/completions")
@@ -1805,7 +1805,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
 
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         Request,
         Response,
         gemini_proxy_route,
@@ -1865,13 +1865,13 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
+    from litellm_proxy.proxy_server import model_group_info, model_info_v1, model_list
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    proxy_config = getattr(litellm_proxy.proxy_server, "proxy_config")
 
     _model_list = [
         {
@@ -1884,8 +1884,8 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
         model_list=_model_list,
         model_group_alias={model_alias: {"model": "gpt-3.5-turbo", "hidden": hidden}},
     )
-    setattr(litellm.proxy.proxy_server, "llm_router", router)
-    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+    setattr(litellm_proxy.proxy_server, "llm_router", router)
+    setattr(litellm_proxy.proxy_server, "llm_model_list", _model_list)
 
     request = Request(scope={"type": "http", "method": "POST", "headers": {}})
     request._url = URL(url="/v1/models")
@@ -1945,13 +1945,13 @@ async def test_proxy_model_group_info_rerank(prisma_client):
     from fastapi import HTTPException, Request, Response
     from starlette.datastructures import URL
 
-    from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
+    from litellm_proxy.proxy_server import model_group_info, model_info_v1, model_list
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    proxy_config = getattr(litellm_proxy.proxy_server, "proxy_config")
 
     _model_list = [
         {
@@ -1963,8 +1963,8 @@ async def test_proxy_model_group_info_rerank(prisma_client):
         }
     ]
     router = litellm.Router(model_list=_model_list)
-    setattr(litellm.proxy.proxy_server, "llm_router", router)
-    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+    setattr(litellm_proxy.proxy_server, "llm_router", router)
+    setattr(litellm_proxy.proxy_server, "llm_model_list", _model_list)
 
     request = Request(scope={"type": "http", "method": "POST", "headers": {}})
     request._url = URL(url="/v1/models")
@@ -1995,19 +1995,19 @@ async def test_proxy_model_group_info_rerank(prisma_client):
 #     """
 #     Add 10 people to a team. Confirm all 10 are added.
 #     """
-#     from litellm.proxy.management_endpoints.team_endpoints import (
+#     from litellm_proxy.management_endpoints.team_endpoints import (
 #         team_member_add,
 #         new_team,
 #     )
-#     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
+#     from litellm_proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
 
-#     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+#     setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
 #     try:
 
 #         async def test():
-#             await litellm.proxy.proxy_server.prisma_client.connect()
-#             from litellm.proxy.proxy_server import user_api_key_cache
+#             await litellm_proxy.proxy_server.prisma_client.connect()
+#             from litellm_proxy.proxy_server import user_api_key_cache
 
 #             user_api_key_dict = UserAPIKeyAuth(
 #                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2070,14 +2070,14 @@ async def test_proxy_model_group_info_rerank(prisma_client):
 
 @pytest.mark.asyncio
 async def test_proxy_server_prisma_setup():
-    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_state
-    from litellm.proxy.utils import ProxyLogging
+    from litellm_proxy.proxy_server import ProxyStartupEvent, proxy_state
+    from litellm_proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
     user_api_key_cache = DualCache()
 
     with patch.object(
-        litellm.proxy.proxy_server, "PrismaClient", new=MagicMock()
+        litellm_proxy.proxy_server, "PrismaClient", new=MagicMock()
     ) as mock_prisma_client:
         mock_client = mock_prisma_client.return_value  # This is the mocked instance
         mock_client.connect = AsyncMock()  # Mock the connect method
@@ -2113,8 +2113,8 @@ async def test_proxy_server_prisma_setup_invalid_db():
 
     Think 2-3 times before editing / deleting this test, it's important for PROD
     """
-    from litellm.proxy.proxy_server import ProxyStartupEvent
-    from litellm.proxy.utils import ProxyLogging
+    from litellm_proxy.proxy_server import ProxyStartupEvent
+    from litellm_proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
     user_api_key_cache = DualCache()
@@ -2145,8 +2145,8 @@ async def test_get_ui_settings_spend_logs_threshold():
     """
     Test that get_ui_settings correctly sets DISABLE_EXPENSIVE_DB_QUERIES based on spend_logs_row_count threshold
     """
-    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
-    from litellm.proxy.proxy_server import proxy_state
+    from litellm_proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm_proxy.proxy_server import proxy_state
     from fastapi import Request
     from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 
@@ -2195,7 +2195,7 @@ async def test_get_ui_settings_spend_logs_threshold():
 
 
 def test_get_timeout_from_request():
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm_proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     headers = {
         "x-litellm-timeout": "90",

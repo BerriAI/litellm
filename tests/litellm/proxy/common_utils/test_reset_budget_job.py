@@ -13,8 +13,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.utils import ProxyLogging
+from litellm_proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm_proxy.utils import ProxyLogging
 
 
 # Mock classes for testing

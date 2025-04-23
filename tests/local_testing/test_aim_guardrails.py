@@ -10,13 +10,13 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
-from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
+from litellm_proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
+from litellm_proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
-from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm_proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 class ReceiveMock:
@@ -158,7 +158,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr("litellm_proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
 
     results = []
     async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
@@ -213,7 +213,7 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr("litellm_proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
 
     results = []
     with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):

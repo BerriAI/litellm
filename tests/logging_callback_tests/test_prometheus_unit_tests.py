@@ -30,7 +30,7 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -274,9 +274,9 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     future_reset_time_key = datetime.now() + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
     with patch(
-        "litellm.proxy.auth.auth_checks.get_team_object"
+        "litellm_proxy.auth.auth_checks.get_team_object"
     ) as mock_get_team, patch(
-        "litellm.proxy.auth.auth_checks.get_key_object"
+        "litellm_proxy.auth.auth_checks.get_key_object"
     ) as mock_get_key:
 
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
@@ -1081,8 +1081,8 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.team_endpoints.get_paginated_teams"
     ) as mock_get_teams:
 
         # Create mock team data with proper datetime objects for budget_reset_at
@@ -1177,10 +1177,10 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.team_endpoints.get_paginated_teams"
     ) as mock_get_teams, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        "litellm_proxy.management_endpoints.key_management_endpoints._list_key_helper"
     ) as mock_list_keys:
 
         # Make get_paginated_teams raise an exception
@@ -1219,8 +1219,8 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.key_management_endpoints._list_key_helper"
     ) as mock_list_keys:
 
         # Create mock key data with proper datetime objects for budget_reset_at

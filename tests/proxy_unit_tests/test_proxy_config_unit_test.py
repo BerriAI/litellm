@@ -7,7 +7,7 @@ import pytest
 from dotenv import load_dotenv
 
 import litellm.proxy
-import litellm.proxy.proxy_server
+import litellm_proxy.proxy_server
 
 load_dotenv()
 import io
@@ -21,7 +21,7 @@ sys.path.insert(
 import asyncio
 import logging
 
-from litellm.proxy.proxy_server import ProxyConfig
+from litellm_proxy.proxy_server import ProxyConfig
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
 

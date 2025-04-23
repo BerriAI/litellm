@@ -16,14 +16,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
-from litellm.proxy.management_endpoints.model_management_endpoints import (
+from litellm_proxy.management_endpoints.model_management_endpoints import (
     add_new_model,
     update_model,
 )
-from litellm.proxy._types import LitellmUserRoles
+from litellm_proxy._types import LitellmUserRoles
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.proxy.management_endpoints.team_endpoints import new_team
+from litellm_proxy.utils import PrismaClient, ProxyLogging
+from litellm_proxy.management_endpoints.team_endpoints import new_team
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from litellm.caching.caching import DualCache
@@ -33,14 +33,14 @@ from litellm.router import (
 )
 from litellm.types.router import ModelInfo, updateDeployment, updateLiteLLMParams
 
-from litellm.proxy._types import UserAPIKeyAuth, NewTeamRequest, LiteLLM_TeamTable
+from litellm_proxy._types import UserAPIKeyAuth, NewTeamRequest, LiteLLM_TeamTable
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 
 @pytest.fixture
 def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
+    from litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -54,11 +54,11 @@ def prisma_client():
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
-    # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
+    # Reset litellm_proxy.proxy_server.prisma_client to None
+    litellm_proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
+    litellm_proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
 
@@ -66,12 +66,12 @@ def prisma_client():
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="new feature, tests passing locally")
 async def test_add_new_model(prisma_client):
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "store_model_in_db", True)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
-    from litellm.proxy.proxy_server import user_api_key_cache
+    await litellm_proxy.proxy_server.prisma_client.connect()
+    from litellm_proxy.proxy_server import user_api_key_cache
     import uuid
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
@@ -115,12 +115,12 @@ async def test_add_new_model(prisma_client):
 async def test_add_update_model(prisma_client):
     # test that existing litellm_params are not updated
     # only new / updated params get updated
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "store_model_in_db", True)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
-    from litellm.proxy.proxy_server import user_api_key_cache
+    await litellm_proxy.proxy_server.prisma_client.connect()
+    from litellm_proxy.proxy_server import user_api_key_cache
     import uuid
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
@@ -221,13 +221,13 @@ async def test_add_team_model_to_db(prisma_client):
     """
     Test adding a team model and verifying the team_public_model_name is stored correctly
     """
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "store_model_in_db", True)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
 
-    from litellm.proxy.management_endpoints.model_management_endpoints import (
+    from litellm_proxy.management_endpoints.model_management_endpoints import (
         _add_team_model_to_db,
     )
     import uuid

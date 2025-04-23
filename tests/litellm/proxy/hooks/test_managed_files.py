@@ -12,8 +12,8 @@ sys.path.insert(
 from unittest.mock import MagicMock
 
 from litellm.caching import DualCache
-from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.types.utils import SpecialEnums
+from litellm_proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 
 def test_get_file_ids_from_messages():

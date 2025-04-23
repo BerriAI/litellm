@@ -28,37 +28,37 @@ import litellm
 from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
+from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy.enterprise.enterprise_hooks.blocked_user_list import (
     _ENTERPRISE_BlockedUserList,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
     user_update,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
+from litellm_proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
     info_key_fn,
     update_key_fn,
 )
-from litellm.proxy.proxy_server import user_api_key_auth
-from litellm.proxy.management_endpoints.customer_endpoints import block_user
-from litellm.proxy.spend_tracking.spend_management_endpoints import (
+from litellm_proxy.proxy_server import user_api_key_auth
+from litellm_proxy.management_endpoints.customer_endpoints import block_user
+from litellm_proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,
     view_spend_logs,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
+from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import (
+from litellm_proxy._types import (
     BlockUsers,
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -72,7 +72,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 @pytest.fixture
 def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
+    from litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -85,11 +85,11 @@ def prisma_client():
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
-    # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
+    # Reset litellm_proxy.proxy_server.prisma_client to None
+    litellm_proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
+    litellm_proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
 
@@ -101,13 +101,13 @@ async def test_block_user_check(prisma_client):
     - Test to see if a call with that user id is made, an error is raised
     - Test to see if a call without that user is passes
     """
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
 
     litellm.blocked_user_list = ["user_id_1"]
 
     blocked_user_obj = _ENTERPRISE_BlockedUserList(
-        prisma_client=litellm.proxy.proxy_server.prisma_client
+        prisma_client=litellm_proxy.proxy_server.prisma_client
     )
 
     _api_key = "sk-12345"
@@ -145,9 +145,9 @@ async def test_block_user_db_check(prisma_client):
     - Block end user via "/user/block"
     - Check returned value
     """
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    await litellm_proxy.proxy_server.prisma_client.connect()
     _block_users = BlockUsers(user_ids=["user_id_1"])
     result = await block_user(data=_block_users)
     result = result["blocked_users"]

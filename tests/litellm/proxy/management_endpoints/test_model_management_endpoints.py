@@ -9,17 +9,17 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-from litellm.proxy._types import (
+from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm_proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_endpoints.model_management_endpoints import (
+from litellm_proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
 )
-from litellm.proxy.utils import PrismaClient
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm_proxy.utils import PrismaClient
 
 
 class MockPrismaClient:

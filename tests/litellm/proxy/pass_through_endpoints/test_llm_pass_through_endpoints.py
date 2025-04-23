@@ -15,14 +15,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
 )
-from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
 class TestBaseOpenAIPassThroughHandler:
@@ -132,7 +132,7 @@ class TestBaseOpenAIPassThroughHandler:
             assert result["test-header"] == "value"
 
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
     )
     async def test_base_openai_pass_through_handler(self, mock_create_pass_through):
         print("\nTesting _base_openai_pass_through_handler method...")
@@ -196,7 +196,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -213,7 +213,7 @@ class TestVertexAIPassThroughHandler:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
 
@@ -241,11 +241,11 @@ class TestVertexAIPassThroughHandler:
         test_token = vertex_credentials
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
         ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route:
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
@@ -281,7 +281,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when no passthrough credentials are set, default credentials are used in the request
         """
-        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -298,7 +298,7 @@ class TestVertexAIPassThroughHandler:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
 
@@ -316,11 +316,11 @@ class TestVertexAIPassThroughHandler:
         mock_response = Response()
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
         ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route:
             mock_ensure_token.return_value = ("test-auth-header", default_project)
             mock_get_token.return_value = (default_credentials, "")
@@ -350,7 +350,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -371,7 +371,7 @@ class TestVertexAIPassThroughHandler:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
 
@@ -393,11 +393,11 @@ class TestVertexAIPassThroughHandler:
         mock_response = Response()
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
         ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route:
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
@@ -434,12 +434,12 @@ class TestVertexAIPassThroughHandler:
         mock_response = Mock()
 
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
         ) as mock_auth:
             mock_auth.return_value = {"api_key": "test-key-123"}
 
             with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+                "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_pass_through:
                 mock_pass_through.return_value = AsyncMock(
                     return_value={"status": "success"}
@@ -468,7 +468,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -485,7 +485,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
 
@@ -513,11 +513,11 @@ class TestVertexAIDiscoveryPassThroughHandler:
         test_token = vertex_credentials
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
         ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route:
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
@@ -551,12 +551,12 @@ class TestVertexAIDiscoveryPassThroughHandler:
         mock_response = Mock()
 
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
+            "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
         ) as mock_auth:
             mock_auth.return_value = {"api_key": "test-key-123"}
 
             with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+                "litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_pass_through:
                 mock_pass_through.return_value = AsyncMock(
                     return_value={"status": "success"}

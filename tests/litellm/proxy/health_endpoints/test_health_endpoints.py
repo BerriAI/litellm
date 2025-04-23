@@ -12,8 +12,8 @@ sys.path.insert(
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.health_endpoints._health_endpoints import (
+from litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
 )
@@ -46,8 +46,8 @@ async def test_db_health_readiness_check_with_prisma_error(prisma_error):
     }
 
     # Patch the imports and general_settings
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.proxy.proxy_server.general_settings",
+    with patch("litellm_proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm_proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
 
@@ -88,8 +88,8 @@ async def test_db_health_readiness_check_with_error_and_flag_off(prisma_error):
     }
 
     # Patch the imports and general_settings where the flag is False
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.proxy.proxy_server.general_settings",
+    with patch("litellm_proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm_proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": False},
     ):
 

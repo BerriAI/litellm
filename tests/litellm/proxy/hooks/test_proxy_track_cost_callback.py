@@ -12,9 +12,9 @@ sys.path.insert(
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.types.utils import StandardLoggingPayload
+from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_async_post_call_failure_hook():
 
     # Mock update_database function
     with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        "litellm_proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
         new_callable=AsyncMock,
     ) as mock_update_database:
         # Call the method
@@ -114,7 +114,7 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
     # Mock update_database function
     with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        "litellm_proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
         new_callable=AsyncMock,
     ) as mock_update_database:
         # Call the method

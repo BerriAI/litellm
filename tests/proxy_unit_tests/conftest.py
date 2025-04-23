@@ -28,9 +28,9 @@ def setup_and_teardown():
     importlib.reload(litellm)
     try:
         if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
+            importlib.reload(litellm_proxy.proxy_server)
     except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        print(f"Error reloading litellm_proxy.proxy_server: {e}")
 
     import asyncio
 

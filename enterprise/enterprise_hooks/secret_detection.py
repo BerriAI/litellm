@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from typing import Optional
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 from litellm._logging import verbose_proxy_logger
 import tempfile
 from litellm.integrations.custom_guardrail import CustomGuardrail

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm_proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
 
 @pytest.mark.asyncio
@@ -29,10 +29,10 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
 
     # Mock the imported modules/variables
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    with patch("litellm_proxy.proxy_server.disable_spend_logs", True), patch(
+        "litellm_proxy.proxy_server.prisma_client", MagicMock()
+    ), patch("litellm_proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
+        "litellm_proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
     ):
         # Test data
         test_data = {

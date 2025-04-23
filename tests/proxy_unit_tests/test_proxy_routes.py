@@ -20,10 +20,10 @@ from fastapi import Request
 from starlette.datastructures import URL, Headers, QueryParams
 
 import litellm
-from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.auth.auth_utils import get_request_route
-from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.proxy_server import app
+from litellm_proxy._types import LiteLLMRoutes
+from litellm_proxy.auth.auth_utils import get_request_route
+from litellm_proxy.auth.route_checks import RouteChecks
+from litellm_proxy.proxy_server import app
 
 # Configure logging
 logging.basicConfig(

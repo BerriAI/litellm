@@ -9,7 +9,7 @@ Handles Async Operations for:
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
 
 Requires:
-* `os.environ["AWS_REGION_NAME"], 
+* `os.environ["AWS_REGION_NAME"],
 * `pip install boto3>=1.28.57`
 """
 
@@ -26,8 +26,8 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.proxy._types import KeyManagementSystem
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm_proxy._types import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 

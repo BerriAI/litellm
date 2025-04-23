@@ -33,8 +33,8 @@ from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
-from litellm.proxy._types import CallInfo
-from litellm.proxy.utils import ProxyLogging
+from litellm_proxy._types import CallInfo
+from litellm_proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
 from litellm.utils import get_api_base
 
@@ -944,7 +944,7 @@ async def test_spend_report_cache(report_type):
         {"individual_request_tag": "tag2", "total_spend": 150.0},
     ]
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma:
         # Setup mock for database query
         mock_prisma.db.query_raw = AsyncMock(
             side_effect=[mock_spend_data, mock_tag_data]

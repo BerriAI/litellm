@@ -25,8 +25,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_handle_authentication_error_db_unavailable(prisma_error):
 
     # Test with DB connection error when requests are allowed
     with patch(
-        "litellm.proxy.proxy_server.general_settings",
+        "litellm_proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
         result = await handler._handle_authentication_error(
@@ -128,12 +128,12 @@ async def test_route_passed_to_post_call_failure_hook():
 
     # Mock proxy_logging_obj.post_call_failure_hook
     with patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+        "litellm_proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
         new_callable=AsyncMock,
     ) as mock_post_call_failure_hook:
         # Test with DB connection error
         with patch(
-            "litellm.proxy.proxy_server.general_settings",
+            "litellm_proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
         ):
             try:

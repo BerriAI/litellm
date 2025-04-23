@@ -13,8 +13,8 @@ sys.path.insert(
 from unittest.mock import patch
 
 import litellm
-from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
+from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 
@@ -25,14 +25,14 @@ async def test_create_and_get_tag():
     Test creation of a new tag and retrieving its information
     """
     # Mock the prisma client and _get_tags_config and _save_tags_config
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._save_tags_config"
     ) as mock_save_tags, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._add_tag_to_deployment"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._add_tag_to_deployment"
     ) as mock_add_tag, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._get_model_names"
     ) as mock_get_models:
         # Setup mocks
         mock_get_tags.return_value = {}
@@ -81,12 +81,12 @@ async def test_update_tag():
     Test updating an existing tag
     """
     # Mock the prisma client and _get_tags_config and _save_tags_config
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._save_tags_config"
     ) as mock_save_tags, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._get_model_names"
     ) as mock_get_models:
         # Setup mocks for existing tag
         mock_get_tags.return_value = {
@@ -127,10 +127,10 @@ async def test_delete_tag():
     Test deleting a tag
     """
     # Mock the prisma client and _get_tags_config and _save_tags_config
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
+    with patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm_proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
-        "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
+        "litellm_proxy.management_endpoints.tag_management_endpoints._save_tags_config"
     ) as mock_save_tags:
         # Setup mocks for existing tag
         mock_get_tags.return_value = {

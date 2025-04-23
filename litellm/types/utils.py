@@ -1,3 +1,4 @@
+import enum
 import json
 import time
 import uuid
@@ -2262,3 +2263,16 @@ class SpecialEnums(Enum):
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
 ]
+
+
+AllowedModelRegion = Literal["eu", "us"]
+
+
+class KeyManagementSystem(enum.Enum):
+    GOOGLE_KMS = "google_kms"
+    AZURE_KEY_VAULT = "azure_key_vault"
+    AWS_SECRET_MANAGER = "aws_secret_manager"
+    GOOGLE_SECRET_MANAGER = "google_secret_manager"
+    HASHICORP_VAULT = "hashicorp_vault"
+    LOCAL = "local"
+    AWS_KMS = "aws_kms"

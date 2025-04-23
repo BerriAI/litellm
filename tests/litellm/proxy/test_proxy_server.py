@@ -27,8 +27,8 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    from litellm.proxy.proxy_server import ProxyStartupEvent
-    from litellm.proxy.utils import ProxyLogging
+    from litellm_proxy.proxy_server import ProxyStartupEvent
+    from litellm_proxy.utils import ProxyLogging
 
     # Mock dependencies
     mock_prisma_client = MagicMock()
@@ -36,8 +36,8 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_config = AsyncMock()
 
-    with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
-        "litellm.proxy.proxy_server.store_model_in_db", False
+    with patch("litellm_proxy.proxy_server.proxy_config", mock_proxy_config), patch(
+        "litellm_proxy.proxy_server.store_model_in_db", False
     ):  # set store_model_in_db to False
         # Test when store_model_in_db is False
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
@@ -53,9 +53,9 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         mock_proxy_config.get_credentials.assert_not_called()
 
     # Now test with store_model_in_db = True
-    with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
-        "litellm.proxy.proxy_server.store_model_in_db", True
-    ), patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True):
+    with patch("litellm_proxy.proxy_server.proxy_config", mock_proxy_config), patch(
+        "litellm_proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm_proxy.proxy_server.get_secret_bool", return_value=True):
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
             prisma_client=mock_prisma_client,
@@ -93,7 +93,7 @@ mock_prisma = MockPrisma()
 
 
 @patch(
-    "litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
+    "litellm_proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
     return_value=mock_prisma,
 )
 @pytest.mark.asyncio
@@ -105,10 +105,10 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     from fastapi import FastAPI
 
     # Import happens here - this is when the module probably reads the config path
-    from litellm.proxy.proxy_server import proxy_startup_event
+    from litellm_proxy.proxy_server import proxy_startup_event
 
     # Mock the Prisma import
-    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    monkeypatch.setattr("litellm_proxy.proxy_server.PrismaClient", MockPrisma)
 
     # Create test app
     app = FastAPI()
@@ -128,7 +128,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     print(f"config_path: {config_path}")
     print(f"os.getenv('CONFIG_FILE_PATH'): {os.getenv('CONFIG_FILE_PATH')}")
     async with proxy_startup_event(app):
-        from litellm.proxy.proxy_server import master_key
+        from litellm_proxy.proxy_server import master_key
 
         assert master_key == test_master_key
 
@@ -143,7 +143,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
     print("test_env_master_key: {}".format(test_env_master_key))
     async with proxy_startup_event(app):
-        from litellm.proxy.proxy_server import master_key
+        from litellm_proxy.proxy_server import master_key
 
         assert master_key == test_env_master_key
 
@@ -159,7 +159,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     monkeypatch.setenv("CUSTOM_MASTER_KEY", test_resolved_key)
     async with proxy_startup_event(app):
-        from litellm.proxy.proxy_server import master_key
+        from litellm_proxy.proxy_server import master_key
 
         assert master_key == test_resolved_key
 
@@ -170,7 +170,7 @@ def test_team_info_masking():
 
     Ref: https://huntr.com/bounties/661b388a-44d8-4ad5-862b-4dc5b80be30a
     """
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm_proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
     # Test team object with sensitive data

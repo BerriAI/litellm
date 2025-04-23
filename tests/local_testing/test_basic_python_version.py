@@ -29,7 +29,7 @@ def test_litellm_proxy_server():
 
     # Import the proxy_server module
     try:
-        import litellm.proxy.proxy_server
+        import litellm_proxy.proxy_server
     except ImportError:
         pytest.fail("Failed to import litellm.proxy_server")
 
@@ -102,7 +102,7 @@ def test_litellm_proxy_server_config_no_general_settings():
             [
                 "python",
                 "-m",
-                "litellm.proxy.proxy_cli",
+                "litellm_proxy.proxy_cli",
                 "--config",
                 config_fp,
             ]

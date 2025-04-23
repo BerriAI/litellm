@@ -24,7 +24,7 @@ async def test_construct_request_headers_project_id_from_env(monkeypatch):
     test_project_id = "test-project-123"
     monkeypatch.setenv("GCS_PUBSUB_PROJECT_ID", test_project_id)
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server.premium_user",
+        "litellm_proxy.proxy_server.premium_user",
         True,
     )
 

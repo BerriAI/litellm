@@ -14,12 +14,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.proxy.hooks.prompt_injection_detection import (
+from litellm_proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
+from litellm_proxy.utils import ProxyLogging
+from litellm_proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
 from litellm.caching.caching import DualCache
 
 

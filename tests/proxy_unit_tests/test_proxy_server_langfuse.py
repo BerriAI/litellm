@@ -31,7 +31,7 @@ from fastapi import FastAPI
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 
-from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+from litellm_proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     router,
     save_worker_config,
 )

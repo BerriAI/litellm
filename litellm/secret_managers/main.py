@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.proxy._types import KeyManagementSystem
+from litellm_proxy._types import KeyManagementSystem
 
 oidc_cache = DualCache()
 

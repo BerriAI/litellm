@@ -28,7 +28,7 @@ import uuid
 import litellm
 from litellm._logging import verbose_proxy_logger
 
-from litellm.proxy.proxy_server import (
+from litellm_proxy.proxy_server import (
     LitellmUserRoles,
     audio_transcriptions,
     chat_completion,
@@ -40,14 +40,14 @@ from litellm.proxy.proxy_server import (
     user_api_key_auth,
 )
 
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm_proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm_proxy._types import LiteLLM_AuditLogs, LitellmTableNames
 from litellm.caching.caching import DualCache
 from unittest.mock import patch, AsyncMock
 
@@ -62,9 +62,9 @@ async def test_create_audit_log_for_update_premium_user():
 
     Test that the audit log is created when a premium user updates a team
     """
-    with patch("litellm.proxy.proxy_server.premium_user", True), patch(
+    with patch("litellm_proxy.proxy_server.premium_user", True), patch(
         "litellm.store_audit_logs", True
-    ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+    ), patch("litellm_proxy.proxy_server.prisma_client") as mock_prisma:
 
         mock_prisma.db.litellm_auditlog.create = AsyncMock()
 
@@ -97,7 +97,7 @@ async def test_create_audit_log_for_update_premium_user():
 
 @pytest.fixture
 def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
+    from litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -117,12 +117,12 @@ def prisma_client():
 async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)
 
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "premium_user", True)
+    setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm_proxy.proxy_server, "premium_user", True)
     setattr(litellm, "store_audit_logs", True)
 
-    await litellm.proxy.proxy_server.prisma_client.connect()
+    await litellm_proxy.proxy_server.prisma_client.connect()
     audit_log_id = f"audit_log_id_{uuid.uuid4()}"
 
     # create a audit log for /key/generate

@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 from unittest.mock import Mock
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+from litellm_proxy.utils import _get_redoc_url, _get_docs_url
 
 import pytest
 from fastapi import Request
@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+from litellm_proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
 
 
 class MockPrismaClient:

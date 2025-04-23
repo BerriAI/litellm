@@ -8,7 +8,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
+from litellm_proxy._types import CommonProxyErrors, KeyManagementSystem
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -22,7 +22,7 @@ class GoogleSecretManager(GCSBucketBase):
             refresh_interval (int, optional): The refresh interval in seconds. Defaults to 86400. (24 hours)
             always_read_secret_manager (bool, optional): Whether to always read from the secret manager. Defaults to False. Since we do want to cache values
         """
-        from litellm.proxy.proxy_server import premium_user
+        from litellm_proxy.proxy_server import premium_user
 
         if premium_user is not True:
             raise ValueError(

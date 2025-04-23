@@ -40,7 +40,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.humanloop import HumanloopLogger
-from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
+from litellm_proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
 
 # clear prometheus collectors / registry

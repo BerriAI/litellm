@@ -26,7 +26,7 @@ logging.basicConfig(
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-from litellm.proxy.proxy_server import (
+from litellm_proxy.proxy_server import (
     router,
     save_worker_config,
     initialize,
@@ -40,8 +40,8 @@ headers = {"Authorization": f"Bearer {token}"}
 
 @pytest.fixture(scope="function")
 def client_no_auth():
-    # Assuming litellm.proxy.proxy_server is an object
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    # Assuming litellm_proxy.proxy_server is an object
+    from litellm_proxy.proxy_server import cleanup_router_config_variables
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))

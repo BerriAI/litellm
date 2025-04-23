@@ -28,12 +28,12 @@ import litellm
 from litellm import Router, mock_completion
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.enterprise.enterprise_hooks.secret_detection import (
+from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy.enterprise.enterprise_hooks.secret_detection import (
     _ENTERPRISE_SecretDetection,
 )
-from litellm.proxy.proxy_server import chat_completion
-from litellm.proxy.utils import ProxyLogging, hash_token
+from litellm_proxy.proxy_server import chat_completion
+from litellm_proxy.utils import ProxyLogging, hash_token
 from litellm.router import Router
 
 ### UNIT TESTS FOR OpenAI Moderation ###
@@ -53,7 +53,7 @@ async def test_basic_secret_detection_chat():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    from litellm.proxy.proxy_server import llm_router
+    from litellm_proxy.proxy_server import llm_router
 
     test_data = {
         "messages": [
@@ -121,7 +121,7 @@ async def test_basic_secret_detection_text_completion():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    from litellm.proxy.proxy_server import llm_router
+    from litellm_proxy.proxy_server import llm_router
 
     test_data = {
         "prompt": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
@@ -159,7 +159,7 @@ async def test_basic_secret_detection_embeddings():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    from litellm.proxy.proxy_server import llm_router
+    from litellm_proxy.proxy_server import llm_router
 
     test_data = {
         "input": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
@@ -197,7 +197,7 @@ async def test_basic_secret_detection_embeddings_list():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    from litellm.proxy.proxy_server import llm_router
+    from litellm_proxy.proxy_server import llm_router
 
     test_data = {
         "input": [

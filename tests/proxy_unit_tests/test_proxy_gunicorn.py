@@ -17,7 +17,7 @@
 # import litellm
 
 # ### LOCAL Proxy Server INIT ###
-# from litellm.proxy.proxy_server import save_worker_config  # Replace with the actual module where your FastAPI router is defined
+# from litellm_proxy.proxy_server import save_worker_config  # Replace with the actual module where your FastAPI router is defined
 # filepath = os.path.dirname(os.path.abspath(__file__))
 # config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
 # def get_openai_info():
@@ -47,7 +47,7 @@
 
 #     # In order for the app to behave well with signals, run it with gunicorn
 #     # The first argument must be the "name of the command run"
-#     cmd = f"gunicorn litellm.proxy.proxy_server:app --workers {num_workers} --worker-class uvicorn.workers.UvicornWorker --bind {host}:{port}"
+#     cmd = f"gunicorn litellm_proxy.proxy_server:app --workers {num_workers} --worker-class uvicorn.workers.UvicornWorker --bind {host}:{port}"
 #     cmd = cmd.split()
 #     print(f"Running command: {cmd}")
 #     import sys

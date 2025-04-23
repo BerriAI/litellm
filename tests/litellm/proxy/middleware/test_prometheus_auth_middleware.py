@@ -16,8 +16,8 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 import litellm
-from litellm.proxy._types import SpecialHeaders
-from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm_proxy._types import SpecialHeaders
+from litellm_proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 
 
 # Fake auth functions to simulate valid and invalid auth behavior.
@@ -32,7 +32,7 @@ async def fake_invalid_auth(request, api_key):
     raise Exception("Invalid API key")
 
 
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm_proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_valid_auth_metrics(app_with_middleware, monkeypatch):
     litellm.require_auth_for_metrics_endpoint = True
     # Patch the auth function to simulate a valid authentication.
     monkeypatch.setattr(
-        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        "litellm_proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
         fake_valid_auth,
     )
 
@@ -95,7 +95,7 @@ def test_invalid_auth_metrics(app_with_middleware, monkeypatch):
     litellm.require_auth_for_metrics_endpoint = True
     # Patch the auth function to simulate a failed authentication.
     monkeypatch.setattr(
-        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        "litellm_proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
         fake_invalid_auth,
     )
 
@@ -119,7 +119,7 @@ def test_no_auth_metrics_when_disabled(app_with_middleware, monkeypatch):
         raise Exception("Auth should not be called")
 
     monkeypatch.setattr(
-        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        "litellm_proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
         should_not_be_called,
     )
 

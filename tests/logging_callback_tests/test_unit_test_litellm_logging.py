@@ -13,8 +13,8 @@ from typing import Literal
 import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+from litellm_proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+from litellm_proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm._service_logger import ServiceLogging
 import asyncio
 

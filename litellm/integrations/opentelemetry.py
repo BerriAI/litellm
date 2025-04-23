@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import (
+    from litellm_proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
     )
-    from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
+    from litellm_proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = Union[_Span, Any]
     SpanExporter = Union[_SpanExporter, Any]
@@ -350,9 +350,9 @@ class OpenTelemetry(CustomLogger):
         """
         from opentelemetry import trace
 
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
         if not standard_callback_dynamic_params:
             return
 
@@ -406,7 +406,7 @@ class OpenTelemetry(CustomLogger):
     def set_tools_attributes(self, span: Span, tools):
         import json
 
-        from litellm.proxy._types import SpanAttributes
+        from litellm_proxy._types import SpanAttributes
 
         if not tools:
             return
@@ -460,7 +460,7 @@ class OpenTelemetry(CustomLogger):
     def _tool_calls_kv_pair(
         tool_calls: List[ChatCompletionMessageToolCall],
     ) -> Dict[str, Any]:
-        from litellm.proxy._types import SpanAttributes
+        from litellm_proxy._types import SpanAttributes
 
         kv_pairs: Dict[str, Any] = {}
         for idx, tool_call in enumerate(tool_calls):
@@ -496,7 +496,7 @@ class OpenTelemetry(CustomLogger):
                     span, kwargs, response_obj
                 )
                 return
-            from litellm.proxy._types import SpanAttributes
+            from litellm_proxy._types import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}

@@ -1,16 +1,17 @@
 import copy
 import uuid
-import pytest
-import litellm
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi import Request
 
+import litellm
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import (
+from litellm_proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm_proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -38,7 +39,7 @@ class TestProxyBaseLLMRequestProcessing:
             side_effect=mock_common_processing_pre_call_logic
         )
         monkeypatch.setattr(
-            litellm.proxy.common_request_processing,
+            litellm_proxy.common_request_processing,
             "add_litellm_data_to_request",
             mock_add_litellm_data_to_request,
         )

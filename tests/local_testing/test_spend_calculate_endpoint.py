@@ -7,8 +7,8 @@ from fastapi import Request
 from fastapi.routing import APIRoute
 
 import litellm
-from litellm.proxy._types import SpendCalculateRequest
-from litellm.proxy.spend_tracking.spend_management_endpoints import calculate_spend
+from litellm_proxy._types import SpendCalculateRequest
+from litellm_proxy.spend_tracking.spend_management_endpoints import calculate_spend
 from litellm.router import Router
 
 # this file is to test litellm/proxy
@@ -36,7 +36,7 @@ async def test_spend_calc_model_messages():
 
 @pytest.mark.asyncio
 async def test_spend_calc_model_on_router_messages():
-    from litellm.proxy.proxy_server import llm_router as init_llm_router
+    from litellm_proxy.proxy_server import llm_router as init_llm_router
 
     temp_llm_router = Router(
         model_list=[
@@ -49,7 +49,7 @@ async def test_spend_calc_model_on_router_messages():
         ]
     )
 
-    setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", temp_llm_router)
 
     cost_obj = await calculate_spend(
         request=SpendCalculateRequest(
@@ -66,7 +66,7 @@ async def test_spend_calc_model_on_router_messages():
     assert _cost > 0.0
 
     # set router to init value
-    setattr(litellm.proxy.proxy_server, "llm_router", init_llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", init_llm_router)
 
 
 @pytest.mark.asyncio
@@ -105,7 +105,7 @@ async def test_spend_calc_using_response():
 
 @pytest.mark.asyncio
 async def test_spend_calc_model_alias_on_router_messages():
-    from litellm.proxy.proxy_server import llm_router as init_llm_router
+    from litellm_proxy.proxy_server import llm_router as init_llm_router
 
     temp_llm_router = Router(
         model_list=[
@@ -121,7 +121,7 @@ async def test_spend_calc_model_alias_on_router_messages():
         },
     )
 
-    setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", temp_llm_router)
 
     cost_obj = await calculate_spend(
         request=SpendCalculateRequest(
@@ -138,4 +138,4 @@ async def test_spend_calc_model_alias_on_router_messages():
     assert _cost > 0.0
 
     # set router to init value
-    setattr(litellm.proxy.proxy_server, "llm_router", init_llm_router)
+    setattr(litellm_proxy.proxy_server, "llm_router", init_llm_router)

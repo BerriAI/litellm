@@ -17,7 +17,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.proxy.utils import log_db_metrics, ServiceTypes
+from litellm_proxy.utils import log_db_metrics, ServiceTypes
 from datetime import datetime
 import httpx
 from prisma.errors import ClientNotConnectedError
@@ -37,7 +37,7 @@ async def sample_proxy_function(*args, **kwargs):
 @pytest.mark.asyncio
 async def test_log_db_metrics_success():
     # Mock the proxy_logging_obj
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm_proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
         mock_proxy_logging.service_logging_obj.async_service_success_hook = AsyncMock()
 
@@ -65,7 +65,7 @@ async def test_log_db_metrics_success():
 @pytest.mark.asyncio
 async def test_log_db_metrics_duration():
     # Mock the proxy_logging_obj
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm_proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
         mock_proxy_logging.service_logging_obj.async_service_success_hook = AsyncMock()
 
@@ -104,7 +104,7 @@ async def test_log_db_metrics_failure():
     # Mock the proxy_logging_obj
     from prisma.errors import ClientNotConnectedError
 
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm_proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
         mock_proxy_logging.service_logging_obj.async_service_failure_hook = AsyncMock()
 
@@ -158,7 +158,7 @@ async def test_log_db_metrics_failure_error_types(exception, should_log):
     - DB-related errors (Prisma, httpx) are logged as service failures
     - Non-DB errors (ValueError, KeyError, etc.) are not logged
     """
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm_proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         mock_proxy_logging.service_logging_obj.async_service_failure_hook = AsyncMock()
 
         @log_db_metrics

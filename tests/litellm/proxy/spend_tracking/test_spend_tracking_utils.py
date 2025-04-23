@@ -16,7 +16,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
+from litellm_proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_request_body_for_spend_logs_payload,
 )
 

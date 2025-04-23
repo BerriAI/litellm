@@ -11,8 +11,8 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.proxy_server import app
+from litellm_proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 

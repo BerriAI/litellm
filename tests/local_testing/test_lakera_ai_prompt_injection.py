@@ -26,10 +26,10 @@ import pytest
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-from litellm.proxy.proxy_server import embeddings
-from litellm.proxy.utils import ProxyLogging, hash_token
+from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+from litellm_proxy.proxy_server import embeddings
+from litellm_proxy.utils import ProxyLogging, hash_token
 
 verbose_proxy_logger.setLevel(logging.DEBUG)
 
@@ -164,7 +164,7 @@ async def test_moderations_on_embeddings():
             ]
         )
 
-        setattr(litellm.proxy.proxy_server, "llm_router", temp_router)
+        setattr(litellm_proxy.proxy_server, "llm_router", temp_router)
 
         api_route = APIRoute(path="/embeddings", endpoint=embeddings)
         litellm.callbacks = [lakeraAI_Moderation()]
@@ -375,8 +375,8 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm_proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
@@ -422,8 +422,8 @@ async def test_callback_specific_thresholds():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm_proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [

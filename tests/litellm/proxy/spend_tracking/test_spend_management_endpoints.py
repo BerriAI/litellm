@@ -15,10 +15,10 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.proxy._types import SpendLogsPayload
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.proxy_server import app, prisma_client
 from litellm.router import Router
+from litellm_proxy._types import SpendLogsPayload
+from litellm_proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm_proxy.proxy_server import app, prisma_client
 
 ignored_keys = [
     "request_id",
@@ -97,7 +97,7 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 
     # Apply the monkeypatch to replace the prisma_client
     mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Set up test dates
     start_date = (
@@ -188,7 +188,7 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
 
     # Apply the monkeypatch
     mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Set up test dates
     start_date = (
@@ -252,7 +252,7 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
 
     # Apply the monkeypatch
     mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Set up test dates
     start_date = (
@@ -388,7 +388,7 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 
     # Apply the monkeypatch
     mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test with a date range that should only include the second log
     start_date = (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
@@ -431,9 +431,9 @@ class TestSpendLogsPayload:
         # litellm._turn_on_debug()
 
         with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            litellm_proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
             "_insert_spend_log_to_db",
-        ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
+        ) as mock_client, patch.object(litellm_proxy.proxy_server, "prisma_client"):
             response = await litellm.acompletion(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": "Hello, world!"}],
@@ -517,10 +517,10 @@ class TestSpendLogsPayload:
         client = AsyncHTTPHandler()
 
         with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            litellm_proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
             "_insert_spend_log_to_db",
         ) as mock_client, patch.object(
-            litellm.proxy.proxy_server, "prisma_client"
+            litellm_proxy.proxy_server, "prisma_client"
         ), patch.object(
             client, "post", side_effect=self.mock_anthropic_response
         ):
@@ -605,10 +605,10 @@ class TestSpendLogsPayload:
         )
 
         with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+            litellm_proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
             "_insert_spend_log_to_db",
         ) as mock_client, patch.object(
-            litellm.proxy.proxy_server, "prisma_client"
+            litellm_proxy.proxy_server, "prisma_client"
         ), patch.object(
             client, "post", side_effect=self.mock_anthropic_response
         ):
@@ -748,7 +748,7 @@ async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
     mock_db.query_raw = mock_query_raw
     mock_prisma_client.db = mock_db
     # Apply the mock to the prisma_client module
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Call the endpoint without specifying a limit
     no_limit_response = client.get("/global/spend/keys")

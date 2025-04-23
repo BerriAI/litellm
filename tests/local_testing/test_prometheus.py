@@ -39,7 +39,7 @@ async def prometheus_logger():
     for collector in collectors:
         REGISTRY.unregister(collector)
 
-    with patch("litellm.proxy.proxy_server.premium_user", True):
+    with patch("litellm_proxy.proxy_server.premium_user", True):
         yield PrometheusLogger()
 
 

@@ -10,14 +10,14 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm_proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
     get_user_key_counts,
     get_users,
     ui_view_users,
 )
-from litellm.proxy.proxy_server import app
+from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 
@@ -47,7 +47,7 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Patch the prisma client import in the endpoint
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Call ui_view_users function directly
     response = await ui_view_users(
@@ -67,7 +67,7 @@ def test_user_daily_activity_types():
     """
     Assert all fiels in SpendMetrics are reported in DailySpendMetadata as "total_"
     """
-    from litellm.proxy.management_endpoints.common_daily_activity import (
+    from litellm_proxy.management_endpoints.common_daily_activity import (
         DailySpendMetadata,
         SpendMetrics,
     )
@@ -121,14 +121,14 @@ async def test_get_users_includes_timestamps(mocker):
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
     # Patch the prisma client import in the endpoint
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Mock the helper function get_user_key_counts
     async def mock_get_user_key_counts(*args, **kwargs):
         return {"test-user-timestamps": 0}
 
     mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
+        "litellm_proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
         mock_get_user_key_counts,
     )
 
@@ -159,7 +159,7 @@ def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
     """
-    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    from litellm_proxy.management_endpoints.internal_user_endpoints import (
         _validate_sort_params,
     )
 

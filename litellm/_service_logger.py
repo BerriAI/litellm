@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm_proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
 from .integrations.datadog.datadog import DataDogLogger
@@ -143,7 +143,7 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                from litellm_proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
 
@@ -188,7 +188,7 @@ class ServiceLogging(CustomLogger):
         initializes otel_logger if it is None or no attribute exists on ServiceLogging Object
 
         """
-        from litellm.proxy.proxy_server import open_telemetry_logger
+        from litellm_proxy.proxy_server import open_telemetry_logger
 
         if not hasattr(self, "otel_logger"):
             if open_telemetry_logger is not None and isinstance(
@@ -251,7 +251,7 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                from litellm_proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
 
