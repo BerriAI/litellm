@@ -3083,6 +3083,12 @@ class Router:
             "responses",
             "afile_delete",
             "afile_content",
+            # responses api GET
+            "get_responses",
+            "aget_responses",
+            # responses api DELETE
+            "delete_responses",
+            "adelete_responses",
         ] = "assistants",
     ):
         """
@@ -3130,6 +3136,10 @@ class Router:
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
+                "get_responses",
+                "aget_responses",
+                "delete_responses",
+                "adelete_responses",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

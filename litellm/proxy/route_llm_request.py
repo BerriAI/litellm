@@ -22,6 +22,8 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "aget_responses": "/responses",
+    "adelete_responses": "/responses",
 }
 
 
@@ -48,6 +50,8 @@ async def route_request(
         "arerank",
         "aresponses",
         "_arealtime",  # private function for realtime API
+        "aget_responses",
+        "adelete_responses",
     ],
 ):
     """
