@@ -187,7 +187,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         model_class = event_models.get(cast(ResponsesAPIStreamEvents, event_type))
         if not model_class:
-            raise ValueError(f"Unknown event type: {event_type}")
+            return GenericEvent
 
         return model_class
 

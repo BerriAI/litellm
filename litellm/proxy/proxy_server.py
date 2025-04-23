@@ -1296,7 +1296,7 @@ class ProxyConfig:
             config=config, base_dir=os.path.dirname(os.path.abspath(file_path or ""))
         )
 
-        verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
+        # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
     def _process_includes(self, config: dict, base_dir: str) -> dict:
