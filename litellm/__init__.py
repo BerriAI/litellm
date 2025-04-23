@@ -113,6 +113,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
+    "agentops",
     "anthropic_cache_control_hook",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -415,6 +416,7 @@ deepseek_models: List = []
 azure_ai_models: List = []
 jina_ai_models: List = []
 voyage_models: List = []
+infinity_models: List = []
 databricks_models: List = []
 cloudflare_models: List = []
 codestral_models: List = []
@@ -556,6 +558,8 @@ def add_known_models():
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
             voyage_models.append(key)
+        elif value.get("litellm_provider") == "infinity":
+            infinity_models.append(key)
         elif value.get("litellm_provider") == "databricks":
             databricks_models.append(key)
         elif value.get("litellm_provider") == "cloudflare":
@@ -644,6 +648,7 @@ model_list = (
     + deepseek_models
     + azure_ai_models
     + voyage_models
+    + infinity_models
     + databricks_models
     + cloudflare_models
     + codestral_models
@@ -699,6 +704,7 @@ models_by_provider: dict = {
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
+    "infinity": infinity_models,
     "databricks": databricks_models,
     "cloudflare": cloudflare_models,
     "codestral": codestral_models,
@@ -946,6 +952,7 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig

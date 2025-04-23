@@ -201,8 +201,6 @@ class TritonGenerateConfig(TritonConfig):
                 "max_tokens": int(
                     optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)
                 ),
-                "bad_words": [""],
-                "stop_words": [""],
             },
             "stream": bool(stream),
         }

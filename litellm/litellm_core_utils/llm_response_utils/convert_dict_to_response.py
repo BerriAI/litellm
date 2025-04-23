@@ -14,6 +14,7 @@ from litellm.types.llms.openai import ChatCompletionThinkingBlock
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
+    ChatCompletionRedactedThinkingBlock,
     Choices,
     Delta,
     EmbeddingResponse,
@@ -486,7 +487,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     )
 
                     # Handle thinking models that display `thinking_blocks` within `content`
-                    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+                    thinking_blocks: Optional[
+                        List[
+                            Union[
+                                ChatCompletionThinkingBlock,
+                                ChatCompletionRedactedThinkingBlock,
+                            ]
+                        ]
+                    ] = None
                     if "thinking_blocks" in choice["message"]:
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks

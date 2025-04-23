@@ -553,7 +553,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         algorithm="HS256",
     )
     if user_id is not None and isinstance(user_id, str):
-        litellm_dashboard_ui += "?userID=" + user_id
+        litellm_dashboard_ui += "?login=success"
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token, secure=True)
     return redirect_response
@@ -592,9 +592,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -787,9 +787,9 @@ class SSOAuthenticationHandler:
                 if state:
                     redirect_params["state"] = state
                 elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
+                    redirect_params[
+                        "state"
+                    ] = uuid.uuid4().hex  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -1023,7 +1023,7 @@ class MicrosoftSSOHandler:
         original_msft_result = (
             await microsoft_sso.verify_and_process(
                 request=request,
-                convert_response=False,
+                convert_response=False,  # type: ignore
             )
             or {}
         )
@@ -1034,9 +1034,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
@@ -1086,12 +1086,13 @@ class MicrosoftSSOHandler:
             service_principal_group_ids: Optional[List[str]] = []
             service_principal_teams: Optional[List[MicrosoftServicePrincipalTeam]] = []
             if service_principal_id:
-                service_principal_group_ids, service_principal_teams = (
-                    await MicrosoftSSOHandler.get_group_ids_from_service_principal(
-                        service_principal_id=service_principal_id,
-                        async_client=async_client,
-                        access_token=access_token,
-                    )
+                (
+                    service_principal_group_ids,
+                    service_principal_teams,
+                ) = await MicrosoftSSOHandler.get_group_ids_from_service_principal(
+                    service_principal_id=service_principal_id,
+                    async_client=async_client,
+                    access_token=access_token,
                 )
                 verbose_proxy_logger.debug(
                     f"Service principal group IDs: {service_principal_group_ids}"
@@ -1103,9 +1104,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -1304,7 +1305,7 @@ class GoogleSSOHandler:
             return (
                 await google_sso.verify_and_process(
                     request=request,
-                    convert_response=False,
+                    convert_response=False,  # type: ignore
                 )
                 or {}
             )

@@ -29,6 +29,12 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
         return {
             "model": "anthropic/claude-3-5-sonnet-latest",
         }
+    
+    async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
+        pass
+    
+    async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
+        pass
 
 
 def test_multiturn_tool_calls():

@@ -299,7 +299,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
+
+  if (token == null) {
     // user is not logged in as yet 
     console.log("All cookies before redirect:", document.cookie);
     
@@ -317,6 +318,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   } else if (accessToken == null) {
     return null;
   }
+
+  if (userID == null) {
+    return (
+      <h1>User ID is not set</h1>
+    );
+  }
+
 
   if (userRole == null) {
     setUserRole("App Owner");

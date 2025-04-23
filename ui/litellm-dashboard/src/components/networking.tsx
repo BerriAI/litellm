@@ -676,6 +676,12 @@ export const userListCall = async (
   userIDs: string[] | null = null,
   page: number | null = null,
   page_size: number | null = null,
+  userEmail: string | null = null,
+  userRole: string | null = null,
+  team: string | null = null,
+  sso_user_id: string | null = null,
+  sortBy: string | null = null,
+  sortOrder: 'asc' | 'desc' | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -697,6 +703,30 @@ export const userListCall = async (
     
     if (page_size) {
       queryParams.append('page_size', page_size.toString());
+    }
+
+    if (userEmail) {
+      queryParams.append('user_email', userEmail);
+    }
+
+    if (userRole) {
+      queryParams.append('role', userRole);
+    }
+
+    if (team) {
+      queryParams.append('team', team);
+    }
+
+    if (sso_user_id) {
+      queryParams.append('sso_user_ids', sso_user_id);
+    }
+
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
     }
     
     const queryString = queryParams.toString();
@@ -736,8 +766,10 @@ export const userInfoCall = async (
   userRole: String,
   viewAll: Boolean = false,
   page: number | null,
-  page_size: number | null
+  page_size: number | null,
+  lookup_user_id: boolean = false
 ) => {
+  console.log(`userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`)
   try {
     let url: string;
     
@@ -751,7 +783,7 @@ export const userInfoCall = async (
     } else {
       // Use /user/info endpoint for individual user info
       url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if (userRole === "Admin" || userRole === "Admin Viewer") {
+      if ((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) {
         // do nothing 
       } else if (userID) {
         url += `?user_id=${userID}`;
@@ -1200,6 +1232,7 @@ export const teamDailyActivityCall = async (accessToken: String, startTime: Date
     if (teamIds) {
       queryParams.append('team_ids', teamIds.join(','));
     }
+    queryParams.append('exclude_team_ids', 'litellm-dashboard');
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;

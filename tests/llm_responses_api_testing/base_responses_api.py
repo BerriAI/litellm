@@ -133,11 +133,13 @@ class BaseResponsesAPITest(ABC):
         validate_responses_api_response(response, final_chunk=True)
 
 
-    @pytest.mark.parametrize("sync_mode", [True])
+    @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
+        collected_content_string = ""
+        response_completed_event = None
         if sync_mode:
             response = litellm.responses(
                 input="Basic ping",
@@ -146,6 +148,10 @@ class BaseResponsesAPITest(ABC):
             )
             for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
         else:
             response = await litellm.aresponses(
                 input="Basic ping",
@@ -154,5 +160,119 @@ class BaseResponsesAPITest(ABC):
             )
             async for event in response:
                 print("litellm response=", json.dumps(event, indent=4, default=str))
+                if event.type == "response.output_text.delta":
+                    collected_content_string += event.delta
+                elif event.type == "response.completed":
+                    response_completed_event = event
+
+        # assert the delta chunks content had len(collected_content_string) > 0
+        # this content is typically rendered on chat ui's
+        assert len(collected_content_string) > 0
+
+        # assert the response completed event is not None
+        assert response_completed_event is not None
+
+        # assert the response completed event has a response
+        assert response_completed_event.response is not None
+
+        # assert the response completed event includes the usage
+        assert response_completed_event.response.usage is not None
+
+        # basic test assert the usage seems reasonable
+        print("response_completed_event.response.usage=", response_completed_event.response.usage)
+        assert response_completed_event.response.usage.input_tokens > 0 and response_completed_event.response.usage.input_tokens < 100
+        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 1000
+        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 1000
+
+        # total tokens should be the sum of input and output tokens
+        assert response_completed_event.response.usage.total_tokens == response_completed_event.response.usage.input_tokens + response_completed_event.response.usage.output_tokens
+
+
+
+    @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_basic_openai_responses_delete_endpoint(self, sync_mode):
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        if sync_mode:
+            response = litellm.responses(
+                input="Basic ping", max_output_tokens=20,
+                **base_completion_call_args
+            )
+
+            # delete the response
+            if isinstance(response, ResponsesAPIResponse):
+                litellm.delete_responses(
+                    response_id=response.id,
+                    **base_completion_call_args
+                )
+            else:
+                raise ValueError("response is not a ResponsesAPIResponse")
+        else:
+            response = await litellm.aresponses(
+                input="Basic ping", max_output_tokens=20,
+                **base_completion_call_args
+            )
+
+            # async delete the response
+            if isinstance(response, ResponsesAPIResponse):
+                await litellm.adelete_responses(
+                    response_id=response.id,
+                    **base_completion_call_args
+                )
+            else:
+                raise ValueError("response is not a ResponsesAPIResponse")
+    
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
+        #litellm._turn_on_debug()
+        #litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        response_id = None
+        if sync_mode:
+            response_id = None
+            response = litellm.responses(
+                input="Basic ping", max_output_tokens=20,
+                stream=True,
+                **base_completion_call_args
+            )
+            for event in response:
+                print("litellm response=", json.dumps(event, indent=4, default=str))
+                if "response" in event:
+                    response_obj = event.get("response")
+                    if response_obj is not None:
+                        response_id = response_obj.get("id")
+            print("got response_id=", response_id)
+
+            # delete the response
+            assert response_id is not None
+            litellm.delete_responses(
+                response_id=response_id,
+                **base_completion_call_args
+            )
+        else:
+            response = await litellm.aresponses(
+                input="Basic ping", max_output_tokens=20,
+                stream=True,
+                **base_completion_call_args
+            )
+            async for event in response:
+                print("litellm response=", json.dumps(event, indent=4, default=str))
+                if "response" in event:
+                    response_obj = event.get("response")
+                    if response_obj is not None:
+                        response_id = response_obj.get("id")
+            print("got response_id=", response_id)
+
+            # delete the response
+            assert response_id is not None
+            await litellm.adelete_responses(
+                response_id=response_id,
+                **base_completion_call_args
+            )
+
 
 
