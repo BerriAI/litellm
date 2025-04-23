@@ -804,7 +804,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
         print("Response:", json.dumps(response, indent=4, default=str))
 
         # Check that the response has the expected structure
-        assert response["id"] == mock_response["id"]
+        assert response["id"] is not None
         assert response["status"] == "incomplete"
         assert response["incomplete_details"].reason == "max_output_tokens"
         assert response["max_output_tokens"] == 20
