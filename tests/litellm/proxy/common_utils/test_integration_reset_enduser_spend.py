@@ -1,24 +1,22 @@
 import asyncio
 import os
 import sys
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from litellm.caching.caching import DualCache, RedisCache
 
 import aiohttp
 import pytest
 import pytest_asyncio
-from fastapi import Request
-from fastapi.testclient import TestClient
+from dotenv import load_dotenv
+
+from litellm.caching.caching import DualCache
+
+load_dotenv()
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
