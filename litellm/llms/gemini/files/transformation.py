@@ -4,11 +4,12 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import List, Mapping, Optional
+from typing import List, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -91,66 +92,28 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if file_data is None:
             raise ValueError("File data is required")
 
-        # Parse the file_data based on its type
-        filename = None
-        file_content = None
-        content_type = None
-        file_headers: Mapping[str, str] = {}
-
-        if isinstance(file_data, tuple):
-            if len(file_data) == 2:
-                filename, file_content = file_data
-            elif len(file_data) == 3:
-                filename, file_content, content_type = file_data
-            elif len(file_data) == 4:
-                filename, file_content, content_type, file_headers = file_data
-        else:
-            file_content = file_data
-
-        # Handle the file content based on its type
-        import io
-        from os import PathLike
-
-        # Convert content to bytes
-        if isinstance(file_content, (str, PathLike)):
-            # If it's a path, open and read the file
-            with open(file_content, "rb") as f:
-                content = f.read()
-        elif isinstance(file_content, io.IOBase):
-            # If it's a file-like object
-            content = file_content.read()
-            if isinstance(content, str):
-                content = content.encode("utf-8")
-        elif isinstance(file_content, bytes):
-            content = file_content
-        else:
-            raise ValueError(f"Unsupported file content type: {type(file_content)}")
+        # Use the common utility function to extract file data
+        extracted_data = extract_file_data(file_data)
 
         # Get file size
-        file_size = len(content)
-
-        # Use provided content type or guess based on filename
-        if not content_type:
-            import mimetypes
-
-            content_type = (
-                mimetypes.guess_type(filename)[0]
-                if filename
-                else "application/octet-stream"
-            )
+        file_size = len(extracted_data["content"])
 
         # Step 1: Initial resumable upload request
         headers = {
             "X-Goog-Upload-Protocol": "resumable",
             "X-Goog-Upload-Command": "start",
             "X-Goog-Upload-Header-Content-Length": str(file_size),
-            "X-Goog-Upload-Header-Content-Type": content_type,
+            "X-Goog-Upload-Header-Content-Type": extracted_data["content_type"],
             "Content-Type": "application/json",
         }
-        headers.update(file_headers)  # Add any custom headers
+        headers.update(extracted_data["headers"])  # Add any custom headers
 
         # Initial metadata request body
-        initial_data = {"file": {"display_name": filename or str(int(time.time()))}}
+        initial_data = {
+            "file": {
+                "display_name": extracted_data["filename"] or str(int(time.time()))
+            }
+        }
 
         # Step 2: Actual file upload data
         upload_headers = {
@@ -161,7 +124,10 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         return {
             "initial_request": {"headers": headers, "data": initial_data},
-            "upload_request": {"headers": upload_headers, "data": content},
+            "upload_request": {
+                "headers": upload_headers,
+                "data": extracted_data["content"],
+            },
         }
 
     def transform_create_file_response(

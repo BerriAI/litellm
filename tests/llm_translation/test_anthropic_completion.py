@@ -968,6 +968,107 @@ def test_anthropic_citations_api_streaming():
     assert has_citations
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output(model):
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    resp = completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp)
+    assert resp.choices[0].message.reasoning_content is not None
+    assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+
+    assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
+    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_redacted_thinking_output(model):
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    resp = completion(
+        model=model,
+        messages=[{"role": "user", "content": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+    assert resp.choices[0].message.thinking_blocks[0]["type"] == "redacted_thinking"
+    assert resp.choices[0].message.thinking_blocks[0]["data"] is not None
+
+
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output_stream(model):
+    litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=10,
+        )
+
+        reasoning_content_exists = False
+        signature_block_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
+                and isinstance(chunk.choices[0].delta.reasoning_content, str)
+            ):
+                reasoning_content_exists = True
+                print(chunk.choices[0].delta.thinking_blocks[0])
+                if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
+                    signature_block_exists = True
+                    assert chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+        assert reasoning_content_exists
+        assert signature_block_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
+
 def test_anthropic_custom_headers():
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -1045,3 +1146,37 @@ def test_anthropic_thinking_in_assistant_message(model):
 
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_redacted_thinking_in_assistant_message(model):
+    litellm._turn_on_debug()
+    params = {
+        "model": model,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "redacted_thinking",
+                        "data": "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",
+                    },
+                    {
+                        "type": "text",
+                        "text": "I'm not able to respond to special commands or trigger phrases like the one you've shared. Those types of strings don't activate any special modes or features in my system. Is there something specific I can help you with today? I'm happy to assist with questions, have a conversation, provide information, or help with various tasks within my normal capabilities.",
+                    },
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Who do you know?"}]},
+        ],
+        "max_tokens": 32768,
+        "thinking": {"type": "enabled", "budget_tokens": 30720},
+    }
+
+    response = litellm.completion(**params)
+
+    assert response is not None

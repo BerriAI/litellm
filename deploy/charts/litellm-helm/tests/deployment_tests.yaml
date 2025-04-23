@@ -80,3 +80,38 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
+  - it: should work with extraEnvVars
+    template: deployment.yaml
+    set:
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['env']
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['env']
+  - it: should work with both extraEnvVars and envVars
+    template: deployment.yaml
+    set:
+      envVars:
+        ENV_VAR: ENV_VAR_VALUE
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          value: EXTRA_ENV_VAR_VALUE
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENV_VAR
+            value: ENV_VAR_VALUE
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            value: EXTRA_ENV_VAR_VALUE

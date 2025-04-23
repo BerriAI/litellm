@@ -61,7 +61,7 @@ def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-def get_azure_ad_token_from_entrata_id(
+def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
     client_secret: str,
@@ -81,7 +81,7 @@ def get_azure_ad_token_from_entrata_id(
     """
     from azure.identity import ClientSecretCredential, get_bearer_token_provider
 
-    verbose_logger.debug("Getting Azure AD Token from Entrata ID")
+    verbose_logger.debug("Getting Azure AD Token from Entra ID")
 
     if tenant_id.startswith("os.environ/"):
         _tenant_id = get_secret_str(tenant_id)
@@ -309,21 +309,30 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_ad_token_provider: Optional[Callable[[], str]] = None
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id")
-        client_id = litellm_params.get("client_id")
-        client_secret = litellm_params.get("client_secret")
-        azure_username = litellm_params.get("azure_username")
-        azure_password = litellm_params.get("azure_password")
+        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        client_secret = litellm_params.get(
+            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
+        )
+        azure_username = litellm_params.get(
+            "azure_username", os.getenv("AZURE_USERNAME")
+        )
+        azure_password = litellm_params.get(
+            "azure_password", os.getenv("AZURE_PASSWORD")
+        )
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if not api_key and tenant_id and client_id and client_secret:
-            verbose_logger.debug("Using Azure AD Token Provider for Azure Auth")
-            azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+            verbose_logger.debug(
+                "Using Azure AD Token Provider from Entra ID for Azure Auth"
+            )
+            azure_ad_token_provider = get_azure_ad_token_from_entra_id(
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
             )
         if azure_username and azure_password and client_id:
+            verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
                 azure_password=azure_password,
@@ -331,12 +340,16 @@ class BaseAzureLLM(BaseOpenAILLM):
             )
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+            verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
             azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
         elif (
             not api_key
             and azure_ad_token_provider is None
             and litellm.enable_azure_ad_token_refresh is True
         ):
+            verbose_logger.debug(
+                "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+            )
             try:
                 azure_ad_token_provider = get_azure_ad_token_provider()
             except ValueError:

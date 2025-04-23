@@ -4112,100 +4112,6 @@ async def test_async_text_completion_chat_model_stream():
 # asyncio.run(test_async_text_completion_chat_model_stream())
 
 
-@pytest.mark.parametrize("model", ["vertex_ai/codestral@2405"])  #
-@pytest.mark.asyncio
-async def test_completion_codestral_fim_api(model):
-    try:
-        if model == "vertex_ai/codestral@2405":
-            from test_amazing_vertex_completion import (
-                load_vertex_ai_credentials,
-            )
-
-            load_vertex_ai_credentials()
-
-        litellm.set_verbose = True
-        import logging
-
-        from litellm._logging import verbose_logger
-
-        verbose_logger.setLevel(level=logging.DEBUG)
-        response = await litellm.atext_completion(
-            model=model,
-            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
-            suffix="return True",
-            temperature=0,
-            top_p=1,
-            max_tokens=10,
-            min_tokens=10,
-            seed=10,
-            stop=["return"],
-        )
-        # Add any assertions here to check the response
-        print(response)
-
-        assert response.choices[0].text is not None
-
-        # cost = litellm.completion_cost(completion_response=response)
-        # print("cost to make mistral completion=", cost)
-        # assert cost > 0.0
-    except litellm.ServiceUnavailableError:
-        print("got ServiceUnavailableError")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model",
-    ["vertex_ai/codestral@2405"],
-)
-@pytest.mark.asyncio
-async def test_completion_codestral_fim_api_stream(model):
-    try:
-        if model == "vertex_ai/codestral@2405":
-            from test_amazing_vertex_completion import (
-                load_vertex_ai_credentials,
-            )
-
-            load_vertex_ai_credentials()
-        import logging
-
-        from litellm._logging import verbose_logger
-
-        litellm.set_verbose = False
-
-        # verbose_logger.setLevel(level=logging.DEBUG)
-        response = await litellm.atext_completion(
-            model=model,
-            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
-            suffix="return True",
-            temperature=0,
-            top_p=1,
-            stream=True,
-            seed=10,
-            stop=["return"],
-        )
-
-        full_response = ""
-        # Add any assertions here to check the response
-        async for chunk in response:
-            print(chunk)
-            full_response += chunk.get("choices")[0].get("text") or ""
-
-        print("full_response", full_response)
-        # cost = litellm.completion_cost(completion_response=response)
-        # print("cost to make mistral completion=", cost)
-        # assert cost > 0.0
-    except litellm.APIConnectionError as e:
-        print(e)
-        pass
-    except litellm.ServiceUnavailableError as e:
-        print(e)
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def mock_post(*args, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -4257,7 +4163,7 @@ def test_completion_vllm(provider):
 
 
 def test_completion_fireworks_ai_multiple_choices():
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
     response = litellm.text_completion(
         model="fireworks_ai/llama-v3p1-8b-instruct",
         prompt=["halo", "hi", "halo", "hi"],

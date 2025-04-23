@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -34,6 +34,8 @@ import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import MCPToolsViewer from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cx } from '@/lib/cva.config';
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -79,6 +81,21 @@ interface ProxySettings {
 
 const queryClient = new QueryClient();
 
+function LoadingScreen() {
+  return (
+    <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
+      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
+        🚅 LiteLLM
+      </div>
+      
+      <div className="flex items-center justify-center gap-2">
+        <UiLoadingSpinner className="size-4" />
+        <span className="text-gray-600 text-sm">Loading...</span>
+      </div>
+    </div>
+  );
+}
+
 export default function CreateKeyPage() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
@@ -98,8 +115,9 @@ export default function CreateKeyPage() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userID, setUserID] = useState<string | null>(null);
 
-  const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
 
   // Get page from URL, default to 'api-keys' if not present
@@ -124,7 +142,14 @@ export default function CreateKeyPage() {
   useEffect(() => {
     const token = getCookie("token");
     setToken(token);
+    setAuthLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (authLoading === false && token === null) {
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+    }
+  }, [token, authLoading])
 
   useEffect(() => {
     if (!token) {
@@ -177,6 +202,10 @@ export default function CreateKeyPage() {
       if (decoded.auth_header_name) {
         setGlobalLitellmHeaderName(decoded.auth_header_name);
       }
+
+      if (decoded.user_id) {
+        setUserID(decoded.user_id);
+      }
     }
   }, [token]);
   
@@ -192,9 +221,12 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
+  if (authLoading || (authLoading == false && token === null)) {
+    return <LoadingScreen />
+  }
 
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<LoadingScreen />}>
       <QueryClientProvider client={queryClient}>
         {invitation_id ? (
           <UserDashboard
@@ -300,6 +332,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
+                  proxySettings={proxySettings}
                 />
               ) : page == "api_ref" ? (
                 <APIRef proxySettings={proxySettings} />
@@ -314,6 +347,8 @@ export default function CreateKeyPage() {
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
                 <GuardrailsPanel accessToken={accessToken} />
+              ): page == "transform-request" ? (
+                <TransformRequestPanel accessToken={accessToken} />
               ): page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
@@ -367,6 +402,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   accessToken={accessToken}
+                  teams={teams as Team[] ?? []}
                 />
               ) : 
               (

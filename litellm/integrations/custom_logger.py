@@ -20,8 +20,7 @@ from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
-    EmbeddingResponse,
-    ImageResponse,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardCallbackDynamicParams,
@@ -95,7 +94,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -223,7 +222,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponseTypes,
     ) -> Any:
         pass
 

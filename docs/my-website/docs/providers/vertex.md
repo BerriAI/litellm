@@ -347,7 +347,7 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding**
+### **Grounding - Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -358,7 +358,7 @@ See the grounding metadata with `response_obj._hidden_params["vertex_ai_groundin
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python 
+```python showLineNumbers
 from litellm import completion 
 
 ## SETUP ENVIRONMENT
@@ -377,14 +377,36 @@ print(resp)
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-```bash
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"googleSearchRetrieval": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "gemini-pro",
     "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
+      {"role": "user", "content": "Who won the world cup?"}
     ],
    "tools": [
         {
@@ -394,9 +416,81 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 
 ```
+</TabItem>
+</Tabs>
 
 </TabItem>
 </Tabs>
+
+You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"enterpriseWebSearch": {}}] # 👈 ADD GOOGLE ENTERPRISE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-pro",
+    messages=[{"role": "user", "content": "Who won the world cup?"}],
+    tools=[{"enterpriseWebSearch": {}}],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-pro",
+    "messages": [
+      {"role": "user", "content": "Who won the world cup?"}
+    ],
+   "tools": [
+        {
+            "enterpriseWebSearch": {} 
+        }
+    ]
+  }'
+
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
@@ -446,6 +540,154 @@ resp = litellm.completion(
 
 print(resp)
 ```
+
+
+### **Thinking / `reasoning_content`**
+
+LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
+
+**Mapping**
+
+| reasoning_effort | thinking |
+| ---------------- | -------- |
+| "low"            | "budget_tokens": 1024 |
+| "medium"         | "budget_tokens": 2048 |
+| "high"           | "budget_tokens": 4096 |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+resp = completion(
+    model="vertex_ai/gemini-2.5-flash-preview-04-17",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",
+    vertex_project="project-id",
+    vertex_location="us-central1"
+)
+
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: gemini-2.5-flash
+  litellm_params:
+    model: vertex_ai/gemini-2.5-flash-preview-04-17
+    vertex_credentials: {"project_id": "project-id", "location": "us-central1", "project_key": "project-key"}
+    vertex_project: "project-id"
+    vertex_location: "us-central1"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+**Expected Response**
+
+```python
+ModelResponse(
+    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
+    created=1740470510,
+    model='claude-3-7-sonnet-20250219',
+    object='chat.completion',
+    system_fingerprint=None,
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="The capital of France is Paris.",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
+            ),
+        )
+    ],
+    usage=Usage(
+        completion_tokens=68,
+        prompt_tokens=42,
+        total_tokens=110,
+        completion_tokens_details=None,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=0,
+            text_tokens=None,
+            image_tokens=None
+        ),
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0
+    )
+)
+```
+
+#### Pass `thinking` to Gemini models
+
+You can also pass the `thinking` parameter to Gemini models.
+
+This is translated to Gemini's [`thinkingConfig` parameter](https://ai.google.dev/gemini-api/docs/thinking#set-budget).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+response = litellm.completion(
+  model="vertex_ai/gemini-2.5-flash-preview-04-17",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+  vertex_project="project-id",
+  vertex_location="us-central1"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "vertex_ai/gemini-2.5-flash-preview-04-17",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 ### **Context Caching**

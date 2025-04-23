@@ -7,6 +7,9 @@ import httpx
 import litellm
 from litellm.constants import (
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -27,6 +30,7 @@ from litellm.types.llms.openai import (
     REASONING_EFFORT,
     AllMessageValues,
     ChatCompletionCachedContent,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionSystemMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -44,7 +48,7 @@ from litellm.utils import (
     token_counter,
 )
 
-from ..common_utils import AnthropicError, process_anthropic_headers
+from ..common_utils import AnthropicError, AnthropicModelInfo, process_anthropic_headers
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -54,7 +58,7 @@ else:
     LoggingClass = Any
 
 
-class AnthropicConfig(BaseConfig):
+class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 
@@ -126,41 +130,6 @@ class AnthropicConfig(BaseConfig):
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "prompt-caching-2024-07-31",
         }
-
-    def get_anthropic_headers(
-        self,
-        api_key: str,
-        anthropic_version: Optional[str] = None,
-        computer_tool_used: bool = False,
-        prompt_caching_set: bool = False,
-        pdf_used: bool = False,
-        is_vertex_request: bool = False,
-        user_anthropic_beta_headers: Optional[List[str]] = None,
-    ) -> dict:
-        betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
-        if computer_tool_used:
-            betas.add("computer-use-2024-10-22")
-        if pdf_used:
-            betas.add("pdfs-2024-09-25")
-        headers = {
-            "anthropic-version": anthropic_version or "2023-06-01",
-            "x-api-key": api_key,
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-
-        if user_anthropic_beta_headers is not None:
-            betas.update(user_anthropic_beta_headers)
-
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
-        if is_vertex_request is True:
-            pass
-        elif len(betas) > 0:
-            headers["anthropic-beta"] = ",".join(betas)
-
-        return headers
 
     def _map_tool_choice(
         self, tool_choice: Optional[str], parallel_tool_use: Optional[bool]
@@ -311,11 +280,20 @@ class AnthropicConfig(BaseConfig):
         if reasoning_effort is None:
             return None
         elif reasoning_effort == "low":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=1024)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+            )
         elif reasoning_effort == "medium":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=2048)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+            )
         elif reasoning_effort == "high":
-            return AnthropicThinkingParam(type="enabled", budget_tokens=4096)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
@@ -445,49 +423,6 @@ class AnthropicConfig(BaseConfig):
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
         )
         return _tool
-
-    def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
-        """
-        Return if {"cache_control": ..} in message content block
-
-        Used to check if anthropic prompt caching headers need to be set.
-        """
-        for message in messages:
-            if message.get("cache_control", None) is not None:
-                return True
-            _message_content = message.get("content")
-            if _message_content is not None and isinstance(_message_content, list):
-                for content in _message_content:
-                    if "cache_control" in content:
-                        return True
-
-        return False
-
-    def is_computer_tool_used(
-        self, tools: Optional[List[AllAnthropicToolsValues]]
-    ) -> bool:
-        if tools is None:
-            return False
-        for tool in tools:
-            if "type" in tool and tool["type"].startswith("computer_"):
-                return True
-        return False
-
-    def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
-        """
-        Set to true if media passed into messages.
-
-        """
-        for message in messages:
-            if (
-                "content" in message
-                and message["content"] is not None
-                and isinstance(message["content"], list)
-            ):
-                for content in message["content"]:
-                    if "type" in content and content["type"] != "text":
-                        return True
-        return False
 
     def translate_system_message(
         self, messages: List[AllMessageValues]
@@ -641,13 +576,21 @@ class AnthropicConfig(BaseConfig):
     ) -> Tuple[
         str,
         Optional[List[Any]],
-        Optional[List[ChatCompletionThinkingBlock]],
+        Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
         Optional[str],
         List[ChatCompletionToolCallChunk],
     ]:
         text_content = ""
         citations: Optional[List[Any]] = None
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None
         reasoning_content: Optional[str] = None
         tool_calls: List[ChatCompletionToolCallChunk] = []
         for idx, content in enumerate(completion_response["content"]):
@@ -666,21 +609,70 @@ class AnthropicConfig(BaseConfig):
                         index=idx,
                     )
                 )
-            ## CITATIONS
-            if content.get("citations", None) is not None:
-                if citations is None:
-                    citations = []
-                citations.append(content["citations"])
-            if content.get("thinking", None) is not None:
+
+            elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
                 thinking_blocks.append(cast(ChatCompletionThinkingBlock, content))
+            elif content["type"] == "redacted_thinking":
+                if thinking_blocks is None:
+                    thinking_blocks = []
+                thinking_blocks.append(
+                    cast(ChatCompletionRedactedThinkingBlock, content)
+                )
+
+            ## CITATIONS
+            if content.get("citations") is not None:
+                if citations is None:
+                    citations = []
+                citations.append(content["citations"])
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
-                if "thinking" in block:
-                    reasoning_content += block["thinking"]
+                thinking_content = cast(Optional[str], block.get("thinking"))
+                if thinking_content is not None:
+                    reasoning_content += thinking_content
+
         return text_content, citations, thinking_blocks, reasoning_content, tool_calls
+
+    def calculate_usage(
+        self, usage_object: dict, reasoning_content: Optional[str]
+    ) -> Usage:
+        prompt_tokens = usage_object.get("input_tokens", 0)
+        completion_tokens = usage_object.get("output_tokens", 0)
+        _usage = usage_object
+        cache_creation_input_tokens: int = 0
+        cache_read_input_tokens: int = 0
+
+        if "cache_creation_input_tokens" in _usage:
+            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+        if "cache_read_input_tokens" in _usage:
+            cache_read_input_tokens = _usage["cache_read_input_tokens"]
+            prompt_tokens += cache_read_input_tokens
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cache_read_input_tokens
+        )
+        completion_token_details = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=token_counter(
+                    text=reasoning_content, count_response_tokens=True
+                )
+            )
+            if reasoning_content
+            else None
+        )
+        total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            completion_tokens_details=completion_token_details,
+        )
+        return usage
 
     def transform_response(
         self,
@@ -730,7 +722,13 @@ class AnthropicConfig(BaseConfig):
         else:
             text_content = ""
             citations: Optional[List[Any]] = None
-            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+            thinking_blocks: Optional[
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+            ] = None
             reasoning_content: Optional[str] = None
             tool_calls: List[ChatCompletionToolCallChunk] = []
 
@@ -772,45 +770,14 @@ class AnthropicConfig(BaseConfig):
             )
 
         ## CALCULATING USAGE
-        prompt_tokens = completion_response["usage"]["input_tokens"]
-        completion_tokens = completion_response["usage"]["output_tokens"]
-        _usage = completion_response["usage"]
-        cache_creation_input_tokens: int = 0
-        cache_read_input_tokens: int = 0
+        usage = self.calculate_usage(
+            usage_object=completion_response["usage"],
+            reasoning_content=reasoning_content,
+        )
+        setattr(model_response, "usage", usage)  # type: ignore
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
-        if "cache_creation_input_tokens" in _usage:
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if "cache_read_input_tokens" in _usage:
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
-
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cache_read_input_tokens
-        )
-        completion_token_details = (
-            CompletionTokensDetailsWrapper(
-                reasoning_tokens=token_counter(
-                    text=reasoning_content, count_response_tokens=True
-                )
-            )
-            if reasoning_content
-            else None
-        )
-        total_tokens = prompt_tokens + completion_tokens
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            prompt_tokens_details=prompt_tokens_details,
-            cache_creation_input_tokens=cache_creation_input_tokens,
-            cache_read_input_tokens=cache_read_input_tokens,
-            completion_tokens_details=completion_token_details,
-        )
-
-        setattr(model_response, "usage", usage)  # type: ignore
 
         model_response._hidden_params = _hidden_params
         return model_response
@@ -854,46 +821,3 @@ class AnthropicConfig(BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
-
-    def _get_user_anthropic_beta_headers(
-        self, anthropic_beta_header: Optional[str]
-    ) -> Optional[List[str]]:
-        if anthropic_beta_header is None:
-            return None
-        return anthropic_beta_header.split(",")
-
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Dict:
-        if api_key is None:
-            raise litellm.AuthenticationError(
-                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
-                llm_provider="anthropic",
-                model=model,
-            )
-
-        tools = optional_params.get("tools")
-        prompt_caching_set = self.is_cache_control_set(messages=messages)
-        computer_tool_used = self.is_computer_tool_used(tools=tools)
-        pdf_used = self.is_pdf_used(messages=messages)
-        user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
-        )
-        anthropic_headers = self.get_anthropic_headers(
-            computer_tool_used=computer_tool_used,
-            prompt_caching_set=prompt_caching_set,
-            pdf_used=pdf_used,
-            api_key=api_key,
-            is_vertex_request=optional_params.get("is_vertex_request", False),
-            user_anthropic_beta_headers=user_anthropic_beta_headers,
-        )
-
-        headers = {**headers, **anthropic_headers}
-
-        return headers

@@ -4,9 +4,17 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_TeamTable,
+    LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _premium_user_check
+
+
+def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
 
 
 def _is_user_team_admin(

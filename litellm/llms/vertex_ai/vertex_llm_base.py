@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
@@ -22,7 +21,7 @@ else:
     GoogleCredentialsObject = Any
 
 
-class VertexBase(BaseLLM):
+class VertexBase:
     def __init__(self) -> None:
         super().__init__()
         self.access_token: Optional[str] = None

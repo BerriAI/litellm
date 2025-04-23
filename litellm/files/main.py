@@ -473,9 +473,11 @@ def file_delete(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
+        client = kwargs.get("client")
 
         if (
             timeout is not None
@@ -549,6 +551,8 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_id=file_id,
+                client=client,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -774,8 +778,10 @@ def file_content(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        client = kwargs.get("client")
         # set timeout for 10 minutes by default
 
         if (
@@ -797,6 +803,7 @@ def file_content(
         )
 
         _is_async = kwargs.pop("afile_content", False) is True
+
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -858,6 +865,8 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_content_request=_file_content_request,
+                client=client,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise litellm.exceptions.BadRequestError(

@@ -13,7 +13,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import StandardLoggingMCPToolCall, StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -39,6 +43,8 @@ def _get_spend_logs_metadata(
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+    usage_object: Optional[dict] = None,
+    model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -57,6 +63,8 @@ def _get_spend_logs_metadata(
             proxy_server_request=None,
             batch_models=None,
             mcp_tool_call_metadata=None,
+            model_map_information=None,
+            usage_object=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -74,6 +82,8 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["usage_object"] = usage_object
+    clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
 
 
@@ -103,7 +113,7 @@ def generate_hash_from_response(response_obj: Any) -> str:
 def get_spend_logs_id(
     call_type: str, response_obj: dict, kwargs: dict
 ) -> Optional[str]:
-    if call_type == "aretrieve_batch":
+    if call_type == "aretrieve_batch" or call_type == "acreate_file":
         # Generate a hash from the response object
         id: Optional[str] = generate_hash_from_response(response_obj)
     else:
@@ -153,6 +163,17 @@ def get_logging_payload(  # noqa: PLR0915
 
     api_key = metadata.get("user_api_key", "")
 
+    standard_logging_prompt_tokens: int = 0
+    standard_logging_completion_tokens: int = 0
+    standard_logging_total_tokens: int = 0
+    if standard_logging_payload is not None:
+        standard_logging_prompt_tokens = standard_logging_payload.get(
+            "prompt_tokens", 0
+        )
+        standard_logging_completion_tokens = standard_logging_payload.get(
+            "completion_tokens", 0
+        )
+        standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
@@ -208,6 +229,16 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        usage_object=(
+            standard_logging_payload["metadata"].get("usage_object", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        model_map_information=(
+            standard_logging_payload["model_map_information"]
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -227,6 +258,7 @@ def get_logging_payload(  # noqa: PLR0915
         import time
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -242,9 +274,11 @@ def get_logging_payload(  # noqa: PLR0915
             metadata=json.dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
-            total_tokens=usage.get("total_tokens", 0),
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
+            prompt_tokens=usage.get("prompt_tokens", standard_logging_prompt_tokens),
+            completion_tokens=usage.get(
+                "completion_tokens", standard_logging_completion_tokens
+            ),
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=litellm_params.get("api_base", ""),
@@ -360,6 +394,39 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
+def _sanitize_request_body_for_spend_logs_payload(
+    request_body: dict,
+    visited: Optional[set] = None,
+) -> dict:
+    """
+    Recursively sanitize request body to prevent logging large base64 strings or other large values.
+    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    """
+    MAX_STRING_LENGTH = 1000
+
+    if visited is None:
+        visited = set()
+
+    # Get the object's memory address to track visited objects
+    obj_id = id(request_body)
+    if obj_id in visited:
+        return {}
+    visited.add(obj_id)
+
+    def _sanitize_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return _sanitize_request_body_for_spend_logs_payload(value, visited)
+        elif isinstance(value, list):
+            return [_sanitize_value(item) for item in value]
+        elif isinstance(value, str):
+            if len(value) > MAX_STRING_LENGTH:
+                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+            return value
+        return value
+
+    return {k: _sanitize_value(v) for k, v in request_body.items()}
+
+
 def _add_proxy_server_request_to_metadata(
     metadata: dict,
     litellm_params: dict,
@@ -373,6 +440,7 @@ def _add_proxy_server_request_to_metadata(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             metadata["proxy_server_request"] = _request_body_json_str
     return metadata
