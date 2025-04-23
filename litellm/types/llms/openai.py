@@ -50,7 +50,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, Discriminator, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -1013,6 +1013,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     RESPONSE_FAILED = "response.failed"
     RESPONSE_INCOMPLETE = "response.incomplete"
 
+    # Part added
+    RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
+
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
     OUTPUT_ITEM_DONE = "response.output_item.done"
@@ -1200,6 +1203,12 @@ class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     param: Optional[str]
 
 
+class GenericEvent(BaseLiteLLMOpenAIResponseObject):
+    type: str
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
 # Union type for all possible streaming responses
 ResponsesAPIStreamingResponse = Annotated[
     Union[
@@ -1226,6 +1235,7 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
         ErrorEvent,
+        GenericEvent,
     ],
     Discriminator("type"),
 ]

@@ -44,12 +44,12 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
-
+        
         # set request kwargs
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
 
-    def _process_chunk(self, chunk):
+    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
