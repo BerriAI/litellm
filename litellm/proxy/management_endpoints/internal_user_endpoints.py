@@ -1043,7 +1043,12 @@ async def get_users(
     where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
 
     # Build order_by conditions
-    order_by: Optional[Dict[str, str]] = _validate_sort_params(sort_by, sort_order)
+
+    order_by: Optional[Dict[str, str]] = (
+        _validate_sort_params(sort_by, sort_order)
+        if sort_by is not None and isinstance(sort_by, str)
+        else None
+    )
 
     users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
