@@ -10,15 +10,14 @@ import pytest_asyncio
 from dotenv import load_dotenv
 
 from litellm.caching.caching import DualCache
-
-load_dotenv()
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
+load_dotenv()
 
 
 async def create_budget(session, data):
