@@ -76,7 +76,6 @@ class VertexAIModelGardenModels(VertexBase):
                 VertexLLM,
             )
         except Exception as e:
-
             raise VertexAIError(
                 status_code=400,
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",

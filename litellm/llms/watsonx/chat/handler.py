@@ -49,6 +49,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             messages=messages,
             optional_params=optional_params,
             api_key=api_key,
+            litellm_params=litellm_params,
         )
 
         ## UPDATE PAYLOAD (optional params)
@@ -61,6 +62,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         ## GET API URL
         api_base = watsonx_chat_transformation.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
             litellm_params=litellm_params,

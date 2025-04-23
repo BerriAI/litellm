@@ -3,7 +3,7 @@ import collections
 import os
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -286,7 +286,6 @@ async def get_global_activity(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 date_trunc('day', "startTime") AS date,
@@ -453,7 +452,6 @@ async def get_global_activity_model(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 model_group,
@@ -1096,7 +1094,6 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1689,7 +1686,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -1923,9 +1919,7 @@ async def view_spend_logs(  # noqa: PLR0915
             ):
                 result: dict = {}
                 for record in response:
-                    dt_object = datetime.strptime(
-                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"  # type: ignore
-                    )  # type: ignore
+                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}
@@ -2101,8 +2095,7 @@ async def global_spend_refresh():
         try:
             resp = await prisma_client.db.query_raw(sql_query)
 
-            assert resp[0]["relkind"] == "m"
-            return True
+            return resp[0]["relkind"] == "m"
         except Exception:
             return False
 
@@ -2160,7 +2153,6 @@ async def global_spend_for_internal_user(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
-
         user_id = user_api_key_dict.user_id
         if user_id is None:
             raise ValueError("/global/spend/logs Error: User ID is None")
@@ -2293,7 +2285,6 @@ async def global_spend():
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-
         total_spend = 0.0
 
         if prisma_client is None:
@@ -2402,9 +2393,21 @@ async def global_spend_keys(
         return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dKeysBySpend";"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    if limit is None:
+        response = await prisma_client.db.query_raw(sql_query)
+        return response
+    try:
+        limit = int(limit)
+        if limit < 1:
+            raise ValueError("Limit must be greater than 0")
+        sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
+        response = await prisma_client.db.query_raw(sql_query, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail={"error": f"Invalid limit: {limit}, error: {e}"}
+        ) from e
 
     return response
 
@@ -2652,9 +2655,9 @@ async def global_spend_models(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    sql_query = f"""SELECT * FROM "Last30dModelsBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dModelsBySpend" LIMIT $1 ;"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    response = await prisma_client.db.query_raw(sql_query, int(limit))
 
     return response
 

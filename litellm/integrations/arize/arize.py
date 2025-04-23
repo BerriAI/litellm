@@ -19,14 +19,13 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Protocol = Any
     Span = Any
 
 
 class ArizeLogger(OpenTelemetry):
-
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
         return

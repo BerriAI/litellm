@@ -13,10 +13,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    handle_any_messages_to_chat_completion_str_messages_conversion,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -106,7 +111,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 },
             )
 
-            response.raise_for_status()
             if response.status_code != 202:
                 raise Exception(
                     f"DataDogLLMObs: Unexpected response - status_code: {response.status_code}, text: {response.text}"
@@ -116,6 +120,10 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}"
             )
             self.log_queue.clear()
+        except httpx.HTTPStatusError as e:
+            verbose_logger.exception(
+                f"DataDogLLMObs: Error sending batch - {e.response.text}"
+            )
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
 
@@ -133,7 +141,11 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
-        input_meta = InputMeta(messages=messages)  # type: ignore
+        input_meta = InputMeta(
+            messages=handle_any_messages_to_chat_completion_str_messages_conversion(
+                messages
+            )
+        )
         output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
         meta = Meta(

@@ -29,7 +29,6 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
-
     def _transform_sources(
         self, documents: List[Union[str, dict]]
     ) -> List[BedrockRerankSource]:

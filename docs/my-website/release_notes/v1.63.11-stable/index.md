@@ -6,7 +6,7 @@ authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
     url: https://www.linkedin.com/in/krish-d/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1743638400&v=beta&t=39KOXMUFedvukiWWVPHf3qI45fuQD7lNglICwN31DrI
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
   - name: Ishaan Jaffer
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
@@ -25,14 +25,6 @@ This release is primarily focused on:
 - Snowflake Cortex Support, Amazon Nova Image Generation
 - UI - Credential Management, re-use credentials when adding new models
 - UI - Test Connection to LLM Provider before adding a model
-
-:::info
-
-This release will be live on 03/16/2025
-
-:::
-
-<!-- <Image img={require('../../img/release_notes/v16311_release.jpg')} /> -->
 
 ## Known Issues
 - 🚨 Known issue on Azure OpenAI - We don't recommend upgrading if you use Azure OpenAI. This version failed our Azure OpenAI load test

@@ -13,6 +13,8 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
 import { Text, TextInput } from "@tremor/react";
+import TeamDropdown from "../common_components/team_dropdown";
+import { all_admin_roles } from "@/utils/roles";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -28,6 +30,7 @@ interface AddModelTabProps {
   teams: Team[] | null;
   credentials: CredentialItem[];
   accessToken: string;
+  userRole: string;
 }
 
 const { Title, Link } = Typography;
@@ -46,6 +49,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   teams,
   credentials,
   accessToken,
+  userRole,
 }) => {
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
@@ -63,6 +67,8 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     // Show the modal with the fresh test
     setIsResultModalVisible(true);
   };
+
+  const isAdmin = all_admin_roles.includes(userRole);
 
   return (
     <>
@@ -216,6 +222,25 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   </div>
                 );
               }}
+            </Form.Item>
+            <div className="flex items-center my-4">
+              <div className="flex-grow border-t border-gray-200"></div>
+              <span className="px-4 text-gray-500 text-sm">Team Settings</span>
+              <div className="flex-grow border-t border-gray-200"></div>
+            </div>
+            <Form.Item
+              label="Team"
+              name="team_id"
+              className="mb-4"
+              tooltip="Only keys for this team, will be able to call this model."
+              rules={[
+                {
+                  required: !isAdmin, // Required if not admin
+                  message: 'Please select a team.'
+                }
+              ]}
+            >
+              <TeamDropdown teams={teams} />
             </Form.Item>
             <AdvancedSettings 
               showAdvancedSettings={showAdvancedSettings}

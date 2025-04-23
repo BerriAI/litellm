@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { keyListCall, Organization } from '../networking';
+import { Setter } from '@/types';
 
 export interface Team {
     team_id: string;
@@ -84,6 +85,7 @@ total_pages: number;
 interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
+selectedKeyAlias: string | null;
 accessToken: string;
 currentPage?: number;
 }
@@ -94,21 +96,22 @@ totalPages: number;
 totalCount: number;
 }
 
+
 interface UseKeyListReturn {
 keys: KeyResponse[];
 isLoading: boolean;
 error: Error | null;
 pagination: PaginationData;
 refresh: (params?: Record<string, unknown>) => Promise<void>;
-setKeys: (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => void;
+setKeys: Setter<KeyResponse[]>;
 }
 
 const useKeyList = ({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
     currentPage = 1,
-
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -132,8 +135,9 @@ const useKeyList = ({
                 accessToken,
                 currentOrg?.organization_id || null,
                 selectedTeam?.team_id || "",
+                selectedKeyAlias,
                 params.page as number || 1,
-                50
+                50,
             );
             console.log("data", data);
             setKeyData(data);
@@ -147,8 +151,17 @@ const useKeyList = ({
 
     useEffect(() => {
         fetchKeys();
-        console.log("selectedTeam", selectedTeam, "currentOrg", currentOrg, "accessToken", accessToken);
-    }, [selectedTeam, currentOrg, accessToken]);
+        console.log(
+          'selectedTeam',
+          selectedTeam,
+          'currentOrg',
+          currentOrg,
+          'accessToken',
+          accessToken,
+          'selectedKeyAlias',
+          selectedKeyAlias
+        );
+    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias]);
 
     const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
         setKeyData(prevData => {

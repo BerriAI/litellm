@@ -166,7 +166,6 @@ class JWTHandler:
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
         try:
-
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
             else:
@@ -339,7 +338,6 @@ class JWTHandler:
         return scopes
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
-
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
@@ -348,7 +346,6 @@ class JWTHandler:
         keys_url_list = [url.strip() for url in keys_url.split(",")]
 
         for key_url in keys_url_list:
-
             cache_key = f"litellm_jwt_auth_keys_{key_url}"
 
             cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
@@ -923,7 +920,6 @@ class JWTAuthManager:
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         if rbac_role and object_id:
-
             if rbac_role == LitellmUserRoles.TEAM:
                 team_id = object_id
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
@@ -940,15 +936,16 @@ class JWTAuthManager:
         ## SPECIFIC TEAM ID
 
         if not team_id:
-            team_id, team_object = (
-                await JWTAuthManager.find_and_validate_specific_team_id(
-                    jwt_handler,
-                    jwt_valid_token,
-                    prisma_client,
-                    user_api_key_cache,
-                    parent_otel_span,
-                    proxy_logging_obj,
-                )
+            (
+                team_id,
+                team_object,
+            ) = await JWTAuthManager.find_and_validate_specific_team_id(
+                jwt_handler,
+                jwt_valid_token,
+                prisma_client,
+                user_api_key_cache,
+                parent_otel_span,
+                proxy_logging_obj,
             )
 
         if not team_object and not team_id:
