@@ -15,6 +15,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
+import litellm_proxy
 from litellm.router import Router
 from litellm_proxy._types import SpendLogsPayload
 from litellm_proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
