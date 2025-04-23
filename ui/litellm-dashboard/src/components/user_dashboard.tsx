@@ -338,6 +338,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     
     // Clear token cookies using the utility function
     gotoLogin();
+    return null;
   } else {
     // Check if token is expired
     try {
