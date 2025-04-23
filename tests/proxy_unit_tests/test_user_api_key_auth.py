@@ -3,8 +3,6 @@
 
 import os
 import sys
-
-import litellm.proxy
 import litellm_proxy.proxy_server
 
 sys.path.insert(

@@ -4,8 +4,6 @@ import traceback
 from unittest import mock
 
 from dotenv import load_dotenv
-
-import litellm.proxy
 import litellm_proxy.proxy_server
 
 load_dotenv()

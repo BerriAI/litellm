@@ -6,7 +6,6 @@ import pytest
 
 from dotenv import load_dotenv
 
-import litellm.proxy
 import litellm_proxy.proxy_server
 
 load_dotenv()
