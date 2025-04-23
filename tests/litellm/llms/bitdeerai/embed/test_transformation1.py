@@ -21,14 +21,13 @@ class TestBitdeerAIEmbeddingConfig:
         assert len(supported_params) == 0, "Expected empty list"
 
     @pytest.mark.parametrize(
-        "non_default_params, optional_params, model, drop_params, expected",
+        "non_default_params, optional_params, model, expected",
         [
             # 基础测试：直接返回 optional_params
             (
                 {"temperature": 0.5},
                 {"input": "test text", "model": "bitdeerai/test"},
                 "model",
-                {"drop": "this"},
                 {"input": "test text", "model": "bitdeerai/test"},
             ),
             # 测试无 optional_params（空字典）
@@ -36,7 +35,6 @@ class TestBitdeerAIEmbeddingConfig:
                 {},
                 {},
                 "model",
-                None,
                 {},
             ),
             # 测试非默认参数与 model 的存在不影响结果
@@ -44,7 +42,6 @@ class TestBitdeerAIEmbeddingConfig:
                 {"user": "test_user"},
                 {"input": "another text"},
                 "another_model",
-                {"unknown_param": "value"},
                 {"input": "another text"},
             ),
         ],
@@ -54,7 +51,6 @@ class TestBitdeerAIEmbeddingConfig:
         non_default_params,
         optional_params,
         model,
-        drop_params,
         expected,
     ):
         """验证 map_openai_params 正确返回 optional_params（直通）"""
@@ -62,6 +58,5 @@ class TestBitdeerAIEmbeddingConfig:
             non_default_params,
             optional_params,
             model,
-            drop_params=drop_params,
         )
         assert result == expected, f"Expected {expected}, got {result}"
