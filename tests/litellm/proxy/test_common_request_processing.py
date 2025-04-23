@@ -1,11 +1,19 @@
 import copy
+import os
+import sys
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import Request
 
+sys.path.insert(
+    0, os.path.abspath("../../../..")
+)  # Adds the parent directory to the system path
+
+
 import litellm
+import litellm_proxy
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm_proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
