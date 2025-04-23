@@ -35,6 +35,8 @@ from litellm.types.utils import (
     TextCompletionResponse,
     AllowedModelRegion,
     KeyManagementSystem,
+    KeyManagementSettings, # noqa: F401
+    LiteLLM_UpperboundKeyGenerateParams # noqa: F401
 )
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
