@@ -84,10 +84,13 @@ interface FilterState {
   email: string;
   user_id: string;
   user_role: string;
+  sso_user_id: string;
   team: string;
   model: string;
   min_spend: number | null;
   max_spend: number | null;
+  sort_by: string;
+  sort_order: 'asc' | 'desc';
 }
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -124,15 +127,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     email: "",
     user_id: "",
     user_role: "",
+    sso_user_id: "",
     team: "",
     model: "",
     min_spend: null,
-    max_spend: null
+    max_spend: null,
+    sort_by: "created_at",
+    sort_order: "desc"
   });
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState("Email");
   const filtersRef = useRef(null);
+  const lastSearchTimestamp = useRef(0);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -150,6 +157,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleFilterChange = (key: keyof FilterState, value: string | number | null) => {
     const newFilters = { ...filters, [key]: value };
     setFilters(newFilters);
+    console.log("called from handleFilterChange - newFilters:", JSON.stringify(newFilters));
+    debouncedSearch(newFilters);
+  };
+
+  const handleSortChange = (sortBy: string, sortOrder: 'asc' | 'desc') => {
+    const newFilters = {
+      ...filters,
+      sort_by: sortBy,
+      sort_order: sortOrder
+    };
+    setFilters(newFilters);
     debouncedSearch(newFilters);
   };
 
@@ -159,6 +177,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       if (!accessToken || !token || !userRole || !userID) {
         return;
       }
+
+      const currentTimestamp = Date.now();
+      lastSearchTimestamp.current = currentTimestamp;
+
       try {
         // Make the API call using userListCall with all filter parameters
         const data = await userListCall(
@@ -168,12 +190,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           defaultPageSize,
           filters.email || null,
           filters.user_role || null,
-          filters.team || null
+          filters.team || null,
+          filters.sso_user_id || null,
+          filters.sort_by,
+          filters.sort_order
         );
         
-        if (data) {
-          setUserListResponse(data);
-          console.log("called from debouncedSearch");
+        // Only update state if this is the most recent search
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          if (data) {
+            setUserListResponse(data);
+            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+            console.log("called from debouncedSearch data:", JSON.stringify(data));
+          }
         }
       } catch (error) {
         console.error("Error searching users:", error);
@@ -252,6 +281,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   };
 
   const refreshUserData = async () => {
+    console.log("called from refreshUserData");
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
@@ -291,7 +321,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         defaultPageSize,
         filters.email || null,
         filters.user_role || null,
-        filters.team || null
+        filters.team || null,
+        filters.sso_user_id || null,
+        filters.sort_by,
+        filters.sort_order
       );
       
       // Update session storage with new data
@@ -328,7 +361,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             defaultPageSize,
             filters.email || null,
             filters.user_role || null,
-            filters.team || null
+            filters.team || null,
+            filters.sso_user_id || null,
+            filters.sort_by,
+            filters.sort_order
           );
 
           // Store in session storage
@@ -462,9 +498,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           user_id: "",
                           user_role: "",
                           team: "",
+                          sso_user_id: "",
                           model: "",
                           min_spend: null,
-                          max_spend: null
+                          max_spend: null,
+                          sort_by: "created_at",
+                          sort_order: "desc"
                         });
                       }}
                     >
@@ -541,6 +580,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           ))}
                         </Select>
                       </div>
+                      
+                      {/* SSO ID Search */}
+                      <div className="relative w-64">
+                        <input
+                          type="text"
+                          placeholder="Filter by SSO ID"
+                          className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={filters.sso_user_id}
+                          onChange={(e) => handleFilterChange('sso_user_id', e.target.value)}
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -591,9 +641,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               </div>
 
               <UserDataTable
-                data={userListResponse.users || []}
+                data={userListResponse?.users || []}
                 columns={tableColumns}
                 isLoading={!userListResponse}
+                onSortChange={handleSortChange}
+                currentSort={{
+                  sortBy: filters.sort_by,
+                  sortOrder: filters.sort_order
+                }}
               />
             </div>
           </TabPanel>
