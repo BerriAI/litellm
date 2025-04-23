@@ -205,6 +205,7 @@ class BaseResponsesAPITest(ABC):
             if isinstance(response, ResponsesAPIResponse):
                 litellm.delete_responses(
                     response_id=response.id,
+                    **base_completion_call_args
                 )
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
@@ -218,6 +219,7 @@ class BaseResponsesAPITest(ABC):
             if isinstance(response, ResponsesAPIResponse):
                 await litellm.adelete_responses(
                     response_id=response.id,
+                    **base_completion_call_args
                 )
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
@@ -249,6 +251,7 @@ class BaseResponsesAPITest(ABC):
             assert response_id is not None
             litellm.delete_responses(
                 response_id=response_id,
+                **base_completion_call_args
             )
         else:
             response = await litellm.aresponses(
@@ -268,6 +271,7 @@ class BaseResponsesAPITest(ABC):
             assert response_id is not None
             await litellm.adelete_responses(
                 response_id=response_id,
+                **base_completion_call_args
             )
 
 
