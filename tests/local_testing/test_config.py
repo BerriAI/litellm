@@ -21,6 +21,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+import litellm_proxy
 from litellm_proxy.common_utils.encrypt_decrypt_utils import encrypt_value
 from litellm_proxy.proxy_server import ProxyConfig
 from litellm_proxy.utils import DualCache, ProxyLogging

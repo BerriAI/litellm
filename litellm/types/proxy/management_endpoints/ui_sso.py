@@ -2,7 +2,7 @@ from typing import List, Literal, Optional, TypedDict
 
 from pydantic import Field
 
-from litellm_proxy._types import LiteLLMPydanticObjectBase, LitellmUserRoles
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class MicrosoftGraphAPIUserGroupDirectoryObject(TypedDict, total=False):
