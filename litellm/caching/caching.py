@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
 from litellm.types.utils import all_litellm_params
@@ -88,16 +89,16 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
-        redis_semantic_cache_use_async=False,
-        redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir=None,
+        disk_cache_dir: Optional[str] = None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
-        qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         **kwargs,
     ):
         """
@@ -170,8 +171,8 @@ class Cache:
                 port=port,
                 password=password,
                 similarity_threshold=similarity_threshold,
-                use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -406,7 +407,7 @@ class Cache:
                     }
                 ]
             }
-            time.sleep(0.02)
+            time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,

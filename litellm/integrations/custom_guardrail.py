@@ -7,7 +7,6 @@ from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
 class CustomGuardrail(CustomLogger):
-
     def __init__(
         self,
         guardrail_name: Optional[str] = None,

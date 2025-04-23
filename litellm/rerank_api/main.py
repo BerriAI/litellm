@@ -107,13 +107,16 @@ def rerank(  # noqa: PLR0915
             k for k, v in unique_version_params.items() if v is not None
         ]
 
-        model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=optional_params.api_base,
-                api_key=optional_params.api_key,
-            )
+        (
+            model,
+            _custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
         )
 
         rerank_provider_config: BaseRerankConfig = (
@@ -272,7 +275,6 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == "jina_ai":
-
             if dynamic_api_key is None:
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"

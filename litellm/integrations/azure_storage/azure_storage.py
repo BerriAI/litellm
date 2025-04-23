@@ -1,14 +1,15 @@
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 from litellm._logging import verbose_logger
-from litellm.constants import AZURE_STORAGE_MSFT_VERSION
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.llms.azure.common_utils import get_azure_ad_token_from_entrata_id
+from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -48,6 +49,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                     "Missing required environment variable: AZURE_STORAGE_FILE_SYSTEM"
                 )
             self.azure_storage_file_system: str = _azure_storage_file_system
+            self._service_client = None
+            # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
+            self._service_client_timeout: Optional[float] = None
 
             # Internal variables used for Token based authentication
             self.azure_auth_token: Optional[str] = (
@@ -153,7 +157,6 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         3. Flush the data
         """
         try:
-
             if self.azure_storage_account_key:
                 await self.upload_to_azure_data_lake_with_azure_account_key(
                     payload=payload
@@ -292,7 +295,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "Missing required environment variable: AZURE_STORAGE_CLIENT_SECRET"
             )
 
-        token_provider = get_azure_ad_token_from_entrata_id(
+        token_provider = get_azure_ad_token_from_entra_id(
             tenant_id=tenant_id,
             client_id=client_id,
             client_secret=client_secret,
@@ -325,6 +328,25 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 f"AzureBlobStorageLogger is only available for premium users. {CommonProxyErrors.not_premium_user}"
             )
 
+    async def get_service_client(self):
+        from azure.storage.filedatalake.aio import DataLakeServiceClient
+
+        # expire old clients to recover from connection issues
+        if (
+            self._service_client_timeout
+            and self._service_client
+            and self._service_client_timeout > time.time()
+        ):
+            await self._service_client.close()
+            self._service_client = None
+        if not self._service_client:
+            self._service_client = DataLakeServiceClient(
+                account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
+                credential=self.azure_storage_account_key,
+            )
+            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+        return self._service_client
+
     async def upload_to_azure_data_lake_with_azure_account_key(
         self, payload: StandardLoggingPayload
     ):
@@ -333,13 +355,10 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
         This is used when Azure Storage Account Key is set - Azure Storage Account Key does not work directly with Azure Rest API
         """
-        from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # Create an async service client
-        service_client = DataLakeServiceClient(
-            account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
-            credential=self.azure_storage_account_key,
-        )
+
+        service_client = await self.get_service_client()
         # Get file system client
         file_system_client = service_client.get_file_system_client(
             file_system=self.azure_storage_file_system

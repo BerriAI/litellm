@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret
 
@@ -381,7 +381,7 @@ class BaseAWSLLM:
             "region_name": aws_region_name,
         }
 
-        if sts_response["PackedPolicySize"] > 75:
+        if sts_response["PackedPolicySize"] > BEDROCK_MAX_POLICY_SIZE:
             verbose_logger.warning(
                 f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
             )

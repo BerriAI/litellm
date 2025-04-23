@@ -57,7 +57,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 # litellm proxy call
 response = completion(
     model="litellm_proxy/your-model-name", 
-    messages, 
+    messages=messages, 
     api_base = "your-litellm-proxy-url",
     api_key = "your-litellm-proxy-api-key"
 )
@@ -76,7 +76,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 # openai call
 response = completion(
     model="litellm_proxy/your-model-name", 
-    messages, 
+    messages=messages,
     api_base = "your-litellm-proxy-url", 
     stream=True
 )

@@ -111,8 +111,8 @@ from litellm import completion
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = completion(
   model="vertex_ai/gemini-1.5-pro",

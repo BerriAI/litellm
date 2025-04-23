@@ -1,7 +1,10 @@
 /**
  * Helper file for calls being made to proxy
  */
+import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
+import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
+import { Team } from "./key_team_helpers/key_list";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -131,9 +134,9 @@ export const modelCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.text();
       const errorMsg =
-        errorData.error?.message?.error ||
+        errorData||    
         "Network response was not ok";
       message.error(errorMsg);
       throw new Error(errorMsg);
@@ -183,9 +186,8 @@ export const modelSettingsCall = async (accessToken: String) => {
     //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to get callbacks:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Failed to get model settings:", error);
   }
 };
 
@@ -528,6 +530,8 @@ export const userCreateCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
+
+    formValues.auto_create_key = false;
     // if formValues.metadata is not undefined, make it a valid dict
     if (formValues.metadata) {
       console.log("formValues.metadata:", formValues.metadata);
@@ -672,6 +676,12 @@ export const userListCall = async (
   userIDs: string[] | null = null,
   page: number | null = null,
   page_size: number | null = null,
+  userEmail: string | null = null,
+  userRole: string | null = null,
+  team: string | null = null,
+  sso_user_id: string | null = null,
+  sortBy: string | null = null,
+  sortOrder: 'asc' | 'desc' | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -693,6 +703,30 @@ export const userListCall = async (
     
     if (page_size) {
       queryParams.append('page_size', page_size.toString());
+    }
+
+    if (userEmail) {
+      queryParams.append('user_email', userEmail);
+    }
+
+    if (userRole) {
+      queryParams.append('role', userRole);
+    }
+
+    if (team) {
+      queryParams.append('team', team);
+    }
+
+    if (sso_user_id) {
+      queryParams.append('sso_user_ids', sso_user_id);
+    }
+
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
     }
     
     const queryString = queryParams.toString();
@@ -1070,6 +1104,160 @@ export const organizationDeleteCall = async (
   }
 };
 
+export const transformRequestCall = async (accessToken: String, request: object) => {
+  /**
+   * Transform request
+   */
+
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/utils/transform_request` : `/utils/transform_request`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+  
+  
+}
+
+export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: string[] | null = null) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
+    if (tags) {
+      queryParams.append('tags', tags.join(','));
+    }
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const teamDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, teamIds: string[] | null = null) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
+    if (teamIds) {
+      queryParams.append('team_ids', teamIds.join(','));
+    }
+    queryParams.append('exclude_team_ids', 'litellm-dashboard');
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const getTotalSpendCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -1213,8 +1401,12 @@ export const modelInfoCall = async (
    * Get all models on proxy
    */
   try {
+    console.log("modelInfoCall:", accessToken, userID, userRole);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
 
+    if (!all_admin_roles.includes(userRole as string)) { // only show users models they've added
+      url += `?user_models_only=true`;
+    }
     //message.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
@@ -2372,6 +2564,7 @@ export const testConnectionRequest = async (
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
+    console.log("entering keyInfoV1Call");
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/info` : `/key/info`;
     url = `${url}?key=${key}`; // Add key as query parameter
 
@@ -2384,13 +2577,16 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
       // Remove body since this is a GET request
     });
 
+    console.log("response", response);
+
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      message.error("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
+    console.log("data", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch key info:", error);
@@ -2404,8 +2600,9 @@ export const keyListCall = async (
   accessToken: String, 
   organizationID: string | null,
   teamID: string | null,
+  selectedKeyAlias: string | null,
   page: number,
-  pageSize: number
+  pageSize: number,
 ) => {
   /**
    * Get all available teams on proxy
@@ -2421,6 +2618,10 @@ export const keyListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (selectedKeyAlias) {
+      queryParams.append('key_alias', selectedKeyAlias)
     }
 
     if (page) {
@@ -2936,7 +3137,7 @@ export const teamUpdateCall = async (
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
-    const data = await response.json();
+    const data = await response.json() as { data: Team, team_id: string };
     console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3970,7 +4171,438 @@ export const uiSpendLogDetailsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch log details:", error);
+  throw error;
+  }
+};
+
+export const getInternalUserSettings = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/get/internal_user_settings`
+      : `/get/internal_user_settings`;
+
+    console.log("Fetching SSO settings from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched SSO settings:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SSO settings:", error);
     throw error;
   }
 };
 
+
+export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/update/internal_user_settings`
+      : `/update/internal_user_settings`;
+
+    console.log("Updating internal user settings:", settings);
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Updated internal user settings:", data);
+    message.success("Internal user settings updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update internal user settings:", error);
+    throw error;
+  }
+};
+
+
+export const listMCPTools = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/mcp/tools/list`
+      : `/mcp/tools/list`;
+
+    console.log("Fetching MCP tools from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP tools:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP tools:", error);
+    throw error;
+  }
+};
+
+
+export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/mcp/tools/call`
+      : `/mcp/tools/call`;
+
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: toolName,
+        arguments: toolArguments,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("MCP tool call response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to call MCP tool:", error);
+    throw error;
+  }
+};
+
+
+export const tagCreateCall = async (
+  accessToken: string,
+  formValues: TagNewRequest
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/tag/new`
+      : `/tag/new`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error creating tag:", error);
+    throw error;
+  }
+};
+
+export const tagUpdateCall = async (
+  accessToken: string,
+  formValues: TagUpdateRequest
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/tag/update`
+      : `/tag/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating tag:", error);
+    throw error;
+  }
+};
+
+export const tagInfoCall = async (
+  accessToken: string,
+  tagNames: string[]
+): Promise<TagInfoResponse> => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/tag/info`
+      : `/tag/info`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ names: tagNames }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return {};
+    }
+
+    const data = await response.json();
+    return data as TagInfoResponse;
+  } catch (error) {
+    console.error("Error getting tag info:", error);
+    throw error;
+  }
+};
+
+export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/tag/list`
+      : `/tag/list`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return {};
+    }
+
+    const data = await response.json();
+    return data as TagListResponse;
+  } catch (error) {
+    console.error("Error listing tags:", error);
+    throw error;
+  }
+};
+
+export const tagDeleteCall = async (
+  accessToken: string,
+  tagName: string
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/tag/delete`
+      : `/tag/delete`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ name: tagName }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error deleting tag:", error);
+    throw error;
+  }
+};
+
+export const getDefaultTeamSettings = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/get/default_team_settings`
+      : `/get/default_team_settings`;
+
+    console.log("Fetching default team settings from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched default team settings:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch default team settings:", error);
+    throw error;
+  }
+};
+
+
+export const updateDefaultTeamSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/update/default_team_settings`
+      : `/update/default_team_settings`;
+
+    console.log("Updating default team settings:", settings);
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Updated default team settings:", data);
+    message.success("Default team settings updated successfully");
+    return data;
+  } catch (error) {
+    console.error("Failed to update default team settings:", error);
+    throw error;
+  }
+};
+
+
+
+export const getTeamPermissionsCall = async (
+  accessToken: string,
+  teamId: string
+) => {
+  try {
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/team/permissions_list?team_id=${teamId}`
+      : `/team/permissions_list?team_id=${teamId}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get team permissions:", error);
+    throw error;
+  }
+};
+
+
+
+export const teamPermissionsUpdateCall = async (
+  accessToken: string,
+  teamId: string,
+  permissions: string[]
+) => {
+  try {
+    let url = proxyBaseUrl  
+      ? `${proxyBaseUrl}/team/permissions_update`
+      : `/team/permissions_update`;
+
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        team_member_permissions: permissions,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+
+    const data = await response.json();
+    console.log("Team permissions response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update team permissions:", error);
+    throw error;
+  }
+};

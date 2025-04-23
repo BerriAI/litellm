@@ -2,7 +2,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Tuple, Union
 
 import httpx
 from fastapi import HTTPException, Request, status
@@ -57,7 +57,9 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
             "x-litellm-cache-key": cache_key,
-            "x-litellm-model-api-base": api_base,
+            "x-litellm-model-api-base": (
+                api_base.split("?")[0] if api_base else None
+            ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
@@ -99,32 +101,22 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.error(f"Error setting custom headers: {e}")
             return {}
 
-    async def base_process_llm_request(
+    async def common_processing_pre_call_logic(
         self,
         request: Request,
-        fastapi_response: Response,
-        user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal["acompletion", "aresponses"],
-        proxy_logging_obj: ProxyLogging,
         general_settings: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
-        llm_router: Optional[Router] = None,
-        model: Optional[str] = None,
+        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        version: Optional[str] = None,
         user_model: Optional[str] = None,
         user_temperature: Optional[float] = None,
         user_request_timeout: Optional[float] = None,
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
-        version: Optional[str] = None,
-    ) -> Any:
-        """
-        Common request processing logic for both chat completions and responses API endpoints
-        """
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(self.data, indent=4)),
-        )
-
+        model: Optional[str] = None,
+    ) -> Tuple[dict, LiteLLMLoggingObj]:
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -160,6 +152,9 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
+        self.data["litellm_call_id"] = request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type="completion"
@@ -167,9 +162,6 @@ class ProxyBaseLLMRequestProcessing:
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
-        self.data["litellm_call_id"] = request.headers.get(
-            "x-litellm-call-id", str(uuid.uuid4())
-        )
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -179,13 +171,57 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
+        return self.data, logging_obj
+
+    async def base_process_llm_request(
+        self,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        proxy_logging_obj: ProxyLogging,
+        general_settings: dict,
+        proxy_config: ProxyConfig,
+        select_data_generator: Callable,
+        llm_router: Optional[Router] = None,
+        model: Optional[str] = None,
+        user_model: Optional[str] = None,
+        user_temperature: Optional[float] = None,
+        user_request_timeout: Optional[float] = None,
+        user_max_tokens: Optional[int] = None,
+        user_api_base: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> Any:
+        """
+        Common request processing logic for both chat completions and responses API endpoints
+        """
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(self.data, indent=4)),
+        )
+
+        self.data, logging_obj = await self.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type=route_type,
+        )
+
         tasks = []
         tasks.append(
             proxy_logging_obj.during_call_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
-                    route_type=route_type
+                    route_type=route_type  # type: ignore
                 ),
             )
         )
@@ -348,7 +384,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"]
+        route_type: Literal["acompletion", "aresponses"],
     ) -> Literal["completion", "responses"]:
         if route_type == "acompletion":
             return "completion"

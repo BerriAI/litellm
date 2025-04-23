@@ -23,15 +23,25 @@ interface UserDataTableProps {
   data: UserInfo[];
   columns: ColumnDef<UserInfo, any>[];
   isLoading?: boolean;
+  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  currentSort?: {
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+  };
 }
 
 export function UserDataTable({
   data = [],
   columns,
   isLoading = false,
+  onSortChange,
+  currentSort,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created_at", desc: true }
+    { 
+      id: currentSort?.sortBy || "created_at", 
+      desc: currentSort?.sortOrder === "desc" 
+    }
   ]);
 
   const table = useReactTable({
@@ -40,11 +50,29 @@ export function UserDataTable({
     state: {
       sorting,
     },
-    onSortingChange: setSorting,
+    onSortingChange: (newSorting: any) => {
+      setSorting(newSorting);
+      if (newSorting.length > 0) {
+        const sortState = newSorting[0];
+        const sortBy = sortState.id;
+        const sortOrder = sortState.desc ? 'desc' : 'asc';
+        onSortChange?.(sortBy, sortOrder);
+      }
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
   });
+
+  // Update local sorting state when currentSort prop changes
+  React.useEffect(() => {
+    if (currentSort) {
+      setSorting([{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }]);
+    }
+  }, [currentSort]);
 
   return (
     <div className="rounded-lg custom-border relative">

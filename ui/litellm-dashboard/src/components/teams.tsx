@@ -18,15 +18,17 @@ import {
   Form,
   Input,
   Select as Select2,
-  InputNumber,
   message,
   Tooltip
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardModelsInList } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
 import TeamInfoView from "@/components/team/team_info";
+import TeamSSOSettings from "@/components/TeamSSOSettings";
+import { isAdminRole } from "@/utils/roles";
 import {
   Table,
   TableBody,
@@ -84,6 +86,7 @@ import {
   modelAvailableCall,
   teamListCall
 } from "./networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
 
 const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
   let tempModelsToPick = [];
@@ -321,6 +324,22 @@ const Teams: React.FC<TeamProps> = ({
       {selectedTeamId ? (
         <TeamInfoView 
         teamId={selectedTeamId} 
+        onUpdate={(data) => {
+            setTeams(teams => {
+              if (teams == null) {
+                return teams;
+              }
+            
+              return teams.map(team => {
+                if (data.team_id === team.team_id) {
+                  return updateExistingKeys(team, data)
+                }
+                
+                return team
+              })
+            })
+
+        }}
         onClose={() => {
           setSelectedTeamId(null);
           setEditTeam(false);
@@ -337,6 +356,7 @@ const Teams: React.FC<TeamProps> = ({
         <div className="flex">
           <Tab>Your Teams</Tab>
           <Tab>Available Teams</Tab>
+          {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
           </div>
           <div className="flex items-center space-x-2">
             {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
@@ -665,7 +685,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Form.Item label={
                     <span>
                       Models{' '}
-                      <Tooltip title="These are the models that your selected organization has access to">
+                      <Tooltip title="These are the models that your selected team has access to">
                         <InfoCircleOutlined style={{ marginLeft: '4px' }} />
                       </Tooltip>
                     </span>
@@ -690,7 +710,7 @@ const Teams: React.FC<TeamProps> = ({
                 </Form.Item>
 
                 <Form.Item label="Max Budget (USD)" name="max_budget">
-                  <InputNumber step={0.01} precision={2} width={200} />
+                  <NumericalInput step={0.01} precision={2} width={200} />
                 </Form.Item>
                 <Form.Item
                   className="mt-8"
@@ -707,13 +727,13 @@ const Teams: React.FC<TeamProps> = ({
                   label="Tokens per minute Limit (TPM)"
                   name="tpm_limit"
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
                 <Form.Item
                   label="Requests per minute Limit (RPM)"
                   name="rpm_limit"
                 >
-                  <InputNumber step={1} width={400} />
+                  <NumericalInput step={1} width={400} />
                 </Form.Item>
 
                 <Accordion className="mt-20 mb-8">
@@ -780,6 +800,15 @@ const Teams: React.FC<TeamProps> = ({
           userID={userID}
         />
       </TabPanel>
+      {isAdminRole(userRole || "") && (
+        <TabPanel>
+          <TeamSSOSettings
+            accessToken={accessToken}
+            userID={userID || ""}
+            userRole={userRole || ""}
+          />
+        </TabPanel>
+      )}
       </TabPanels>
 
       </TabGroup>)}
