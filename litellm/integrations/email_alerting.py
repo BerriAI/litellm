@@ -3,10 +3,14 @@ Functions for sending Email Alerts
 """
 
 import os
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm_proxy._types import WebhookEvent
+
+if TYPE_CHECKING:
+    from litellm_proxy._types import WebhookEvent
+else:
+    WebhookEvent = Any
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"

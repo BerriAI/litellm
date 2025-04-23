@@ -406,7 +406,7 @@ class OpenTelemetry(CustomLogger):
     def set_tools_attributes(self, span: Span, tools):
         import json
 
-        from litellm_proxy._types import SpanAttributes
+        from litellm.types.integrations.opentelemetry import SpanAttributes
 
         if not tools:
             return
@@ -460,7 +460,7 @@ class OpenTelemetry(CustomLogger):
     def _tool_calls_kv_pair(
         tool_calls: List[ChatCompletionMessageToolCall],
     ) -> Dict[str, Any]:
-        from litellm_proxy._types import SpanAttributes
+        from litellm.types.integrations.opentelemetry import SpanAttributes
 
         kv_pairs: Dict[str, Any] = {}
         for idx, tool_call in enumerate(tool_calls):
@@ -496,7 +496,7 @@ class OpenTelemetry(CustomLogger):
                     span, kwargs, response_obj
                 )
                 return
-            from litellm_proxy._types import SpanAttributes
+            from litellm.types.integrations.opentelemetry import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}

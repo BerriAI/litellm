@@ -9,7 +9,7 @@ Handles two types of alerts:
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -29,7 +29,12 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
-from litellm_proxy._types import UserAPIKeyAuth
+
+if TYPE_CHECKING:
+    from litellm_proxy._types import UserAPIKeyAuth
+else:
+    UserAPIKeyAuth = Any
+
 
 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD = 60
 PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS = 60

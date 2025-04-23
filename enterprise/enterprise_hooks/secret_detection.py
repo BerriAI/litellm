@@ -11,12 +11,17 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional
+from typing import Any, Optional
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth
+from typing import TYPE_CHECKING
 from litellm._logging import verbose_proxy_logger
 import tempfile
 from litellm.integrations.custom_guardrail import CustomGuardrail
+
+if TYPE_CHECKING:
+    from litellm_proxy._types import UserAPIKeyAuth
+else:
+    UserAPIKeyAuth = Any
 
 GUARDRAIL_NAME = "hide_secrets"
 
