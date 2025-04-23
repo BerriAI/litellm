@@ -75,8 +75,8 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():
     ]
     result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
     assert len(result) == 2
-    assert result[0]["input"] == json.dumps(messages[0])
-    assert result[1]["input"] == json.dumps(messages[1])
+    assert result[0] == messages[0]
+    assert result[1] == messages[1]
 
 
 def test_handle_any_messages_to_chat_completion_str_messages_conversion_list_infinite_loop():
@@ -88,8 +88,8 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_list_inf
     # This should complete without stack overflow
     result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
     assert len(result) == 2
-    assert result[0]["input"] == json.dumps(messages[0])
-    assert result[1]["input"] == json.dumps(messages[1])
+    assert result[0] == messages[0]
+    assert result[1] == messages[1]
 
 
 def test_handle_any_messages_to_chat_completion_str_messages_conversion_dict():
