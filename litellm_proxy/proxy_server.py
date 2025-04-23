@@ -33,6 +33,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    KeyManagementSettings,
 )
 
 if TYPE_CHECKING:
