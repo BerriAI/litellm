@@ -389,7 +389,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def get_base_model(model: str) -> str:
+    def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model
 
     def get_model_response_iterator(

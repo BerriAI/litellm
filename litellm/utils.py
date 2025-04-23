@@ -180,10 +180,18 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
-with resources.open_text(
-    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
-) as f:
-    json_data = json.load(f)
+try:
+    # Python 3.9+
+    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
+        "anthropic_tokenizer.json"
+    ).open("r") as f:
+        json_data = json.load(f)
+except (ImportError, AttributeError, TypeError):
+    with resources.open_text(
+        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+    ) as f:
+        json_data = json.load(f)
+
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
@@ -2735,6 +2743,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "infinity":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="infinity",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.InfinityEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -4458,14 +4481,14 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
                 key = model
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
@@ -4475,21 +4498,21 @@ def _get_model_info_helper(  # noqa: PLR0915
                 and combined_stripped_model_name in litellm.model_cost
             ):
                 key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
                 key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
                 key = split_model
-                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
@@ -4562,6 +4585,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
+                ),
+                output_cost_per_reasoning_token=_model_info.get(
+                    "output_cost_per_reasoning_token", None
                 ),
                 output_cost_per_token_above_128k_tokens=_model_info.get(
                     "output_cost_per_token_above_128k_tokens", None
@@ -5117,6 +5143,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("VOYAGE_API_KEY")
+        elif custom_llm_provider == "infinity":
+            if "INFINITY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("INFINITY_API_KEY")
         elif custom_llm_provider == "fireworks_ai":
             if (
                 "FIREWORKS_AI_API_KEY" in os.environ
@@ -5807,8 +5838,133 @@ def trim_messages(
         return messages
 
 
+from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class AvailableModelsCache(InMemoryCache):
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
+        super().__init__(ttl_seconds, max_size)
+        self._env_hash: Optional[str] = None
+
+    def _get_env_hash(self) -> str:
+        """Create a hash of relevant environment variables"""
+        env_vars = {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith(("OPENAI", "ANTHROPIC", "AZURE", "AWS"))
+        }
+        return str(hash(frozenset(env_vars.items())))
+
+    def _check_env_changed(self) -> bool:
+        """Check if environment variables have changed"""
+        current_hash = self._get_env_hash()
+        if self._env_hash is None:
+            self._env_hash = current_hash
+            return True
+        return current_hash != self._env_hash
+
+    def _get_cache_key(
+        self,
+        custom_llm_provider: Optional[str],
+        litellm_params: Optional[LiteLLM_Params],
+    ) -> str:
+        valid_str = ""
+
+        if litellm_params is not None:
+            valid_str = litellm_params.model_dump_json()
+        if custom_llm_provider is not None:
+            valid_str = f"{custom_llm_provider}:{valid_str}"
+        return hashlib.sha256(valid_str.encode()).hexdigest()
+
+    def get_cached_model_info(
+        self,
+        custom_llm_provider: Optional[str] = None,
+        litellm_params: Optional[LiteLLM_Params] = None,
+    ) -> Optional[List[str]]:
+        """Get cached model info"""
+        # Check if environment has changed
+        if litellm_params is None and self._check_env_changed():
+            self.cache_dict.clear()
+            return None
+
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+
+        result = cast(Optional[List[str]], self.get_cache(cache_key))
+
+        if result is not None:
+            return copy.deepcopy(result)
+        return result
+
+    def set_cached_model_info(
+        self,
+        custom_llm_provider: str,
+        litellm_params: Optional[LiteLLM_Params],
+        available_models: List[str],
+    ):
+        """Set cached model info"""
+        cache_key = self._get_cache_key(custom_llm_provider, litellm_params)
+        self.set_cache(cache_key, copy.deepcopy(available_models))
+
+
+# Global cache instance
+_model_cache = AvailableModelsCache()
+
+
+def _infer_valid_provider_from_env_vars(
+    custom_llm_provider: Optional[str] = None,
+) -> List[str]:
+    valid_providers: List[str] = []
+    environ_keys = os.environ.keys()
+    for provider in litellm.provider_list:
+        if custom_llm_provider and provider != custom_llm_provider:
+            continue
+
+        # edge case litellm has together_ai as a provider, it should be togetherai
+        env_provider_1 = provider.replace("_", "")
+        env_provider_2 = provider
+
+        # litellm standardizes expected provider keys to
+        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
+        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
+        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
+        if (
+            expected_provider_key_1 in environ_keys
+            or expected_provider_key_2 in environ_keys
+        ):
+            # key is set
+            valid_providers.append(provider)
+
+    return valid_providers
+
+
+def _get_valid_models_from_provider_api(
+    provider_config: BaseLLMModelInfo,
+    custom_llm_provider: str,
+    litellm_params: Optional[LiteLLM_Params] = None,
+) -> List[str]:
+    try:
+        cached_result = _model_cache.get_cached_model_info(
+            custom_llm_provider, litellm_params
+        )
+
+        if cached_result is not None:
+            return cached_result
+        models = provider_config.get_models(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+        )
+
+        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        return models
+    except Exception as e:
+        verbose_logger.debug(f"Error getting valid models: {e}")
+        return []
+
+
 def get_valid_models(
-    check_provider_endpoint: bool = False, custom_llm_provider: Optional[str] = None
+    check_provider_endpoint: Optional[bool] = None,
+    custom_llm_provider: Optional[str] = None,
+    litellm_params: Optional[LiteLLM_Params] = None,
 ) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
@@ -5819,31 +5975,21 @@ def get_valid_models(
     Returns:
         A list of valid LLMs
     """
+
     try:
+        check_provider_endpoint = (
+            check_provider_endpoint or litellm.check_provider_endpoint
+        )
         # get keys set in .env
-        environ_keys = os.environ.keys()
-        valid_providers = []
+
+        valid_providers: List[str] = []
+        valid_models: List[str] = []
         # for all valid providers, make a list of supported llms
-        valid_models = []
 
-        for provider in litellm.provider_list:
-            if custom_llm_provider and provider != custom_llm_provider:
-                continue
-
-            # edge case litellm has together_ai as a provider, it should be togetherai
-            env_provider_1 = provider.replace("_", "")
-            env_provider_2 = provider
-
-            # litellm standardizes expected provider keys to
-            # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-            expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-            expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-            if (
-                expected_provider_key_1 in environ_keys
-                or expected_provider_key_2 in environ_keys
-            ):
-                # key is set
-                valid_providers.append(provider)
+        if custom_llm_provider:
+            valid_providers = [custom_llm_provider]
+        else:
+            valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
 
         for provider in valid_providers:
             provider_config = ProviderConfigManager.get_provider_model_info(
@@ -5856,15 +6002,24 @@ def get_valid_models(
 
             if provider == "azure":
                 valid_models.append("Azure-LLM")
-            elif provider_config is not None and check_provider_endpoint:
-                try:
-                    models = provider_config.get_models()
-                    valid_models.extend(models)
-                except Exception as e:
-                    verbose_logger.debug(f"Error getting valid models: {e}")
+            elif (
+                provider_config is not None
+                and check_provider_endpoint
+                and provider is not None
+            ):
+                valid_models.extend(
+                    _get_valid_models_from_provider_api(
+                        provider_config,
+                        provider,
+                        litellm_params,
+                    )
+                )
             else:
-                models_for_provider = litellm.models_by_provider.get(provider, [])
+                models_for_provider = copy.deepcopy(
+                    litellm.models_by_provider.get(provider, [])
+                )
                 valid_models.extend(models_for_provider)
+
         return valid_models
     except Exception as e:
         verbose_logger.debug(f"Error getting valid models: {e}")
@@ -6137,24 +6292,27 @@ def validate_and_fix_openai_messages(messages: List):
 
     Handles missing role for assistant messages.
     """
+    new_messages = []
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
-    return validate_chat_completion_messages(messages=messages)
+
+        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        new_messages.append(cleaned_message)
+    return validate_chat_completion_user_messages(messages=new_messages)
 
 
-def validate_chat_completion_messages(messages: List[AllMessageValues]):
+def cleanup_none_field_in_message(message: AllMessageValues):
     """
-    Ensures all messages are valid OpenAI chat completion messages.
+    Cleans up the message by removing the none field.
+
+    remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
     """
-    # 1. convert all messages to dict
-    messages = [
-        cast(AllMessageValues, convert_to_dict(cast(dict, m))) for m in messages
-    ]
-    # 2. validate user messages
-    return validate_chat_completion_user_messages(messages=messages)
+    new_message = message.copy()
+    return {k: v for k, v in new_message.items() if v is not None}
 
 
 def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
@@ -6424,6 +6582,8 @@ class ProviderConfigManager:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXEmbeddingConfig()
+        elif litellm.LlmProviders.INFINITY == provider:
+            return litellm.InfinityEmbeddingConfig()
         raise ValueError(f"Provider {provider.value} does not support embedding config")
 
     @staticmethod
@@ -6473,11 +6633,13 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_responses_api_config(
-        model: str,
         provider: LlmProviders,
+        model: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE == provider:
+            return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -6510,7 +6672,12 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.common_utils import (
+                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
+            )
 
+            return VLLMModelInfo()
         return None
 
     @staticmethod

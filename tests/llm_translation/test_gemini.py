@@ -17,6 +17,9 @@ from litellm import completion
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.0-flash"}
+    
+    def get_base_completion_call_args_with_reasoning_model(self) -> dict:
+        return {"model": "gemini/gemini-2.5-flash-preview-04-17"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -85,3 +88,50 @@ def test_gemini_image_generation():
     assert response.choices[0].message.content is not None
 
 
+
+def test_gemini_thinking():
+    litellm._turn_on_debug()
+    from litellm.types.utils import Message, CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    messages = [
+        {"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}
+    ]
+    reasoning_content = "I'm thinking about Occam's Razor."
+    assistant_message = Message(content='Okay, let\'s break down Occam\'s Razor.', reasoning_content=reasoning_content, role='assistant', tool_calls=None, function_call=None, provider_specific_fields=None)
+
+    messages.append(assistant_message)
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "messages": messages,
+        }
+    )
+    assert reasoning_content in json.dumps(raw_request)
+    response = completion(
+        model="gemini/gemini-2.5-flash-preview-04-17",
+        messages=messages, # make sure call works
+    )
+    print(response.choices[0].message)
+    assert response.choices[0].message.content is not None
+
+
+def test_gemini_thinking_budget_0():
+    litellm._turn_on_debug()
+    from litellm.types.utils import Message, CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "messages": [{"role": "user", "content": "Explain the concept of Occam's Razor and provide a simple, everyday example"}],
+            "thinking": {"type": "enabled", "budget_tokens": 0}
+        }
+    )
+    print(raw_request)
+    assert "0" in json.dumps(raw_request["raw_request_body"])

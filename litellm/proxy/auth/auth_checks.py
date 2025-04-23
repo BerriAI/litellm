@@ -2,11 +2,11 @@
 ## Common auth checks between jwt + key based auth
 """
 Got Valid Token from Cache, DB
-Run checks for: 
+Run checks for:
 
 1. If user can call model
-2. If user is in budget 
-3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
+2. If user is in budget
+3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
 import asyncio
 import re
@@ -88,7 +88,7 @@ async def common_checks(
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _model = request_body.get("model", None)
+    _model: Optional[str] = cast(Optional[str], request_body.get("model", None))
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -112,7 +112,7 @@ async def common_checks(
             )
 
     ## 2.1 If user can call model (if personal key)
-    if team_object is None and user_object is not None:
+    if _model and team_object is None and user_object is not None:
         await can_user_call_model(
             model=_model,
             llm_router=llm_router,
@@ -269,6 +269,11 @@ def _is_api_route_allowed(
 
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
+
+    # Check if Virtual Key is allowed to call the route - Applies to all Roles
+    RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route, valid_token=valid_token
+    )
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -639,6 +644,7 @@ async def get_user_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
     sso_user_id: Optional[str] = None,
     user_email: Optional[str] = None,
+    check_db_only: Optional[bool] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -650,12 +656,13 @@ async def get_user_object(
         return None
 
     # check if in cache
-    cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-    if cached_user_obj is not None:
-        if isinstance(cached_user_obj, dict):
-            return LiteLLM_UserTable(**cached_user_obj)
-        elif isinstance(cached_user_obj, LiteLLM_UserTable):
-            return cached_user_obj
+    if not check_db_only:
+        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        if cached_user_obj is not None:
+            if isinstance(cached_user_obj, dict):
+                return LiteLLM_UserTable(**cached_user_obj)
+            elif isinstance(cached_user_obj, LiteLLM_UserTable):
+                return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")

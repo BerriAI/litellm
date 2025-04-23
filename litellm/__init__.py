@@ -113,6 +113,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
+    "agentops",
+    "anthropic_cache_control_hook",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -162,7 +164,7 @@ token: Optional[str] = (
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
-modify_params = False
+modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -324,6 +326,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
+check_provider_endpoint = False
 
 
 ####### THREAD-SPECIFIC DATA ####################
@@ -413,6 +416,7 @@ deepseek_models: List = []
 azure_ai_models: List = []
 jina_ai_models: List = []
 voyage_models: List = []
+infinity_models: List = []
 databricks_models: List = []
 cloudflare_models: List = []
 codestral_models: List = []
@@ -554,6 +558,8 @@ def add_known_models():
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
             voyage_models.append(key)
+        elif value.get("litellm_provider") == "infinity":
+            infinity_models.append(key)
         elif value.get("litellm_provider") == "databricks":
             databricks_models.append(key)
         elif value.get("litellm_provider") == "cloudflare":
@@ -642,6 +648,7 @@ model_list = (
     + deepseek_models
     + azure_ai_models
     + voyage_models
+    + infinity_models
     + databricks_models
     + cloudflare_models
     + codestral_models
@@ -697,6 +704,7 @@ models_by_provider: dict = {
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
+    "infinity": infinity_models,
     "databricks": databricks_models,
     "cloudflare": cloudflare_models,
     "codestral": codestral_models,
@@ -944,9 +952,11 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,

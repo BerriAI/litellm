@@ -44,6 +44,19 @@ class BaseLLMModelInfo(ABC):
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         pass
 
+    @abstractmethod
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        pass
+
     @staticmethod
     @abstractmethod
     def get_base_model(model: str) -> Optional[str]:

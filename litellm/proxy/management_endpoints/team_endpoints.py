@@ -56,11 +56,16 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _user_has_admin_view,
+)
+from litellm.proxy.management_endpoints.tag_management_endpoints import (
+    get_daily_activity,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -75,6 +80,9 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
 )
 from litellm.router import Router
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
@@ -515,12 +523,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1146,10 +1154,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -1307,10 +1315,10 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_info is None:
                 raise Exception
@@ -2079,3 +2087,115 @@ async def update_team_member_permissions(
     )
 
     return updated_team
+
+
+@router.get(
+    "/team/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+)
+async def get_team_daily_activity(
+    team_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_team_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily activity for specific teams or all teams.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Convert comma-separated tags string to list if provided
+    team_ids_list = team_ids.split(",") if team_ids else None
+    exclude_team_ids_list: Optional[List[str]] = None
+
+    if exclude_team_ids:
+        exclude_team_ids_list = (
+            exclude_team_ids.split(",") if exclude_team_ids else None
+        )
+
+    if not _user_has_admin_view(user_api_key_dict):
+        user_info = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_id_upsert=False,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
+        )
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "User= {} not found".format(user_api_key_dict.user_id)
+                },
+            )
+
+        if team_ids_list is None:
+            team_ids_list = user_info.teams
+        else:
+            # check if all team_ids are in user_info.teams
+            for team_id in team_ids_list:
+                if team_id not in user_info.teams:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "error": "User does not belong to Team= {}. Call `/user/info` to see user's teams".format(
+                                team_id
+                            )
+                        },
+                    )
+
+    ## Fetch team aliases
+    where_condition = {}
+    if team_ids_list:
+        where_condition["team_id"] = {"in": list(team_ids_list)}
+    team_aliases = await prisma_client.db.litellm_teamtable.find_many(
+        where=where_condition
+    )
+    team_alias_metadata = {
+        t.team_id: {"team_alias": t.team_alias} for t in team_aliases
+    }
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=team_ids_list,
+        entity_metadata_field=team_alias_metadata,
+        exclude_entity_ids=exclude_team_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )

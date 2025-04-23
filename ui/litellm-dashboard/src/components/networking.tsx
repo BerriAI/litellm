@@ -676,6 +676,9 @@ export const userListCall = async (
   userIDs: string[] | null = null,
   page: number | null = null,
   page_size: number | null = null,
+  userEmail: string | null = null,
+  userRole: string | null = null,
+  team: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -697,6 +700,18 @@ export const userListCall = async (
     
     if (page_size) {
       queryParams.append('page_size', page_size.toString());
+    }
+
+    if (userEmail) {
+      queryParams.append('user_email', userEmail);
+    }
+
+    if (userRole) {
+      queryParams.append('role', userRole);
+    }
+
+    if (team) {
+      queryParams.append('team', team);
     }
     
     const queryString = queryParams.toString();
@@ -1144,6 +1159,90 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
     throw error;
   }
 };
+
+export const tagDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, tags: string[] | null = null) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
+    if (tags) {
+      queryParams.append('tags', tags.join(','));
+    }
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const teamDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1, teamIds: string[] | null = null) => {
+  /**
+   * Get daily user activity on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
+    const queryParams = new URLSearchParams();
+    queryParams.append('start_date', startTime.toISOString());
+    queryParams.append('end_date', endTime.toISOString());
+    queryParams.append('page_size', '1000');
+    queryParams.append('page', page.toString());
+    if (teamIds) {
+      queryParams.append('team_ids', teamIds.join(','));
+    }
+    queryParams.append('exclude_team_ids', 'litellm-dashboard');
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const getTotalSpendCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -2486,8 +2585,9 @@ export const keyListCall = async (
   accessToken: String, 
   organizationID: string | null,
   teamID: string | null,
+  selectedKeyAlias: string | null,
   page: number,
-  pageSize: number
+  pageSize: number,
 ) => {
   /**
    * Get all available teams on proxy
@@ -2503,6 +2603,10 @@ export const keyListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (selectedKeyAlias) {
+      queryParams.append('key_alias', selectedKeyAlias)
     }
 
     if (page) {

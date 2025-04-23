@@ -110,6 +110,18 @@ async def test_key_gen():
 
 
 @pytest.mark.asyncio
+async def test_simple_key_gen():
+    async with aiohttp.ClientSession() as session:
+        key_data = await generate_key(session, i=0)
+        key = key_data["key"]
+        assert key_data["token"] is not None
+        assert key_data["token"] != key
+        assert key_data["token_id"] is not None
+        assert key_data["created_at"] is not None
+        assert key_data["updated_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_key_gen_bad_key():
     """
     Test if you can create a key with a non-admin key, even with UI setup

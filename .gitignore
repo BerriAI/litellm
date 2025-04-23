@@ -73,6 +73,7 @@ tests/local_testing/log.txt
 .codegpt
 litellm/proxy/_new_new_secret_config.yaml
 litellm/proxy/custom_guardrail.py
+.mypy_cache/*
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/model_hub.html
@@ -85,3 +86,5 @@ litellm/proxy/db/migrations/0_init/migration.sql
 litellm/proxy/db/migrations/*
 litellm/proxy/migrations/*config.yaml
 litellm/proxy/migrations/*
+config.yaml
+tests/litellm/litellm_core_utils/llm_cost_calc/log.txt
