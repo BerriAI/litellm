@@ -2493,6 +2493,9 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 
     if (!response.ok) {
       const errorData = await response.text();
+      if (errorData.includes("Invalid proxy server token passed")) {
+        throw new Error("Invalid proxy server token passed");
+      }
       handleError(errorData);
       throw new Error("Network response was not ok");
     }
