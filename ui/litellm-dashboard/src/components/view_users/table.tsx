@@ -78,6 +78,16 @@ export function UserDataTable({
     setSelectedUserId(null);
   };
 
+  // Update local sorting state when currentSort prop changes
+  React.useEffect(() => {
+    if (currentSort) {
+      setSorting([{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }]);
+    }
+  }, [currentSort]);
+
   if (selectedUserId) {
     return (
       <UserInfoView
@@ -88,16 +98,6 @@ export function UserDataTable({
       />
     );
   }
-
-  // Update local sorting state when currentSort prop changes
-  React.useEffect(() => {
-    if (currentSort) {
-      setSorting([{
-        id: currentSort.sortBy,
-        desc: currentSort.sortOrder === 'desc'
-      }]);
-    }
-  }, [currentSort]);
 
   return (
     <div className="rounded-lg custom-border relative">
