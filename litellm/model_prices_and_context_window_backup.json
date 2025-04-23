@@ -1437,6 +1437,76 @@
         "output_cost_per_pixel": 0.0,
         "litellm_provider": "openai"
     },
+    "gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4.0054321e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "low/1024-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.0490417e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "medium/1024-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4.0054321e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "high/1024-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.59263611e-7,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "low/1024-x-1536/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.0172526e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "medium/1024-x-1536/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4.0054321e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "high/1024-x-1536/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.58945719e-7,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "low/1536-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.0172526e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "medium/1536-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 4.0054321e-8,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "high/1536-x-1024/gpt-image-1": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.58945719e-7,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai",
+        "supported_endpoints": ["/v1/images/generations"]
+    },
     "gpt-4o-transcribe": {
         "mode": "audio_transcription",
         "input_cost_per_token": 0.0000025,
