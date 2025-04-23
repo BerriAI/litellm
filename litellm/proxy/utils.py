@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -23,7 +23,6 @@ from typing import (
 )
 
 from litellm.constants import MAX_TEAM_LIST_LIMIT
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
