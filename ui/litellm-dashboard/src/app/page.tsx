@@ -139,6 +139,8 @@ export default function CreateKeyPage() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
+  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+
   useEffect(() => {
     const token = getCookie("token");
     setToken(token);
@@ -146,7 +148,7 @@ export default function CreateKeyPage() {
   }, []);
 
   useEffect(() => {
-    if (authLoading === false && token === null) {
+    if (redirectToLogin) {
       window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
     }
   }, [token, authLoading])
@@ -221,7 +223,7 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
-  if (authLoading || (authLoading == false && token === null)) {
+  if (authLoading) {
     return <LoadingScreen />
   }
 
