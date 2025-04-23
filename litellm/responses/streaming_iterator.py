@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
@@ -33,6 +34,8 @@ class BaseResponsesAPIStreamingIterator:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         self.response = response
         self.model = model
@@ -41,6 +44,10 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
+
+        # set request kwargs
+        self.litellm_metadata = litellm_metadata
+        self.custom_llm_provider = custom_llm_provider
 
     def _process_chunk(self, chunk):
         """Process a single chunk of data from the stream"""
@@ -70,6 +77,17 @@ class BaseResponsesAPIStreamingIterator:
                         logging_obj=self.logging_obj,
                     )
                 )
+
+                # if "response" in parsed_chunk, then encode litellm specific information like custom_llm_provider
+                response_object = getattr(openai_responses_api_chunk, "response", None)
+                if response_object:
+                    response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                        responses_api_response=response_object,
+                        litellm_metadata=self.litellm_metadata,
+                        custom_llm_provider=self.custom_llm_provider,
+                    )
+                    setattr(openai_responses_api_chunk, "response", response)
+
                 # Store the completed response
                 if (
                     openai_responses_api_chunk
@@ -102,8 +120,17 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
-        super().__init__(response, model, responses_api_provider_config, logging_obj)
+        super().__init__(
+            response,
+            model,
+            responses_api_provider_config,
+            logging_obj,
+            litellm_metadata,
+            custom_llm_provider,
+        )
         self.stream_iterator = response.aiter_lines()
 
     def __aiter__(self):
@@ -163,8 +190,17 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
-        super().__init__(response, model, responses_api_provider_config, logging_obj)
+        super().__init__(
+            response,
+            model,
+            responses_api_provider_config,
+            logging_obj,
+            litellm_metadata,
+            custom_llm_provider,
+        )
         self.stream_iterator = response.iter_lines()
 
     def __iter__(self):
@@ -228,12 +264,16 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         super().__init__(
             response=response,
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             logging_obj=logging_obj,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
         )
 
         # one-time transform

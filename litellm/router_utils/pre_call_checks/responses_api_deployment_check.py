@@ -31,11 +31,10 @@ class ResponsesApiDeploymentCheck(CustomLogger):
         if previous_response_id is None:
             return healthy_deployments
 
-        model_id, response_id = (
-            ResponsesAPIRequestUtils._decode_responses_api_response_id(
-                response_id=previous_response_id,
-            )
+        decoded_response = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            response_id=previous_response_id,
         )
+        model_id = decoded_response.get("model_id")
         if model_id is None:
             return healthy_deployments
 
