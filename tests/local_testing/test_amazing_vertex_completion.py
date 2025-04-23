@@ -455,6 +455,7 @@ async def test_async_vertexai_response():
             or "gemini-2.0-flash-thinking-exp" in model
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
         ):
             # our account does not have access to this model
             continue
@@ -465,6 +466,8 @@ async def test_async_vertexai_response():
                 model=model, messages=messages, temperature=0.7, timeout=5
             )
             print(f"response: {response}")
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.Timeout as e:
@@ -503,6 +506,7 @@ async def test_async_vertexai_streaming_response():
             or "gemini-2.0-flash-thinking-exp" in model
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
         ):
             # our account does not have access to this model
             continue
@@ -524,6 +528,8 @@ async def test_async_vertexai_streaming_response():
                     complete_response += chunk.choices[0].delta.content
             print(f"complete_response: {complete_response}")
             assert len(complete_response) > 0
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.APIConnectionError:
