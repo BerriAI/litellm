@@ -7,6 +7,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
+from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 
 from ..common_utils import OpenAIError
@@ -110,11 +111,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
     ) -> str:
         """
         Get the endpoint for OpenAI responses API
@@ -217,3 +214,39 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     f"Error getting model info in OpenAIResponsesAPIConfig: {e}"
                 )
         return False
+
+    #########################################################
+    ########## DELETE RESPONSE API TRANSFORMATION ##############
+    #########################################################
+    def transform_delete_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the delete response API request into a URL and data
+
+        OpenAI API expects the following request
+        - DELETE /v1/responses/{response_id}
+        """
+        url = f"{api_base}/{response_id}"
+        data: Dict = {}
+        return url, data
+
+    def transform_delete_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> DeleteResponseResult:
+        """
+        Transform the delete response API response into a DeleteResponseResult
+        """
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return DeleteResponseResult(**raw_response_json)
