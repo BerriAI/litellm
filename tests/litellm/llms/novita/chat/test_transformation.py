@@ -33,6 +33,7 @@ class TestNovitaConfig:
             model="novita/meta-llama/llama-3.3-70b-instruct",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
+            litellm_params={},
             api_key=api_key,
             api_base="https://api.novita.ai/v3/openai"
         )
@@ -52,6 +53,7 @@ class TestNovitaConfig:
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=[{"role": "user", "content": "Hello"}],
                 optional_params={},
+                litellm_params={},
                 api_key=None,
                 api_base="https://api.novita.ai/v3/openai"
             )
