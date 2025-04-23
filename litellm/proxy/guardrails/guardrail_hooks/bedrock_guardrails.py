@@ -192,7 +192,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def make_bedrock_api_request(
         self, kwargs: dict, response: Optional[Union[Any, litellm.ModelResponse]] = None
     ):
-
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
@@ -240,7 +239,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
     @log_guardrail_information
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -250,6 +249,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

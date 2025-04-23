@@ -338,18 +338,6 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["metadata"]["key2"] == "value2"
 
 
-def test_get_async_openai_model_client(model_list):
-    """Test if the '_get_async_openai_model_client' function is working correctly"""
-    router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
-    )
-    model_client = router._get_async_openai_model_client(
-        deployment=deployment, kwargs={}
-    )
-    assert model_client is not None
-
-
 def test_get_timeout(model_list):
     """Test if the '_get_timeout' function is working correctly"""
     router = Router(model_list=model_list)

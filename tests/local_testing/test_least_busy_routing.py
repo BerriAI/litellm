@@ -33,7 +33,7 @@ def test_model_added():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": "1234"},
         }
@@ -47,7 +47,7 @@ def test_get_available_deployments():
     test_cache = DualCache()
     least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
     model_group = "gpt-3.5-turbo"
-    deployment = "azure/chatgpt-v-2"
+    deployment = "azure/chatgpt-v-3"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -113,13 +113,13 @@ async def test_router_get_available_deployments(async_test):
     router.leastbusy_logger.test_flag = True
 
     model_group = "azure-model"
-    deployment = "azure/chatgpt-v-2"
+    deployment = "azure/chatgpt-v-3"
     request_count_dict = {1: 10, 2: 54, 3: 100}
     cache_key = f"{model_group}_request_count"
     if async_test is True:
         await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
         deployment = await router.async_get_available_deployment(
-            model=model_group, messages=None
+            model=model_group, messages=None, request_kwargs={}
         )
     else:
         router.cache.set_cache(key=cache_key, value=request_count_dict)

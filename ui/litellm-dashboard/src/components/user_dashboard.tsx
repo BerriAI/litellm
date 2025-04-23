@@ -21,6 +21,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 const isLocal = process.env.NODE_ENV === "development";
 if (isLocal != true) {
   console.log = function() {};
@@ -107,6 +108,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     team_id: null,
   };
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+  const [selectedKeyAlias, setSelectedKeyAlias] = useState<string | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -293,16 +295,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     )
   }
 
-  if (userID == null || token == null) {
+
+  if (token == null) {
     // user is not logged in as yet 
+    console.log("All cookies before redirect:", document.cookie);
+    
+    // Clear token cookies using the utility function
+    clearTokenCookies();
+    
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
     
-
-    // clear cookie called "token" since user will be logging in again
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-
     console.log("Full URL:", url);
     window.location.href = url;
 
@@ -310,6 +314,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   } else if (accessToken == null) {
     return null;
   }
+
+  if (userID == null) {
+    return (
+      <h1>User ID is not set</h1>
+    );
+  }
+
 
   if (userRole == null) {
     setUserRole("App Owner");
@@ -326,6 +337,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   console.log("inside user dashboard, selected team", selectedTeam);
+  console.log("All cookies after redirect:", document.cookie);
   return (
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
@@ -347,6 +359,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             setSelectedTeam={setSelectedTeam}
+            selectedKeyAlias={selectedKeyAlias}
+            setSelectedKeyAlias={setSelectedKeyAlias}
             data={keys}
             setData={setKeys}
             premiumUser={premiumUser}

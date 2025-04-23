@@ -62,9 +62,48 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (options.length > 0 && options[0].isSearchable && options[0].searchFn) {
+      loadInitialOptions(options[0]);
+    }
+  }, []);
+
+  const loadInitialOptions = async (option: FilterOption) => {
+    if (!option.isSearchable || !option.searchFn) return;
+    
+    setSearchLoading(true);
+    try {
+      const results = await option.searchFn('');
+      setSearchOptions(results);
+    } catch (error) {
+      console.error('Error loading initial options:', error);
+      setSearchOptions([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+  
+  useEffect(() => {
+    if (showFilters && currentOption?.isSearchable && currentOption?.searchFn) {
+      loadInitialOptions(currentOption);
+    }
+  }, [showFilters, selectedFilter]);
+
+  const handleFilterSelect = (key: string) => {
+    setSelectedFilter(key);
+    setDropdownOpen(false);
+    
+    const newOption = options.find(opt => opt.name === key);
+    if (newOption?.isSearchable && newOption?.searchFn) {
+      loadInitialOptions(newOption);
+    } else {
+      setSearchOptions([]);
+    }
+  };
+
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
-      if (!value || !option.isSearchable || !option.searchFn) return;
+      if (!option.isSearchable || !option.searchFn) return;
       
       setSearchLoading(true);
       try {
@@ -139,7 +178,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
         {buttonLabel}
       </TremorButton>
       {showFilters && (
-        <Card className="absolute left-0 mt-2 w-96 z-50 border border-gray-200 shadow-lg">
+        <Card className="absolute left-0 mt-2 w-[500px] z-50 border border-gray-200 shadow-lg">
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">Where</span>
@@ -147,17 +186,14 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
               <Dropdown
                 menu={{
                   items: dropdownItems,
-                  onClick: ({ key }) => {
-                    setSelectedFilter(key);
-                    setDropdownOpen(false);
-                    setSearchOptions([]);
-                  }
+                  onClick: ({ key }) => handleFilterSelect(key),
+                  style: { minWidth: '200px' }
                 }}
                 onOpenChange={setDropdownOpen}
                 open={dropdownOpen}
                 trigger={['click']}
               >
-                <Button className="min-w-32 text-left flex justify-between items-center">
+                <Button className="min-w-40 text-left flex justify-between items-center">
                   {currentOption?.label || selectedFilter}
                   {dropdownOpen ? (
                     <ChevronUpIcon className="h-4 w-4" />
@@ -185,7 +221,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                   }
                 }}
                 filterOption={false}
-                className="flex-1 w-full max-w-full truncate"
+                className="flex-1 w-full max-w-full truncate min-w-100"
                 loading={searchLoading}
                 options={searchOptions}
                 allowClear

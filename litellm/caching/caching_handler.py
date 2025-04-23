@@ -66,9 +66,7 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = (
-        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    )
+    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
 
 
 class LLMCachingHandler:
@@ -247,7 +245,6 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
-
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -725,6 +722,7 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+
         new_kwargs = kwargs.copy()
         new_kwargs.update(
             convert_args_to_kwargs(
@@ -789,6 +787,7 @@ class LLMCachingHandler:
         - Else append the chunk to self.async_streaming_chunks
 
         """
+
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = _assemble_complete_response_from_streaming_chunks(
@@ -799,7 +798,6 @@ class LLMCachingHandler:
             streaming_chunks=self.async_streaming_chunks,
             is_async=True,
         )
-
         # if a complete_streaming_response is assembled, add it to the cache
         if complete_streaming_response is not None:
             await self.async_set_cache(
@@ -864,9 +862,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params["preset_cache_key"] = (
-                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
-            )
+            litellm_params[
+                "preset_cache_key"
+            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
         else:
             litellm_params["preset_cache_key"] = None
 

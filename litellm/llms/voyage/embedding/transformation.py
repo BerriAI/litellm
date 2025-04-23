@@ -41,8 +41,10 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         if api_base:
@@ -81,6 +83,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -131,7 +134,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response.object = raw_response_json.get("object")
 
         usage = Usage(
-            prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
+            prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
         model_response.usage = usage

@@ -3,21 +3,33 @@ import TabItem from '@theme/TabItem';
 
 # 'Thinking' / 'Reasoning Content'
 
+:::info
+
+Requires LiteLLM v1.63.0+
+
+:::
+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
+- OpenRouter (`openrouter/`)
+- XAI (`xai/`)
+- Google AI Studio (`google/`)
+- Vertex AI (`vertex_ai/`)
 
-```python
+LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
+
+```python title="Example response from litellm"
 "message": {
     ...
     "reasoning_content": "The capital of France is Paris.",
-    "thinking_blocks": [
+    "thinking_blocks": [ # only returned for Anthropic models
         {
             "type": "thinking",
             "thinking": "The capital of France is Paris.",
-            "signature_delta": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
+            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
         }
     ]
 }
@@ -28,7 +40,7 @@ Supported Providers:
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python
+```python showLineNumbers
 from litellm import completion
 import os 
 
@@ -39,7 +51,7 @@ response = completion(
   messages=[
     {"role": "user", "content": "What is the capital of France?"},
   ],
-  thinking={"type": "enabled", "budget_tokens": 1024} # 👈 REQUIRED FOR ANTHROPIC models (on `anthropic/`, `bedrock/`, `vertexai/`)
+  reasoning_effort="low", 
 )
 print(response.choices[0].message.content)
 ```
@@ -59,7 +71,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
         "content": "What is the capital of France?"
       }
     ],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
+    "reasoning_effort": "low"
 }'
 ```
 </TabItem>
@@ -102,7 +114,7 @@ Here's how to use `thinking` blocks by Anthropic with tool calling.
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-```python
+```python showLineNumbers
 litellm._turn_on_debug()
 litellm.modify_params = True
 model = "anthropic/claude-3-7-sonnet-20250219" # works across Anthropic, Bedrock, Vertex AI
@@ -141,7 +153,7 @@ response = litellm.completion(
     messages=messages,
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
-    thinking={"type": "enabled", "budget_tokens": 1024},
+    reasoning_effort="low",
 )
 print("Response\n", response)
 response_message = response.choices[0].message
@@ -189,9 +201,9 @@ if tool_calls:
         model=model,
         messages=messages,
         seed=22,
+        reasoning_effort="low",
         # tools=tools,
         drop_params=True,
-        thinking={"type": "enabled", "budget_tokens": 1024},
     )  # get a new response from the model where it can see the function response
     print("second response\n", second_response)
 ```
@@ -201,7 +213,7 @@ if tool_calls:
 
 1. Setup config.yaml
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: claude-3-7-sonnet-thinking
     litellm_params:
@@ -215,7 +227,7 @@ model_list:
 
 2. Run proxy
 
-```bash
+```bash showLineNumbers
 litellm --config config.yaml
 
 # RUNNING on http://0.0.0.0:4000
@@ -292,7 +304,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
           {
             "type": "thinking",
             "thinking": "The user is asking for the current weather in three different locations: San Francisco, Tokyo, and Paris. I have access to the `get_current_weather` function that can provide this information.\n\nThe function requires a `location` parameter, and has an optional `unit` parameter. The user hasn't specified which unit they prefer (celsius or fahrenheit), so I'll use the default provided by the function.\n\nI need to make three separate function calls, one for each location:\n1. San Francisco\n2. Tokyo\n3. Paris\n\nThen I'll compile the results into a response with three distinct weather reports as requested by the user.",
-            "signature_delta": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c="
+            "signature": "EqoBCkgIARABGAIiQCkBXENoyB+HstUOs/iGjG+bvDbIQRrxPsPpOSt5yDxX6iulZ/4K/w9Rt4J5Nb2+3XUYsyOH+CpZMfADYvItFR4SDPb7CmzoGKoolCMAJRoM62p1ZRASZhrD3swqIjAVY7vOAFWKZyPEJglfX/60+bJphN9W1wXR6rWrqn3MwUbQ5Mb/pnpeb10HMploRgUqEGKOd6fRKTkUoNDuAnPb55c="
           }
         ],
         "provider_specific_fields": {
@@ -323,7 +335,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Set `drop_params=True` to drop the 'thinking' blocks when swapping from Anthropic to Deepseek models. Suggest improvements to this approach [here](https://github.com/BerriAI/litellm/discussions/8927).
 
-```python
+```python showLineNumbers
 litellm.drop_params = True # 👈 EITHER GLOBALLY or per request
 
 # or per request
@@ -331,7 +343,7 @@ litellm.drop_params = True # 👈 EITHER GLOBALLY or per request
 response = litellm.completion(
   model="anthropic/claude-3-7-sonnet-20250219",
   messages=[{"role": "user", "content": "What is the capital of France?"}],
-  thinking={"type": "enabled", "budget_tokens": 1024},
+  reasoning_effort="low",
   drop_params=True,
 )
 
@@ -339,7 +351,7 @@ response = litellm.completion(
 response = litellm.completion(
   model="deepseek/deepseek-chat",
   messages=[{"role": "user", "content": "What is the capital of France?"}],
-  thinking={"type": "enabled", "budget_tokens": 1024},
+  reasoning_effort="low",
   drop_params=True,
 )
 ```
@@ -353,5 +365,125 @@ These fields can be accessed via `response.choices[0].message.reasoning_content`
 - `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
   - `type` - str: The type of thinking block.
   - `thinking` - str: The thinking from the model.
-  - `signature_delta` - str: The signature delta from the model.
+  - `signature` - str: The signature delta from the model.
 
+
+
+## Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+response = litellm.completion(
+  model="anthropic/claude-3-7-sonnet-20250219",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## Checking if a model supports reasoning
+
+<Tabs>
+<TabItem label="LiteLLM Python SDK" value="Python">
+
+Use `litellm.supports_reasoning(model="")` -> returns `True` if model supports reasoning and `False` if not.
+
+```python showLineNumbers title="litellm.supports_reasoning() usage"
+import litellm 
+
+# Example models that support reasoning
+assert litellm.supports_reasoning(model="anthropic/claude-3-7-sonnet-20250219") == True
+assert litellm.supports_reasoning(model="deepseek/deepseek-chat") == True 
+
+# Example models that do not support reasoning
+assert litellm.supports_reasoning(model="openai/gpt-3.5-turbo") == False 
+```
+</TabItem>
+
+<TabItem label="LiteLLM Proxy Server" value="proxy">
+
+1. Define models that support reasoning in your `config.yaml`. You can optionally add `supports_reasoning: True` to the `model_info` if LiteLLM does not automatically detect it for your custom model.
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+model_list:
+  - model_name: claude-3-sonnet-reasoning
+    litellm_params:
+      model: anthropic/claude-3-7-sonnet-20250219
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: deepseek-reasoning
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  # Example for a custom model where detection might be needed
+  - model_name: my-custom-reasoning-model 
+    litellm_params:
+      model: openai/my-custom-model # Assuming it's OpenAI compatible
+      api_base: http://localhost:8000
+      api_key: fake-key
+    model_info:
+      supports_reasoning: True # Explicitly mark as supporting reasoning
+```
+
+2. Run the proxy server:
+
+```bash showLineNumbers title="litellm --config config.yaml"
+litellm --config config.yaml
+```
+
+3. Call `/model_group/info` to check if your model supports `reasoning`
+
+```shell showLineNumbers title="curl /model_group/info"
+curl -X 'GET' \
+  'http://localhost:4000/model_group/info' \
+  -H 'accept: application/json' \
+  -H 'x-api-key: sk-1234'
+```
+
+Expected Response 
+
+```json showLineNumbers title="response from /model_group/info"
+{
+  "data": [
+    {
+      "model_group": "claude-3-sonnet-reasoning",
+      "providers": ["anthropic"],
+      "mode": "chat",
+      "supports_reasoning": true,
+    },
+    {
+      "model_group": "deepseek-reasoning",
+      "providers": ["deepseek"],
+      "supports_reasoning": true,
+    },
+    {
+      "model_group": "my-custom-reasoning-model",
+      "providers": ["openai"],
+      "supports_reasoning": true,
+    }
+  ]
+}
+````
+
+
+</TabItem>
+</Tabs>

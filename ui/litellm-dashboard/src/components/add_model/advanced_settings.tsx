@@ -5,6 +5,7 @@ import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
+import CacheControlSettings from "./cache_control_settings";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
@@ -21,6 +22,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
   const [pricingModel, setPricingModel] = React.useState<'per_token' | 'per_second'>('per_token');
+  const [showCacheControl, setShowCacheControl] = React.useState(false);
 
   // Add validation function for numbers
   const validateNumber = (_: any, value: string) => {
@@ -83,6 +85,24 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
     }
   };
 
+  const handleCacheControlChange = (checked: boolean) => {
+    setShowCacheControl(checked);
+    if (!checked) {
+      const currentParams = form.getFieldValue('litellm_extra_params');
+      try {
+        let paramsObj = currentParams ? JSON.parse(currentParams) : {};
+        delete paramsObj.cache_control_injection_points;
+        if (Object.keys(paramsObj).length > 0) {
+          form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+        } else {
+          form.setFieldValue('litellm_extra_params', '');
+        }
+      } catch (error) {
+        form.setFieldValue('litellm_extra_params', '');
+      }
+    }
+  };
+
   return (
     <>
       <Accordion className="mt-2 mb-4">
@@ -91,13 +111,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         </AccordionHeader>
         <AccordionBody>
           <div className="bg-white rounded-lg">
-            <Form.Item
-              label="Team"
-              name="team_id"
-              className="mb-4"
-            >
-              <TeamDropdown teams={teams} />
-            </Form.Item>
 
             <Form.Item
               label="Custom Pricing"
@@ -176,6 +189,12 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 className="bg-gray-600" 
               />
             </Form.Item>
+
+            <CacheControlSettings
+              form={form}
+              showCacheControl={showCacheControl}
+              onCacheControlChange={handleCacheControlChange}
+            />
             <Form.Item
               label="LiteLLM Params"
               name="litellm_extra_params"
