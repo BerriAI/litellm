@@ -402,13 +402,14 @@ class HttpPassThroughEndpointHelpers:
                 requested_query_params=requested_query_params,
             )
         else:
+            json_str = json.dumps(_parsed_body)  # Pre-serialize JSON to avoid Content-Length mismatch
             # Generic httpx method
             response = await async_client.request(
                 method=request.method,
                 url=url,
                 headers=headers,
                 params=requested_query_params,
-                json=_parsed_body,
+                data=json_str
             )
         return response
 
@@ -584,10 +585,11 @@ async def pass_through_request(  # noqa: PLR0915
             },
         )
         if stream:
+            json_str = json.dumps(_parsed_body)  # Pre-serialize JSON to avoid Content-Length mismatch
             req = async_client.build_request(
                 "POST",
                 url,
-                json=_parsed_body,
+                data=json_str,
                 params=requested_query_params,
                 headers=headers,
             )
