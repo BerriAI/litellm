@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_format_from_file_id,
+    handle_any_messages_to_chat_completion_str_messages_conversion,
     update_messages_with_model_file_ids,
 )
 
@@ -64,3 +65,63 @@ def test_update_messages_with_model_file_ids():
             ],
         }
     ]
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_list():
+    # Test with list of messages
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
+    assert len(result) == 2
+    assert result[0] == messages[0]
+    assert result[1] == messages[1]
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_list_infinite_loop():
+    # Test that list handling doesn't cause infinite recursion
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    # This should complete without stack overflow
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(messages)
+    assert len(result) == 2
+    assert result[0] == messages[0]
+    assert result[1] == messages[1]
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_dict():
+    # Test with single dictionary message
+    message = {"role": "user", "content": "Hello"}
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
+    assert len(result) == 1
+    assert result[0]["input"] == json.dumps(message)
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_str():
+    # Test with string message
+    message = "Hello"
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
+    assert len(result) == 1
+    assert result[0]["input"] == message
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_other():
+    # Test with non-string/dict/list type
+    message = 123
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
+    assert len(result) == 1
+    assert result[0]["input"] == "123"
+
+
+def test_handle_any_messages_to_chat_completion_str_messages_conversion_complex():
+    # Test with complex nested structure
+    message = {
+        "role": "user",
+        "content": {"text": "Hello", "metadata": {"timestamp": "2024-01-01"}},
+    }
+    result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
+    assert len(result) == 1
+    assert result[0]["input"] == json.dumps(message)
