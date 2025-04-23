@@ -44,8 +44,9 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
 
     if isinstance(messages, list):
         try:
-            return handle_any_messages_to_chat_completion_str_messages_conversion(
-                messages
+            return cast(
+                List[Dict[str, str]],
+                handle_messages_with_content_list_to_str_conversion(messages),
             )
         except Exception:
             return [{"input": json.dumps(message, default=str)} for message in messages]
