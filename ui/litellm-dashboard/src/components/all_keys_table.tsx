@@ -205,15 +205,18 @@ export function AllKeysTable({
     },
     {
       header: "Team Alias",
-      accessorKey: "team_id", // Change to access the team_id
-      cell: ({ row, getValue }) => {
-        const teamId = getValue() as string;
-        const team = allTeams?.find(t => t.team_id === teamId);
+      id: "team_alias",
+      accessorFn: (row) => {
+        const team = allTeams?.find(t => t.team_id === row.team_id);
         return team?.team_alias || "Unknown";
+      },
+      cell: (info) => {
+        return <span>{info.getValue() as string}</span>;
       },
     },
     {
       header: "Team ID",
+      id: "team_id",
       accessorKey: "team_id",
       cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
@@ -224,15 +227,18 @@ export function AllKeysTable({
     },
     {
       header: "User Email",
-      accessorKey: "user_id",
+      id: "user_email",
+      accessorFn: (row) => {
+        const user = userList.find(u => u.user_id === row.user_id);
+        return user?.user_email || "-";
+      },
       cell: (info) => {
-        const userId = info.getValue() as string;
-        const user = userList.find(u => u.user_id === userId);
-        return user?.user_email ? user.user_email : "-";
+        return <span>{info.getValue() as string}</span>;
       },
     },
     {
       header: "User ID",
+      id: "user_id",
       accessorKey: "user_id",
       cell: (info) => {
         const userId = info.getValue() as string;
