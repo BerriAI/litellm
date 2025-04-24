@@ -364,7 +364,7 @@ from litellm import completion
 ## SETUP ENVIRONMENT
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
@@ -391,7 +391,7 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gemini-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
-    tools=[{"googleSearchRetrieval": {}}],
+    tools=[{"googleSearch": {}}],
 )
 
 print(response)
@@ -410,7 +410,7 @@ curl http://localhost:4000/v1/chat/completions \
     ],
    "tools": [
         {
-            "googleSearchRetrieval": {} 
+            "googleSearch": {} 
         }
     ]
   }'
@@ -529,7 +529,7 @@ from litellm import completion
 
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
