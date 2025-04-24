@@ -36,7 +36,6 @@ def test_get_masked_api_base(logging_obj):
 
 def test_sentry_sample_rate():
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
-    print(f"Existing SENTRY_API_SAMPLE_RATE: {existing_sample_rate}")
     try:
         # test with default value by removing the environment variable
         if existing_sample_rate:
