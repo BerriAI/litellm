@@ -12,20 +12,39 @@ class DeepEvalLogger(CustomLogger):
         self._validate_environment()
         super().__init__()
 
-    #----------SYNC----------#
-    # def log_pre_api_call(self, model, messages, kwargs):
-    # def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-    # def log_stream_event(self, kwargs, response_obj, start_time, end_time): 
-    # def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_failure_event(kwargs, response_obj, start_time, end_time)       
+
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_success_event(kwargs, response_obj, start_time, end_time)
 
-    #----------ASYNC----------#
-    # async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-    # async def async_log_pre_api_call(self, model, messages, kwargs):
-    # async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_failure_event(kwargs, response_obj, start_time, end_time)
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_success_event(kwargs, response_obj, start_time, end_time)
+
+    def _handle_failure_event(self, kwargs, response_obj, start_time, end_time):
+        standard_logging_obj = kwargs.get('standard_logging_object', {})
+        error_str = standard_logging_obj.get('error_str', "")
+        @observe(type="llm", model=kwargs["model"], name="litellm_message_failure", error_str=error_str)
+        def send_litellm_message_failure_trace(
+            input,
+            output
+        ):
+            # rasing exception after updating attributes to ensure trace is logged
+            update_current_span_attributes(
+                LlmAttributes(
+                    input=input,
+                    output=output
+                )
+            )
+            # raise Exception(error_str)
+        
+        send_litellm_message_failure_trace(
+            input=_prepare_input_str(kwargs["input"]),
+            output=error_str
+        )
 
     def _validate_environment(self):
         """
@@ -82,6 +101,7 @@ class DeepEvalLogger(CustomLogger):
             print(f"Error getting metrics: {e}")
         
         # message success Trace
+        # PS: execution time is logged as 0 (spanned on a hook rather than a llm call)
         @observe(type="llm", model=kwargs["model"], name="litellm_message_success", cost_per_output_token=_cost_per_output_token, cost_per_input_token=_cost_per_input_token, metrics=metrics)
         def send_litellm_message_success_trace(
             input, 
@@ -108,6 +128,7 @@ class DeepEvalLogger(CustomLogger):
         ):
             update_current_span_attributes(
                 ToolAttributes(
+                    # TODO: input and output subject to change with next update in tracing
                     input_parameters=input_parameters,
                     output=output           
                 )
@@ -118,6 +139,7 @@ class DeepEvalLogger(CustomLogger):
             if hasattr(choice, 'message'):
                 if hasattr(choice.message, 'content') and choice.message.content is not None:
                     send_litellm_message_success_trace(
+                        # TODO: input and output subject to change with next update in tracing
                         input=_prepare_input_str(kwargs["input"]), 
                         output=choice.message.content,
                         input_token_count=input_token_count,
