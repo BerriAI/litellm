@@ -117,13 +117,14 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string, models?: string[] }) => {
+  const handleCreate = async (formValues: { user_id: string, models?: string[], user_role: string }) => {
     try {
       message.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      if (!formValues.models || formValues.models.length === 0) {
+      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
+        console.log("formValues.user_role", formValues.user_role)
         // If models is empty or undefined, set it to "no-default-models"
         formValues.models = ["no-default-models"];
       }
