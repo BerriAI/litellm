@@ -5,6 +5,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
+import { UiError } from "@/utils/errorUtils";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -3263,7 +3264,11 @@ export const teamMemberAddCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      debugger;
+      if (errorData.includes('already in team')) {
+        throw new UiError("User is already a member of this team") 
+      }
+      throw new Error("Failed to add team member");
     }
 
     const data = await response.json();

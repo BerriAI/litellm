@@ -33,6 +33,7 @@ import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { isAdminRole } from "@/utils/roles";
+import { UiError } from "@/utils/errorUtils";
 
 export interface TeamData {
   team_id: string;
@@ -131,7 +132,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       form.resetFields();
       fetchTeamInfo();
     } catch (error) {
-      message.error("Failed to add team member");
+      if (error instanceof UiError) {
+        message.error(error.message)
+      } else {
+        message.error("Failed to add team member");
+      }
+      
       console.error("Error adding team member:", error);
     }
   };
