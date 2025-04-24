@@ -15,7 +15,7 @@ import asyncio
 import logging
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
-from litellm_proxy._types import SpanAttributes
+from litellm.types.integrations.opentelemetry import SpanAttributes
 
 verbose_logger.setLevel(logging.DEBUG)
 

@@ -14,7 +14,7 @@ import asyncio
 from unittest.mock import Mock
 
 import httpx
-
+import litellm_proxy
 from litellm_proxy.proxy_server import initialize_pass_through_endpoints
 
 

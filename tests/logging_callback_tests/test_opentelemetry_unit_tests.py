@@ -26,7 +26,7 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
     def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
         tool_calls = mock_response_obj.choices[0].message.tool_calls
         from litellm.integrations.opentelemetry import OpenTelemetry
-        from litellm_proxy._types import SpanAttributes
+        from litellm.types.integrations.opentelemetry import SpanAttributes
 
         kv_pair_dict = OpenTelemetry._tool_calls_kv_pair(tool_calls)
 
