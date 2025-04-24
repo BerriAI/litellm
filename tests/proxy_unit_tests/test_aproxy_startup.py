@@ -14,6 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
+import litellm_proxy
 from litellm_proxy.proxy_server import (
     router,
     save_worker_config,

@@ -25,6 +25,7 @@ import logging
 import pytest
 
 import litellm
+import litellm_proxy
 from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache

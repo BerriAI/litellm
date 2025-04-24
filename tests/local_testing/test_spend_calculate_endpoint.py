@@ -7,6 +7,7 @@ from fastapi import Request
 from fastapi.routing import APIRoute
 
 import litellm
+import litellm_proxy
 from litellm_proxy._types import SpendCalculateRequest
 from litellm_proxy.spend_tracking.spend_management_endpoints import calculate_spend
 from litellm.router import Router

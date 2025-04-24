@@ -24,6 +24,7 @@ from unittest.mock import patch
 import pytest
 
 import litellm
+import litellm_proxy
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm_proxy._types import UserAPIKeyAuth

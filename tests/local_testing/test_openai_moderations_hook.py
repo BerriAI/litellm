@@ -23,6 +23,7 @@ from litellm import Router, mock_completion
 from litellm_proxy.utils import ProxyLogging, hash_token
 from litellm_proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
+import litellm_proxy
 
 ### UNIT TESTS FOR OpenAI Moderation ###
 

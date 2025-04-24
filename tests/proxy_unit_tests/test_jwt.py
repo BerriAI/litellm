@@ -25,6 +25,7 @@ from fastapi import Request, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.responses import Response
 import litellm
+import litellm_proxy
 from litellm.caching.caching import DualCache
 from litellm_proxy._types import (
     LiteLLM_JWTAuth,

@@ -26,6 +26,7 @@ load_dotenv()
 import pytest
 import uuid
 import litellm
+import litellm_proxy
 from litellm._logging import verbose_proxy_logger
 
 from litellm_proxy.proxy_server import (

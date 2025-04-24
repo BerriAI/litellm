@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+import litellm_proxy
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from litellm_proxy._types import LitellmUserRoles, UserAPIKeyAuth

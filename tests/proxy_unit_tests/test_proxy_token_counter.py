@@ -18,6 +18,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
+import litellm_proxy
 from litellm_proxy.proxy_server import token_counter
 from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger

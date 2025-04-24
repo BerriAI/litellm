@@ -14,7 +14,9 @@ import os, io, time
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
 import pytest, logging, asyncio
+import litellm_proxy
 import litellm
 from litellm_proxy.management_endpoints.model_management_endpoints import (
     add_new_model,

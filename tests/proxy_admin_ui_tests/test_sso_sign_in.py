@@ -10,6 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+import litellm_proxy
 from litellm_proxy.proxy_server import app
 from litellm_proxy.utils import PrismaClient, ProxyLogging
 from litellm_proxy.management_endpoints.ui_sso import auth_callback

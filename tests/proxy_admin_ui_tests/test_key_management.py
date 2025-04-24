@@ -25,6 +25,7 @@ import logging
 
 import pytest
 import litellm
+import litellm_proxy
 from litellm._logging import verbose_proxy_logger
 from litellm_proxy.management_endpoints.team_endpoints import list_team
 from litellm_proxy._types import *

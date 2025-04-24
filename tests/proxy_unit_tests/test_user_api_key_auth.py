@@ -16,6 +16,7 @@ from starlette.datastructures import URL
 from litellm._logging import verbose_proxy_logger
 import logging
 import litellm
+import litellm_proxy
 from litellm_proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     UserAPIKeyAuth,
