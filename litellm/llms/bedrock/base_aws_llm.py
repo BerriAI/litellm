@@ -56,7 +56,7 @@ class BaseAWSLLM:
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
         ]
-        self.env_extra_headers = {}
+        self.env_extra_headers: dict[str, str] = {}
 
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
         """
