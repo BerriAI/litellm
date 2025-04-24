@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm_proxy._types import KeyManagementSystem
+from litellm.types.utils import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 

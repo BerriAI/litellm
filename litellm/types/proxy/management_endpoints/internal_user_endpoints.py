@@ -1,9 +1,12 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
-from litellm_proxy._types import LiteLLM_UserTableWithKeyCount
+if TYPE_CHECKING:
+    from litellm_proxy._types import LiteLLM_UserTableWithKeyCount
+else:
+    LiteLLM_UserTableWithKeyCount = Any
 
 
 class UserListResponse(BaseModel):

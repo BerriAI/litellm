@@ -15,7 +15,7 @@ import re
 from typing import Any, Dict, Optional
 
 import litellm
-from litellm_proxy._types import KeyManagementSystem
+from litellm.types.utils import KeyManagementSystem
 
 
 def validate_environment():

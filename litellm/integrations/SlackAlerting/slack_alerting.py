@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.slack_alerting import *
-from litellm_proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
+from litellm.types.utils import CallInfo, VirtualKeyEvent, WebhookEvent
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads

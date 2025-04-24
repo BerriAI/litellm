@@ -12,7 +12,6 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardLoggingPayload
-from litellm_proxy._types import CommonProxyErrors
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -22,7 +21,7 @@ else:
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
-        from litellm_proxy.proxy_server import premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         super().__init__(bucket_name=bucket_name)
 
@@ -48,7 +47,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm_proxy.proxy_server import premium_user
+        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(

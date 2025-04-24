@@ -38,6 +38,7 @@ from litellm.types.utils import (
     KeyManagementSettings, # noqa: F401
     LiteLLM_UpperboundKeyGenerateParams # noqa: F401
 )
+from litellm.types.utils import CallInfo, WebhookEvent, VirtualKeyEvent # noqa: F401
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
@@ -1745,37 +1746,6 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     tokenizer_type: str
 
 
-class CallInfo(LiteLLMPydanticObjectBase):
-    """Used for slack budget alerting"""
-
-    spend: float
-    max_budget: Optional[float] = None
-    soft_budget: Optional[float] = None
-    token: Optional[str] = Field(default=None, description="Hashed value of that key")
-    customer_id: Optional[str] = None
-    user_id: Optional[str] = None
-    team_id: Optional[str] = None
-    team_alias: Optional[str] = None
-    user_email: Optional[str] = None
-    key_alias: Optional[str] = None
-    projected_exceeded_date: Optional[str] = None
-    projected_spend: Optional[float] = None
-
-
-class WebhookEvent(CallInfo):
-    event: Literal[
-        "budget_crossed",
-        "soft_budget_crossed",
-        "threshold_crossed",
-        "projected_limit_exceeded",
-        "key_created",
-        "internal_user_created",
-        "spend_tracked",
-    ]
-    event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
-    event_message: str  # human-readable description of event
-
-
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
@@ -2132,13 +2102,6 @@ class SSOUserDefinedValues(TypedDict):
     user_role: Optional[str]
     max_budget: Optional[float]
     budget_duration: Optional[str]
-
-
-class VirtualKeyEvent(LiteLLMPydanticObjectBase):
-    created_by_user_id: str
-    created_by_user_role: str
-    created_by_key_alias: Optional[str]
-    request_kwargs: dict
 
 
 class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):

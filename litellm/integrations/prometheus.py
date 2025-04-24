@@ -21,12 +21,15 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
-from litellm_proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm_proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 else:
     AsyncIOScheduler = Any
+    UserAPIKeyAuth = Any
+    LiteLLM_TeamTable = Any
 
 
 class PrometheusLogger(CustomLogger):
@@ -1511,6 +1514,8 @@ class PrometheusLogger(CustomLogger):
         self, keys: List[Union[str, UserAPIKeyAuth]]
     ):
         """Helper function to set budget metrics for a list of keys"""
+        from litellm_proxy._types import UserAPIKeyAuth
+
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):
                 self._set_key_budget_metrics(key)

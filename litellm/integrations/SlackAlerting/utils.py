@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm.secret_managers.main import get_secret
-from litellm_proxy._types import AlertType
+from litellm.types.integrations.slack_alerting import AlertType
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
