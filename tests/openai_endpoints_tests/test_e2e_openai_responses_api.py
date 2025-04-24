@@ -77,6 +77,18 @@ def test_basic_response():
     )
     print("basic response=", response)
 
+    # get the response
+    response = client.responses.get(response.id)
+    print("get response=", response)
+
+    # Add assertions 
+
+
+    # delete the response
+    client.responses.delete(response.id)
+
+    # try getting the response again, we should not get it back 
+
 
 def test_streaming_response():
     client = get_test_client()
