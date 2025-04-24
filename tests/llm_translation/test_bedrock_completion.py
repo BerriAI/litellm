@@ -2972,6 +2972,30 @@ def test_bedrock_application_inference_profile():
     client = HTTPHandler()
     client2 = HTTPHandler()
 
+    tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                }
+            }
+        }
+    ]
+
+
     with patch.object(client, "post") as mock_post, patch.object(
         client2, "post"
     ) as mock_post2:
@@ -2981,6 +3005,7 @@ def test_bedrock_application_inference_profile():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
+                tools=tools
             )
         except Exception as e:
             print(e)
@@ -2990,6 +3015,7 @@ def test_bedrock_application_inference_profile():
                 model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 client=client2,
+                tools=tools
             )
         except Exception as e:
             print(e)
