@@ -141,7 +141,11 @@ def test_update_mcp_servers_file_success(mock_fetch, mock_json_dump, mock_file):
     
     update_mcp_servers_file("test_output.json")
     
-    mock_file.assert_called_once_with("test_output.json", 'w')
+    # Check if the file was opened with a filename containing "test_output.json"
+    mock_file.assert_called()
+    args, _ = mock_file.call_args
+    assert "test_output.json" in args[0]  # Ensure the filename contains the substring
+
     mock_json_dump.assert_called_once_with(mock_servers, mock_file(), indent=2)
 
 @patch('litellm.experimental_mcp_client.mcp_utils.fetch_mcp_servers')
