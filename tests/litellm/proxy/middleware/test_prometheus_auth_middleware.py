@@ -14,10 +14,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from litellm_proxy_extras.litellm_proxy._types import SpecialHeaders
+from litellm_proxy_extras.litellm_proxy.middleware.prometheus_auth_middleware import (
+    PrometheusAuthMiddleware,
+)
 
 import litellm
-from litellm_proxy._types import SpecialHeaders
-from litellm_proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 
 
 # Fake auth functions to simulate valid and invalid auth behavior.
@@ -32,7 +34,7 @@ async def fake_invalid_auth(request, api_key):
     raise Exception("Invalid API key")
 
 
-from litellm_proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm_proxy_extras.litellm_proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.fixture

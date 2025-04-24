@@ -12,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm_proxy._types import LitellmUserRoles
+from litellm_proxy_extras.litellm_proxy._types import LitellmUserRoles
 
 
 async def generate_team(
@@ -626,7 +626,7 @@ async def test_key_with_budgets():
     - wait 10min (budget reset runs every 10mins.)
     - Check if value updated
     """
-    from litellm_proxy.utils import hash_token
+    from litellm_proxy_extras.litellm_proxy.utils import hash_token
 
     async def retry_request(func, *args, _max_attempts=5, **kwargs):
         for attempt in range(_max_attempts):
@@ -673,7 +673,7 @@ async def test_key_crossing_budget():
 
     - Check if value updated
     """
-    from litellm_proxy.utils import hash_token
+    from litellm_proxy_extras.litellm_proxy.utils import hash_token
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session, i=0, budget=0.0000001)

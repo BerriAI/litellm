@@ -25,17 +25,17 @@ from fastapi import Request, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.responses import Response
 import litellm
-import litellm_proxy
+import litellm_proxy_extras.litellm_proxy
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     JWTAuthBuilderResult,
 )
-from litellm_proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
-from litellm_proxy.management_endpoints.team_endpoints import new_team
-from litellm_proxy.proxy_server import chat_completion
+from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
+from litellm_proxy_extras.litellm_proxy.management_endpoints.team_endpoints import new_team
+from litellm_proxy_extras.litellm_proxy.proxy_server import chat_completion
 from typing import Literal
 
 public_key = {
@@ -219,8 +219,8 @@ async def test_valid_invalid_token(audience, monkeypatch):
 @pytest.fixture
 def prisma_client():
     import litellm
-    from litellm_proxy.proxy_cli import append_query_params
-    from litellm_proxy.utils import PrismaClient, ProxyLogging
+    from litellm_proxy_extras.litellm_proxy.proxy_cli import append_query_params
+    from litellm_proxy_extras.litellm_proxy.utils import PrismaClient, ProxyLogging
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -251,8 +251,8 @@ def team_token_tuple():
     from starlette.datastructures import URL
 
     import litellm
-    from litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
 
     # Generate a private / public key pair using RSA algorithm
     key = rsa.generate_private_key(
@@ -316,8 +316,8 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
     from starlette.datastructures import URL
 
     import litellm
-    from litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
 
     setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
     await litellm_proxy.proxy_server.prisma_client.connect()
@@ -502,12 +502,12 @@ async def aaaatest_user_token_output(
     from starlette.datastructures import URL
 
     import litellm
-    from litellm_proxy._types import NewTeamRequest, NewUserRequest, UserAPIKeyAuth
-    from litellm_proxy.management_endpoints.internal_user_endpoints import (
+    from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest, NewUserRequest, UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
         new_user,
         user_info,
     )
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
 
     setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
     await litellm_proxy.proxy_server.prisma_client.connect()
@@ -737,8 +737,8 @@ async def test_allowed_routes_admin(
     from starlette.datastructures import URL
 
     import litellm
-    from litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
 
     setattr(litellm_proxy.proxy_server, "prisma_client", prisma_client)
     await litellm_proxy.proxy_server.prisma_client.connect()
@@ -861,7 +861,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_team_cache_update_called():
     import litellm
-    from litellm_proxy.proxy_server import user_api_key_cache
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_cache
 
     # Use setattr to replace the method on the user_api_key_cache object
     cache = DualCache()
@@ -945,8 +945,8 @@ async def test_allow_access_by_email(
     import jwt
     from starlette.datastructures import URL
 
-    from litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
 
     public_jwk = public_jwt_key["public_jwk"]
     private_key = public_jwt_key["private_key"]
@@ -1041,7 +1041,7 @@ async def test_allow_access_by_email(
 
 def test_get_public_key_from_jwk_url():
     import litellm
-    from litellm_proxy.auth.handle_jwt import JWTHandler
+    from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTHandler
 
     jwt_handler = JWTHandler()
 
@@ -1068,10 +1068,10 @@ def test_get_public_key_from_jwk_url():
 @pytest.mark.asyncio
 async def test_end_user_jwt_auth(monkeypatch):
     import litellm
-    from litellm_proxy.auth.handle_jwt import JWTHandler
+    from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTHandler
     from litellm.caching import DualCache
-    from litellm_proxy._types import LiteLLM_JWTAuth
-    from litellm_proxy.proxy_server import user_api_key_auth
+    from litellm_proxy_extras.litellm_proxy._types import LiteLLM_JWTAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
     import json
 
     monkeypatch.delenv("JWT_AUDIENCE", None)
@@ -1168,7 +1168,7 @@ async def test_end_user_jwt_auth(monkeypatch):
     )
     setattr(litellm_proxy.proxy_server, "prisma_client", {})
     setattr(litellm_proxy.proxy_server, "jwt_handler", jwt_handler)
-    from litellm_proxy.proxy_server import cost_tracking
+    from litellm_proxy_extras.litellm_proxy.proxy_server import cost_tracking
 
     cost_tracking()
     result = await user_api_key_auth(request=request, api_key=bearer_token)
@@ -1177,7 +1177,7 @@ async def test_end_user_jwt_auth(monkeypatch):
     )  # jwt token decoded sub value
 
     temp_response = Response()
-    from litellm_proxy.hooks.proxy_track_cost_callback import (
+    from litellm_proxy_extras.litellm_proxy.hooks.proxy_track_cost_callback import (
         _should_track_cost_callback,
     )
 
@@ -1203,9 +1203,9 @@ async def test_end_user_jwt_auth(monkeypatch):
 
 
 def test_can_rbac_role_call_route():
-    from litellm_proxy.auth.handle_jwt import JWTAuthManager
-    from litellm_proxy._types import RoleBasedPermissions
-    from litellm_proxy._types import LitellmUserRoles
+    from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTAuthManager
+    from litellm_proxy_extras.litellm_proxy._types import RoleBasedPermissions
+    from litellm_proxy_extras.litellm_proxy._types import LitellmUserRoles
 
     with pytest.raises(HTTPException):
         JWTAuthManager.can_rbac_role_call_route(
@@ -1229,8 +1229,8 @@ def test_can_rbac_role_call_route():
     ],
 )
 def test_check_scope_based_access(requested_model, should_work):
-    from litellm_proxy.auth.handle_jwt import JWTAuthManager
-    from litellm_proxy._types import ScopeMapping
+    from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTAuthManager
+    from litellm_proxy_extras.litellm_proxy._types import ScopeMapping
 
     args = {
         "scope_mappings": [

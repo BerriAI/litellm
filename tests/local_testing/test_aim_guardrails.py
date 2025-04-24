@@ -10,13 +10,13 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm_proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
-from litellm_proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
+from litellm_proxy_extras.litellm_proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
-from litellm_proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm_proxy_extras.litellm_proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 class ReceiveMock:

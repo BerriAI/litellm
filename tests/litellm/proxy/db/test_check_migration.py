@@ -31,7 +31,9 @@ def test_check_migration_out_of_sync(mocker):
     mock_logger = mocker.patch("litellm._logging.verbose_logger")
 
     # Import the function after mocking the logger
-    from litellm_proxy.db.check_migration import check_prisma_schema_diff
+    from litellm_proxy_extras.litellm_proxy.db.check_migration import (
+        check_prisma_schema_diff,
+    )
 
     # Mock the helper function to simulate out-of-sync state
     mock_diff_helper = mocker.patch(

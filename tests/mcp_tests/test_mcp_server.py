@@ -7,7 +7,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm_proxy._experimental.mcp_server.mcp_server_manager import (
+from litellm_proxy_extras.litellm_proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     MCPSSEServer,
 )

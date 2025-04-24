@@ -9,7 +9,7 @@ Here's how:
 Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
 
 ```python
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 
 async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
     try: 

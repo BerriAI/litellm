@@ -25,38 +25,38 @@ import logging
 import pytest
 
 import litellm
-import litellm_proxy
+import litellm_proxy_extras.litellm_proxy
 from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
     user_update,
 )
-from litellm_proxy.management_endpoints.key_management_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
     info_key_fn,
     update_key_fn,
 )
-from litellm_proxy.proxy_server import user_api_key_auth
-from litellm_proxy.management_endpoints.customer_endpoints import block_user
-from litellm_proxy.spend_tracking.spend_management_endpoints import (
+from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_auth
+from litellm_proxy_extras.litellm_proxy.management_endpoints.customer_endpoints import block_user
+from litellm_proxy_extras.litellm_proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,
     view_spend_logs,
 )
-from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy._types import (
     BlockUsers,
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -72,7 +72,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 @pytest.fixture
 def prisma_client():
-    from litellm_proxy.proxy_cli import append_query_params
+    from litellm_proxy_extras.litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}

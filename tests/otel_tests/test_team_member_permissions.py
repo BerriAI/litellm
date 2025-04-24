@@ -47,7 +47,7 @@ import asyncio
 import aiohttp, openai
 import uuid
 import json
-from litellm_proxy._types import ProxyErrorTypes
+from litellm_proxy_extras.litellm_proxy._types import ProxyErrorTypes
 from typing import Optional
 LITELLM_MASTER_KEY = "sk-1234"
 

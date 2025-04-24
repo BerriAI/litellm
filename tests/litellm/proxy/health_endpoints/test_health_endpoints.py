@@ -10,13 +10,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
-from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
-
-from litellm_proxy._types import ProxyErrorTypes, ProxyException
-from litellm_proxy.health_endpoints._health_endpoints import (
+from litellm_proxy_extras.litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy_extras.litellm_proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
 )
+from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
 
 @pytest.mark.asyncio

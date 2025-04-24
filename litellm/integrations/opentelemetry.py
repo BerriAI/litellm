@@ -15,13 +15,14 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
-    from opentelemetry.trace import Span as _Span
-
-    from litellm_proxy._types import (
+    from litellm_proxy_extras.litellm_proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
     )
-    from litellm_proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import (
+        UserAPIKeyAuth as _UserAPIKeyAuth,
+    )
+    from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
+    from opentelemetry.trace import Span as _Span
 
     Span = Union[_Span, Any]
     SpanExporter = Union[_SpanExporter, Any]
@@ -126,7 +127,7 @@ class OpenTelemetry(CustomLogger):
         - Adds Otel as a service callback
         - Sets `proxy_server.open_telemetry_logger` to self
         """
-        from litellm_proxy import proxy_server
+        from litellm_proxy_extras.litellm_proxy import proxy_server
 
         # Add Otel as a service callback
         if "otel" not in litellm.service_callback:

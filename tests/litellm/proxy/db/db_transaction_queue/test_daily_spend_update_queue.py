@@ -9,17 +9,20 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy._types import (
     DailyUserSpendTransaction,
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
-from litellm_proxy.db.db_transaction_queue.daily_spend_update_queue import (
+from litellm_proxy_extras.litellm_proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
-from litellm_proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm_proxy_extras.litellm_proxy.db.db_transaction_queue.spend_update_queue import (
+    SpendUpdateQueue,
+)
+
+import litellm
+from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 
 
 @pytest.fixture

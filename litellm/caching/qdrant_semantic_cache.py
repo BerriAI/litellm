@@ -281,7 +281,10 @@ class QdrantSemanticCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         import uuid
 
-        from litellm_proxy.proxy_server import llm_model_list, llm_router
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            llm_model_list,
+            llm_router,
+        )
 
         print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
 
@@ -344,7 +347,10 @@ class QdrantSemanticCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
-        from litellm_proxy.proxy_server import llm_model_list, llm_router
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            llm_model_list,
+            llm_router,
+        )
 
         # get the messages
         messages = kwargs["messages"]

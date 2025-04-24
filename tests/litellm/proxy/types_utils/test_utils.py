@@ -4,8 +4,7 @@ import sys
 
 import pytest
 from fastapi.testclient import TestClient
-
-from litellm_proxy.types_utils.utils import security_checks
+from litellm_proxy_extras.litellm_proxy.types_utils.utils import security_checks
 
 sys.path.insert(
     0, os.path.abspath("../../..")

@@ -10,9 +10,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
+
 import litellm
 from litellm.caching import RedisCache
-from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 

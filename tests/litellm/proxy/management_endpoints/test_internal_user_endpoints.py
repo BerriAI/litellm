@@ -10,14 +10,17 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm_proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
-from litellm_proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy_extras.litellm_proxy._types import (
+    LiteLLM_UserTableFiltered,
+    UserAPIKeyAuth,
+)
+from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
     get_user_key_counts,
     get_users,
     ui_view_users,
 )
-from litellm_proxy.proxy_server import app
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 
@@ -67,7 +70,7 @@ def test_user_daily_activity_types():
     """
     Assert all fiels in SpendMetrics are reported in DailySpendMetadata as "total_"
     """
-    from litellm_proxy.management_endpoints.common_daily_activity import (
+    from litellm_proxy_extras.litellm_proxy.management_endpoints.common_daily_activity import (
         DailySpendMetadata,
         SpendMetrics,
     )
@@ -159,7 +162,7 @@ def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
     """
-    from litellm_proxy.management_endpoints.internal_user_endpoints import (
+    from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
         _validate_sort_params,
     )
 

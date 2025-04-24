@@ -10,8 +10,11 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy.db.db_transaction_queue.base_update_queue import (
+    BaseUpdateQueue,
+)
+
 from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT
-from litellm_proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
 
 
 @pytest.mark.asyncio

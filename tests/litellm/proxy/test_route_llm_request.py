@@ -12,7 +12,7 @@ sys.path.insert(
 
 from unittest.mock import MagicMock
 
-from litellm_proxy.route_llm_request import route_request
+from litellm_proxy_extras.litellm_proxy.route_llm_request import route_request
 
 
 @pytest.mark.parametrize(

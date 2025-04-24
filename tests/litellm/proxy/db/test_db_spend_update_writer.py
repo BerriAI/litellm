@@ -11,8 +11,9 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from litellm_proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm_proxy_extras.litellm_proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
+)
 
 
 @pytest.mark.asyncio

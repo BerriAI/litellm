@@ -17,10 +17,10 @@
 # import pytest
 # import litellm
 # from litellm import Router
-# from litellm_proxy.utils import ProxyLogging, hash_token
-# from litellm_proxy._types import UserAPIKeyAuth
+# from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging, hash_token
+# from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 # from litellm.caching.caching import DualCache, RedisCache
-# from litellm_proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
+# from litellm_proxy_extras.litellm_proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 # from datetime import datetime
 
 
@@ -133,7 +133,7 @@
 #     - test if default namespace set via `proxyconfig._init_cache`
 #     - respected for tpm/rpm caching
 #     """
-#     from litellm_proxy.proxy_server import ProxyConfig
+#     from litellm_proxy_extras.litellm_proxy.proxy_server import ProxyConfig
 
 #     redis_usage_cache: Optional[RedisCache] = None
 #     cache_params = {"type": "redis", "namespace": "litellm_default"}

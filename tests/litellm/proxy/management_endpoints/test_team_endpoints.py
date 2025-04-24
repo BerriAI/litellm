@@ -13,20 +13,25 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
-from litellm_proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
-from litellm_proxy._types import LiteLLM_TeamTable, LitellmUserRoles
-from litellm_proxy.management_endpoints.team_endpoints import (
+from litellm_proxy_extras.litellm_proxy._types import (
+    UserAPIKeyAuth,  # Import UserAPIKeyAuth
+)
+from litellm_proxy_extras.litellm_proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+)
+from litellm_proxy_extras.litellm_proxy.management_endpoints.team_endpoints import (
     user_api_key_auth,  # Assuming this dependency is needed
 )
-from litellm_proxy.management_endpoints.team_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     router,
 )
-from litellm_proxy.management_helpers.team_member_permission_checks import (
+from litellm_proxy_extras.litellm_proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
-from litellm_proxy.proxy_server import app
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
 # Setup TestClient
 client = TestClient(app)

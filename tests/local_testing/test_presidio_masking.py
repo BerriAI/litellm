@@ -22,11 +22,11 @@ import pytest
 import litellm
 from litellm import Router, mock_completion
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.guardrails.guardrail_hooks.presidio import (
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
-from litellm_proxy.utils import ProxyLogging
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
 
 
 @pytest.mark.parametrize(
@@ -296,7 +296,7 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     from typing import Dict, List, Optional
 
     import litellm
-    from litellm_proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm_proxy_extras.litellm_proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import (
         GuardrailItem,
         GuardrailItemSpec,

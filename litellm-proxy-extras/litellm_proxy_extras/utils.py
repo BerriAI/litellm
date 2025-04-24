@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras.litellm_proxy_extras._logging import logger
 
 
 def str_to_bool(value: Optional[str]) -> bool:

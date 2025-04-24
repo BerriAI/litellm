@@ -11,7 +11,7 @@ import pytest
 from litellm import acompletion, Cache
 from litellm._service_logger import ServiceLogging
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
-from litellm_proxy.utils import ServiceTypes
+from litellm_proxy_extras.litellm_proxy.utils import ServiceTypes
 from unittest.mock import patch, AsyncMock
 import litellm
 

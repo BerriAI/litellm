@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
 if TYPE_CHECKING:
-    from litellm_proxy._types import LiteLLM_UserTableWithKeyCount
+    from litellm_proxy_extras.litellm_proxy._types import LiteLLM_UserTableWithKeyCount
 else:
     LiteLLM_UserTableWithKeyCount = Any
 

@@ -29,8 +29,8 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -449,7 +449,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 
 class myCustomGuardrail(CustomGuardrail):
     def __init__(self, **kwargs):

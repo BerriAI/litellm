@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath("../.."))  #
 
 import unittest
 from unittest.mock import patch
-from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
+from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials

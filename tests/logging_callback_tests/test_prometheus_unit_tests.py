@@ -30,7 +30,7 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
 

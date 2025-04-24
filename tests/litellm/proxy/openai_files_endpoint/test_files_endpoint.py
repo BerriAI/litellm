@@ -12,17 +12,24 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy._types import (
+    LiteLLM_UserTableFiltered,
+    UserAPIKeyAuth,
+)
+from litellm_proxy_extras.litellm_proxy.hooks import get_proxy_hook
+from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
+    ui_view_users,
+)
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
+
 import litellm
 from litellm import Router
-from litellm_proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
-from litellm_proxy.hooks import get_proxy_hook
-from litellm_proxy.management_endpoints.internal_user_endpoints import ui_view_users
-from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
+from litellm_proxy_extras.litellm_proxy.proxy_server import hash_token
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
+
 from litellm.caching.caching import DualCache
-from litellm_proxy.proxy_server import hash_token
-from litellm_proxy.utils import ProxyLogging
 
 
 @pytest.fixture
@@ -103,8 +110,9 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     """
     Asserts 'create_file' is called with the correct arguments
     """
+    from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
+
     from litellm import Router
-    from litellm_proxy.utils import ProxyLogging
 
     mock_create_file = mocker.patch("litellm.files.main.create_file")
 
@@ -325,13 +333,17 @@ def test_create_file_for_each_model(
     """
     import asyncio
 
-    from litellm import CreateFileRequest
-    from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
-    from litellm_proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm_proxy.openai_files_endpoints.files_endpoints import (
+    from litellm_proxy_extras.litellm_proxy._types import (
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm_proxy_extras.litellm_proxy.openai_files_endpoints.files_endpoints import (
         create_file_for_each_model,
     )
-    from litellm_proxy.utils import ProxyLogging
+    from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
+
+    from litellm import CreateFileRequest
+    from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 
     # Setup proxy logging
     proxy_logging_obj = ProxyLogging(

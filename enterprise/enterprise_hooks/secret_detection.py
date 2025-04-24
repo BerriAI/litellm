@@ -19,7 +19,7 @@ import tempfile
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 if TYPE_CHECKING:
-    from litellm_proxy._types import UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 else:
     UserAPIKeyAuth = Any
 

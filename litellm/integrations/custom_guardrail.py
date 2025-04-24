@@ -165,7 +165,10 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the user is a premium user
         """
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         if premium_user is not True:
             verbose_logger.warning(
@@ -183,7 +186,7 @@ class CustomGuardrail(CustomLogger):
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
         """
-        from litellm_proxy.proxy_server import premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import premium_user
 
         if premium_user is not True:
             verbose_logger.warning(

@@ -14,20 +14,21 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy._types import NewTeamRequest
+from litellm_proxy_extras.litellm_proxy.auth.handle_jwt import JWTHandler
+from litellm_proxy_extras.litellm_proxy.management_endpoints.types import CustomOpenID
+from litellm_proxy_extras.litellm_proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    GoogleSSOHandler,
+    MicrosoftSSOHandler,
+    SSOAuthenticationHandler,
+)
+
 import litellm
 from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
-)
-from litellm_proxy._types import NewTeamRequest
-from litellm_proxy.auth.handle_jwt import JWTHandler
-from litellm_proxy.management_endpoints.types import CustomOpenID
-from litellm_proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    GoogleSSOHandler,
-    MicrosoftSSOHandler,
-    SSOAuthenticationHandler,
 )
 
 

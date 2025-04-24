@@ -22,8 +22,8 @@ import pytest
 
 import litellm
 from litellm import DualCache, Router
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.hooks.dynamic_rate_limiter import (
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.hooks.dynamic_rate_limiter import (
     _PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
 )
 

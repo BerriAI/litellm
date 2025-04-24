@@ -12,9 +12,8 @@ from .integrations.prometheus_services import PrometheusServicesLogger
 from .types.services import ServiceLoggerPayload, ServiceTypes
 
 if TYPE_CHECKING:
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
     from opentelemetry.trace import Span as _Span
-
-    from litellm_proxy._types import UserAPIKeyAuth
 
     Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
@@ -145,7 +144,9 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm_proxy.proxy_server import open_telemetry_logger
+                from litellm_proxy_extras.litellm_proxy.proxy_server import (
+                    open_telemetry_logger,
+                )
 
                 await self.init_otel_logger_if_none()
 
@@ -190,7 +191,9 @@ class ServiceLogging(CustomLogger):
         initializes otel_logger if it is None or no attribute exists on ServiceLogging Object
 
         """
-        from litellm_proxy.proxy_server import open_telemetry_logger
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            open_telemetry_logger,
+        )
 
         if not hasattr(self, "otel_logger"):
             if open_telemetry_logger is not None and isinstance(
@@ -253,7 +256,9 @@ class ServiceLogging(CustomLogger):
                     event_metadata=event_metadata,
                 )
             elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                from litellm_proxy.proxy_server import open_telemetry_logger
+                from litellm_proxy_extras.litellm_proxy.proxy_server import (
+                    open_telemetry_logger,
+                )
 
                 await self.init_otel_logger_if_none()
 

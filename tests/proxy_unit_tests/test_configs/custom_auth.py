@@ -1,4 +1,4 @@
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 from fastapi import Request
 from dotenv import load_dotenv
 import os

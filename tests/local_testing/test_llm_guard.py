@@ -18,8 +18,8 @@ import pytest
 import litellm
 from enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
 from litellm import Router, mock_completion
-from litellm_proxy.utils import ProxyLogging, hash_token
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging, hash_token
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 
 ### UNIT TESTS FOR LLM GUARD ###

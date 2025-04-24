@@ -14,12 +14,15 @@ sys.path.insert(
 
 from unittest.mock import MagicMock, patch
 
+import litellm_proxy_extras.litellm_proxy
+from litellm_proxy_extras.litellm_proxy._types import SpendLogsPayload
+from litellm_proxy_extras.litellm_proxy.hooks.proxy_track_cost_callback import (
+    _ProxyDBLogger,
+)
+from litellm_proxy_extras.litellm_proxy.proxy_server import app, prisma_client
+
 import litellm
-import litellm_proxy
 from litellm.router import Router
-from litellm_proxy._types import SpendLogsPayload
-from litellm_proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm_proxy.proxy_server import app, prisma_client
 
 ignored_keys = [
     "request_id",

@@ -11,8 +11,10 @@ sys.path.insert(
 
 from unittest.mock import AsyncMock, MagicMock
 
-from litellm_proxy.management_endpoints.key_management_endpoints import _list_key_helper
-from litellm_proxy.proxy_server import app
+from litellm_proxy_extras.litellm_proxy.management_endpoints.key_management_endpoints import (
+    _list_key_helper,
+)
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 
@@ -73,12 +75,15 @@ async def test_key_token_handling(monkeypatch):
         return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
     )
 
-    from litellm_proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm_proxy.auth.user_api_key_auth import UserAPIKeyAuth
-    from litellm_proxy.management_endpoints.key_management_endpoints import (
+    from litellm_proxy_extras.litellm_proxy._types import (
+        GenerateKeyRequest,
+        LitellmUserRoles,
+    )
+    from litellm_proxy_extras.litellm_proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )
-    from litellm_proxy.proxy_server import prisma_client
+    from litellm_proxy_extras.litellm_proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm_proxy.proxy_server.prisma_client", mock_prisma_client)

@@ -17,7 +17,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm_proxy.utils import log_db_metrics, ServiceTypes
+from litellm_proxy_extras.litellm_proxy.utils import log_db_metrics, ServiceTypes
 from datetime import datetime
 import httpx
 from prisma.errors import ClientNotConnectedError

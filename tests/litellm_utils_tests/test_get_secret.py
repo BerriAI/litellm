@@ -10,7 +10,7 @@ sys.path.insert(
 import pytest
 
 import litellm
-from litellm_proxy._types import KeyManagementSystem
+from litellm_proxy_extras.litellm_proxy._types import KeyManagementSystem
 from litellm.secret_managers.main import get_secret
 
 

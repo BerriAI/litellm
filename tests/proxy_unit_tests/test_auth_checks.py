@@ -13,22 +13,22 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, litellm
 import httpx
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.auth.auth_checks import get_end_user_object
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
     LiteLLM_UserTable,
     LiteLLM_TeamTable,
 )
-from litellm_proxy.utils import PrismaClient
-from litellm_proxy.auth.auth_checks import (
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient
+from litellm_proxy_extras.litellm_proxy.auth.auth_checks import (
     can_team_access_model,
     _virtual_key_soft_budget_check,
 )
-from litellm_proxy.utils import ProxyLogging
-from litellm_proxy.utils import CallInfo
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
+from litellm_proxy_extras.litellm_proxy.utils import CallInfo
 
 
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
@@ -87,7 +87,7 @@ async def test_can_key_call_model(model, expect_to_work):
     """
     If wildcard model + specific model is used, choose the specific model settings
     """
-    from litellm_proxy.auth.auth_checks import can_key_call_model
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import can_key_call_model
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -140,7 +140,7 @@ async def test_can_key_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_team_call_model(model, expect_to_work):
-    from litellm_proxy.auth.auth_checks import model_in_access_group
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import model_in_access_group
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -195,7 +195,7 @@ async def test_can_team_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_work):
-    from litellm_proxy.auth.auth_checks import can_key_call_model
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import can_key_call_model
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -260,7 +260,7 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
 
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
-    from litellm_proxy.auth.auth_checks import is_valid_fallback_model
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import is_valid_fallback_model
     from litellm import Router
 
     router = Router(
@@ -305,8 +305,8 @@ async def test_virtual_key_max_budget_check(
     1. Triggers budget alert for all cases
     2. Raises BudgetExceededError when spend >= max_budget
     """
-    from litellm_proxy.auth.auth_checks import _virtual_key_max_budget_check
-    from litellm_proxy.utils import ProxyLogging
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import _virtual_key_max_budget_check
+    from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
 
     # Setup test data
     valid_token = UserAPIKeyAuth(
@@ -479,8 +479,8 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
 @pytest.mark.asyncio
 async def test_can_user_call_model():
-    from litellm_proxy.auth.auth_checks import can_user_call_model
-    from litellm_proxy._types import ProxyException
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import can_user_call_model
+    from litellm_proxy_extras.litellm_proxy._types import ProxyException
     from litellm import Router
 
     router = Router(
@@ -519,8 +519,8 @@ async def test_can_user_call_model():
 
 @pytest.mark.asyncio
 async def test_can_user_call_model_with_no_default_models():
-    from litellm_proxy.auth.auth_checks import can_user_call_model
-    from litellm_proxy._types import ProxyException, SpecialModelNames
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import can_user_call_model
+    from litellm_proxy_extras.litellm_proxy._types import ProxyException, SpecialModelNames
     from unittest.mock import MagicMock
 
     args = {
@@ -543,8 +543,8 @@ async def test_can_user_call_model_with_no_default_models():
 
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
-    from litellm_proxy.auth.auth_checks import _get_fuzzy_user_object
-    from litellm_proxy.utils import PrismaClient
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import _get_fuzzy_user_object
+    from litellm_proxy_extras.litellm_proxy.utils import PrismaClient
     from unittest.mock import AsyncMock, MagicMock
 
     # Setup mock Prisma client
@@ -638,7 +638,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
     """
     Test if can_key_call_model correctly handles model aliases in the token
     """
-    from litellm_proxy.auth.auth_checks import can_key_call_model
+    from litellm_proxy_extras.litellm_proxy.auth.auth_checks import can_key_call_model
 
     llm_model_list = [
         {

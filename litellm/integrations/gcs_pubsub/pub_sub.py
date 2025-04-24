@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from litellm_proxy._types import SpendLogsPayload
+    from litellm_proxy_extras.litellm_proxy._types import SpendLogsPayload
 else:
     SpendLogsPayload = Any
 
@@ -44,7 +44,7 @@ class GcsPubSubLogger(CustomBatchLogger):
             topic_id (str): Pub/Sub topic ID
             credentials_path (str, optional): Path to Google Cloud credentials JSON file
         """
-        from litellm_proxy.utils import _premium_user_check
+        from litellm_proxy_extras.litellm_proxy.utils import _premium_user_check
 
         _premium_user_check()
 
@@ -108,10 +108,10 @@ class GcsPubSubLogger(CustomBatchLogger):
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
-        from litellm_proxy.spend_tracking.spend_tracking_utils import (
+        from litellm_proxy_extras.litellm_proxy.spend_tracking.spend_tracking_utils import (
             get_logging_payload,
         )
-        from litellm_proxy.utils import _premium_user_check
+        from litellm_proxy_extras.litellm_proxy.utils import _premium_user_check
 
         _premium_user_check()
 

@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm_proxy.auth.auth_utils import (
+from litellm_proxy_extras.litellm_proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
 )
 from litellm.router import Router
@@ -71,7 +71,7 @@ def test_configurable_clientside_parameters(
 
 
 def test_get_end_user_id_from_request_body_always_returns_str():
-    from litellm_proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from litellm_proxy_extras.litellm_proxy.auth.auth_utils import get_end_user_id_from_request_body
 
     request_body = {"user": 123}
     end_user_id = get_end_user_id_from_request_body(request_body)

@@ -17,7 +17,7 @@
 # import litellm
 
 # ### LOCAL Proxy Server INIT ###
-# from litellm_proxy.proxy_server import save_worker_config  # Replace with the actual module where your FastAPI router is defined
+# from litellm_proxy_extras.litellm_proxy.proxy_server import save_worker_config  # Replace with the actual module where your FastAPI router is defined
 # filepath = os.path.dirname(os.path.abspath(__file__))
 # config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
 # def get_openai_info():

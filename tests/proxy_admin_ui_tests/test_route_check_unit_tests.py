@@ -25,14 +25,14 @@ import logging
 
 from fastapi import HTTPException, Request
 import pytest
-from litellm_proxy.auth.route_checks import RouteChecks
-from litellm_proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
-from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+from litellm_proxy_extras.litellm_proxy.auth.route_checks import RouteChecks
+from litellm_proxy_extras.litellm_proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
 
 # Replace the actual hash_token function with our mock
-import litellm_proxy.auth.route_checks
+import litellm_proxy_extras.litellm_proxy.auth.route_checks
 
 
 # Mock objects and functions

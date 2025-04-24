@@ -22,7 +22,10 @@ class GoogleSecretManager(GCSBucketBase):
             refresh_interval (int, optional): The refresh interval in seconds. Defaults to 86400. (24 hours)
             always_read_secret_manager (bool, optional): Whether to always read from the secret manager. Defaults to False. Since we do want to cache values
         """
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         if premium_user is not True:
             raise ValueError(

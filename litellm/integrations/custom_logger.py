@@ -27,9 +27,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
     from opentelemetry.trace import Span as _Span
-
-    from litellm_proxy._types import UserAPIKeyAuth
 
     Span = Union[_Span, Any]
 else:

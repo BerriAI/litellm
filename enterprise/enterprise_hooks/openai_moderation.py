@@ -14,7 +14,7 @@ sys.path.insert(
 from typing import Literal
 import litellm
 import sys
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
@@ -50,7 +50,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
                 if "content" in m and isinstance(m["content"], str):
                     text += m["content"]
 
-        from litellm_proxy.proxy_server import llm_router
+        from litellm_proxy_extras.litellm_proxy.proxy_server import llm_router
 
         if llm_router is None:
             return

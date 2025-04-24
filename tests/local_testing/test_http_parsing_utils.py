@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
 
-from litellm_proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm_proxy_extras.litellm_proxy.common_utils.http_parsing_utils import _read_request_body
 
 
 @pytest.mark.asyncio

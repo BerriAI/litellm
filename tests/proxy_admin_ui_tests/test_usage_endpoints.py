@@ -39,14 +39,14 @@ import logging
 import pytest
 
 import litellm
-import litellm_proxy
+import litellm_proxy_extras.litellm_proxy
 from litellm._logging import verbose_proxy_logger
-from litellm_proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
     user_update,
 )
-from litellm_proxy.management_endpoints.key_management_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
@@ -54,12 +54,12 @@ from litellm_proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
     update_key_fn,
 )
-from litellm_proxy.management_endpoints.team_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.team_endpoints import (
     new_team,
     team_info,
     update_team,
 )
-from litellm_proxy.proxy_server import (
+from litellm_proxy_extras.litellm_proxy.proxy_server import (
     LitellmUserRoles,
     audio_transcriptions,
     chat_completion,
@@ -70,10 +70,10 @@ from litellm_proxy.proxy_server import (
     moderations,
     user_api_key_auth,
 )
-from litellm_proxy.management_endpoints.customer_endpoints import (
+from litellm_proxy_extras.litellm_proxy.management_endpoints.customer_endpoints import (
     new_end_user,
 )
-from litellm_proxy.spend_tracking.spend_management_endpoints import (
+from litellm_proxy_extras.litellm_proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
     global_spend_logs,
     global_spend_models,
@@ -82,14 +82,14 @@ from litellm_proxy.spend_tracking.spend_management_endpoints import (
     spend_user_fn,
     view_spend_logs,
 )
-from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     RegenerateKeyRequest,
@@ -111,7 +111,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 @pytest.fixture
 def prisma_client():
-    from litellm_proxy.proxy_cli import append_query_params
+    from litellm_proxy_extras.litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}
@@ -140,7 +140,7 @@ async def test_view_daily_spend_ui(prisma_client):
     setattr(litellm_proxy.proxy_server, "master_key", "sk-1234")
 
     await litellm_proxy.proxy_server.prisma_client.connect()
-    from litellm_proxy.proxy_server import user_api_key_cache
+    from litellm_proxy_extras.litellm_proxy.proxy_server import user_api_key_cache
 
     spend_logs_for_admin = await global_spend_logs(
         user_api_key_dict=UserAPIKeyAuth(

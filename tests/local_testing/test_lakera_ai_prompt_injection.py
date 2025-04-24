@@ -24,13 +24,13 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-import litellm_proxy
+import litellm_proxy_extras.litellm_proxy
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-from litellm_proxy.proxy_server import embeddings
-from litellm_proxy.utils import ProxyLogging, hash_token
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+from litellm_proxy_extras.litellm_proxy.proxy_server import embeddings
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging, hash_token
 
 verbose_proxy_logger.setLevel(logging.DEBUG)
 
@@ -376,8 +376,8 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-    from litellm_proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm_proxy_extras.litellm_proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
@@ -423,8 +423,8 @@ async def test_callback_specific_thresholds():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-    from litellm_proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm_proxy_extras.litellm_proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [

@@ -29,7 +29,7 @@ def setup_and_teardown():
 
     try:
         if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm_proxy.proxy_server
+            import litellm_proxy_extras.litellm_proxy.proxy_server
 
             importlib.reload(litellm_proxy.proxy_server)
     except Exception as e:

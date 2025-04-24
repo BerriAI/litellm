@@ -279,7 +279,10 @@ class RedisSemanticCache(BaseCache):
         Returns:
             List[float]: The embedding vector
         """
-        from litellm_proxy.proxy_server import llm_model_list, llm_router
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            llm_model_list,
+            llm_router,
+        )
 
         # Route the embedding request through the proxy if appropriate
         router_model_names = (

@@ -19,7 +19,10 @@ from .base_secret_manager import BaseSecretManager
 
 class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")

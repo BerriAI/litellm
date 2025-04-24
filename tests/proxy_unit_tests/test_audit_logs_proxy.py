@@ -26,10 +26,10 @@ load_dotenv()
 import pytest
 import uuid
 import litellm
-import litellm_proxy
+import litellm_proxy_extras.litellm_proxy
 from litellm._logging import verbose_proxy_logger
 
-from litellm_proxy.proxy_server import (
+from litellm_proxy_extras.litellm_proxy.proxy_server import (
     LitellmUserRoles,
     audio_transcriptions,
     chat_completion,
@@ -41,14 +41,14 @@ from litellm_proxy.proxy_server import (
     user_api_key_auth,
 )
 
-from litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm_proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm_proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm_proxy_extras.litellm_proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm_proxy_extras.litellm_proxy._types import LiteLLM_AuditLogs, LitellmTableNames
 from litellm.caching.caching import DualCache
 from unittest.mock import patch, AsyncMock
 
@@ -98,7 +98,7 @@ async def test_create_audit_log_for_update_premium_user():
 
 @pytest.fixture
 def prisma_client():
-    from litellm_proxy.proxy_cli import append_query_params
+    from litellm_proxy_extras.litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}

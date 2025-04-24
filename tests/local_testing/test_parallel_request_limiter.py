@@ -24,11 +24,11 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.hooks.parallel_request_limiter import (
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler as MaxParallelRequestsHandler,
 )
-from litellm_proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm_proxy_extras.litellm_proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 
 ## On Request received
 ## On Request success

@@ -12,9 +12,10 @@ sys.path.insert(
 
 from unittest.mock import patch
 
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
+
 import litellm
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
-from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 

@@ -21,7 +21,10 @@ else:
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         super().__init__(bucket_name=bucket_name)
 
@@ -47,7 +50,10 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         if premium_user is not True:
             raise ValueError(

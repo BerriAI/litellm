@@ -14,11 +14,11 @@ sys.path.insert(
 from typing import Optional, Literal, Any
 import litellm
 import sys
-from litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm_proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm_proxy_extras.litellm_proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
@@ -140,7 +140,7 @@ class AporiaGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        from litellm_proxy.common_utils.callback_utils import (
+        from litellm_proxy_extras.litellm_proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
 
@@ -176,7 +176,7 @@ class AporiaGuardrail(CustomGuardrail):
             "responses",
         ],
     ):
-        from litellm_proxy.common_utils.callback_utils import (
+        from litellm_proxy_extras.litellm_proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
 

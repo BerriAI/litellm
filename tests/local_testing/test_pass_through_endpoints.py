@@ -14,8 +14,8 @@ import asyncio
 from unittest.mock import Mock
 
 import httpx
-import litellm_proxy
-from litellm_proxy.proxy_server import initialize_pass_through_endpoints
+import litellm_proxy_extras.litellm_proxy
+from litellm_proxy_extras.litellm_proxy.proxy_server import initialize_pass_through_endpoints
 
 
 # Mock the async_client used in the pass_through_request function
@@ -36,7 +36,7 @@ def remove_rerank_route(app):
 
 @pytest.fixture
 def client():
-    from litellm_proxy.proxy_server import app
+    from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
     remove_rerank_route(
         app=app
@@ -154,8 +154,8 @@ async def test_pass_through_endpoint_rpm_limit(
     client, auth, expected_error_code, rpm_limit
 ):
     import litellm
-    from litellm_proxy._types import UserAPIKeyAuth
-    from litellm_proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 
     mock_api_key = "sk-my-test-key"
     cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
@@ -220,13 +220,13 @@ async def test_pass_through_endpoint_rpm_limit(
 async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     auth, expected_error_code, rpm_limit
 ):
-    from litellm_proxy.proxy_server import app
+    from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
     client = TestClient(app)
     import litellm
 
-    from litellm_proxy._types import UserAPIKeyAuth
-    from litellm_proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 
     # Store original values
     original_user_api_key_cache = getattr(

@@ -6,7 +6,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm_proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm_proxy_extras.litellm_proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
 def test_guardrails_ai():

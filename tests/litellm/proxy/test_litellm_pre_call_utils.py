@@ -4,9 +4,8 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from litellm_proxy._types import UserAPIKeyAuth
-from litellm_proxy.litellm_pre_call_utils import (
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
+from litellm_proxy_extras.litellm_proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     check_if_token_is_service_account,
 )
@@ -99,7 +98,9 @@ def test_get_enforced_params_for_service_account_settings():
 def test_get_enforced_params(
     general_settings, user_api_key_dict, expected_enforced_params
 ):
-    from litellm_proxy.litellm_pre_call_utils import _get_enforced_params
+    from litellm_proxy_extras.litellm_proxy.litellm_pre_call_utils import (
+        _get_enforced_params,
+    )
 
     enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
     assert enforced_params == expected_enforced_params

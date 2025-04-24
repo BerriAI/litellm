@@ -16,8 +16,9 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
+from litellm_proxy_extras.litellm_proxy.proxy_cli import ProxyInitializationHelpers
+
 import litellm
-from litellm_proxy.proxy_cli import ProxyInitializationHelpers
 
 
 class TestProxyInitializationHelpers:

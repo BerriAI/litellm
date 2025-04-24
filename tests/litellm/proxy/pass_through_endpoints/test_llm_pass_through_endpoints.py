@@ -14,15 +14,16 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
-from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
 )
+
+import litellm
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
 class TestBaseOpenAIPassThroughHandler:
@@ -196,7 +197,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -281,7 +282,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when no passthrough credentials are set, default credentials are used in the request
         """
-        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -350,7 +351,7 @@ class TestVertexAIPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 
@@ -468,7 +469,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
-        from litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
 

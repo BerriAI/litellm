@@ -1148,7 +1148,10 @@ Model Info:
         email_logo_url: Optional[str] = None,
         email_support_contact: Optional[str] = None,
     ):
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
@@ -1161,7 +1164,7 @@ Model Info:
         self, webhook_event: WebhookEvent
     ) -> bool:
         try:
-            from litellm_proxy.utils import send_email
+            from litellm_proxy_extras.litellm_proxy.utils import send_email
 
             if self.alerting is None or "email" not in self.alerting:
                 # do nothing if user does not want email alerts
@@ -1170,7 +1173,10 @@ Model Info:
                     self.alerting,
                 )
                 return False
-            from litellm_proxy.proxy_server import premium_user, prisma_client
+            from litellm_proxy_extras.litellm_proxy.proxy_server import (
+                premium_user,
+                prisma_client,
+            )
 
             email_logo_url = os.getenv(
                 "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1271,8 +1277,8 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        from litellm_proxy.proxy_server import premium_user
-        from litellm_proxy.utils import send_email
+        from litellm_proxy_extras.litellm_proxy.proxy_server import premium_user
+        from litellm_proxy_extras.litellm_proxy.utils import send_email
 
         email_logo_url = os.getenv(
             "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1598,7 +1604,7 @@ Model Info:
             return
 
         try:
-            from litellm_proxy.spend_tracking.spend_management_endpoints import (
+            from litellm_proxy_extras.litellm_proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,
             )
 
@@ -1662,7 +1668,7 @@ Model Info:
         try:
             from calendar import monthrange
 
-            from litellm_proxy.spend_tracking.spend_management_endpoints import (
+            from litellm_proxy_extras.litellm_proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,
             )
 

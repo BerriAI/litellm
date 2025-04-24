@@ -9,9 +9,13 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy._types import (
+    DefaultInternalUserParams,
+    LitellmUserRoles,
+)
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
+
 from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
-from litellm_proxy._types import DefaultInternalUserParams, LitellmUserRoles
-from litellm_proxy.proxy_server import app
 
 client = TestClient(app)
 
@@ -50,7 +54,7 @@ def mock_proxy_config(monkeypatch):
             mock_config = new_config
         return mock_config
 
-    from litellm_proxy.proxy_server import proxy_config
+    from litellm_proxy_extras.litellm_proxy.proxy_server import proxy_config
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr(proxy_config, "save_config", mock_save_config)
@@ -66,7 +70,7 @@ def mock_auth(monkeypatch):
     async def mock_user_api_key_auth():
         return {"user_id": "test_user"}
 
-    from litellm_proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+    from litellm_proxy_extras.litellm_proxy.ui_crud_endpoints.proxy_setting_endpoints import (
         user_api_key_auth,
     )
 

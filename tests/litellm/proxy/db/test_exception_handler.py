@@ -24,10 +24,13 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy_extras.litellm_proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
+)
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm_proxy._types import ProxyErrorTypes, ProxyException
-from litellm_proxy.db.exception_handler import PrismaDBExceptionHandler
 
 
 # Test is_database_connection_error method

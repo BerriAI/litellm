@@ -230,7 +230,7 @@ def test_update_litellm_params_for_health_check():
     1. Updates messages with a random message
     2. Updates model name when health_check_model is provided
     """
-    from litellm_proxy.health_check import _update_litellm_params_for_health_check
+    from litellm_proxy_extras.litellm_proxy.health_check import _update_litellm_params_for_health_check
 
     # Test with health_check_model
     model_info = {"health_check_model": "gpt-3.5-turbo"}
@@ -266,7 +266,7 @@ async def test_perform_health_check_with_health_check_model():
     1. Verifies that health_check_model overrides the original model when model=`openai/*`
     2. Ensures the health check is performed with the override model
     """
-    from litellm_proxy.health_check import _perform_health_check
+    from litellm_proxy_extras.litellm_proxy.health_check import _perform_health_check
 
     # Mock model list with health_check_model specified
     model_list = [
@@ -301,7 +301,7 @@ async def test_perform_health_check_with_health_check_model():
 
 @pytest.mark.asyncio
 async def test_health_check_bad_model():
-    from litellm_proxy.health_check import _perform_health_check
+    from litellm_proxy_extras.litellm_proxy.health_check import _perform_health_check
     import time
 
     model_list = [

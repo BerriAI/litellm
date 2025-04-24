@@ -12,14 +12,15 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-import litellm
-import litellm_proxy
-from litellm.integrations.opentelemetry import UserAPIKeyAuth
-from litellm_proxy.common_request_processing import (
+import litellm_proxy_extras.litellm_proxy
+from litellm_proxy_extras.litellm_proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
 )
-from litellm_proxy.utils import ProxyLogging
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
+
+import litellm
+from litellm.integrations.opentelemetry import UserAPIKeyAuth
 
 
 class TestProxyBaseLLMRequestProcessing:

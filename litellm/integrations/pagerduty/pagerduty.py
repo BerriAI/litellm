@@ -31,7 +31,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm_proxy._types import UserAPIKeyAuth
+    from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth
 else:
     UserAPIKeyAuth = Any
 
@@ -51,7 +51,10 @@ class PagerDutyAlerting(SlackAlerting):
     def __init__(
         self, alerting_args: Optional[Union[AlertingConfig, dict]] = None, **kwargs
     ):
-        from litellm_proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm_proxy_extras.litellm_proxy.proxy_server import (
+            CommonProxyErrors,
+            premium_user,
+        )
 
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")

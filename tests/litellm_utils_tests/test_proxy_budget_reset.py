@@ -20,8 +20,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm_proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm_proxy._types import (
+from litellm_proxy_extras.litellm_proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm_proxy_extras.litellm_proxy._types import (
     LiteLLM_VerificationToken,
     LiteLLM_UserTable,
     LiteLLM_TeamTable,

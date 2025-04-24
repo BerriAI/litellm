@@ -292,7 +292,7 @@ def test_should_read_secret_from_secret_manager():
     """
     Test that _should_read_secret_from_secret_manager returns correct values based on access mode
     """
-    from litellm_proxy._types import KeyManagementSettings
+    from litellm_proxy_extras.litellm_proxy._types import KeyManagementSettings
 
     # Test when secret manager client is None
     litellm.secret_manager_client = None
@@ -323,7 +323,7 @@ def test_get_secret_with_access_mode():
     """
     Test that get_secret respects access mode settings
     """
-    from litellm_proxy._types import KeyManagementSettings
+    from litellm_proxy_extras.litellm_proxy._types import KeyManagementSettings
 
     # Set up test environment
     test_secret_name = "TEST_SECRET_KEY"

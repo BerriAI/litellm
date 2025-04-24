@@ -9,9 +9,9 @@
 
 from typing import Optional, Literal
 import litellm
-from litellm_proxy.utils import PrismaClient
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient
 from litellm.caching.caching import DualCache
-from litellm_proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
+from litellm_proxy_extras.litellm_proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException

@@ -20,12 +20,12 @@ Make sure the response type follows the `SSOUserDefinedValues` pydantic object. 
 from fastapi import Request
 from fastapi_sso.sso.base import OpenID
 
-from litellm_proxy._types import LitellmUserRoles, SSOUserDefinedValues
-from litellm_proxy.management_endpoints.internal_user_endpoints import (
+from litellm_proxy_extras.litellm_proxy._types import LitellmUserRoles, SSOUserDefinedValues
+from litellm_proxy_extras.litellm_proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
 )
-from litellm_proxy.management_endpoints.team_endpoints import add_new_member
+from litellm_proxy_extras.litellm_proxy.management_endpoints.team_endpoints import add_new_member
 
 
 async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:

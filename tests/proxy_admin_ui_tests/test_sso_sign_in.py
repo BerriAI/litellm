@@ -10,11 +10,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-import litellm_proxy
-from litellm_proxy.proxy_server import app
-from litellm_proxy.utils import PrismaClient, ProxyLogging
-from litellm_proxy.management_endpoints.ui_sso import auth_callback
-from litellm_proxy._types import LitellmUserRoles
+import litellm_proxy_extras.litellm_proxy
+from litellm_proxy_extras.litellm_proxy.proxy_server import app
+from litellm_proxy_extras.litellm_proxy.utils import PrismaClient, ProxyLogging
+from litellm_proxy_extras.litellm_proxy.management_endpoints.ui_sso import auth_callback
+from litellm_proxy_extras.litellm_proxy._types import LitellmUserRoles
 import os
 import jwt
 import time
@@ -33,7 +33,7 @@ def mock_env_vars(monkeypatch):
 
 @pytest.fixture
 def prisma_client():
-    from litellm_proxy.proxy_cli import append_query_params
+    from litellm_proxy_extras.litellm_proxy.proxy_cli import append_query_params
 
     ### add connection pool + pool timeout args
     params = {"connection_limit": 100, "pool_timeout": 60}

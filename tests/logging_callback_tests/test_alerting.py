@@ -33,8 +33,8 @@ from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
-from litellm_proxy._types import CallInfo
-from litellm_proxy.utils import ProxyLogging
+from litellm_proxy_extras.litellm_proxy._types import CallInfo
+from litellm_proxy_extras.litellm_proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
 from litellm.utils import get_api_base
 

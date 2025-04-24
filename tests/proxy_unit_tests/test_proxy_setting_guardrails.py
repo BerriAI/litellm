@@ -19,7 +19,7 @@ from fastapi import Response
 from fastapi.testclient import TestClient
 
 import litellm
-from litellm_proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+from litellm_proxy_extras.litellm_proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     initialize,
     router,
     save_worker_config,
@@ -31,7 +31,7 @@ def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_guardrails_config.yaml"
     asyncio.run(initialize(config=config_fp))
-    from litellm_proxy.proxy_server import app
+    from litellm_proxy_extras.litellm_proxy.proxy_server import app
 
     return TestClient(app)
 

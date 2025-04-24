@@ -14,11 +14,16 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
-from litellm_proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm_proxy.management_endpoints.scim.scim_transformations import (
+from litellm_proxy_extras.litellm_proxy._types import (
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    Member,
+)
+from litellm_proxy_extras.litellm_proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
+
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
 
 
 # Mock data

@@ -29,11 +29,11 @@ import httpx
 import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm_proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
+from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
     AssemblyAIPassthroughLoggingHandler,
     AssemblyAITranscriptResponse,
 )
-from litellm_proxy.pass_through_endpoints.success_handler import (
+from litellm_proxy_extras.litellm_proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 

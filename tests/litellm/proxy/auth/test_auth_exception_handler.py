@@ -24,9 +24,12 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm_proxy_extras.litellm_proxy._types import ProxyErrorTypes, ProxyException
+from litellm_proxy_extras.litellm_proxy.auth.auth_exception_handler import (
+    UserAPIKeyAuthExceptionHandler,
+)
+
 from litellm._logging import verbose_proxy_logger
-from litellm_proxy._types import ProxyErrorTypes, ProxyException
-from litellm_proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
 
 @pytest.mark.asyncio
