@@ -124,6 +124,7 @@ async def google_login(request: Request):  # noqa: PLR0915
         )
         is True
     ):
+        verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
         return await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
@@ -322,6 +323,7 @@ def get_disabled_non_admin_personal_key_creation():
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
+    verbose_proxy_logger.info("Starting SSO callback")
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
@@ -375,7 +377,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             redirect_url=redirect_url,
         )
     # User is Authe'd in - generate key for the UI to access Proxy
-    verbose_proxy_logger.debug(f"SSO callback result: {result}")
+    verbose_proxy_logger.info(f"SSO callback result: {result}")
     user_email: Optional[str] = getattr(result, "email", None)
     user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
 
@@ -552,8 +554,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         master_key,
         algorithm="HS256",
     )
+    verbose_proxy_logger.info(f"user_id: {user_id}; jwt_token: {jwt_token}")
     if user_id is not None and isinstance(user_id, str):
         litellm_dashboard_ui += "?login=success"
+    verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token, secure=True)
     return redirect_response
