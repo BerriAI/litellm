@@ -75,7 +75,6 @@ def fetch_mcp_servers() -> List[Dict[str, Any]]:
         return server_configs
     
     except requests.RequestException as e:
-        print(f"Error fetching MCP servers: {e}")
         return []
 
 def update_mcp_servers_file(output_file: str = None) -> None:
@@ -94,9 +93,6 @@ def update_mcp_servers_file(output_file: str = None) -> None:
     if servers:
         with open(output_file, 'w') as f:
             json.dump(servers, f, indent=2)
-        print(f"Successfully updated {output_file} with {len(servers)} server configurations")
-    else:
-        print("No server configurations were fetched. File not updated.")
 
 if __name__ == "__main__":
     # Update the MCP servers file in the root directory of the repository
