@@ -443,7 +443,6 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             budget_duration=internal_user_budget_duration,
         )
 
-    _user_id_from_sso = user_id
     user_role = None
     try:
         if prisma_client is not None:
@@ -474,6 +473,12 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 user_defined_values=user_defined_values,
                 prisma_client=prisma_client,
             )
+            if (
+                user_info is not None
+                and user_info.user_id is not None
+                and user_defined_values is not None
+            ):
+                user_defined_values["user_id"] = user_info.user_id
             if user_info and user_info.user_role is not None:
                 user_role = user_info.user_role
             else:
