@@ -19,12 +19,12 @@ from litellm.proxy._types import NewTeamRequest
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
@@ -518,3 +518,29 @@ async def test_create_team_without_default_params():
         assert "max_budget" not in create_call_args
         assert "budget_duration" not in create_call_args
         assert create_call_args["models"] == []
+
+
+def test_apply_user_info_values_to_sso_user_defined_values():
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="admin",
+    )
+
+    user_defined_values = {
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "admin",
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values["user_id"] == "123"
