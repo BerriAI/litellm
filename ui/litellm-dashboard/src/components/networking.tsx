@@ -3264,7 +3264,6 @@ export const teamMemberAddCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      debugger;
       if (errorData.includes('already in team')) {
         throw new UiError("User is already a member of this team") 
       }
