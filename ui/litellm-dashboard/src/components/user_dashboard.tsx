@@ -110,6 +110,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   };
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
   const [selectedKeyAlias, setSelectedKeyAlias] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -428,6 +429,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setSelectedTeam={setSelectedTeam}
             selectedKeyAlias={selectedKeyAlias}
             setSelectedKeyAlias={setSelectedKeyAlias}
+            selectedUserId={selectedUserId}
+            setSelectedUserId={setSelectedUserId}
             data={keys}
             setData={setKeys}
             premiumUser={premiumUser}

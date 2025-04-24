@@ -32,6 +32,8 @@ interface AllKeysTableProps {
   setSelectedTeam: (team: Team | null) => void;
   selectedKeyAlias: string | null;
   setSelectedKeyAlias: Setter<string | null>;
+  selectedUserId: string | null;
+  setSelectedUserId: Setter<string | null>;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
@@ -98,10 +100,9 @@ export function AllKeysTable({
   onPageChange,
   pageSize = 50,
   teams,
-  selectedTeam,
   setSelectedTeam,
-  selectedKeyAlias,
   setSelectedKeyAlias,
+  setSelectedUserId,
   accessToken,
   userID,
   userRole,
@@ -117,6 +118,7 @@ export function AllKeysTable({
     filters,
     filteredKeys,
     allKeyAliases,
+    allUsers,
     allTeams,
     allOrganizations,
     handleFilterChange,
@@ -128,7 +130,8 @@ export function AllKeysTable({
     accessToken,
     setSelectedTeam,
     setCurrentOrg,
-    setSelectedKeyAlias
+    setSelectedKeyAlias,
+    setSelectedUserId
   });
 
   useEffect(() => {
@@ -361,6 +364,23 @@ export function AllKeysTable({
             label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
             value: org.organization_id as string
           }));
+      }
+    },
+    {
+      name: "User ID",
+      label: "User ID",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredUserIds = allUsers.filter(user => {
+          return user.user_id.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredUserIds.map((user) => {
+          return {
+            label: user.user_id,
+            value: user.user_id
+          }
+        });
       }
     },
     {

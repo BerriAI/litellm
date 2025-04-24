@@ -110,6 +110,8 @@ interface ViewKeyTableProps {
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   selectedKeyAlias: string | null;
   setSelectedKeyAlias: Setter<string | null>;
+  selectedUserId: string | null;
+  setSelectedUserId: Setter<string | null>;
 }
 
 interface ItemData {
@@ -159,7 +161,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   organizations,
   setCurrentOrg,
   selectedKeyAlias,
-  setSelectedKeyAlias
+  setSelectedKeyAlias,
+  selectedUserId,
+  setSelectedUserId
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -185,6 +189,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     selectedTeam,
     currentOrg,
     selectedKeyAlias,
+    selectedUserId,
     accessToken,
   });
 
@@ -440,6 +445,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         refresh={refresh}
         selectedKeyAlias={selectedKeyAlias}
         setSelectedKeyAlias={setSelectedKeyAlias}
+        selectedUserId={selectedUserId}
+        setSelectedUserId={setSelectedUserId}
       />
 
       {isDeleteModalOpen && (

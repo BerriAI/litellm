@@ -2605,7 +2605,8 @@ export const keyListCall = async (
   accessToken: String, 
   organizationID: string | null,
   teamID: string | null,
-  selectedKeyAlias: string | null,
+  keyAlias: string | null,
+  userId: string | null,
   page: number,
   pageSize: number,
 ) => {
@@ -2625,8 +2626,12 @@ export const keyListCall = async (
       queryParams.append('organization_id', organizationID.toString());
     }
 
-    if (selectedKeyAlias) {
-      queryParams.append('key_alias', selectedKeyAlias)
+    if (keyAlias) {
+      queryParams.append('key_alias', keyAlias)
+    }
+
+    if (userId) {
+      queryParams.append('user_id', userId)
     }
 
     if (page) {

@@ -3,13 +3,14 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
+import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams, fetchAllUsers } from "./filter_helpers";
 import { Setter } from "@/types";
 
 
 export interface FilterState {
   'Team ID': string;
   'Organization ID': string;
+  'User ID': string;
   'Key Alias': string;
   [key: string]: string;
 }
@@ -21,7 +22,8 @@ export function useFilterLogic({
   accessToken,
   setSelectedTeam,
   setCurrentOrg,
-  setSelectedKeyAlias
+  setSelectedKeyAlias,
+  setSelectedUserId
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
@@ -30,10 +32,12 @@ export function useFilterLogic({
   setSelectedTeam: (team: Team | null) => void;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   setSelectedKeyAlias: Setter<string | null>
+  setSelectedUserId: Setter<string | null>
 }) {
   const [filters, setFilters] = useState<FilterState>({
     'Team ID': '',
     'Organization ID': '',
+    'User ID': '',
     'Key Alias': ''
   });
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
@@ -86,7 +90,7 @@ export function useFilterLogic({
     }
   }, [accessToken]);
 
-  const queryAllKeysQuery = useQuery({
+  const allKeyAliasesQuery = useQuery({
     queryKey: ['allKeys'],
     queryFn: async () => {
       if (!accessToken) throw new Error('Access token required');
@@ -94,7 +98,18 @@ export function useFilterLogic({
     },
     enabled: !!accessToken
   });
-  const allKeyAliases = queryAllKeysQuery.data || []
+  const allKeyAliases = allKeyAliasesQuery.data || []
+
+  const allUsersQuery = useQuery({
+    queryKey: ['allUsers'],
+    enabled: !!accessToken,
+    queryFn: async () => {
+      if (!accessToken) throw new Error('Access token required');
+      return await fetchAllUsers(accessToken);
+    },
+  });
+  const allUsers = allUsersQuery.data || [];
+  
 
   // Update teams and organizations when props change
   useEffect(() => {
@@ -120,6 +135,7 @@ export function useFilterLogic({
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
+      'User ID': newFilters['User ID'] || '',
       'Key Alias': newFilters['Key Alias'] || ''
     });
   
@@ -144,6 +160,8 @@ export function useFilterLogic({
       ? allKeyAliases.find((k) => k === keyAlias) || null
       : null;
     setSelectedKeyAlias(selectedKeyAlias)
+
+    setSelectedUserId(newFilters['User ID'] || null)
   };
 
   const handleFilterReset = () => {
@@ -151,6 +169,7 @@ export function useFilterLogic({
     setFilters({
       'Team ID': '',
       'Organization ID': '',
+      'User ID': '',
       'Key Alias': ''
     });
     
@@ -158,6 +177,7 @@ export function useFilterLogic({
     setSelectedTeam(null);
     setCurrentOrg(null);
     setSelectedKeyAlias(null);
+    setSelectedUserId(null)
   };
 
   return {
@@ -165,6 +185,7 @@ export function useFilterLogic({
     filteredKeys,
     allKeyAliases,
     allTeams,
+    allUsers,
     allOrganizations,
     handleFilterChange,
     handleFilterReset
