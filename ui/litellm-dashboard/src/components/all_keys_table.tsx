@@ -371,11 +371,11 @@ export function AllKeysTable({
       label: "User ID",
       isSearchable: true,
       searchFn: async (searchText) => {
-        const filteredUserIds = allUsers.filter(user => {
+        const filteredUsers = allUsers.filter(user => {
           return user.user_id.toLowerCase().includes(searchText.toLowerCase())
         });
 
-        return filteredUserIds.map((user) => {
+        return filteredUsers.map((user) => {
           return {
             label: user.user_id,
             value: user.user_id
