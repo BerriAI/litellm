@@ -1,8 +1,10 @@
 import React from "react";
-import { Form, Input, InputNumber, Select } from "antd";
+import { Form, InputNumber, Select, Tooltip } from "antd";
+import { TextInput, Textarea, SelectItem } from "@tremor/react";
 import { Button } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { all_admin_roles } from "../utils/roles";
+import { InfoCircleOutlined } from "@ant-design/icons";
 interface UserEditViewProps {
   userData: any;
   onCancel: () => void;
@@ -12,6 +14,7 @@ interface UserEditViewProps {
   userID: string | null;
   userRole: string | null;
   userModels: string[];
+  possibleUIRoles: Record<string, Record<string, string>> | null;
 }
 
 export function UserEditView({
@@ -23,6 +26,7 @@ export function UserEditView({
   userID,
   userRole,
   userModels,
+  possibleUIRoles,
 }: UserEditViewProps) {
   const [form] = Form.useForm();
 
@@ -62,25 +66,54 @@ export function UserEditView({
         label="User ID"
         name="user_id"
       >
-        <Input disabled />
+        <TextInput disabled />
       </Form.Item>
 
       <Form.Item
         label="Email"
         name="user_email"
       >
-        <Input />
+        <TextInput />
       </Form.Item>
 
-      <Form.Item
-        label="Role"
-        name="user_role"
-      >
-        <Input />
-      </Form.Item>
+      <Form.Item label={
+                  <span>
+                    Global Proxy Role{' '}
+                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                      <InfoCircleOutlined/>
+                    </Tooltip>
+                  </span>
+                } 
+              name="user_role">
+            <Select>
+              {possibleUIRoles &&
+                Object.entries(possibleUIRoles).map(
+                  ([role, { ui_label, description }]) => (
+                    <SelectItem key={role} value={role} title={ui_label}>
+                      <div className="flex">
+                        {ui_label}{" "}
+                        <p
+                          className="ml-2"
+                          style={{ color: "gray", fontSize: "12px" }}
+                        >
+                          {description}
+                        </p>
+                      </div>
+                    </SelectItem>
+                  ),
+                )}
+            </Select>
+          </Form.Item>
 
       <Form.Item
-        label="Models"
+        label={
+          <span>
+            Personal Models{' '}
+            <Tooltip title="Select which models this user can access outside of team-scope. Choose 'All Proxy Models' to grant access to all models available on the proxy.">
+              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            </Tooltip>
+          </span>
+        }
         name="models"
       >
         <Select
@@ -88,6 +121,7 @@ export function UserEditView({
           placeholder="Select models"
           style={{ width: "100%" }}
           disabled={!all_admin_roles.includes(userData.user_info?.user_role || "")}
+          
         >
           <Select.Option key="all-proxy-models" value="all-proxy-models">
             All Proxy Models
@@ -115,7 +149,7 @@ export function UserEditView({
         label="Metadata"
         name="metadata"
       >
-        <Input.TextArea
+        <Textarea
           rows={4}
           placeholder="Enter metadata as JSON"
         />

@@ -25,6 +25,7 @@ interface UserInfoViewProps {
   accessToken: string | null;
   userRole: string | null;
   onDelete?: () => void;
+  possibleUIRoles: Record<string, Record<string, string>> | null;
 }
 
 interface UserInfo {
@@ -44,7 +45,7 @@ interface UserInfo {
   teams: any[] | null;
 }
 
-export default function UserInfoView({ userId, onClose, accessToken, userRole, onDelete }: UserInfoViewProps) {
+export default function UserInfoView({ userId, onClose, accessToken, userRole, onDelete, possibleUIRoles }: UserInfoViewProps) {
   const [userData, setUserData] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -285,6 +286,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                   userID={userId}
                   userRole={userRole}
                   userModels={userModels}
+                  possibleUIRoles={possibleUIRoles}
                 />
               ) : (
                 <div className="space-y-4">
