@@ -409,7 +409,7 @@ class HttpPassThroughEndpointHelpers:
                 url=url,
                 headers=headers,
                 params=requested_query_params,
-                data=json_str.encode()
+                content=json_str.encode()
             )
         return response
 
@@ -589,7 +589,7 @@ async def pass_through_request(  # noqa: PLR0915
             req = async_client.build_request(
                 "POST",
                 url,
-                data=json_str.encode(),
+                content=json_str.encode(),
                 params=requested_query_params,
                 headers=headers,
             )
