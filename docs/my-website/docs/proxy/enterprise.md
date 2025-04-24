@@ -691,7 +691,7 @@ curl --request POST \
 <TabItem value="admin_only_routes" label="Test `admin_only_routes`">
 
 
-**Successfull Request**
+**Successful Request**
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
@@ -729,7 +729,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 <TabItem value="allowed_routes" label="Test `allowed_routes`">
 
 
-**Successfull Request**
+**Successful Request**
 
 ```shell
 curl http://localhost:4000/chat/completions \

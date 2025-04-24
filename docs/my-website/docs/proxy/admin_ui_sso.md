@@ -243,12 +243,12 @@ We allow you to pass a local image or a an http/https url of your image
 
 Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
 
-Exaple setting Hosted image
+Example setting Hosted image
 ```shell
 UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
 ```
 
-Exaple setting a local image (on your container)
+Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```

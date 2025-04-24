@@ -222,7 +222,7 @@ curl http://localhost:4000/vertex-ai/v1/projects/${PROJECT_ID}/locations/us-cent
 
 LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
-1. Pass Vertex Credetials client side to proxy server
+1. Pass Vertex Credentials client side to proxy server
 
 2. Set Vertex AI credentials on proxy server
 

@@ -22,7 +22,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
-# We recommned - https://1password.com/password-generator/ 
+# We recommend - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
@@ -125,7 +125,7 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 
 ### Build from litellm `pip` package
 
-Follow these instructons to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
 
 Dockerfile 
 
@@ -999,7 +999,7 @@ services:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     volumes:
       - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
-    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
+    # You can change the port or number of workers as per your requirements or pass any new supported CLI argument. Make sure the port passed here matches with the container port defined above in `ports` value
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
 
 # ...rest of your docker-compose config if any
