@@ -213,6 +213,19 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                   <Text>{userData.keys?.length || 0} keys</Text>
                 </div>
               </Card>
+
+              <Card>
+                <Text>Personal Models</Text>
+                <div className="mt-2">
+                  {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
+                    userData.user_info?.models?.map((model, index) => (
+                      <Text key={index}>{model}</Text>
+                    ))
+                  ) : (
+                    <Text>All proxy models</Text>
+                  )}
+                </div>
+              </Card>
             </Grid>
           </TabPanel>
 
@@ -259,6 +272,24 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                       ))
                     ) : (
                       <Text>No teams</Text>
+                    )}
+                  </div>
+                </div>
+                
+                <div>
+                  <Text className="font-medium">Models</Text>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
+                      userData.user_info?.models?.map((model, index) => (
+                        <span
+                          key={index}
+                          className="px-2 py-1 bg-blue-100 rounded text-xs"
+                        >
+                          {model}
+                        </span>
+                      ))
+                    ) : (
+                      <Text>All proxy models</Text>
                     )}
                   </div>
                 </div>
