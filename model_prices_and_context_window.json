@@ -3866,6 +3866,34 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
+    "groq/meta-llama/llama-4-maverick-17b-128e-instruct": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000020,
+        "output_cost_per_token": 0.00000060,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false, 
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
+      "max_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 8192,
+      "input_cost_per_token": 0.00000011,
+      "output_cost_per_token": 0.00000034,
+      "litellm_provider": "groq",
+      "mode": "chat",
+      "supports_system_messages": true,
+      "supports_function_calling": false,
+      "supports_reasoning": true,
+      "supports_response_schema": false,
+      "supports_tool_choice": true
+    },
     "groq/deepseek-r1-distill-llama-70b": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
