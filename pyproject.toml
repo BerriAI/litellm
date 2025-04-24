@@ -92,7 +92,7 @@ extra_proxy = [
 profile = "black"
 
 [tool.poetry.scripts]
-litellm = 'litellm:run_server'
+litellm = 'litellm_proxy_extras.proxy_cli.run_server:main'
 
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.1.0"
