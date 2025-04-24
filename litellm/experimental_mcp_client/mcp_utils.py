@@ -74,7 +74,7 @@ def fetch_mcp_servers() -> List[Dict[str, Any]]:
             
         return server_configs
     
-    except requests.RequestException as e:
+    except requests.RequestException:
         return []
 
 def update_mcp_servers_file(output_file: str = None) -> None:
