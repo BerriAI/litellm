@@ -108,7 +108,9 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
         proxy_config: ProxyConfig,
-        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        route_type: Literal[
+            "acompletion", "aresponses", "_arealtime", "aget_responses"
+        ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
         user_temperature: Optional[float] = None,
@@ -178,7 +180,9 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        route_type: Literal[
+            "acompletion", "aresponses", "_arealtime", "aget_responses"
+        ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,

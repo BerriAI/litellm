@@ -47,6 +47,7 @@ async def route_request(
         "amoderation",
         "arerank",
         "aresponses",
+        "aget_responses",
         "_arealtime",  # private function for realtime API
     ],
 ):

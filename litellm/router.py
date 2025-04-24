@@ -739,6 +739,9 @@ class Router:
             litellm.afile_content, call_type="afile_content"
         )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
+        self.aget_responses = self.factory_function(
+            litellm.aget_responses, call_type="aget_responses"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -3081,6 +3084,7 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "responses",
+            "aget_responses",
             "afile_delete",
             "afile_content",
         ] = "assistants",
@@ -3131,6 +3135,18 @@ class Router:
                 "anthropic_messages",
                 "aresponses",
             ):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in ("aget_responses"):
+                from litellm.responses.utils import ResponsesAPIRequestUtils
+
+                model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+                    kwargs.get("response_id")
+                )
+                if model_id is not None:
+                    kwargs["model"] = model_id
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
