@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -26,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import (
+    CommonProxyErrors,
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
@@ -57,7 +59,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
@@ -320,6 +322,103 @@ def get_disabled_non_admin_personal_key_creation():
     return bool("proxy_admin" in allowed_user_roles)
 
 
+async def get_existing_user_info_from_db(
+    user_id: Optional[str],
+    user_email: Optional[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[LiteLLM_UserTable]:
+    try:
+        user_info = await get_user_object(
+            user_id=user_id,
+            user_email=user_email,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            sso_user_id=user_id,
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error getting user object: {e}")
+        user_info = None
+
+    return user_info
+
+
+async def get_user_info_from_db(
+    result: Union[CustomOpenID, OpenID, dict],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+    user_email: Optional[str],
+    user_defined_values: Optional[SSOUserDefinedValues],
+) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
+    try:
+        user_info: Optional[
+            Union[LiteLLM_UserTable, NewUserResponse]
+        ] = await get_existing_user_info_from_db(
+            user_id=cast(
+                Optional[str],
+                getattr(result, "user_id", None)
+                if not isinstance(result, dict)
+                else result.get("user_id", None),
+            ),
+            user_email=cast(
+                Optional[str],
+                getattr(result, "email", None)
+                if not isinstance(result, dict)
+                else result.get("email", None),
+            ),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        verbose_proxy_logger.debug(
+            f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
+        )
+
+        # Upsert SSO User to LiteLLM DB
+        user_info = await SSOAuthenticationHandler.upsert_sso_user(
+            result=result,
+            user_info=user_info,
+            user_email=user_email,
+            user_defined_values=user_defined_values,
+            prisma_client=prisma_client,
+        )
+
+        await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
+            result=result,
+            user_info=user_info,
+        )
+
+        return user_info
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"[Non-Blocking] Error trying to add sso user to db: {e}"
+        )
+
+    return None
+
+
+def apply_user_info_values_to_sso_user_defined_values(
+    user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
+    user_defined_values: Optional[SSOUserDefinedValues],
+) -> Optional[SSOUserDefinedValues]:
+    if user_defined_values is None:
+        return None
+    if user_info is not None and user_info.user_id is not None:
+        user_defined_values["user_id"] = user_info.user_id
+
+    if user_info is None or user_info.user_role is None:
+        user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    else:
+        user_defined_values["user_role"] = user_info.user_role
+
+    return user_defined_values
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
@@ -338,6 +437,11 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         user_api_key_cache,
         user_custom_sso,
     )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
@@ -376,6 +480,13 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             generic_client_id=generic_client_id,
             redirect_url=redirect_url,
         )
+
+    if result is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Result not returned by SSO provider.",
+        )
+
     # User is Authe'd in - generate key for the UI to access Proxy
     verbose_proxy_logger.info(f"SSO callback result: {result}")
     user_email: Optional[str] = getattr(result, "email", None)
@@ -443,56 +554,18 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             budget_duration=internal_user_budget_duration,
         )
 
-    user_role = None
-    try:
-        if prisma_client is not None:
-            try:
-                user_info = await get_user_object(
-                    user_id=user_id,
-                    user_email=user_email,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=False,
-                    parent_otel_span=None,
-                    proxy_logging_obj=proxy_logging_obj,
-                    sso_user_id=user_id,
-                )
-            except Exception as e:
-                verbose_proxy_logger.debug(f"Error getting user object: {e}")
-                user_info = None
+    user_info = await get_user_info_from_db(
+        result=result,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        user_email=user_email,
+        user_defined_values=user_defined_values,
+    )
 
-            verbose_proxy_logger.debug(
-                f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
-            )
-
-            # Upsert SSO User to LiteLLM DB
-            user_info = await SSOAuthenticationHandler.upsert_sso_user(
-                result=result,
-                user_info=user_info,
-                user_email=user_email,
-                user_defined_values=user_defined_values,
-                prisma_client=prisma_client,
-            )
-            if (
-                user_info is not None
-                and user_info.user_id is not None
-                and user_defined_values is not None
-            ):
-                user_defined_values["user_id"] = user_info.user_id
-            if user_info and user_info.user_role is not None:
-                user_role = user_info.user_role
-            else:
-                user_role = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-
-            await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
-                result=result,
-                user_info=user_info,
-            )
-
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"[Non-Blocking] Error trying to add sso user to db: {e}"
-        )
+    user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info, user_defined_values=user_defined_values
+    )
 
     if user_defined_values is None:
         raise Exception(
@@ -514,7 +587,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     user_id = response["user_id"]  # type: ignore
 
     litellm_dashboard_ui = "/ui/"
-    user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+    user_role = (
+        user_defined_values["user_email"]
+        or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+    )
     if (
         os.getenv("PROXY_ADMIN_ID", None) is not None
         and os.environ["PROXY_ADMIN_ID"] == user_id
