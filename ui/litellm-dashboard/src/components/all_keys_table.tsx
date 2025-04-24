@@ -450,6 +450,8 @@ export function AllKeysTable({
               columns={columns.filter(col => col.id !== 'expander') as any}
               data={filteredKeys as any}
               isLoading={isLoading}
+              loadingMessage="🚅 Loading keys..."
+              noDataMessage="No keys found"
               getRowCanExpand={() => false}
               renderSubComponent={() => <></>}
             />
