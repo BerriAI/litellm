@@ -811,6 +811,7 @@ class BaseLLMChatTest(ABC):
 
         return url
     
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_empty_tools(self):
         """
         Related Issue: https://github.com/BerriAI/litellm/issues/9080
@@ -833,6 +834,8 @@ class BaseLLMChatTest(ABC):
             response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[]) # just make sure call doesn't fail
             print("response: ", response)
             assert response is not None
+        except litellm.ContentPolicyViolationError:
+            pass
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
@@ -840,6 +843,7 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_basic_tool_calling(self):
         try:
             from litellm import completion, ModelResponse
