@@ -742,6 +742,9 @@ class Router:
         self.aget_responses = self.factory_function(
             litellm.aget_responses, call_type="aget_responses"
         )
+        self.adelete_responses = self.factory_function(
+            litellm.adelete_responses, call_type="adelete_responses"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -3085,6 +3088,7 @@ class Router:
             "aresponses",
             "responses",
             "aget_responses",
+            "adelete_responses",
             "afile_delete",
             "afile_content",
         ] = "assistants",
@@ -3139,15 +3143,8 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
-            elif call_type in ("aget_responses"):
-                from litellm.responses.utils import ResponsesAPIRequestUtils
-
-                model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(
-                    kwargs.get("response_id")
-                )
-                if model_id is not None:
-                    kwargs["model"] = model_id
-                return await self._ageneric_api_call_with_fallbacks(
+            elif call_type in ("aget_responses", "adelete_responses"):
+                return await self._init_responses_api_endpoints(
                     original_function=original_function,
                     **kwargs,
                 )
@@ -3160,6 +3157,28 @@ class Router:
                 )
 
         return async_wrapper
+
+    async def _init_responses_api_endpoints(
+        self,
+        original_function: Callable,
+        **kwargs,
+    ):
+        """
+        Initialize the Responses API endpoints on the router.
+
+        GET, DELETE Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        """
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+            kwargs.get("response_id")
+        )
+        if model_id is not None:
+            kwargs["model"] = model_id
+        return await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            **kwargs,
+        )
 
     async def _pass_through_assistants_endpoint_factory(
         self,

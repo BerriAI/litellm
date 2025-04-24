@@ -48,6 +48,7 @@ async def route_request(
         "arerank",
         "aresponses",
         "aget_responses",
+        "adelete_responses",
         "_arealtime",  # private function for realtime API
     ],
 ):
