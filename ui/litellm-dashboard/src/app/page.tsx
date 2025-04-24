@@ -151,7 +151,7 @@ export default function CreateKeyPage() {
     if (redirectToLogin) {
       window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
     }
-  }, [token, authLoading])
+  }, [redirectToLogin])
 
   useEffect(() => {
     if (!token) {
@@ -223,7 +223,7 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
-  if (authLoading) {
+  if (authLoading || redirectToLogin) {
     return <LoadingScreen />
   }
 
