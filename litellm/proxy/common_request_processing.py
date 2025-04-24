@@ -178,7 +178,7 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        route_type: Literal["acompletion", "aresponses", "aget_responses", "adelete_responses", "_arealtime"],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,

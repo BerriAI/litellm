@@ -732,6 +732,12 @@ class Router:
         self.aresponses = self.factory_function(
             litellm.aresponses, call_type="aresponses"
         )
+        self.aget_responses = self.factory_function(
+            litellm.aget_responses, call_type="aget_responses"
+        )
+        self.adelete_responses = self.factory_function(
+            litellm.adelete_responses, call_type="adelete_responses"
+        )
         self.afile_delete = self.factory_function(
             litellm.afile_delete, call_type="afile_delete"
         )
@@ -2416,6 +2422,14 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    def retrieve_responses_model(
+        self, response_id: str
+    ):
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        decoded_result = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        model_id = decoded_result.get("model_id")
+        return model_id
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3080,6 +3094,8 @@ class Router:
             "moderation",
             "anthropic_messages",
             "aresponses",
+            "aget_responses",
+            "adelete_responses",
             "responses",
             "afile_delete",
             "afile_content",
@@ -3130,7 +3146,11 @@ class Router:
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
+                "aget_responses",
+                "adelete_responses"
             ):
+                if call_type == "aget_responses" or call_type == "adelete_responses":
+                    kwargs['model'] = self.retrieve_responses_model(kwargs["response_id"])
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,
