@@ -14,9 +14,10 @@ import {
   Badge,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import { userInfoCall, userDeleteCall } from "../networking";
+import { userInfoCall, userDeleteCall, userUpdateUserCall, modelAvailableCall } from "../networking";
 import { message } from "antd";
 import { rolesWithWriteAccess } from '../../utils/roles';
+import { UserEditView } from "../user_edit_view";
 
 interface UserInfoViewProps {
   userId: string;
@@ -24,6 +25,7 @@ interface UserInfoViewProps {
   accessToken: string | null;
   userRole: string | null;
   onDelete?: () => void;
+  possibleUIRoles: Record<string, Record<string, string>> | null;
 }
 
 interface UserInfo {
@@ -43,18 +45,25 @@ interface UserInfo {
   teams: any[] | null;
 }
 
-export default function UserInfoView({ userId, onClose, accessToken, userRole, onDelete }: UserInfoViewProps) {
+export default function UserInfoView({ userId, onClose, accessToken, userRole, onDelete, possibleUIRoles }: UserInfoViewProps) {
   const [userData, setUserData] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   React.useEffect(() => {
     console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`)
-    const fetchUserData = async () => {
+    const fetchData = async () => {
       try {
         if (!accessToken) return;
         const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
         setUserData(data);
+
+        // Fetch available models
+        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
+        const availableModels = modelDataResponse.data.map((model: any) => model.id);
+        setUserModels(availableModels);
       } catch (error) {
         console.error("Error fetching user data:", error);
         message.error("Failed to fetch user data");
@@ -63,7 +72,7 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
       }
     };
 
-    fetchUserData();
+    fetchData();
   }, [accessToken, userId, userRole]);
 
   const handleDelete = async () => {
@@ -78,6 +87,32 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
     } catch (error) {
       console.error("Error deleting user:", error);
       message.error("Failed to delete user");
+    }
+  };
+
+  const handleUserUpdate = async (formValues: Record<string, any>) => {
+    try {
+      if (!accessToken || !userData) return;
+
+      const response = await userUpdateUserCall(accessToken, formValues, null);
+      
+      // Update local state with new values
+      setUserData({
+        ...userData,
+        user_info: {
+          ...userData.user_info,
+          user_email: formValues.user_email,
+          models: formValues.models,
+          max_budget: formValues.max_budget,
+          metadata: formValues.metadata,
+        }
+      });
+
+      message.success("User updated successfully");
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating user:", error);
+      message.error("Failed to update user");
     }
   };
 
@@ -213,81 +248,135 @@ export default function UserInfoView({ userId, onClose, accessToken, userRole, o
                   <Text>{userData.keys?.length || 0} keys</Text>
                 </div>
               </Card>
+
+              <Card>
+                <Text>Personal Models</Text>
+                <div className="mt-2">
+                  {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
+                    userData.user_info?.models?.map((model, index) => (
+                      <Text key={index}>{model}</Text>
+                    ))
+                  ) : (
+                    <Text>All proxy models</Text>
+                  )}
+                </div>
+              </Card>
             </Grid>
           </TabPanel>
 
           {/* Details Panel */}
           <TabPanel>
             <Card>
-              <div className="space-y-4">
-                <div>
-                  <Text className="font-medium">User ID</Text>
-                  <Text className="font-mono">{userData.user_id}</Text>
-                </div>
-                
-                <div>
-                  <Text className="font-medium">Email</Text>
-                  <Text>{userData.user_info?.user_email || "Not Set"}</Text>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Role</Text>
-                  <Text>{userData.user_info?.user_role || "Not Set"}</Text>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Created</Text>
-                  <Text>{userData.user_info?.created_at ? new Date(userData.user_info.created_at).toLocaleString() : "Unknown"}</Text>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Last Updated</Text>
-                  <Text>{userData.user_info?.updated_at ? new Date(userData.user_info.updated_at).toLocaleString() : "Unknown"}</Text>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Teams</Text>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {userData.teams?.length && userData.teams?.length > 0 ? (
-                      userData.teams?.map((team, index) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 bg-blue-100 rounded text-xs"
-                        >
-                          {team.team_alias || team.team_id}
-                        </span>
-                      ))
-                    ) : (
-                      <Text>No teams</Text>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <Text className="font-medium">API Keys</Text>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {userData.keys?.length && userData.keys?.length > 0 ? (
-                      userData.keys.map((key, index) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 bg-green-100 rounded text-xs"
-                        >
-                          {key.key_alias || key.token}
-                        </span>
-                      ))
-                    ) : (
-                      <Text>No API keys</Text>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <Text className="font-medium">Metadata</Text>
-                  <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                    {JSON.stringify(userData.user_info?.metadata || {}, null, 2)}
-                  </pre>
-                </div>
+              <div className="flex justify-between items-center mb-4">
+                <Title>User Settings</Title>
+                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                  <Button variant="light" onClick={() => setIsEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
               </div>
+
+              {isEditing && userData ? (
+                <UserEditView
+                  userData={userData}
+                  onCancel={() => setIsEditing(false)}
+                  onSubmit={handleUserUpdate}
+                  teams={userData.teams}
+                  accessToken={accessToken}
+                  userID={userId}
+                  userRole={userRole}
+                  userModels={userModels}
+                  possibleUIRoles={possibleUIRoles}
+                />
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <Text className="font-medium">User ID</Text>
+                    <Text className="font-mono">{userData.user_id}</Text>
+                  </div>
+                  
+                  <div>
+                    <Text className="font-medium">Email</Text>
+                    <Text>{userData.user_info?.user_email || "Not Set"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Role</Text>
+                    <Text>{userData.user_info?.user_role || "Not Set"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Created</Text>
+                    <Text>{userData.user_info?.created_at ? new Date(userData.user_info.created_at).toLocaleString() : "Unknown"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Last Updated</Text>
+                    <Text>{userData.user_info?.updated_at ? new Date(userData.user_info.updated_at).toLocaleString() : "Unknown"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Teams</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {userData.teams?.length && userData.teams?.length > 0 ? (
+                        userData.teams?.map((team, index) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 bg-blue-100 rounded text-xs"
+                          >
+                            {team.team_alias || team.team_id}
+                          </span>
+                        ))
+                      ) : (
+                        <Text>No teams</Text>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Models</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
+                        userData.user_info?.models?.map((model, index) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 bg-blue-100 rounded text-xs"
+                          >
+                            {model}
+                          </span>
+                        ))
+                      ) : (
+                        <Text>All proxy models</Text>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">API Keys</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {userData.keys?.length && userData.keys?.length > 0 ? (
+                        userData.keys.map((key, index) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 bg-green-100 rounded text-xs"
+                          >
+                            {key.key_alias || key.token}
+                          </span>
+                        ))
+                      ) : (
+                        <Text>No API keys</Text>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Metadata</Text>
+                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                      {JSON.stringify(userData.user_info?.metadata || {}, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
             </Card>
           </TabPanel>
         </TabPanels>
