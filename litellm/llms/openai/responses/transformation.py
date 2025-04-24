@@ -281,6 +281,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         try:
             raw_response_json = raw_response.json()
+            raw_response.raise_for_status()
         except Exception:
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
