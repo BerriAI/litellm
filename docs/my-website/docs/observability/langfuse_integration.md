@@ -185,7 +185,7 @@ curl --location --request POST 'http://0.0.0.0:4000/chat/completions' \
 * `trace_release`  - Release for the trace, defaults to `None`
 * `trace_metadata` - Metadata for the trace, defaults to `None`
 * `trace_user_id`  - User identifier for the trace, defaults to completion argument `user`
-* `tags`           - Tags for the trace, defeaults to `None`
+* `tags`           - Tags for the trace, defaults to `None`
 
 ##### Updatable Parameters on Continuation
 
