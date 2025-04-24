@@ -1,33 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Card,
-  Title,
-  Subtitle,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TableCell,
-  TableBody,
   Tab,
-  Text,
   TabGroup,
   TabList,
   TabPanels,
-  Metric,
-  Grid,
   TabPanel,
   Select,
   SelectItem,
-  Dialog,
-  DialogPanel,
-  Icon,
-  TextInput,
-  NumberInput,
 } from "@tremor/react";
 
 import { message } from "antd";
-import { Modal } from "antd";
 
 import {
   userInfoCall,
@@ -35,22 +17,14 @@ import {
   getPossibleUserRoles,
   userListCall,
 } from "./networking";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
-import RequestAccess from "./request_model_access";
+import { Button } from "@tremor/react";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
-import Paragraph from "antd/es/skeleton/Paragraph";
-import {
-  PencilAltIcon,
-  InformationCircleIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
 
 import { userDeleteCall } from "./networking";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import BulkCreateUsers from "./bulk_create_users_button";
 import SSOSettings from "./SSOSettings";
 import debounce from "lodash/debounce";
 
@@ -109,10 +83,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   setKeys,
 }) => {
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
-  const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
-  const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -136,9 +107,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     sort_order: "desc"
   });
   const [showFilters, setShowFilters] = useState(false);
-  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState("Email");
-  const filtersRef = useRef(null);
   const lastSearchTimestamp = useRef(0);
 
   // check if window is not undefined
