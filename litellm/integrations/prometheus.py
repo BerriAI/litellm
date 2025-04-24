@@ -1716,6 +1716,7 @@ class PrometheusLogger(CustomLogger):
         """
         Assemble a UserAPIKeyAuth object
         """
+        from litellm_proxy._types import UserAPIKeyAuth
         from litellm_proxy.auth.auth_checks import get_key_object
         from litellm_proxy.proxy_server import prisma_client, user_api_key_cache
 
