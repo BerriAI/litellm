@@ -22,6 +22,7 @@ from litellm.router import Router
 
 ignored_keys = [
     "request_id",
+    "session_id",
     "startTime",
     "endTime",
     "completionStartTime",
@@ -452,6 +453,7 @@ class TestSpendLogsPayload:
             expected_payload = SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "session_id": "1234567890",
                     "call_type": "acompletion",
                     "api_key": "",
                     "cache_hit": "None",
@@ -482,6 +484,7 @@ class TestSpendLogsPayload:
                     "custom_llm_provider": "openai",
                     "messages": "{}",
                     "response": "{}",
+                    "proxy_server_request": "{}",
                 }
             )
 
