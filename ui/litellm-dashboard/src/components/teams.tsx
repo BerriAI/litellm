@@ -539,7 +539,7 @@ const Teams: React.FC<TeamProps> = ({
                     <div className="relative w-64">
                       <input
                         type="text"
-                        placeholder="Filter by Team ID"
+                        placeholder="Enter Team ID"
                         className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={filters.team_id}
                         onChange={(e) => handleFilterChange('team_id', e.target.value)}
