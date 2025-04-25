@@ -6585,7 +6585,6 @@ class ProviderConfigManager:
                 return litellm.AmazonInvokeConfig()
         elif litellm.LlmProviders.NETMIND == provider:
             return litellm.NetmindChatConfig()
-        return litellm.OpenAIGPTConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
