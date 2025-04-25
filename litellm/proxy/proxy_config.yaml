@@ -1,8 +1,7 @@
 model_list:
-  - model_name: openai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-
-router_settings:
-  optional_pre_call_checks: ["responses_api_deployment_check"]
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+general_settings:
+  store_prompts_in_spend_logs: true
