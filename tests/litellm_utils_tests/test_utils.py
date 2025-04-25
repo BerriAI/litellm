@@ -477,7 +477,34 @@ def test_token_counter():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_token_counter()
+def test_token_counter_list_tool_call():
+
+    usermessage = {
+            'content': [
+                {
+                    'type': 'text',
+                    'text': "2025-04-25 (UTC)",
+                }
+            ],
+            'role': 'user',
+        }
+    tool_call =   {
+            'role': 'assistant',
+            'tool_calls': [
+                {
+                    'id': 'toolu_01NZjJ3e6fzhhbYYcb5k1k4d',
+                    'type': 'function'
+                }
+            ],
+        }
+    
+    tokens_usermessage = token_counter(model="anthropic.claude-instant-v1", messages=[usermessage])
+    assert tokens_usermessage > 0
+    tokens_tool_call = token_counter(model="anthropic.claude-instant-v1", messages=[tool_call])
+    assert tokens_tool_call > 0
+    tokens_both = token_counter(model="anthropic.claude-instant-v1", messages=[usermessage, tool_call])
+    assert tokens_both > tokens_usermessage
+    assert tokens_both > tokens_tool_call
 
 
 @pytest.mark.parametrize(
