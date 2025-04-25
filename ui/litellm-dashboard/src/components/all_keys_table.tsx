@@ -130,9 +130,6 @@ export function AllKeysTable({
     teams,
     organizations,
     accessToken,
-    setSelectedTeam,
-    setCurrentOrg,
-    setSelectedKeyAlias
   });
 
   

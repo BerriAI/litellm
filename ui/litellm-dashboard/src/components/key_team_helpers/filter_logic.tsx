@@ -22,23 +22,18 @@ export function useFilterLogic({
   teams,
   organizations,
   accessToken,
-  setSelectedTeam,
-  setCurrentOrg,
-  setSelectedKeyAlias
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
   organizations: Organization[] | null;
   accessToken: string | null;
-  setSelectedTeam: (team: Team | null) => void;
-  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
-  setSelectedKeyAlias: Setter<string | null>
 }) {
-  const [filters, setFilters] = useState<FilterState>({
+  const defaultFilters: FilterState = {
     'Team ID': '',
     'Organization ID': '',
     'Key Alias': ''
-  });
+  }
+  const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
@@ -143,14 +138,10 @@ export function useFilterLogic({
 
   const handleFilterReset = () => {
     // Reset filters state
-    setFilters({
-      'Team ID': '',
-      'Organization ID': '',
-      'Key Alias': ''
-    });
+    setFilters(defaultFilters);
     
     // Reset selections
-    debouncedSearch(filters);
+    debouncedSearch(defaultFilters);
   };
 
   return {
