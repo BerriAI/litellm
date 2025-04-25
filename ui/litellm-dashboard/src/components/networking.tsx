@@ -852,6 +852,8 @@ export const teamListCall = async (
   accessToken: String, 
   organizationID: string | null,
   userID: String | null = null,
+  teamID: string | null = null,
+  team_alias: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -867,6 +869,14 @@ export const teamListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (teamID) {
+      queryParams.append('team_id', teamID.toString());
+    }
+
+    if (team_alias) {
+      queryParams.append('team_alias', team_alias.toString());
     }
     
     const queryString = queryParams.toString();
