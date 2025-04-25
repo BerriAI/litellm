@@ -94,12 +94,6 @@ const TeamFilter = ({
  * The team selector and filtering have been removed so that all keys are shown.
  */
 
-export interface FilterState {
-  'Team ID': string;
-  'Organization ID': string;
-  'Key Alias': string;
-  [key: string]: string;
-}
 
 export function AllKeysTable({ 
   keys, 
@@ -123,9 +117,6 @@ export function AllKeysTable({
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
   const lastSearchTimestamp = useRef(0);
-  const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>([]);
-  const [allTeams, setAllTeams] = useState<Team[]>([]);
-  const [allOrganizations, setAllOrganizations] = useState<Organization[]>([]);
 
   // Use the filter logic hook
   useEffect(() => {
@@ -152,62 +143,25 @@ export function AllKeysTable({
     }
   }, [accessToken]);
 
-  const debouncedSearch = useCallback(
-    debounce(async (filters: FilterState) => {
-      if (!accessToken || !userRole || !userID) {
-        return;
-      }
-
-      const currentTimestamp = Date.now();
-      lastSearchTimestamp.current = currentTimestamp;
-
-      try {
-        // Make the API call using userListCall with all filter parameters
-        const data = await keyListCall(
-          accessToken,
-          filters["Organization ID"] || null,
-          filters["Team ID"] || null,
-          filters["Key Alias"] || null,
-          filters["User ID"] || null,
-          1, // Reset to first page when searching
-          defaultPageSize
-        );
-        
-        // Only update state if this is the most recent search
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          if (data) {
-            setFilteredKeys(data.keys);
-            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-            console.log("called from debouncedSearch data:", JSON.stringify(data));
-          }
-        }
-      } catch (error) {
-        console.error("Error searching users:", error);
-      }
-    }, 300),
-    [accessToken, userRole, userID]
-  );
-  
-  const [filters, setFilters] = useState<FilterState>({
-    'Team ID': '',
-    'Organization ID': '',
-    'Key Alias': ''
+  const {
+    filters,
+    filteredKeys,
+    allKeyAliases,
+    allTeams,
+    allOrganizations,
+    handleFilterChange,
+    handleFilterReset
+  } = useFilterLogic({
+    keys,
+    teams,
+    organizations,
+    accessToken,
+    setSelectedTeam,
+    setCurrentOrg,
+    setSelectedKeyAlias
   });
 
-  const handleFilterChange = (key: keyof FilterState, value: string) => {
-    const newFilters = { ...filters, [key]: value };
-    setFilters(newFilters);
-    console.log("called from handleFilterChange - newFilters:", JSON.stringify(newFilters));
-    debouncedSearch(newFilters);
-  };
-
-  const handleFilterReset = () => {
-    const resetFilters = Object.keys(filters).reduce((acc, key) => {
-      acc[key] = '';
-      return acc;
-    }, {} as FilterState);
-    setFilters(resetFilters);
-  };
+  
 
   useEffect(() => {
     if (accessToken) {

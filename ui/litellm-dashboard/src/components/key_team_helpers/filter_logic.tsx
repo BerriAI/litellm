@@ -14,6 +14,42 @@ export interface FilterState {
   [key: string]: string;
 }
 
+  // const debouncedSearch = useCallback(
+  //   debounce(async (filters: FilterState) => {
+  //     if (!accessToken || !userRole || !userID) {
+  //       return;
+  //     }
+
+  //     const currentTimestamp = Date.now();
+  //     lastSearchTimestamp.current = currentTimestamp;
+
+  //     try {
+  //       // Make the API call using userListCall with all filter parameters
+  //       const data = await keyListCall(
+  //         accessToken,
+  //         filters["Organization ID"] || null,
+  //         filters["Team ID"] || null,
+  //         filters["Key Alias"] || null,
+  //         filters["User ID"] || null,
+  //         1, // Reset to first page when searching
+  //         defaultPageSize
+  //       );
+        
+  //       // Only update state if this is the most recent search
+  //       if (currentTimestamp === lastSearchTimestamp.current) {
+  //         if (data) {
+  //           setFilteredKeys(data.keys);
+  //           console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+  //           console.log("called from debouncedSearch data:", JSON.stringify(data));
+  //         }
+  //       }
+  //     } catch (error) {
+  //       console.error("Error searching users:", error);
+  //     }
+  //   }, 300),
+  //   [accessToken, userRole, userID]
+  // );
+
 export function useFilterLogic({
   keys,
   teams,
