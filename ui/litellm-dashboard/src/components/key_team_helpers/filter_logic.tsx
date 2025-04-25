@@ -78,28 +78,6 @@ export function useFilterLogic({
     }, 300),
     [accessToken]
   );
-  // Apply filters to keys whenever keys or filters change
-  useEffect(() => {
-    if (!keys) {
-      setFilteredKeys([]);
-      return;
-    }
-
-    let result = [...keys];
-
-    // Apply Team ID filter
-    if (filters['Team ID']) {
-      result = result.filter(key => key.team_id === filters['Team ID']);
-    }
-
-    // Apply Organization ID filter
-    if (filters['Organization ID']) {
-      result = result.filter(key => key.organization_id === filters['Organization ID']);
-    }
-
-
-    setFilteredKeys(result);
-  }, [keys, filters]);
 
   // Fetch all data for filters when component mounts
   useEffect(() => {
@@ -154,34 +132,6 @@ export function useFilterLogic({
   }, [organizations]);
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
-      'Team ID': newFilters['Team ID'] || '',
-      'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || ''
-    });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = allTeams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
-    }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = allOrganizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
-
-    const keyAlias = newFilters['Key Alias'];
-    const selectedKeyAlias = keyAlias
-      ? allKeyAliases.find((k) => k === keyAlias) || null
-      : null;
-    setSelectedKeyAlias(selectedKeyAlias)
 
     // Fetch keys based on new filters
     const updatedFilters = {
@@ -200,9 +150,7 @@ export function useFilterLogic({
     });
     
     // Reset selections
-    setSelectedTeam(null);
-    setCurrentOrg(null);
-    setSelectedKeyAlias(null);
+    debouncedSearch(filters);
   };
 
   return {

@@ -116,32 +116,6 @@ export function AllKeysTable({
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
-  const lastSearchTimestamp = useRef(0);
-
-  // Use the filter logic hook
-  useEffect(() => {
-    const loadAllFilterData = async () => {
-    
-      // Load all teams - no organization filter needed here
-      const teamsData = await fetchAllTeams(accessToken);
-      if (teamsData.length > 0) {
-        setAllTeams(teamsData);
-      }
-      
-      // Load all organizations
-      const orgsData = await fetchAllOrganizations(accessToken);
-      if (orgsData.length > 0) {
-        setAllOrganizations(orgsData);
-      }
-
-      // Load all keys
-      debouncedSearch(filters);
-    };
-    
-    if (accessToken) {
-      loadAllFilterData();
-    }
-  }, [accessToken]);
 
   const {
     filters,
