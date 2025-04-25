@@ -13,9 +13,11 @@ spec:
       labels:
         app: litellm
     spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
       containers:
         - name: litellm-container
-          image: 767397923279.dkr.ecr.ap-southeast-1.amazonaws.com/gpt-portal/litellm:v1.0
+          image: 767397923279.dkr.ecr.ap-southeast-1.amazonaws.com/gpt-portal/litellm:v1.1
           imagePullPolicy: Always
           envFrom:
             - secretRef:
