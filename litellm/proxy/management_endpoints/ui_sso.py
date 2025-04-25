@@ -361,9 +361,9 @@ async def get_user_info_from_db(
         ] = await get_existing_user_info_from_db(
             user_id=cast(
                 Optional[str],
-                getattr(result, "user_id", None)
+                getattr(result, "id", None)
                 if not isinstance(result, dict)
-                else result.get("user_id", None),
+                else result.get("id", None),
             ),
             user_email=cast(
                 Optional[str],
@@ -380,13 +380,15 @@ async def get_user_info_from_db(
         )
 
         # Upsert SSO User to LiteLLM DB
-        user_info = await SSOAuthenticationHandler.upsert_sso_user(
-            result=result,
-            user_info=user_info,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
-            prisma_client=prisma_client,
-        )
+
+        if user_info is None:
+            user_info = await SSOAuthenticationHandler.upsert_sso_user(
+                result=result,
+                user_info=user_info,
+                user_email=user_email,
+                user_defined_values=user_defined_values,
+                prisma_client=prisma_client,
+            )
 
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
             result=result,
@@ -395,7 +397,7 @@ async def get_user_info_from_db(
 
         return user_info
     except Exception as e:
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.exception(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
         )
 
