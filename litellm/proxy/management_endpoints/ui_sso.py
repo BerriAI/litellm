@@ -58,7 +58,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.utils import PrismaClient
-from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
 if TYPE_CHECKING:

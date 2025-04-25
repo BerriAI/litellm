@@ -34,12 +34,10 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
-    NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
     SpecialModelNames,
-    SSOUserDefinedValues,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
