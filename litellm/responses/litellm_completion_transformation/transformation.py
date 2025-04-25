@@ -6,12 +6,11 @@ from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.tool_param import FunctionToolParam
 
+from enterprise.enterprise_hooks.session_handler import (
+    _ENTERPRISE_ResponsesSessionHandler,
+)
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.responses.litellm_completion_transformation.session_handler import (
-    ResponsesAPISessionElement,
-    SessionHandler,
-)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -48,7 +47,7 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
-RESPONSES_API_SESSION_HANDLER = SessionHandler()
+_ENTERPRISE_ResponsesSessionHandler = _ENTERPRISE_ResponsesSessionHandler()
 ########### End of Initialize Classes used for Responses API  ###########
 
 
@@ -159,11 +158,39 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
+        messages.extend(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+                input=input,
+            )
+        )
+
+        return messages
+
+    @staticmethod
+    async def async_responses_api_session_handler(
+        previous_response_id: str,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
+        """
+        messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
         if previous_response_id:
-            previous_response_pairs = (
-                RESPONSES_API_SESSION_HANDLER.get_chain_of_previous_input_output_pairs(
-                    previous_response_id=previous_response_id
-                )
+            previous_response_pairs = await _ENTERPRISE_ResponsesSessionHandler.get_chain_of_previous_input_output_pairs(
+                previous_response_id=previous_response_id
             )
             if previous_response_pairs:
                 for previous_response_pair in previous_response_pairs:
@@ -176,12 +203,6 @@ class LiteLLMCompletionResponsesConfig:
 
                     messages.extend(chat_completion_input_messages)
                     messages.extend(chat_completion_output_messages)
-
-        messages.extend(
-            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=input,
-            )
-        )
 
         return messages
 
@@ -512,16 +533,6 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             ),
             user=getattr(chat_completion_response, "user", None),
-        )
-
-        RESPONSES_API_SESSION_HANDLER.add_completed_response_to_cache(
-            response_id=responses_api_response.id,
-            session_element=ResponsesAPISessionElement(
-                input=request_input,
-                output=responses_api_response,
-                response_id=responses_api_response.id,
-                previous_response_id=responses_api_request.get("previous_response_id"),
-            ),
         )
         return responses_api_response
 

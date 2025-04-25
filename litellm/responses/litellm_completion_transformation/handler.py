@@ -89,6 +89,17 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+
+        previous_response_id: Optional[str] = responses_api_request.get(
+            "previous_response_id"
+        )
+        if previous_response_id:
+            previous_messages = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id=previous_response_id
+            )
+            if previous_messages and "messages" in litellm_completion_request:
+                litellm_completion_request["messages"].extend(previous_messages)
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
