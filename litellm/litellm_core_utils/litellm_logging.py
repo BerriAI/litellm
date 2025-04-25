@@ -3502,14 +3502,14 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def _get_standard_logging_payload_trace_id(
         logging_obj: Logging,
-        kwargs: dict,
+        litellm_params: dict,
     ) -> str:
         """
         Returns the `litellm_trace_id` for this request
 
         This helps link sessions when multiple requests are made in a single session
         """
-        dynamic_trace_id = kwargs.get("litellm_trace_id")
+        dynamic_trace_id = litellm_params.get("litellm_trace_id")
         if dynamic_trace_id:
             return str(dynamic_trace_id)
         return logging_obj.litellm_trace_id
@@ -3668,7 +3668,7 @@ def get_standard_logging_object_payload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
                 logging_obj=logging_obj,
-                kwargs=kwargs,
+                litellm_params=litellm_params,
             ),
             call_type=call_type or "",
             cache_hit=cache_hit,

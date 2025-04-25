@@ -169,14 +169,8 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     async def async_responses_api_session_handler(
         previous_response_id: str,
-    ) -> List[
-        Union[
-            AllMessageValues,
-            GenericChatCompletionMessage,
-            ChatCompletionMessageToolCall,
-            ChatCompletionResponseMessage,
-        ]
-    ]:
+        litellm_completion_request: dict,
+    ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
@@ -188,9 +182,12 @@ class LiteLLMCompletionResponsesConfig:
                 ChatCompletionResponseMessage,
             ]
         ] = []
+        litellm_session_id: Optional[str] = None
         if previous_response_id:
-            previous_response_pairs = await _ENTERPRISE_ResponsesSessionHandler.get_chain_of_previous_input_output_pairs(
-                previous_response_id=previous_response_id
+            previous_response_pairs, litellm_session_id = (
+                await _ENTERPRISE_ResponsesSessionHandler.get_chain_of_previous_input_output_pairs(
+                    previous_response_id=previous_response_id
+                )
             )
             if previous_response_pairs:
                 for previous_response_pair in previous_response_pairs:
@@ -203,8 +200,10 @@ class LiteLLMCompletionResponsesConfig:
 
                     messages.extend(chat_completion_input_messages)
                     messages.extend(chat_completion_output_messages)
-
-        return messages
+        _messages = litellm_completion_request.get("messages") or []
+        litellm_completion_request["messages"] = _messages + messages
+        litellm_completion_request["litellm_trace_id"] = litellm_session_id
+        return litellm_completion_request
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(

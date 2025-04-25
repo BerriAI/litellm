@@ -12,12 +12,17 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
     @staticmethod
     async def get_chain_of_previous_input_output_pairs(
         previous_response_id: str,
-    ) -> List[Tuple[Union[str, ResponseInputParam], ResponsesAPIResponse]]:
+    ) -> Tuple[List[Tuple[Union[str, ResponseInputParam], ResponsesAPIResponse]], Optional[str]]:
         """
         Get all input and output from the spend logs
         """
         from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
         all_spend_logs: List[SpendLogsPayload] = await _ENTERPRISE_ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(previous_response_id)
+        
+        litellm_session_id: Optional[str] = None
+        if len(all_spend_logs) > 0:
+            litellm_session_id = all_spend_logs[0].get("session_id")
+
         responses_api_session_elements: List[Tuple[ResponseInputParam, ResponsesAPIResponse]] = []
         for spend_log in all_spend_logs:
             proxy_server_request: Union[str, dict] = spend_log.get("proxy_server_request") or "{}"
@@ -47,8 +52,7 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
                     chat_completion_response=_response_output
                 )        
             responses_api_session_elements.append((response_input_param, response_output))
-
-        return responses_api_session_elements
+        return responses_api_session_elements, litellm_session_id
 
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
