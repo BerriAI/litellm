@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, InputNumber, Select } from "antd";
+import { Form, Input, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
-
+import NumericalInput from "./shared/numerical_input";
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -126,7 +126,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
-        <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value"/>
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
@@ -138,15 +138,15 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
-        <InputNumber style={{ width: "100%" }} min={0}/>
+        <NumericalInput min={0}/>
       </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
-        <InputNumber style={{ width: "100%" }} min={0}/>
+        <NumericalInput min={0}/>
       </Form.Item>
 
       <Form.Item label="Max Parallel Requests" name="max_parallel_requests">  
-        <InputNumber style={{ width: "100%" }} min={0}/>
+        <NumericalInput min={0}/>
       </Form.Item>
 
       <Form.Item label="Model TPM Limit" name="model_tpm_limit">

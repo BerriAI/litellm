@@ -71,6 +71,7 @@ import useKeyList from "./key_team_helpers/key_list";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
+import { Setter } from "@/types";
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -107,6 +108,8 @@ interface ViewKeyTableProps {
   currentOrg: Organization | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
 }
 
 interface ItemData {
@@ -154,7 +157,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   premiumUser,
   currentOrg,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
+  selectedKeyAlias,
+  setSelectedKeyAlias
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -179,6 +184,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
   });
 
@@ -418,6 +424,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     <div>
       <AllKeysTable 
         keys={keys}
+        setKeys={setKeys}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
@@ -431,6 +438,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
         refresh={refresh}
+        selectedKeyAlias={selectedKeyAlias}
+        setSelectedKeyAlias={setSelectedKeyAlias}
       />
 
       {isDeleteModalOpen && (

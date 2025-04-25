@@ -55,7 +55,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
       console.log("Result from prepareModelAddRequest:", result);
 
-      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result;
+      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
 
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj?.mode);
       if (response.status === "success") {

@@ -148,9 +148,9 @@ class lakeraAI_Moderation(CustomGuardrail):
         text = ""
         _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
-            prompt_injection_obj: Optional[GuardrailItem] = (
-                litellm.guardrail_name_config_map.get("prompt_injection")
-            )
+            prompt_injection_obj: Optional[
+                GuardrailItem
+            ] = litellm.guardrail_name_config_map.get("prompt_injection")
             if prompt_injection_obj is not None:
                 enabled_roles = prompt_injection_obj.enabled_roles
             else:

@@ -1,6 +1,8 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: openai/*
     litellm_params:
-      model: gpt-4o
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
 
-
+router_settings:
+  optional_pre_call_checks: ["responses_api_deployment_check"]

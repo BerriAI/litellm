@@ -8,7 +8,7 @@ import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(
-    0, os.path.abspath("../..")
+    0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 import litellm
 import pytest
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages,
 )
+
 from typing import Optional
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
@@ -73,6 +74,7 @@ async def test_anthropic_messages_non_streaming():
     """
     Test the anthropic_messages with non-streaming request
     """
+    litellm._turn_on_debug()
     # Get API key from environment
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -82,7 +84,7 @@ async def test_anthropic_messages_non_streaming():
     messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
 
     # Call the handler
-    response = await anthropic_messages(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -114,7 +116,7 @@ async def test_anthropic_messages_streaming():
 
     # Call the handler
     async_httpx_client = AsyncHTTPHandler()
-    response = await anthropic_messages(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",
@@ -134,7 +136,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
     Test the anthropic_messages with streaming request
     """
     try:
-        response = await anthropic_messages(
+        response = await litellm.anthropic.messages.acreate(
             messages=["hi"],
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             model="claude-3-haiku-20240307",
@@ -458,7 +460,7 @@ async def test_anthropic_messages_with_extra_headers():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await anthropic_messages(
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-3-haiku-20240307",

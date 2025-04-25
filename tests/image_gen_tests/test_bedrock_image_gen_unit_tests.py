@@ -6,6 +6,14 @@ import traceback
 from dotenv import load_dotenv
 from openai.types.image import Image
 
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
+from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+    AmazonNovaCanvasConfig,
+)
+
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
@@ -51,6 +59,25 @@ from litellm.llms.bedrock.image.image_handler import (
 )
 def test_is_stability_3_model(model, expected):
     result = AmazonStability3Config._is_stability_3_model(model)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("amazon.nova-canvas", True),
+        ("sd3-large", False),
+        ("sd3-large-turbo", False),
+        ("sd3-medium", False),
+        ("sd3.5-large", False),
+        ("sd3.5-large-turbo", False),
+        ("gpt-4", False),
+        (None, False),
+        ("other-model", False),
+    ],
+)
+def test_is_nova_canvas_model(model, expected):
+    result = AmazonNovaCanvasConfig._is_nova_model(model)
     assert result == expected
 
 
@@ -159,6 +186,110 @@ def test_get_request_body_stability():
     assert result["text_prompts"][0]["text"] == prompt
     assert result["text_prompts"][0]["weight"] == 1
     assert result["cfg_scale"] == 7
+
+
+def test_transform_request_body_nova_canvas():
+    prompt = "A beautiful sunset"
+    optional_params = {"size": "1024x1024"}
+
+    result = AmazonNovaCanvasConfig.transform_request_body(prompt, optional_params)
+
+    assert result["taskType"] == "TEXT_IMAGE"
+    assert result["textToImageParams"]["text"] == prompt
+    assert result["imageGenerationConfig"]["size"] == "1024x1024"
+
+
+def test_map_openai_params_nova_canvas():
+    non_default_params = {"n": 2, "size": "1024x1024"}
+    optional_params = {"cfg_scale": 7}
+
+    result = AmazonNovaCanvasConfig.map_openai_params(
+        non_default_params, optional_params
+    )
+
+    assert result == optional_params
+    assert "n" not in result  # OpenAI params should not be included
+
+
+def test_transform_response_dict_to_openai_response_nova_canvas():
+    # Create a mock response
+    response_dict = {"images": ["base64_encoded_image_1", "base64_encoded_image_2"]}
+    model_response = ImageResponse()
+
+    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(
+        model_response, response_dict
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert len(result.data) == 2
+    assert all(hasattr(img, "b64_json") for img in result.data)
+    assert [img.b64_json for img in result.data] == response_dict["images"]
+
+
+def test_amazon_nova_canvas_get_supported_openai_params():
+    result = AmazonNovaCanvasConfig.get_supported_openai_params()
+    assert result == ["n", "size", "quality"]
+
+
+def test_get_request_body_nova_canvas_default():
+    handler = BedrockImageGeneration()
+    prompt = "A beautiful sunset"
+    optional_params = {"cfg_scale": 7}
+    model = "amazon.nova-canvas-v1"
+
+    result = handler._get_request_body(
+        model=model, prompt=prompt, optional_params=optional_params
+    )
+
+    assert result["taskType"] == "TEXT_IMAGE"
+    assert result["textToImageParams"]["text"] == prompt
+    assert result["imageGenerationConfig"]["cfg_scale"] == 7
+
+
+def test_get_request_body_nova_canvas_text_image():
+    handler = BedrockImageGeneration()
+    prompt = "A beautiful sunset"
+    optional_params = {"cfg_scale": 7, "taskType": "TEXT_IMAGE"}
+    model = "amazon.nova-canvas-v1"
+
+    result = handler._get_request_body(
+        model=model, prompt=prompt, optional_params=optional_params
+    )
+
+    assert result["taskType"] == "TEXT_IMAGE"
+    assert result["textToImageParams"]["text"] == prompt
+    assert result["imageGenerationConfig"]["cfg_scale"] == 7
+
+
+def test_get_request_body_nova_canvas_color_guided_generation():
+    handler = BedrockImageGeneration()
+    prompt = "A beautiful sunset"
+    optional_params = {
+        "cfg_scale": 7,
+        "taskType": "COLOR_GUIDED_GENERATION",
+        "colorGuidedGenerationParams": {"colors": ["#FF0000"]},
+    }
+    model = "amazon.nova-canvas-v1"
+
+    result = handler._get_request_body(
+        model=model, prompt=prompt, optional_params=optional_params
+    )
+
+    assert result["taskType"] == "COLOR_GUIDED_GENERATION"
+    assert result["colorGuidedGenerationParams"]["text"] == prompt
+    assert result["colorGuidedGenerationParams"]["colors"] == ["#FF0000"]
+    assert result["imageGenerationConfig"]["cfg_scale"] == 7
+
+
+def test_transform_request_body_with_invalid_task_type():
+    text = "An image of a otter"
+    optional_params = {"taskType": "INVALID_TASK"}
+
+    with pytest.raises(NotImplementedError) as exc_info:
+        AmazonNovaCanvasConfig.transform_request_body(
+            text=text, optional_params=optional_params
+        )
+    assert "Task type INVALID_TASK is not supported" in str(exc_info.value)
 
 
 def test_transform_response_dict_to_openai_response_stability3():

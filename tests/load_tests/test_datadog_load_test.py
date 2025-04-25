@@ -91,7 +91,7 @@ async def make_async_calls(metadata=None, **completion_kwargs):
 def create_async_task(**completion_kwargs):
     litellm.set_verbose = True
     completion_args = {
-        "model": "openai/chatgpt-v-2",
+        "model": "openai/chatgpt-v-3",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,

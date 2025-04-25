@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # Prompt Caching 
 
 Supported Providers:
-- OpenAI (`deepseek/`)
+- OpenAI (`openai/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (`bedrock/`, `bedrock/invoke/`, `bedrock/converse`) ([All models bedrock supports prompt caching on](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html))
 - Deepseek API (`deepseek/`)
