@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
@@ -118,7 +118,6 @@ const Teams: React.FC<TeamProps> = ({
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
-  const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
   useEffect(() => {
     console.log(`inside useeffect - ${lastRefreshed}`)
@@ -149,7 +148,11 @@ const Teams: React.FC<TeamProps> = ({
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   
+  const selectedOrganizationId = Form.useWatch('organization_id', form)
 
+  const currentOrgForCreateTeam = useMemo<Organization | null>(() => {
+    return organizations?.find((org) => org.organization_id === selectedOrganizationId) || null
+  }, [selectedOrganizationId])
 
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
 
@@ -665,7 +668,12 @@ const Teams: React.FC<TeamProps> = ({
                     placeholder="Search or select an Organization"
                     onChange={(value) => {
                       form.setFieldValue('organization_id', value);
-                      setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
+                      if (value) {
+                        const selectedModels = form.getFieldValue('models') as (string[] | undefined)
+                        if (selectedModels) {
+                          form.setFieldValue('models', selectedModels.filter(m => m !== 'all-proxy-models'))
+                        }
+                      }
                     }}
                     filterOption={(input, option) => {
                       if (!option) return false;
@@ -695,12 +703,14 @@ const Teams: React.FC<TeamProps> = ({
                     placeholder="Select models"
                     style={{ width: "100%" }}
                   >
-                    <Select2.Option
-                      key="all-proxy-models"
-                      value="all-proxy-models"
-                    >
-                      All Proxy Models
-                    </Select2.Option>
+                    {selectedOrganizationId ? null : (
+                      <Select2.Option
+                        key="all-proxy-models"
+                        value="all-proxy-models"
+                      >
+                        All Proxy Models
+                      </Select2.Option>
+                    )}
                     {modelsToPick.map((model) => (
                       <Select2.Option key={model} value={model}>
                         {getModelDisplayName(model)}
