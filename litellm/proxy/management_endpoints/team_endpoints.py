@@ -537,6 +537,7 @@ async def update_team(
             detail={"error": "Team doesn't exist. Got={}".format(team_row)},
         )
 
+    verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
     await _cache_team_object(
         team_id=team_row.team_id,
         team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),

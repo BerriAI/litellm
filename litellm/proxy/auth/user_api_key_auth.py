@@ -52,6 +52,7 @@ from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -555,7 +556,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token = None
 
         ## Check UI Hash Key
-        valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
+        if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
+                api_key
+            )
 
         if (
             valid_token is not None

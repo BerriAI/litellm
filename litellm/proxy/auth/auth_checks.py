@@ -996,10 +996,6 @@ class ExperimentalUIJWTToken:
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             decrypt_value_helper,
         )
-        from litellm.secret_managers.main import get_secret_bool
-
-        if get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not True:
-            return None
 
         decrypted_token = decrypt_value_helper(hashed_token, exception_type="debug")
         if decrypted_token is None:
