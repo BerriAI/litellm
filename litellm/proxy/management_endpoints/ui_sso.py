@@ -692,6 +692,7 @@ async def insert_sso_user(
         user_role=user_defined_values["user_role"],  # type: ignore
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
+        sso_user_id=user_defined_values["user_id"],
     )
 
     if result_openid:

@@ -805,6 +805,7 @@ class NewUserRequest(GenerateRequestBase):
         True  # flag used for returning a key as part of the /user/new response
     )
     send_invite_email: Optional[bool] = None
+    sso_user_id: Optional[str] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
