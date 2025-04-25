@@ -133,10 +133,11 @@ const useKeyList = ({
 
             const data = await keyListCall(
                 accessToken,
-                currentOrg?.organization_id || null,
-                selectedTeam?.team_id || "",
-                selectedKeyAlias,
-                params.page as number || 1,
+                null,
+                null,
+                null,
+                null,
+                1,
                 50,
             );
             console.log("data", data);
