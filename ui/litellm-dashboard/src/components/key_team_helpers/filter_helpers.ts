@@ -25,6 +25,7 @@ export const fetchAllKeyAliases = async (
         "", // team_id
         null, // selectedKeyAlias
         null, // user_id
+        null, // key_hash
         currentPage,
         100 // larger page size to reduce number of requests
       );
