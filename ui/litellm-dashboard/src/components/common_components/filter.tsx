@@ -74,7 +74,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   const handleApplyFilters = () => {
     setFilterValues(tempValues);
     onApplyFilters(tempValues);
-    setShowFilters(false);
+    // setShowFilters(false);
   };
 
   const resetFilters = () => {

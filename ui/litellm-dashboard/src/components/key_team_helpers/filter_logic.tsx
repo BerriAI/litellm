@@ -13,6 +13,7 @@ export interface FilterState {
   'Organization ID': string;
   'Key Alias': string;
   [key: string]: string;
+  'User ID': string;
 }
 
 
@@ -31,7 +32,8 @@ export function useFilterLogic({
   const defaultFilters: FilterState = {
     'Team ID': '',
     'Organization ID': '',
-    'Key Alias': ''
+    'Key Alias': '',
+    'User ID': ''
   }
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
@@ -153,30 +155,9 @@ export function useFilterLogic({
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || ''
+      'Key Alias': newFilters['Key Alias'] || '',
+      'User ID': newFilters['User ID'] || ''
     });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = allTeams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
-    }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = allOrganizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
-
-    const keyAlias = newFilters['Key Alias'];
-    const selectedKeyAlias = keyAlias
-      ? allKeyAliases.find((k) => k === keyAlias) || null
-      : null;
-    setSelectedKeyAlias(selectedKeyAlias)
 
     // Fetch keys based on new filters
     const updatedFilters = {
