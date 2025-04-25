@@ -24,6 +24,7 @@ from litellm.caching import DualCache
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
     _cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
@@ -552,6 +553,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         except Exception:
             verbose_logger.debug("api key not found in cache.")
             valid_token = None
+
+        ## Check UI Hash Key
+        valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
 
         if (
             valid_token is not None

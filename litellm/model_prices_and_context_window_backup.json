@@ -7058,6 +7058,17 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
+    "command-a-03-2025": {
+        "max_tokens": 8000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "cohere_chat",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "command-r": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
