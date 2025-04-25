@@ -492,11 +492,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        chat_completion_response: ModelResponse,
+        chat_completion_response: Union[ModelResponse, dict],
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
         """
+        if isinstance(chat_completion_response, dict):
+            chat_completion_response = ModelResponse(**chat_completion_response)
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
