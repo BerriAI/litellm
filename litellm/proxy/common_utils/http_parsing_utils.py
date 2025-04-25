@@ -187,7 +187,7 @@ def check_file_size_under_limit(
     return True
 
 
-async def get_form_data(request: Request) -> dict[str, Any]:
+async def get_form_data(request: Request) -> Dict[str, Any]:
     """
     Read form data from request
 
