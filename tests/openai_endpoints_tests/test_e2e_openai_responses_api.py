@@ -86,10 +86,7 @@ def test_basic_response():
     delete_response = client.responses.delete(response.id)
     print("DELETE response=", delete_response)
 
-    # try getting the response again, we should not get it back 
-    get_response = client.responses.retrieve(response.id)
-    print("GET response after delete=", get_response)
-
+    # expect an error when getting the response again since it was deleted
     with pytest.raises(Exception):
         get_response = client.responses.retrieve(response.id)
 
