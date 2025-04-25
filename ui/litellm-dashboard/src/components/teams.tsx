@@ -92,7 +92,7 @@ import {
   teamMemberUpdateCall,
   Member,
   modelAvailableCall,
-  teamListCall
+  v2TeamListCall
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
 
@@ -339,10 +339,10 @@ const Teams: React.FC<TeamProps> = ({
     setFilters(newFilters);
     // Call teamListCall with the new filters
     if (accessToken) {
-      teamListCall(
+      v2TeamListCall(
         accessToken,
         newFilters.organization_id || null,
-        userID || null,
+        null,
         newFilters.team_id || null,
         newFilters.team_alias || null
       ).then((response) => {
@@ -364,10 +364,10 @@ const Teams: React.FC<TeamProps> = ({
     setFilters(newFilters);
     // Call teamListCall with the new sort parameters
     if (accessToken) {
-      teamListCall(
+      v2TeamListCall(
         accessToken,
         filters.organization_id || null,
-        userID || null,
+        null,
         filters.team_id || null,
         filters.team_alias || null
       ).then((response) => {
@@ -390,7 +390,7 @@ const Teams: React.FC<TeamProps> = ({
     });
     // Reset teams list
     if (accessToken) {
-      teamListCall(accessToken, null, userID || null, null, null).then((response) => {
+      v2TeamListCall(accessToken, null, userID || null, null, null).then((response) => {
         if (response && response.teams) {
           setTeams(response.teams);
         }

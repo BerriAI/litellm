@@ -85,6 +85,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
+    TeamListResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -1554,7 +1555,10 @@ async def list_available_teams(
 
 
 @router.get(
-    "/v2/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
+    "/v2/team/list",
+    tags=["team management"],
+    response_model=TeamListResponse,
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def list_team_v2(
     http_request: Request,
