@@ -202,6 +202,7 @@ async def new_user(
     - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
+    - sso_user_id: Optional[str] - The id of the user in the SSO provider.
 
     Returns:
     - key: (str) The generated api key for the user
