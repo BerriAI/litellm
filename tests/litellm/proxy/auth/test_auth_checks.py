@@ -22,6 +22,12 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 
+@pytest.fixture(autouse=True)
+def set_salt_key(monkeypatch):
+    """Automatically set LITELLM_SALT_KEY for all tests"""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+
+
 @pytest.fixture
 def valid_sso_user_defined_values():
     return LiteLLM_UserTable(
