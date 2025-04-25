@@ -590,7 +590,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
 
     litellm_dashboard_ui = "/ui/"
     user_role = (
-        user_defined_values["user_email"]
+        user_defined_values["user_role"]
         or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
     )
     if (
