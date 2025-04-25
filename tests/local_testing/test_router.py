@@ -9,8 +9,6 @@ import traceback
 
 import openai
 import pytest
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import litellm.types
 import litellm.types.router
@@ -706,7 +704,7 @@ async def test_async_router_context_window_fallback(sync_mode):
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-4",
                     "api_key": os.getenv("OPENAI_API_KEY"),
-                    "api_base": os.getenv("OPENAI_BASE_URL"),
+                    "api_base": os.getenv("OPENAI_API_BASE"),
                 },
             },
             {
@@ -1374,86 +1372,6 @@ async def test_mistral_on_router():
 
 
 # asyncio.run(test_mistral_on_router())
-
-@pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
-@pytest.mark.asyncio
-async def test_openai_env_on_router(monkeypatch, env_base):
-    "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
-
-    # See https://github.com/openai/openai-openapi/blob/master/openapi.yaml
-    class MockOpenAIRequestHandler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            if not self.path.startswith("/v1/chat/completions"):
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"Not Found")
-                return
-
-            # Define a proper OpenAI chat completion response
-            response_body = b"""{
-                "id": "chatcmpl-AyPNinnUqUDYo9SAdA52NobMflmj2",
-                "object": "chat.completion",
-                "created": 1738960610,
-                "model": "gpt-4o",
-                "usage": {
-                    "prompt_tokens": 13,
-                    "completion_tokens": 18,
-                    "total_tokens": 31
-                },
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": "hello back at ya!"
-                        },
-                        "finish_reason": "stop"
-                    }
-                ]
-            }"""
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(response_body)))
-            self.end_headers()
-            self.wfile.write(response_body)
-
-    # Set up the server
-    server_address = ("localhost", 0)  # Ephemeral port
-    httpd = HTTPServer(server_address, MockOpenAIRequestHandler)
-    port = httpd.server_port
-
-    # Run the server in a separate thread
-    server_thread = threading.Thread(target=httpd.serve_forever)
-    server_thread.daemon = True
-    server_thread.start()
-
-    # Configure environment variables
-    monkeypatch.setenv(env_base, f"http://localhost:{port}/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
-
-    # Set up the router
-    model_list = [
-        {
-            "model_name": "gpt-4o",
-            "litellm_params": {
-                "model": "gpt-4o",
-            },
-        },
-    ]
-    router = Router(model_list=model_list)
-
-    # Make the async call
-    response = await router.acompletion(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": "hello from litellm test",
-            }
-        ],
-    )
-    assert response.choices[0].message.content == "hello back at ya!"
 
 
 def test_openai_completion_on_router():

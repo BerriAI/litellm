@@ -118,7 +118,7 @@ def mock_patch_aimage_generation():
 def fake_env_vars(monkeypatch):
     # Set some fake environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "http://fake-openai-api-base/v1")
+    monkeypatch.setenv("OPENAI_API_BASE", "http://fake-openai-api-base")
     monkeypatch.setenv("AZURE_API_BASE", "http://fake-azure-api-base")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
     monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")

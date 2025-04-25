@@ -1,10 +1,10 @@
 import json
 import os
 import sys
-
 import httpx
 import pytest
 import respx
+
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -142,6 +142,7 @@ def test_completion_missing_role(openai_api_response):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
+
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -261,7 +262,6 @@ def test_bedrock_latency_optimized_inference():
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
 
-
 @pytest.fixture(autouse=True)
 def set_openrouter_api_key():
     original_api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -274,9 +274,7 @@ def set_openrouter_api_key():
 
 
 @pytest.mark.asyncio
-async def test_extra_body_with_fallback(
-    respx_mock: respx.MockRouter, set_openrouter_api_key
-):
+async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openrouter_api_key):
     """
     test regression for https://github.com/BerriAI/litellm/issues/8425.
 
@@ -289,10 +287,14 @@ async def test_extra_body_with_fallback(
         "provider": {
             "order": ["DeepSeek"],
             "allow_fallbacks": False,
-            "require_parameters": True,
+            "require_parameters": True
         }
     }
-    fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
+    fallbacks = [
+        {
+            "model": "openrouter/google/gemini-flash-1.5-8b"
+        }
+    ]
 
     respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
         json={
