@@ -356,7 +356,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-07-14"
     },
     "gpt-4o-audio-preview": {
         "max_tokens": 16384,
@@ -1509,6 +1510,8 @@
     },
     "gpt-4o-transcribe": {
         "mode": "audio_transcription",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
         "input_cost_per_token": 0.0000025,
         "input_cost_per_audio_token": 0.000006,
         "output_cost_per_token": 0.00001, 
@@ -1517,6 +1520,8 @@
     }, 
     "gpt-4o-mini-transcribe": {
         "mode": "audio_transcription",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
         "input_cost_per_token": 0.00000125,
         "input_cost_per_audio_token": 0.000003,
         "output_cost_per_token": 0.000005, 
@@ -2439,7 +2444,8 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-08-20"
     },
     "azure/us/gpt-4o-2024-08-06": {
         "max_tokens": 16384,
@@ -2479,13 +2485,15 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.0000025,
         "output_cost_per_token": 0.000010,
+        "cache_read_input_token_cost": 0.00000125,
         "litellm_provider": "azure",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-12-20"
     },
     "azure/global-standard/gpt-4o-mini": {
         "max_tokens": 16384,
@@ -5349,14 +5357,14 @@
         "input_cost_per_image": 0,
         "input_cost_per_video_per_second": 0,
         "input_cost_per_audio_per_second": 0,
-        "input_cost_per_token": 0,
+        "input_cost_per_token": 0.00000015,
         "input_cost_per_character": 0, 
         "input_cost_per_token_above_128k_tokens": 0, 
         "input_cost_per_character_above_128k_tokens": 0, 
         "input_cost_per_image_above_128k_tokens": 0,
         "input_cost_per_video_per_second_above_128k_tokens": 0,
         "input_cost_per_audio_per_second_above_128k_tokens": 0,
-        "output_cost_per_token": 0,
+        "output_cost_per_token": 0.0000006,
         "output_cost_per_character": 0,
         "output_cost_per_token_above_128k_tokens": 0,
         "output_cost_per_character_above_128k_tokens": 0,
@@ -5395,7 +5403,8 @@
         "supports_tool_choice": true,
         "supported_modalities": ["text", "image", "audio", "video"],
         "supported_output_modalities": ["text", "image"],
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "deprecation_date": "2026-02-05"
     },
     "gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
@@ -5599,7 +5608,8 @@
         "supported_modalities": ["text", "image", "audio", "video"],
         "supported_output_modalities": ["text"],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-02-25"
     },
     "gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65536,
