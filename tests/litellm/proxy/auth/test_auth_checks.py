@@ -78,8 +78,11 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
     assert str(exc_info.value) == "User role is required for experimental UI login"
 
 
-def test_get_key_object_from_ui_hash_key_valid(valid_sso_user_defined_values):
+def test_get_key_object_from_ui_hash_key_valid(
+    valid_sso_user_defined_values, monkeypatch
+):
     """Test getting key object from valid UI hash key"""
+    monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "True")
     # Generate a valid token
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
         valid_sso_user_defined_values
