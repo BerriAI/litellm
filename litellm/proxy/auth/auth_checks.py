@@ -610,6 +610,7 @@ async def _get_fuzzy_user_object(
     - Check if user_email is user_email in db
     - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
     """
+
     response = None
     if sso_user_id is not None:
         response = await prisma_client.db.litellm_usertable.find_unique(
