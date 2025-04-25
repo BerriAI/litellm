@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { Organization } from "../networking";
+import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
 import { Setter } from "@/types";
-
+import { debounce } from "lodash";
+import { defaultPageSize } from "../constants";
 
 export interface FilterState {
   'Team ID': string;
@@ -14,41 +15,7 @@ export interface FilterState {
   [key: string]: string;
 }
 
-  // const debouncedSearch = useCallback(
-  //   debounce(async (filters: FilterState) => {
-  //     if (!accessToken || !userRole || !userID) {
-  //       return;
-  //     }
 
-  //     const currentTimestamp = Date.now();
-  //     lastSearchTimestamp.current = currentTimestamp;
-
-  //     try {
-  //       // Make the API call using userListCall with all filter parameters
-  //       const data = await keyListCall(
-  //         accessToken,
-  //         filters["Organization ID"] || null,
-  //         filters["Team ID"] || null,
-  //         filters["Key Alias"] || null,
-  //         filters["User ID"] || null,
-  //         1, // Reset to first page when searching
-  //         defaultPageSize
-  //       );
-        
-  //       // Only update state if this is the most recent search
-  //       if (currentTimestamp === lastSearchTimestamp.current) {
-  //         if (data) {
-  //           setFilteredKeys(data.keys);
-  //           console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-  //           console.log("called from debouncedSearch data:", JSON.stringify(data));
-  //         }
-  //       }
-  //     } catch (error) {
-  //       console.error("Error searching users:", error);
-  //     }
-  //   }, 300),
-  //   [accessToken, userRole, userID]
-  // );
 
 export function useFilterLogic({
   keys,
@@ -75,7 +42,42 @@ export function useFilterLogic({
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
-
+  const lastSearchTimestamp = useRef(0);
+  const debouncedSearch = useCallback(
+    debounce(async (filters: FilterState) => {
+      if (!accessToken) {
+        return;
+      }
+  
+      const currentTimestamp = Date.now();
+      lastSearchTimestamp.current = currentTimestamp;
+  
+      try {
+        // Make the API call using userListCall with all filter parameters
+        const data = await keyListCall(
+          accessToken,
+          filters["Organization ID"] || null,
+          filters["Team ID"] || null,
+          filters["Key Alias"] || null,
+          filters["User ID"] || null,
+          1, // Reset to first page when searching
+          defaultPageSize
+        );
+        
+        // Only update state if this is the most recent search
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          if (data) {
+            setFilteredKeys(data.keys);
+            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+            console.log("called from debouncedSearch data:", JSON.stringify(data));
+          }
+        }
+      } catch (error) {
+        console.error("Error searching users:", error);
+      }
+    }, 300),
+    [accessToken]
+  );
   // Apply filters to keys whenever keys or filters change
   useEffect(() => {
     if (!keys) {
@@ -180,6 +182,13 @@ export function useFilterLogic({
       ? allKeyAliases.find((k) => k === keyAlias) || null
       : null;
     setSelectedKeyAlias(selectedKeyAlias)
+
+    // Fetch keys based on new filters
+    const updatedFilters = {
+      ...filters,
+      ...newFilters
+    }
+    debouncedSearch(updatedFilters);
   };
 
   const handleFilterReset = () => {
