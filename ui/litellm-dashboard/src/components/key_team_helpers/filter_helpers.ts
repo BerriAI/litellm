@@ -1,6 +1,7 @@
-import { keyListCall, teamListCall, organizationListCall } from '../networking';
+import { keyListCall, teamListCall, organizationListCall, userListCall } from '../networking';
 import { Team } from './key_list';
 import { Organization } from '../networking';
+import { UserInfo } from '../view_users/types';
 
 /**
  * Fetches all key aliases across all pages
@@ -22,6 +23,7 @@ export const fetchAllKeyAliases = async (accessToken: string | null): Promise<st
         null, // organization_id
         "", // team_id
         null, // selectedKeyAlias
+        null, // selectedUserId
         currentPage,
         100 // larger page size to reduce number of requests
       );
@@ -120,6 +122,40 @@ export const fetchAllOrganizations = async (accessToken: string | null): Promise
     return allOrganizations;
   } catch (error) {
     console.error("Error fetching all organizations:", error);
+    return [];
+  }
+};
+
+export const fetchAllUsers = async (accessToken: string | null): Promise<UserInfo[]> => {
+  if (!accessToken) return [];
+
+  try {
+    let allUsers: any[] = [];
+    let currentPage = 1;
+    let hasMorePages = true;
+
+    while (hasMorePages) {
+      const response = await userListCall(
+        accessToken,
+        null, // userIDs
+        currentPage,
+        100, // page size
+      );
+
+      // Add users from the response
+      allUsers = [...allUsers, ...response.users];
+
+      // Check if there are more pages
+      if (currentPage < response.total_pages) {
+        currentPage++;
+      } else {
+        hasMorePages = false;
+      }
+    }
+
+    return allUsers;
+  } catch (error) {
+    console.error("Error fetching all users:", error);
     return [];
   }
 };

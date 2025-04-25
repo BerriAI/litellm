@@ -86,6 +86,7 @@ interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
 selectedKeyAlias: string | null;
+selectedUserId: string | null;
 accessToken: string;
 currentPage?: number;
 }
@@ -110,6 +111,7 @@ const useKeyList = ({
     selectedTeam,
     currentOrg,
     selectedKeyAlias,
+    selectedUserId,
     accessToken,
     currentPage = 1,
 }: UseKeyListProps): UseKeyListReturn => {
@@ -136,6 +138,7 @@ const useKeyList = ({
                 currentOrg?.organization_id || null,
                 selectedTeam?.team_id || "",
                 selectedKeyAlias,
+                selectedUserId,
                 params.page as number || 1,
                 50,
             );
@@ -159,9 +162,11 @@ const useKeyList = ({
           'accessToken',
           accessToken,
           'selectedKeyAlias',
-          selectedKeyAlias
+          selectedKeyAlias,
+          'selectedUserId',
+          selectedUserId
         );
-    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias]);
+    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, selectedUserId]);
 
     const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
         setKeyData(prevData => {
