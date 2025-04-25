@@ -388,7 +388,13 @@ export function AllKeysTable({
       name: 'User ID',
       label: 'User ID',
       isSearchable: false,
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
     }
+
   ];
   
   

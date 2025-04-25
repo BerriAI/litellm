@@ -57,6 +57,7 @@ export function useFilterLogic({
           filters["Team ID"] || null,
           filters["Key Alias"] || null,
           filters["User ID"] || null,
+          filters["Key Hash"] || null,
           1, // Reset to first page when searching
           defaultPageSize
         );

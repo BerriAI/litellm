@@ -2607,6 +2607,7 @@ export const keyListCall = async (
   teamID: string | null,
   selectedKeyAlias: string | null,
   userID: string | null,
+  keyHash: string | null,
   page: number,
   pageSize: number,
 ) => {
@@ -2628,6 +2629,10 @@ export const keyListCall = async (
 
     if (selectedKeyAlias) {
       queryParams.append('key_alias', selectedKeyAlias)
+    }
+
+    if (keyHash) {
+      queryParams.append('key_hash', keyHash);
     }
 
     if (userID) {
