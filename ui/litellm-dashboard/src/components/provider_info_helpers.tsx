@@ -25,8 +25,8 @@ export enum Providers {
     Perplexity = "Perplexity",
     TogetherAI = "TogetherAI",
     Openrouter = "Openrouter",
-    FireworksAI = "Fireworks AI"
-
+    FireworksAI = "Fireworks AI",
+    Netmind = "Netmind"
   }
   
 export const provider_map: Record<string, string> = {
@@ -53,7 +53,8 @@ export const provider_map: Record<string, string> = {
     Perplexity: "perplexity",
     TogetherAI: "togetherai",
     Openrouter: "openrouter",
-    FireworksAI: "fireworks_ai"
+    FireworksAI: "fireworks_ai",
+    Netmind: "netmind",
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -82,7 +83,8 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
-    [Providers.xAI]: `${asset_logos_folder}xai.svg`
+    [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.Netmind]: `${asset_logos_folder}netmind.svg`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
