@@ -706,7 +706,7 @@ async def test_async_router_context_window_fallback(sync_mode):
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-4",
                     "api_key": os.getenv("OPENAI_API_KEY"),
-                    "api_base": os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"),
+                    "api_base": os.getenv("OPENAI_BASE_URL"),
                 },
             },
             {
