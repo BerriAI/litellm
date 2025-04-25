@@ -290,7 +290,11 @@ def get_logging_payload(  # noqa: PLR0915
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata, litellm_params=litellm_params
             ),
-            session_id=kwargs.get("session_id", None),
+            session_id=(
+                standard_logging_payload.get("trace_id")
+                if standard_logging_payload is not None
+                else None
+            ),
         )
 
         verbose_proxy_logger.debug(
