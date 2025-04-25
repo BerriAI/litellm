@@ -1356,6 +1356,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
+        instructions: Optional[str],
         optional_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
@@ -1393,6 +1394,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         response = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
+            instructions=instructions,
             input=input,
             **optional_params,
         )

@@ -889,8 +889,13 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
     "include",
 ]
 
-
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
+
+OpenAISpeechOptionalParams = Literal[
+    "instructions",
+    "response_format",
+    "speed",
+]
 
 
 class ComputerToolParam(TypedDict, total=False):

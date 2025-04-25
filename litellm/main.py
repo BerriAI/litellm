@@ -95,6 +95,7 @@ from litellm.utils import (
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
+    get_optional_params_speech,
     get_secret,
     mock_completion_streaming_obj,
     read_config_args,
@@ -5302,6 +5303,7 @@ def speech(  # noqa: PLR0915
     model: str,
     input: str,
     voice: Optional[Union[str, dict]] = None,
+    instructions: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -5328,11 +5330,18 @@ def speech(  # noqa: PLR0915
     )  # type: ignore
     kwargs.pop("tags", [])
 
-    optional_params = {}
-    if response_format is not None:
-        optional_params["response_format"] = response_format
-    if speed is not None:
-        optional_params["speed"] = speed  # type: ignore
+    # optional_params = {}
+    # if response_format is not None:
+    #     optional_params["response_format"] = response_format
+    # if speed is not None:
+    #     optional_params["speed"] = speed  # type: ignore
+    
+    optional_params = get_optional_params_speech(
+        model=model,
+        response_format=response_format,
+        speed=speed,
+        instructions=instructions,
+    )
 
     if timeout is None:
         timeout = litellm.request_timeout
@@ -5401,6 +5410,7 @@ def speech(  # noqa: PLR0915
             model=model,
             input=input,
             voice=voice,
+            instructions=instructions,
             optional_params=optional_params,
             api_key=api_key,
             api_base=api_base,
