@@ -48,6 +48,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   onKeyHashClick?: (keyHash: string) => void;
+  onSessionClick?: (sessionId: string) => void;
 };
 
 export const columns: ColumnDef<LogEntry>[] = [
@@ -124,13 +125,21 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Session ID",
     accessorKey: "session_id",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[15ch] truncate block">
-          {String(info.getValue() || "")}
-        </span>
-      </Tooltip>
-    ),
+    cell: (info: any) => {
+      const value = String(info.getValue() || "");
+      const onSessionClick = info.row.original.onSessionClick;
+      return (
+        <Tooltip title={value}>
+          <span
+            className="font-mono text-xs max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
+            onClick={() => onSessionClick?.(value)}
+            style={{ textDecoration: onSessionClick ? "underline" : undefined }}
+          >
+            {value}
+          </span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Request ID",
