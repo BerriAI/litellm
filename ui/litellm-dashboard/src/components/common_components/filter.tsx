@@ -1,14 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Button, Input, Dropdown, MenuProps, Select, Spin, Space } from 'antd';
-import { Card, Button as TremorButton } from '@tremor/react';
-import {
-  FilterIcon,
-  XIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  SearchIcon
-} from '@heroicons/react/outline';
+import React, { useState, useCallback } from 'react';
+import { Button, Input, Select } from 'antd';
+import { FilterIcon } from '@heroicons/react/outline';
 import debounce from 'lodash/debounce';
 
 export interface FilterOption {
@@ -35,16 +27,13 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   onApplyFilters,
   onResetFilters,
   initialValues = {},
-  buttonLabel = "Filter",
+  buttonLabel = "Filters",
 }) => {
   const [showFilters, setShowFilters] = useState<boolean>(false);
-  const [filterValues, setFilterValues] = useState<FilterValues>(initialValues);
   const [tempValues, setTempValues] = useState<FilterValues>(initialValues);
   const [searchOptionsMap, setSearchOptionsMap] = useState<{ [key: string]: Array<{ label: string; value: string }> }>({});
   const [searchLoadingMap, setSearchLoadingMap] = useState<{ [key: string]: boolean }>({});
   const [searchInputValueMap, setSearchInputValueMap] = useState<{ [key: string]: string }>({});
-  
-  const filtersRef = useRef<HTMLDivElement>(null);
 
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
@@ -65,16 +54,12 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   );
 
   const handleFilterChange = (name: string, value: string) => {
-    setTempValues(prev => ({
-      ...prev,
+    const newValues = {
+      ...tempValues,
       [name]: value
-    }));
-  };
-
-  const handleApplyFilters = () => {
-    setFilterValues(tempValues);
-    onApplyFilters(tempValues);
-    // setShowFilters(false);
+    };
+    setTempValues(newValues);
+    onApplyFilters(newValues);
   };
 
   const resetFilters = () => {
@@ -83,32 +68,46 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       emptyValues[option.name] = '';
     });
     setTempValues(emptyValues);
-    setFilterValues(emptyValues);
-    setSearchInputValueMap({});
-    setSearchOptionsMap({});
     onResetFilters();
   };
 
+  // Define the order of filters
+  const orderedFilters = [
+    'Team ID',
+    'Organization ID',
+    'Key Alias',
+    'User ID',
+    'Key Hash'
+  ];
+
   return (
-    <div className="relative" ref={filtersRef}>
-      <TremorButton
-        icon={FilterIcon}
-        onClick={() => setShowFilters(!showFilters)}
-        variant="secondary"
-        size='xs'
-        className="flex items-center pr-2"
-      >
-        {buttonLabel}
-      </TremorButton>
+    <div className="w-full">
+      <div className="flex items-center gap-2 mb-6">
+        <Button 
+          icon={<FilterIcon className="h-4 w-4" />}
+          onClick={() => setShowFilters(!showFilters)}
+          className="flex items-center gap-2"
+        >
+          {buttonLabel}
+        </Button>
+        <Button onClick={resetFilters}>Reset Filters</Button>
+      </div>
+
       {showFilters && (
-        <div className="mt-2">
-          <Space size="middle" align="center">
-            {options.map((option) => (
-              <div key={option.name} className="flex items-center gap-2">
+        <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
+          {orderedFilters.map((filterName) => {
+            const option = options.find(opt => opt.label === filterName || opt.name === filterName);
+            if (!option) return null;
+
+            return (
+              <div key={option.name} className="flex flex-col gap-2">
+                <label className="text-sm text-gray-600">
+                  {option.label || option.name}
+                </label>
                 {option.isSearchable ? (
                   <Select
                     showSearch
-                    style={{ width: 200 }}
+                    className="w-full"
                     placeholder={`Search ${option.label || option.name}...`}
                     value={tempValues[option.name] || undefined}
                     onChange={(value) => handleFilterChange(option.name, value)}
@@ -125,7 +124,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                   />
                 ) : (
                   <Input
-                    style={{ width: 200 }}
+                    className="w-full"
                     placeholder={`Enter ${option.label || option.name}...`}
                     value={tempValues[option.name] || ''}
                     onChange={(e) => handleFilterChange(option.name, e.target.value)}
@@ -133,12 +132,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                   />
                 )}
               </div>
-            ))}
-            <Space>
-              <Button onClick={resetFilters}>Reset</Button>
-              <Button onClick={handleApplyFilters}>Apply</Button>
-            </Space>
-          </Space>
+            );
+          })}
         </div>
       )}
     </div>

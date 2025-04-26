@@ -429,34 +429,35 @@ export function AllKeysTable({
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full mb-2">
+          <div className="w-full mb-6">
             <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
-            <div className="flex items-center gap-4">
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+          </div>
+
+          <div className="flex items-center justify-between w-full mb-4">
+            <span className="inline-flex text-sm text-gray-700">
+              Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+            </span>
+            
+            <div className="inline-flex items-center gap-2">
+              <span className="text-sm text-gray-700">
+                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
               
-              <div className="inline-flex items-center gap-2">
-                <span className="text-sm text-gray-700">
-                  Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
-                </span>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage - 1)}
-                  disabled={isLoading || pagination.currentPage === 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage + 1)} 
-                  disabled={isLoading || pagination.currentPage === pagination.totalPages}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
+              <button
+                onClick={() => onPageChange(pagination.currentPage - 1)}
+                disabled={isLoading || pagination.currentPage === 1}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              
+              <button
+                onClick={() => onPageChange(pagination.currentPage + 1)} 
+                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
             </div>
           </div>
           <div className="h-[75vh] overflow-auto">
