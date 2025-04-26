@@ -105,7 +105,8 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
-            "proxy/ui_logs"
+            "proxy/ui_logs",
+            "proxy/ui_logs_sessions"
           ],
         },
         {
