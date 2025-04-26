@@ -1646,7 +1646,7 @@ async def list_team_v2(
             user_object = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}
             )
-        except Exception as e:
+        except Exception:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"User not found, passed user_id={user_id}"},
