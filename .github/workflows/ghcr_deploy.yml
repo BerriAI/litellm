@@ -121,7 +121,6 @@ jobs:
   
   build-and-push-image-ee:
     runs-on: ubuntu-latest
-    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
     permissions:
       contents: read
       packages: write
@@ -130,38 +129,37 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.commit_hash }}
-      # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
+
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # This step uses [docker/metadata-action](https://github.com/docker/metadata-action#about) to extract tags and labels that will be applied to the specified image. The `id` "meta" allows the output of this step to be referenced in a subsequent step. The `images` value provides the base name for the tags and labels.
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
+
+      - name: Extract metadata (tags, labels) for EE Dockerfile
+        id: meta-ee
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ee
       # Configure multi platform Docker builds
       - name: Set up QEMU
         uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
-      # This step uses the `docker/build-push-action` action to build the image, based on your repository's `Dockerfile`. If the build succeeds, it pushes the image to GitHub Packages.
-      # It uses the `context` parameter to define the build's context as the set of files located in the specified path. For more information, see "[Usage](https://github.com/docker/build-push-action#usage)" in the README of the `docker/build-push-action` repository.
-      # It uses the `tags` and `labels` parameters to tag and label the image with the output from the "meta" step.
-      - name: Build and push Docker image
-        uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
+
+      - name: Build and push EE Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
+          file: Dockerfile
           push: true
           tags: |
-            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
-            ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }}
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
+            ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.release_type }}
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-stable', env.REGISTRY) || '' }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.meta-ee.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
    
   build-and-push-image-database:
