@@ -385,10 +385,9 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     assert payload["response"] == json.dumps(
         {"role": "assistant", "content": "Hi there!"}
     )
-    parsed_metadata = json.loads(payload["metadata"])
-    assert parsed_metadata["proxy_server_request"] == json.dumps(
-        {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello!"}]}
-    )
+    proxy_server_request = json.loads(payload["proxy_server_request"] or "{}")
+    assert proxy_server_request["model"] == "gpt-4"
+    assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
 
     # Clean up - reset general_settings
     general_settings["store_prompts_in_spend_logs"] = False

@@ -4747,3 +4747,37 @@ export const teamPermissionsUpdateCall = async (
     throw error;
   }
 };
+
+/**
+ * Get all spend logs for a particular session
+ */
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
+      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch session logs:", error);
+    throw error;
+  }
+};
