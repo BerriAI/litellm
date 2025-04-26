@@ -328,8 +328,11 @@ class ResetBudgetJob:
         try:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                duration_s = duration_in_seconds(duration=item.budget_duration)
-                item.budget_reset_at = current_time + timedelta(seconds=duration_s)
+                # Get standardized reset time based on budget duration
+                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+                item.budget_reset_at = get_budget_reset_time(
+                    budget_duration=item.budget_duration
+                )
             return item
         except Exception as e:
             verbose_proxy_logger.exception(

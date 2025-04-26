@@ -313,11 +313,10 @@ async def new_team(  # noqa: PLR0915
 
         # If budget_duration is set, set `budget_reset_at`
         if complete_team_data.budget_duration is not None:
-            duration_s = duration_in_seconds(
-                duration=complete_team_data.budget_duration
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            complete_team_data.budget_reset_at = get_budget_reset_time(
+                budget_duration=complete_team_data.budget_duration, 
             )
-            reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            complete_team_data.budget_reset_at = reset_at
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
         complete_team_data_dict = prisma_client.jsonify_team_object(

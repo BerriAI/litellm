@@ -651,9 +651,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
-        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = user_reset_at
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        non_default_values["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=non_default_values["budget_duration"]
+        )
 
     if "max_budget" not in non_default_values:
         if (
@@ -668,11 +669,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
             non_default_values[
                 "budget_duration"
             ] = litellm.internal_user_budget_duration
-            duration_s = duration_in_seconds(
-                duration=non_default_values["budget_duration"]
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            non_default_values["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=non_default_values["budget_duration"]
             )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
 
     return non_default_values
 
