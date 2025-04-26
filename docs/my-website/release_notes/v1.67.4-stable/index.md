@@ -44,8 +44,9 @@ pip install litellm==1.67.4.post1
 
 ## Key Highlights
 
-
-Let's dive in.
+- **Improved UI Usability and Security**: This release brings usability and security improvements to the Admin UI, making it easier to manage access across 200+ users. 
+- **Responses API Load Balancing**: Route requests across provider regions and ensure session continuity. 
+- **UI Session Logs**: Group several requests to LiteLLM into a session. 
 
 
 
