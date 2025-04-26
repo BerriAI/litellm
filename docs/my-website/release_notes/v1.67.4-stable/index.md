@@ -75,6 +75,11 @@ Let's dive in.
   - Fixed key alias reset when resetting filters [PR](https://github.com/BerriAI/litellm/pull/10099)
   - Fixed table rendering on key creation [PR](https://github.com/BerriAI/litellm/pull/10224)
 
+### Logs page
+
+- **Session Logs**: Added UI Session Logs documentation [PR](https://github.com/BerriAI/litellm/pull/10334)
+
+
 ### Authentication & Security
 - **Required Authentication**: Authentication now required for all dashboard pages [PR](https://github.com/BerriAI/litellm/pull/10229)
 - **SSO Fixes**: Fixed SSO user login invalid token error [PR](https://github.com/BerriAI/litellm/pull/10298)
@@ -90,18 +95,17 @@ Let's dive in.
 
 ## Logging / Guardrail Integrations
 
-- **Passthrough Endpoints**: Ensured `PassthroughStandardLoggingPayload` is logged with method, URL, request/response body [PR](https://github.com/BerriAI/litellm/pull/10194)
-- **Datadog**: Fixed Datadog LLM observability logging [PR](https://github.com/BerriAI/litellm/pull/10206)
-- **Grafana**: Enabled datasource selection via templating in Grafana dashboard [PR](https://github.com/BerriAI/litellm/pull/10257)
-- **New Integrations**:
-    1. Added AgentOps Integration [PR](https://github.com/BerriAI/litellm/pull/9685)
-    2. Added missing attributes for Arize & Phoenix Integration [PR](https://github.com/BerriAI/litellm/pull/10215)
-- **Session Logs**: Added UI Session Logs documentation [PR](https://github.com/BerriAI/litellm/pull/10334)
+- **Datadog**: Fixed Datadog LLM observability logging [Get Started](https://docs.litellm.ai/docs/proxy/logging#datadog), [PR](https://github.com/BerriAI/litellm/pull/10206)
+- **Prometheus / Grafana**: Enable datasource selection on LiteLLM Grafana Template [Get Started](https://docs.litellm.ai/docs/proxy/prometheus#-litellm-maintained-grafana-dashboards-), [PR](https://github.com/BerriAI/litellm/pull/10257)
+- **AgentOps**: Added AgentOps Integration [Get Started](https://docs.litellm.ai/docs/observability/agentops_integration), [PR](https://github.com/BerriAI/litellm/pull/9685)
+- **Arize**: Added missing attributes for Arize & Phoenix Integration [Get Started](https://docs.litellm.ai/docs/observability/arize_integration), [PR](https://github.com/BerriAI/litellm/pull/10215)
+
 
 ## General Proxy Improvements
 
 - **Caching**: Fixed caching to account for thinking or reasoning_effort config [PR](https://github.com/BerriAI/litellm/pull/10140)
 - **Model Groups**: Fixed handling for cases where user sets model_group inside model_info [PR](https://github.com/BerriAI/litellm/pull/10191)
+- **Passthrough Endpoints**: Ensured `PassthroughStandardLoggingPayload` is logged with method, URL, request/response body [PR](https://github.com/BerriAI/litellm/pull/10194)
 
 
 ## Security Fixes
