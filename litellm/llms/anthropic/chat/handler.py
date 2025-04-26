@@ -564,7 +564,7 @@ class ModelResponseIterator:
                 reasoning_content += thinking_content
         return reasoning_content
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
         try:
             type_chunk = chunk.get("type", "") or ""
 
@@ -627,6 +627,7 @@ class ModelResponseIterator:
                             data=content_block_start["content_block"]["data"],
                         )
                     ]
+                    provider_specific_fields["thinking_blocks"] = thinking_blocks
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
