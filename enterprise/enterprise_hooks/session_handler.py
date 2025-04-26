@@ -19,10 +19,7 @@ class ChatCompletionSession(TypedDict, total=False):
     messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, Message]]
     litellm_session_id: Optional[str]
 
-class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
-    def __init__(self):
-        pass
-
+class _ENTERPRISE_ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,

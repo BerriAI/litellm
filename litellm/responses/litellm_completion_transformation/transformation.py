@@ -48,7 +48,6 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
-_ENTERPRISE_ResponsesSessionHandler = _ENTERPRISE_ResponsesSessionHandler()
 ########### End of Initialize Classes used for Responses API  ###########
 
 
