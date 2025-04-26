@@ -32,7 +32,9 @@ Update from LiteLLM:
     # Ensure GIT_PUSH_TOKEN is configured as a protected CI/CD variable in GitLab
     GIT_STRATEGY: clone # Ensure a clean clone for this job
   script:
-    # Git should automatically use http_proxy and https_proxy environment variables
+    # Explicitly configure Git to use the proxy defined in global variables
+    - git config --global http.proxy $HTTP_PROXY
+    - git config --global https.proxy $HTTPS_PROXY
     - git config --global user.email "ccoe-dis@thalesgroup.com" # Use your desired commit email
     - git config --global user.name "Thales DIS CCoE CI" # Use your desired commit author name
     - git remote add github https://github.com/BerriAI/litellm.git # Add upstream repo via HTTPS
