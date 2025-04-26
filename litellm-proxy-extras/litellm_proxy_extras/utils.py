@@ -4,6 +4,7 @@ import random
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -108,8 +109,77 @@ class ProxyExtrasDBManager:
         )
 
     @staticmethod
-    def _resolve_all_migrations(migrations_dir: str):
-        """Mark all existing migrations as applied"""
+    def _resolve_all_migrations(migrations_dir: str, schema_path: str):
+        """
+        1. Compare the current database state to schema.prisma and generate a migration for the diff.
+        2. Run prisma migrate deploy to apply any pending migrations.
+        3. Mark all existing migrations as applied.
+        """
+        database_url = os.getenv("DATABASE_URL")
+        diff_dir = (
+            Path(migrations_dir)
+            / "migrations"
+            / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_baseline_diff"
+        )
+        diff_dir.mkdir(parents=True, exist_ok=True)
+        diff_sql_path = diff_dir / "migration.sql"
+
+        # 1. Generate migration SQL for the diff between DB and schema
+        try:
+            logger.info("Generating migration diff between DB and schema.prisma...")
+            with open(diff_sql_path, "w") as f:
+                subprocess.run(
+                    [
+                        "prisma",
+                        "migrate",
+                        "diff",
+                        "--from-url",
+                        database_url,
+                        "--to-schema-datamodel",
+                        schema_path,
+                        "--script",
+                    ],
+                    check=True,
+                    timeout=60,
+                    stdout=f,
+                )
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to generate migration diff: {e.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Migration diff generation timed out.")
+
+        # check if the migration was created
+        if not diff_sql_path.exists():
+            logger.warning("Migration diff was not created")
+            return
+        logger.info(f"Migration diff created at {diff_sql_path}")
+
+        # 2. Run prisma db execute to apply the migration
+        try:
+            logger.info("Running prisma db execute to apply the migration diff...")
+            result = subprocess.run(
+                [
+                    "prisma",
+                    "db",
+                    "execute",
+                    "--file",
+                    str(diff_sql_path),
+                    "--schema",
+                    schema_path,
+                ],
+                timeout=60,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            logger.info(f"prisma db execute stdout: {result.stdout}")
+            logger.info("✅ Migration diff applied successfully")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to apply migration diff: {e.stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Migration diff application timed out.")
+
+        # 3. Mark all migrations as applied
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
         logger.info(f"Resolving {len(migration_names)} migrations")
         for migration_name in migration_names:
@@ -204,7 +274,9 @@ class ProxyExtrasDBManager:
                             logger.info(
                                 "Baseline migration created, resolving all migrations"
                             )
-                            ProxyExtrasDBManager._resolve_all_migrations(migrations_dir)
+                            ProxyExtrasDBManager._resolve_all_migrations(
+                                migrations_dir, schema_path
+                            )
                             logger.info("✅ All migrations resolved.")
                             return True
                         elif (
