@@ -63,7 +63,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS, CustomPricingLiteLLMParams
+from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
