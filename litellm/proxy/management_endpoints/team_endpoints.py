@@ -198,7 +198,6 @@ async def new_team(  # noqa: PLR0915
     try:
         from litellm.proxy.proxy_server import (
             create_audit_log_for_update,
-            duration_in_seconds,
             litellm_proxy_admin_name,
             prisma_client,
         )

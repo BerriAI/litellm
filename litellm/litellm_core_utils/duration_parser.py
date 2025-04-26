@@ -117,7 +117,33 @@ def get_next_standardized_reset_time(
     Returns:
     - Next reset time at a standardized interval in the specified timezone
     """
-    # Set up the timezone
+    # Set up timezone and normalize current time
+    current_time, timezone = _setup_timezone(current_time, timezone_str)
+    
+    # Parse duration
+    value, unit = _parse_duration(duration)
+    if value is None:
+        # Fall back to default if format is invalid
+        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    
+    # Midnight of the current day in the specified timezone
+    base_midnight = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Handle different time units
+    if unit == "d":
+        return _handle_day_reset(current_time, base_midnight, value, timezone)
+    elif unit == "h":
+        return _handle_hour_reset(current_time, base_midnight, value)
+    elif unit == "m":
+        return _handle_minute_reset(current_time, base_midnight, value)
+    elif unit == "s":
+        return _handle_second_reset(current_time, base_midnight, value)
+    else:
+        # Unrecognized unit, default to next midnight
+        return base_midnight + timedelta(days=1)
+
+def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[datetime, ZoneInfo]:
+    """Set up timezone and normalize current time to that timezone."""
     try:
         if timezone_str is None:
             timezone = ZoneInfo("UTC")
@@ -136,136 +162,126 @@ def get_next_standardized_reset_time(
         # Already has timezone - convert to target timezone
         current_time = current_time.astimezone(timezone)
     
+    return current_time, timezone
+
+def _parse_duration(duration: str) -> Tuple[int, str]:
+    """Parse the duration string into value and unit."""
     match = re.match(r"(\d+)([a-z]+)", duration)
     if not match:
-        # Fall back to default if format is invalid
-        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return None, None
     
     value, unit = match.groups()
-    value = int(value)
-    
-    # Midnight of the current day in the specified timezone
-    base_midnight = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Handle days
-    if unit == "d":
-        if value == 1:  # Daily reset at midnight
-            return base_midnight + timedelta(days=1)
-        elif value == 7:  # Weekly reset on Monday at midnight
-            days_until_monday = (7 - current_time.weekday()) % 7
-            if days_until_monday == 0:  # If today is Monday
-                days_until_monday = 7
-            return base_midnight + timedelta(days=days_until_monday)
-        elif value == 30:  # Monthly reset on 1st at midnight
-            # Get 1st of next month at midnight
-            if current_time.month == 12:
-                next_reset = datetime(
-                    year=current_time.year + 1, 
-                    month=1, 
-                    day=1, 
-                    hour=0, 
-                    minute=0, 
-                    second=0, 
-                    microsecond=0,
-                    tzinfo=timezone
-                )
-            else:
-                next_reset = datetime(
-                    year=current_time.year, 
-                    month=current_time.month + 1, 
-                    day=1, 
-                    hour=0, 
-                    minute=0, 
-                    second=0, 
-                    microsecond=0,
-                    tzinfo=timezone
-                )
-            return next_reset
-        else:  # Custom day value - next interval is value days from current
-            return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=value)
-    
-    # Handle hours - find next hour boundary aligned with the frequency
-    elif unit == "h":
-        current_hour = current_time.hour
-        current_minute = current_time.minute
-        current_second = current_time.second
-        current_microsecond = current_time.microsecond
-        
-        # If exactly on the hour and no minutes/seconds/microseconds, use the next interval
-        if current_minute == 0 and current_second == 0 and current_microsecond == 0:
-            # Calculate next hour aligned with the value
-            next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
-        else:
-            # Not on the hour boundary, round up to next aligned hour
-            next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
-        
-        # Handle overnight case
-        if next_hour >= 24:
-            next_hour = next_hour % 24
-            next_day = base_midnight + timedelta(days=1)
-            return next_day.replace(hour=next_hour)
-        
-        return current_time.replace(hour=next_hour, minute=0, second=0, microsecond=0)
-    
-    # Handle minutes - find next minute boundary aligned with the frequency
-    elif unit == "m":
-        current_hour = current_time.hour
-        current_minute = current_time.minute
-        current_second = current_time.second
-        current_microsecond = current_time.microsecond
-        
-        # If exactly on the minute and no seconds/microseconds, use the next interval
-        if current_second == 0 and current_microsecond == 0:
-            # Calculate next minute aligned with the value
-            next_minute = current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        else:
-            # Not on the minute boundary, round up to next aligned minute
-            next_minute = current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        
-        # Handle hour rollover
-        next_hour = current_hour + (next_minute // 60)
-        next_minute = next_minute % 60
-        
-        # Handle overnight case
-        if next_hour >= 24:
-            next_hour = next_hour % 24
-            next_day = base_midnight + timedelta(days=1)
-            return next_day.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
-        
-        return current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
-    
-    # Handle seconds - find next second boundary aligned with the frequency
-    elif unit == "s":
-        current_hour = current_time.hour
-        current_minute = current_time.minute
-        current_second = current_time.second
-        current_microsecond = current_time.microsecond
-        
-        # If exactly on the second and no microseconds, use the next interval
-        if current_microsecond == 0:
-            # Calculate next second aligned with the value
-            next_second = current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        else:
-            # Not on the second boundary, round up to next aligned second
-            next_second = current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        
-        # Handle minute rollover
-        additional_minutes = next_second // 60
-        next_second = next_second % 60
-        next_minute = current_minute + additional_minutes
-        
-        # Handle hour rollover
-        next_hour = current_hour + (next_minute // 60)
-        next_minute = next_minute % 60
-        
-        # Handle overnight case
-        if next_hour >= 24:
-            next_hour = next_hour % 24
-            next_day = base_midnight + timedelta(days=1)
-            return next_day.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
-        
-        return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
-    
-    else:
-        # Unrecognized unit, default to next midnight
+    return int(value), unit
+
+def _handle_day_reset(current_time: datetime, base_midnight: datetime, value: int, timezone: ZoneInfo) -> datetime:
+    """Handle day-based reset times."""
+    if value == 1:  # Daily reset at midnight
         return base_midnight + timedelta(days=1)
+    elif value == 7:  # Weekly reset on Monday at midnight
+        days_until_monday = (7 - current_time.weekday()) % 7
+        if days_until_monday == 0:  # If today is Monday
+            days_until_monday = 7
+        return base_midnight + timedelta(days=days_until_monday)
+    elif value == 30:  # Monthly reset on 1st at midnight
+        # Get 1st of next month at midnight
+        if current_time.month == 12:
+            next_reset = datetime(
+                year=current_time.year + 1, 
+                month=1, 
+                day=1, 
+                hour=0, 
+                minute=0, 
+                second=0, 
+                microsecond=0,
+                tzinfo=timezone
+            )
+        else:
+            next_reset = datetime(
+                year=current_time.year, 
+                month=current_time.month + 1, 
+                day=1, 
+                hour=0, 
+                minute=0, 
+                second=0, 
+                microsecond=0,
+                tzinfo=timezone
+            )
+        return next_reset
+    else:  # Custom day value - next interval is value days from current
+        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=value)
+
+def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
+    """Handle hour-based reset times."""
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_second = current_time.second
+    current_microsecond = current_time.microsecond
+    
+    # Calculate next hour aligned with the value
+    if current_minute == 0 and current_second == 0 and current_microsecond == 0:
+        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
+    else:
+        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
+    
+    # Handle overnight case
+    if next_hour >= 24:
+        next_hour = next_hour % 24
+        next_day = base_midnight + timedelta(days=1)
+        return next_day.replace(hour=next_hour)
+    
+    return current_time.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+
+def _handle_minute_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
+    """Handle minute-based reset times."""
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_second = current_time.second
+    current_microsecond = current_time.microsecond
+    
+    # Calculate next minute aligned with the value
+    if current_second == 0 and current_microsecond == 0:
+        next_minute = current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
+    else:
+        next_minute = current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
+    
+    # Handle hour rollover
+    next_hour = current_hour + (next_minute // 60)
+    next_minute = next_minute % 60
+    
+    # Handle overnight case
+    if next_hour >= 24:
+        next_hour = next_hour % 24
+        next_day = base_midnight + timedelta(days=1)
+        return next_day.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+    
+    return current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+
+def _handle_second_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
+    """Handle second-based reset times."""
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_second = current_time.second
+    current_microsecond = current_time.microsecond
+    
+    # Calculate next second aligned with the value
+    if current_microsecond == 0:
+        next_second = current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
+    else:
+        next_second = current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
+    
+    # Handle minute rollover
+    additional_minutes = next_second // 60
+    next_second = next_second % 60
+    next_minute = current_minute + additional_minutes
+    
+    # Handle hour rollover
+    next_hour = current_hour + (next_minute // 60)
+    next_minute = next_minute % 60
+    
+    # Handle overnight case
+    if next_hour >= 24:
+        next_hour = next_hour % 24
+        next_day = base_midnight + timedelta(days=1)
+        return next_day.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
+    
+    return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
