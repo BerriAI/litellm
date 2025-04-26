@@ -2,6 +2,7 @@ import glob
 import os
 import random
 import re
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -20,9 +21,30 @@ def str_to_bool(value: Optional[str]) -> bool:
 class ProxyExtrasDBManager:
     @staticmethod
     def _get_prisma_dir() -> str:
-        """Get the path to the migrations directory"""
-        migrations_dir = os.path.dirname(__file__)
-        return migrations_dir
+        """
+        Get the path to the migrations directory
+
+        Set os.environ["LITELLM_MIGRATION_DIR"] to a custom migrations directory, to support baselining db in read-only fs.
+        """
+        custom_migrations_dir = os.getenv("LITELLM_MIGRATION_DIR")
+        pkg_migrations_dir = os.path.dirname(__file__)
+        if custom_migrations_dir:
+            # If migrations_dir exists, copy contents
+            if os.path.exists(custom_migrations_dir):
+                # Copy contents instead of directory itself
+                for item in os.listdir(pkg_migrations_dir):
+                    src_path = os.path.join(pkg_migrations_dir, item)
+                    dst_path = os.path.join(custom_migrations_dir, item)
+                    if os.path.isdir(src_path):
+                        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(src_path, dst_path)
+            else:
+                # If directory doesn't exist, create it and copy everything
+                shutil.copytree(pkg_migrations_dir, custom_migrations_dir)
+            return custom_migrations_dir
+
+        return pkg_migrations_dir
 
     @staticmethod
     def _create_baseline_migration(schema_path: str) -> bool:
