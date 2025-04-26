@@ -143,7 +143,15 @@ class ProxyExtrasDBManager:
             / "migrations"
             / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_baseline_diff"
         )
-        diff_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            diff_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            if "Permission denied" in str(e):
+                logger.warning(
+                    f"Permission denied - {e}\nunable to baseline db. Set LITELLM_MIGRATION_DIR environment variable to a writable directory to enable migrations."
+                )
+                return
+            raise e
         diff_sql_path = diff_dir / "migration.sql"
 
         # 1. Generate migration SQL for the diff between DB and schema
