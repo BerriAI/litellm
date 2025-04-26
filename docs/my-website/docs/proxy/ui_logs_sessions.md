@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# UI Logs Sessions Management
+# Session Logs
 
-Group requests into sessions. This allows you to see all requests made by a user in a single session.
+Group requests into sessions. This allows you to group related requests together.
 
 
 <Image img={require('../../img/ui_session_logs.png')}/>
