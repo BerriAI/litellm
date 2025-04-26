@@ -13,6 +13,10 @@ variables:
   IMAGE_NAME: litellm # Name for the container image
   DOCKERFILE_PATH: Dockerfile # Path to the main Dockerfile
   environment: $CI_ENVIRONMENT_NAME
+  # Proxy settings for network access within Thales environment
+  http_proxy: $HTTP_PROXY # Assumes HTTP_PROXY is defined as a GitLab CI/CD variable
+  https_proxy: $HTTP_PROXY # Assumes HTTP_PROXY is defined as a GitLab CI/CD variable
+  no_proxy: artifactory.photon.thalescloud.io,gitlab.photon.thalescloud.io,.local,localhost,127.0.0.1,github.com # Added github.com to no_proxy if direct access is needed/allowed, adjust if necessary
 
 stages:
   - update # Add update stage
@@ -28,9 +32,13 @@ Update from LiteLLM:
     # Ensure GIT_PUSH_TOKEN is configured as a protected CI/CD variable in GitLab
     GIT_STRATEGY: clone # Ensure a clean clone for this job
   script:
+    # Configure Git to use the proxy defined in global variables
+    - git config --global http.proxy $HTTP_PROXY
+    - git config --global https.proxy $HTTPS_PROXY
     - git config --global user.email "ccoe-dis@thalesgroup.com" # Use your desired commit email
     - git config --global user.name "Thales DIS CCoE CI" # Use your desired commit author name
     - git remote add github https://github.com/BerriAI/litellm.git # Add upstream repo via HTTPS
+    - echo "Attempting to fetch from GitHub via proxy..."
     - git fetch -v github main # Fetch only the main branch
     - git checkout -B litellm-updates # Create/reset the update branch
     - git reset --hard github/main # Reset local branch to match upstream main
