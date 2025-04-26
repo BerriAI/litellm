@@ -40,7 +40,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import get_user_object
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -60,7 +60,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.secret_managers.main import str_to_bool
+from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
 if TYPE_CHECKING:
@@ -620,6 +620,30 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     )
 
     import jwt
+
+    if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+        _user_info: Optional[LiteLLM_UserTable] = None
+        if (
+            user_defined_values is not None
+            and user_defined_values["user_id"] is not None
+        ):
+            _user_info = LiteLLM_UserTable(
+                user_id=user_defined_values["user_id"],
+                user_role=user_defined_values["user_role"] or user_role,
+                models=[],
+                max_budget=litellm.max_ui_session_budget,
+            )
+        if _user_info is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "User Information is required for experimental UI login"
+                },
+            )
+
+        key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            _user_info
+        )
 
     jwt_token = jwt.encode(  # type: ignore
         {
