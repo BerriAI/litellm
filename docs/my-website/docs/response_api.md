@@ -621,9 +621,9 @@ for event in response:
 | `azure_ai` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 | All other llm api providers | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 
-## Load Balancing with Routing Affinity
+## Load Balancing with Session Continuity.
 
-When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides routing affinity for conversations. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
+When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides session continuity. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
 
 
 #### Example Usage
@@ -631,7 +631,7 @@ When using the Responses API with multiple deployments of the same model (e.g., 
 <Tabs>
 <TabItem value="python-sdk" label="Python SDK">
 
-```python showLineNumbers title="Python SDK with Routing Affinity"
+```python showLineNumbers title="Python SDK with Session Continuity"
 import litellm
 
 # Set up router with multiple deployments of the same model
@@ -681,11 +681,11 @@ follow_up = await router.aresponses(
 </TabItem>
 <TabItem value="proxy-server" label="Proxy Server">
 
-#### 1. Setup routing affinity on proxy config.yaml
+#### 1. Setup session continuity on proxy config.yaml
 
-To enable routing affinity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
 
-```yaml showLineNumbers title="config.yaml with Responses API Routing Affinity"
+```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
   - model_name: azure-gpt4-turbo
     litellm_params:
