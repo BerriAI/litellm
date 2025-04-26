@@ -19,6 +19,8 @@ To group multiple requests into a single session, pass the same `litellm_trace_i
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
 **Request 1**
+Create a new session with a unique ID and make the first request. The session ID will be used to track all related requests.
+
 ```python showLineNumbers
 import openai
 import uuid
@@ -49,6 +51,8 @@ response1 = client.chat.completions.create(
 ```
 
 **Request 2**
+Make another request using the same session ID to link it with the previous request. This allows tracking related requests together.
+
 ```python showLineNumbers
 # Second request using same session ID
 response2 = client.chat.completions.create(
@@ -71,6 +75,8 @@ response2 = client.chat.completions.create(
 <TabItem value="langchain" label="Langchain">
 
 **Request 1**
+Initialize a new session with a unique ID and create a chat model instance for making requests. The session ID is embedded in the model's configuration.
+
 ```python showLineNumbers
 from langchain.chat_models import ChatOpenAI
 import uuid
@@ -94,6 +100,8 @@ response1 = chat.invoke("Write a short story about a robot")
 ```
 
 **Request 2**
+Use the same chat model instance to make another request, automatically maintaining the session context through the previously configured session ID.
+
 ```python showLineNumbers
 # Second request using same chat object and session ID
 response2 = chat.invoke("Now write a poem about that robot")
@@ -103,6 +111,8 @@ response2 = chat.invoke("Now write a poem about that robot")
 <TabItem value="curl" label="Curl">
 
 **Request 1**
+Generate a new session ID and make the initial API call. The session ID in the metadata will be used to track this conversation.
+
 ```bash showLineNumbers
 # Create a session ID
 SESSION_ID=$(uuidgen)
@@ -129,6 +139,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 **Request 2**
+Make a follow-up request using the same session ID to maintain conversation context and tracking.
+
 ```bash showLineNumbers
 # Second request using same session ID
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -149,9 +161,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 </TabItem>
-<TabItem value="litellm" label="LiteLLM">
+<TabItem value="litellm" label="LiteLLM Python SDK">
 
 **Request 1**
+Start a new session by creating a unique ID and making the initial request. This session ID will be used to group related requests together.
+
 ```python showLineNumbers
 import litellm
 import uuid
@@ -172,6 +186,8 @@ response1 = litellm.completion(
 ```
 
 **Request 2**
+Continue the conversation by making another request with the same session ID, linking it to the previous interaction.
+
 ```python showLineNumbers
 # Second request using same session ID
 response2 = litellm.completion(
