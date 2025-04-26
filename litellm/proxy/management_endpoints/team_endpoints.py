@@ -1589,6 +1589,7 @@ async def list_team_v2(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get a paginated list of teams with filtering and sorting options.
@@ -1619,6 +1620,9 @@ async def list_team_v2(
             detail={"error": f"No db connected. prisma client={prisma_client}"},
         )
 
+    if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        user_id = user_api_key_dict.user_id
+
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
@@ -1638,25 +1642,31 @@ async def list_team_v2(
         where_conditions["organization_id"] = organization_id
 
     if user_id:
-        # Find teams where this user is a member
-        user_teams = await prisma_client.db.litellm_teammembership.find_many(
-            where={
-                "user_id": user_id,
-            }
-        )
-        team_ids = [team.team_id for team in user_teams]
-
-        if team_ids:
-            where_conditions["team_id"] = {"in": team_ids}
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        if user_object is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        # Find teams where this user is a member by checking members_with_roles array
+        if team_id is None:
+            where_conditions["team_id"] = {"in": user_object_correct_type.teams}
+        elif team_id in user_object_correct_type.teams:
+            where_conditions["team_id"] = team_id
         else:
-            # If user has no teams, return empty result
-            return {
-                "teams": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": 0,
-            }
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User is not a member of team_id={team_id}"},
+            )
 
     # Build order_by conditions
     valid_sort_columns = ["team_id", "team_alias", "created_at"]
