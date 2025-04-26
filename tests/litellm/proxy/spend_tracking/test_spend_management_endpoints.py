@@ -575,6 +575,7 @@ class TestSpendLogsPayload:
                     "custom_llm_provider": "anthropic",
                     "messages": "{}",
                     "response": "{}",
+                    "proxy_server_request": "{}",
                 }
             )
 
@@ -663,6 +664,7 @@ class TestSpendLogsPayload:
                     "custom_llm_provider": "anthropic",
                     "messages": "{}",
                     "response": "{}",
+                    "proxy_server_request": "{}",
                 }
             )
 
