@@ -1931,7 +1931,7 @@ async def validate_key_list_check(
             key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
                 where={"token": key_hash},
             )
-        except Exception as e:
+        except Exception:
             raise ProxyException(
                 message="Key Hash not found.",
                 type=ProxyErrorTypes.bad_request_error,
