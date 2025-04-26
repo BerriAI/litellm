@@ -13,6 +13,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 | Streaming | ✅ | |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
+| Supported operations | Create a response, Get a response, Delete a response | |
 | Supported LiteLLM Versions | 1.63.8+ | |
 | Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
 
@@ -50,6 +51,56 @@ response = litellm.responses(
 
 for event in response:
     print(event)
+```
+
+#### GET a Response
+```python showLineNumbers title="Get Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = litellm.get_responses(
+    response_id=response_id
+)
+
+print(retrieved_response)
+
+# For async usage
+# retrieved_response = await litellm.aget_responses(response_id=response_id)
+```
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = litellm.delete_responses(
+    response_id=response_id
+)
+
+print(delete_response)
+
+# For async usage
+# delete_response = await litellm.adelete_responses(response_id=response_id)
 ```
 
 </TabItem>
@@ -287,6 +338,56 @@ response = client.responses.create(
 
 for event in response:
     print(event)
+```
+
+#### GET a Response
+```python showLineNumbers title="Get Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = client.responses.retrieve(response_id)
+
+print(retrieved_response)
+```
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = client.responses.delete(response_id)
+
+print(delete_response)
 ```
 
 </TabItem>
