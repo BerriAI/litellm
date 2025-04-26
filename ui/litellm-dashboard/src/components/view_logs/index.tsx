@@ -15,6 +15,8 @@ import { ConfigInfoMessage } from './ConfigInfoMessage';
 import { Tooltip } from "antd";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
+import { SessionView } from './SessionView';
+
 interface SpendLogsTableProps {
   accessToken: string | null;
   token: string | null;
@@ -294,6 +296,19 @@ export default function SpendLogsTable({
   const handleRowExpand = (requestId: string | null) => {
     setExpandedRequestId(requestId);
   };
+
+  // When a session is selected, render the SessionView component
+  if (selectedSessionId && sessionLogs.data) {
+    return (
+      <div className="w-full p-6">
+        <SessionView
+          sessionId={selectedSessionId}
+          logs={sessionLogs.data.data}
+          onBack={() => setSelectedSessionId(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="w-full p-6">
