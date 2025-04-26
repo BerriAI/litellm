@@ -33,27 +33,29 @@ class ProxyExtrasDBManager:
         # Create migrations/0_init directory
         init_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate migration SQL file
-        migration_file = init_dir / "migration.sql"
+        database_url = os.getenv("DATABASE_URL")
 
         try:
-            # Generate migration diff with increased timeout
+            # 1. Generate migration SQL file by comparing empty state to current db state
+            logger.info("Generating baseline migration...")
+            migration_file = init_dir / "migration.sql"
             subprocess.run(
                 [
                     "prisma",
                     "migrate",
                     "diff",
                     "--from-empty",
-                    "--to-schema-datamodel",
-                    str(schema_path),
+                    "--to-url",
+                    database_url,
                     "--script",
                 ],
                 stdout=open(migration_file, "w"),
                 check=True,
                 timeout=30,
-            )  # 30 second timeout
+            )
 
-            # Mark migration as applied with increased timeout
+            # 3. Mark the migration as applied since it represents current state
+            logger.info("Marking baseline migration as applied...")
             subprocess.run(
                 [
                     "prisma",
@@ -73,8 +75,10 @@ class ProxyExtrasDBManager:
             )
             return False
         except subprocess.CalledProcessError as e:
-            logger.warning(f"Error creating baseline migration: {e}")
-            return False
+            logger.warning(
+                f"Error creating baseline migration: {e}, {e.stderr}, {e.stdout}"
+            )
+            raise e
 
     @staticmethod
     def _get_migration_names(migrations_dir: str) -> list:
