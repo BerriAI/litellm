@@ -106,13 +106,9 @@ Let's dive in.
 - **Caching**: Fixed caching to account for thinking or reasoning_effort config [PR](https://github.com/BerriAI/litellm/pull/10140)
 - **Model Groups**: Fixed handling for cases where user sets model_group inside model_info [PR](https://github.com/BerriAI/litellm/pull/10191)
 - **Passthrough Endpoints**: Ensured `PassthroughStandardLoggingPayload` is logged with method, URL, request/response body [PR](https://github.com/BerriAI/litellm/pull/10194)
+- **Fix SQL Injection**: Fixed potential SQL injection vulnerability in spend_management_endpoints.py [PR](https://github.com/BerriAI/litellm/pull/9878)
 
 
-## Security Fixes
-
-- **SQL Injection**: Fixed potential SQL injection vulnerability in spend_management_endpoints.py [PR](https://github.com/BerriAI/litellm/pull/9878)
-- **Authentication**: Fixed multiple authentication and token security issues [PR](https://github.com/BerriAI/litellm/pull/10302, https://github.com/BerriAI/litellm/pull/10326)
-- **Auth Check**: Fixed typing to ensure cases where model is None are handled properly [PR](https://github.com/BerriAI/litellm/pull/10170)
 
 ## Helm
 
