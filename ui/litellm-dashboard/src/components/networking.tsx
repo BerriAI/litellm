@@ -5,6 +5,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { TagNewRequest, TagUpdateRequest, TagDeleteRequest, TagInfoRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
+import { UserInfo } from "./view_users/types";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -670,6 +671,13 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
   }
 };
 
+export type UserListResponse = {
+  page: number,
+  page_size: number,
+  total: number,
+  total_pages: number,
+  users: UserInfo[]
+}
 
 export const userListCall = async (
   accessToken: String, 
@@ -748,7 +756,7 @@ export const userListCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as UserListResponse;
     console.log("/user/list API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2914,7 +2922,7 @@ export const getPossibleUserRoles = async (accessToken: String) => {
       const errorData = await response.text();
       throw new Error("Network response was not ok");
     }
-    const data = await response.json();
+    const data = await response.json() as Record<string, Record<string, string>>;
     console.log("response from user/available_role", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3600,7 +3608,10 @@ export const userUpdateUserCall = async (
       throw new Error("Network response was not ok");
     }
 
-    const data = await response.json();
+    const data = await response.json() as {
+      user_id: string;
+      data: UserInfo;
+    };
     console.log("API Response:", data);
     //message.success("User role updated");
     return data;
