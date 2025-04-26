@@ -1420,7 +1420,8 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
-        print("slack url before log_queue {slack_webhook_url}")
+        print(f"slack url before log_queue {slack_webhook_url}")
+        print(f"slack payload {payload}")
         if isinstance(slack_webhook_url, list):
             for url in slack_webhook_url:
                 self.log_queue.append(
