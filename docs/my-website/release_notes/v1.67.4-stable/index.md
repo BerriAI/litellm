@@ -1,5 +1,5 @@
 ---
-title: v1.67.4-stable - UI Improvements & Responses API Enhancements
+title: v1.67.4-stable
 slug: v1.67.4-stable
 date: 2025-04-26T10:00:00
 authors:
@@ -21,22 +21,39 @@ import TabItem from '@theme/TabItem';
 
 ## Key Highlights
 
-- **Responses API Enhancements**: New endpoints and session management support for non-OpenAI models
-- **UI Improvements**: Enhanced filtering, better user management, and fixed authentication issues
-- **Security Fixes**: Critical bug fixes and enhanced token security
-- **Model Support Updates**: Added cost tracking for new models including gpt-image-1
 
 Let's dive in.
 
-## Responses API Enhancements
+## Responses API
 
-This release significantly improves the Responses API with:
-- **New Endpoints**: Added support for GET and DELETE operations - `/v1/responses/{response_id}` [Get Started](../../docs/response_api)
-- **Session Management**: Added session support for non-OpenAI models [PR](https://github.com/BerriAI/litellm/pull/10321)
-- **Routing Affinity**: New logic to maintain model consistency within sessions [PR](https://github.com/BerriAI/litellm/pull/10193)
-- **UI Integration**: Exposed the Responses API on the Test Key page in the UI [PR](https://github.com/BerriAI/litellm/pull/10166)
 
-## UI Improvements
+## New Models / Updated Models
+
+- **OpenAI**
+    1. Added gpt-image-1 cost tracking [PR](https://github.com/BerriAI/litellm/pull/10241)
+    2. Added cost tracking for gpt-image-1 when quality is unspecified [PR](https://github.com/BerriAI/litellm/pull/10247)
+- **Azure**
+    1. Added azure/gpt-image-1 pricing [PR](https://github.com/BerriAI/litellm/pull/10327)
+    2. Fixed timestamp granularities passing to whisper in Azure [PR](https://github.com/BerriAI/litellm/pull/10299)
+- **Bedrock**
+    1. Fixed wrong system prompt transformation [PR](https://github.com/BerriAI/litellm/pull/10120)
+    2. Added support for all compatible Bedrock parameters when model="arn:.." [PR](https://github.com/BerriAI/litellm/pull/10256)
+- **Gemini**
+    1. Fixed passing back Gemini thinking content to API [PR](https://github.com/BerriAI/litellm/pull/10173)
+    2. Various Gemini-2.5-flash improvements [PR](https://github.com/BerriAI/litellm/pull/10198)
+- **Cohere**
+    1. Added support for cohere command-a-03-2025 [PR](https://github.com/BerriAI/litellm/pull/10295)
+- **SageMaker**
+    1. Added support for max_completion_tokens parameter [PR](https://github.com/BerriAI/litellm/pull/10300)
+
+
+## Spend Tracking Improvements
+
+- **Bug Fix**: Fixed spend tracking bug, ensuring default litellm params aren't modified in memory [PR](https://github.com/BerriAI/litellm/pull/10167)
+- **Model Pricing**: Model pricing updates for Azure & VertexAI [PR](https://github.com/BerriAI/litellm/pull/10178)
+- **Updated Deprecation Dates**: Updated deprecation dates and prices [PR](https://github.com/BerriAI/litellm/pull/10308)
+
+## Management Endpoints / UI
 
 ### User Management
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
@@ -66,33 +83,6 @@ This release significantly improves the Responses API with:
 - **Team Model Selector**: Bug fix for team model selection [PR](https://github.com/BerriAI/litellm/pull/10171)
 - **Azure Model Support**: Fixed editing Azure public model names and changing model names after creation [PR](https://github.com/BerriAI/litellm/pull/10249)
 
-## New Models / Updated Models
-
-- **OpenAI**
-    1. Added gpt-image-1 cost tracking [PR](https://github.com/BerriAI/litellm/pull/10241)
-    2. Added cost tracking for gpt-image-1 when quality is unspecified [PR](https://github.com/BerriAI/litellm/pull/10247)
-- **Azure**
-    1. Added azure/gpt-image-1 pricing [PR](https://github.com/BerriAI/litellm/pull/10327)
-    2. Fixed timestamp granularities passing to whisper in Azure [PR](https://github.com/BerriAI/litellm/pull/10299)
-- **Bedrock**
-    1. Fixed wrong system prompt transformation [PR](https://github.com/BerriAI/litellm/pull/10120)
-    2. Added support for all compatible Bedrock parameters when model="arn:.." [PR](https://github.com/BerriAI/litellm/pull/10256)
-- **Gemini**
-    1. Fixed passing back Gemini thinking content to API [PR](https://github.com/BerriAI/litellm/pull/10173)
-    2. Various Gemini-2.5-flash improvements [PR](https://github.com/BerriAI/litellm/pull/10198)
-- **Cohere**
-    1. Added support for cohere command-a-03-2025 [PR](https://github.com/BerriAI/litellm/pull/10295)
-- **SageMaker**
-    1. Added support for max_completion_tokens parameter [PR](https://github.com/BerriAI/litellm/pull/10300)
-- **Model Updates**
-    1. Model pricing updates for Azure & VertexAI [PR](https://github.com/BerriAI/litellm/pull/10178)
-    2. Updated deprecation dates and prices [PR](https://github.com/BerriAI/litellm/pull/10308)
-
-## Spend Tracking Improvements
-
-- **Caching**: Fixed caching to account for thinking or reasoning_effort config [PR](https://github.com/BerriAI/litellm/pull/10140)
-- **Bug Fix**: Fixed spend tracking bug, ensuring default litellm params aren't modified in memory [PR](https://github.com/BerriAI/litellm/pull/10167)
-- **Model Groups**: Fixed handling for cases where user sets model_group inside model_info [PR](https://github.com/BerriAI/litellm/pull/10191)
 
 ## Logging / Guardrail Integrations
 
@@ -103,6 +93,12 @@ This release significantly improves the Responses API with:
     1. Added AgentOps Integration [PR](https://github.com/BerriAI/litellm/pull/9685)
     2. Added missing attributes for Arize & Phoenix Integration [PR](https://github.com/BerriAI/litellm/pull/10215)
 - **Session Logs**: Added UI Session Logs documentation [PR](https://github.com/BerriAI/litellm/pull/10334)
+
+## General Proxy Improvements
+
+- **Caching**: Fixed caching to account for thinking or reasoning_effort config [PR](https://github.com/BerriAI/litellm/pull/10140)
+- **Model Groups**: Fixed handling for cases where user sets model_group inside model_info [PR](https://github.com/BerriAI/litellm/pull/10191)
+
 
 ## Security Fixes
 
