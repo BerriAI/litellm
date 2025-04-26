@@ -31,10 +31,10 @@ Let's dive in.
 
 - **OpenAI**
     1. Added `gpt-image-1` cost tracking [Get Started](https://docs.litellm.ai/docs/image_generation)
-    2. Added cost tracking for gpt-image-1 when quality is unspecified [PR](https://github.com/BerriAI/litellm/pull/10247)
+    2. Bug fix: added cost tracking for gpt-image-1 when quality is unspecified [PR](https://github.com/BerriAI/litellm/pull/10247)
 - **Azure**
     1. Added azure/gpt-image-1 pricing [PR](https://github.com/BerriAI/litellm/pull/10327)
-    2. Fixed timestamp granularities passing to whisper in Azure [PR](https://github.com/BerriAI/litellm/pull/10299)
+    2. Fixed timestamp granularities passing to whisper in Azure [Get Started](https://docs.litellm.ai/docs/audio_transcription)
 - **Bedrock**
     1. Fixed wrong system prompt transformation [PR](https://github.com/BerriAI/litellm/pull/10120)
     2. Added support for all compatible Bedrock parameters when model="arn:.." [PR](https://github.com/BerriAI/litellm/pull/10256)
