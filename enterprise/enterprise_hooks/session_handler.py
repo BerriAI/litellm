@@ -1,20 +1,34 @@
 from litellm.proxy._types import SpendLogsPayload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Union
 import json
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
-from litellm.responses.utils import ResponsesAPIRequestUtils, DecodedResponseId
+from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionResponseMessage,
+    GenericChatCompletionMessage,
+    ResponseInputParam,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall
+
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from typing import TypedDict
+
+class ChatCompletionSession(TypedDict, total=False):
+    messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionMessageToolCall, ChatCompletionResponseMessage]]
+    litellm_session_id: Optional[str]
+
 class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
     def __init__(self):
         pass
 
     @staticmethod
-    async def get_chain_of_previous_input_output_pairs(
+    async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
-    ) -> Tuple[List[Tuple[Union[str, ResponseInputParam], ResponsesAPIResponse]], Optional[str]]:
+    ) -> ChatCompletionSession:
         """
-        Get all input and output from the spend logs
+        Return the chat completion message history for a previous response id
         """
         from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
         all_spend_logs: List[SpendLogsPayload] = await _ENTERPRISE_ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(previous_response_id)
@@ -23,16 +37,24 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
         if len(all_spend_logs) > 0:
             litellm_session_id = all_spend_logs[0].get("session_id")
 
-        responses_api_session_elements: List[Tuple[ResponseInputParam, ResponsesAPIResponse]] = []
+        chat_completion_message_history: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
         for spend_log in all_spend_logs:
             proxy_server_request: Union[str, dict] = spend_log.get("proxy_server_request") or "{}"
             proxy_server_request_dict: Optional[dict] = None
             response_input_param: Optional[Union[str, ResponseInputParam]] = None
-            response_output: Optional[ResponsesAPIResponse] = None
             if isinstance(proxy_server_request, dict):
                 proxy_server_request_dict = proxy_server_request
             else:
                 proxy_server_request_dict = json.loads(proxy_server_request)
+            
+            
             # Get Response Input Param from `proxy_server_request`
             if proxy_server_request_dict:
                 _response_input_param = proxy_server_request_dict.get("input", None)
@@ -40,19 +62,25 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
                     response_input_param = _response_input_param
                 elif isinstance(_response_input_param, dict):
                     response_input_param = ResponseInputParam(**_response_input_param)
-
-
+            
+            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=response_input_param,
+                responses_api_request=dict(proxy_server_request_dict)
+            )
+            chat_completion_message_history.extend(chat_completion_messages)
+            
             # Get Response Output from `spend_log`
             _response_output = spend_log.get("response", "{}")
             if isinstance(_response_output, dict):
                 # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-                response_output = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    request_input=response_input_param,
-                    responses_api_request={},
-                    chat_completion_response=_response_output
-                )        
-            responses_api_session_elements.append((response_input_param, response_output))
-        return responses_api_session_elements, litellm_session_id
+                model_response = ModelResponse(**_response_output)
+                for choice in model_response.choices:
+                    chat_completion_message_history.append(choice.message)
+        verbose_proxy_logger.debug("chat_completion_message_history %s", json.dumps(chat_completion_message_history, indent=4, default=str))
+        return ChatCompletionSession(
+            messages=chat_completion_message_history,
+            litellm_session_id=litellm_session_id
+        )
 
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
@@ -81,7 +109,7 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
             SELECT *
             FROM "LiteLLM_SpendLogs"
             WHERE session_id IN (SELECT session_id FROM matching_session)
-            ORDER BY "endTime" DESC;
+            ORDER BY "endTime" ASC;
         """
 
         spend_logs = await prisma_client.db.query_raw(
