@@ -20,9 +20,9 @@ print(f"response: {response}")
 
 ```yaml
 model_list:
-  - model_name: dall-e-2 ### RECEIVED MODEL NAME ###
+  - model_name: gpt-image-1 ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.image_generation()
-      model: azure/dall-e-2 ### MODEL NAME sent to `litellm.image_generation()` ###
+      model: azure/gpt-image-1 ### MODEL NAME sent to `litellm.image_generation()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
       rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
@@ -47,7 +47,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-    "model": "dall-e-2",
+    "model": "gpt-image-1",
     "prompt": "A cute baby sea otter",
     "n": 1,
     "size": "1024x1024"
@@ -104,15 +104,19 @@ Any non-openai params, will be treated as provider-specific params, and sent in 
     litellm_logging_obj=None,
     custom_llm_provider=None,
 
-- `model`: *string (optional)* The model to use for image generation. Defaults to openai/dall-e-2
+- `model`: *string (optional)* The model to use for image generation. Defaults to openai/gpt-image-1
 
 - `n`: *int (optional)* The number of images to generate. Must be between 1 and 10. For dall-e-3, only n=1 is supported.
 
-- `quality`: *string (optional)* The quality of the image that will be generated. hd creates images with finer details and greater consistency across the image. This param is only supported for dall-e-3.
-
+- `quality`: *string (optional)* The quality of the image that will be generated.
+  *   `auto` (default value) will automatically select the best quality for the given model.
+  *   `high`, `medium` and `low` are supported for `gpt-image-1`.
+  *   `hd` and `standard` are supported for `dall-e-3`.
+  *   `standard` is the only option for `dall-e-2`.
+  
 - `response_format`: *string (optional)* The format in which the generated images are returned. Must be one of url or b64_json.
 
-- `size`: *string (optional)* The size of the generated images. Must be one of 256x256, 512x512, or 1024x1024 for dall-e-2. Must be one of 1024x1024, 1792x1024, or 1024x1792 for dall-e-3 models.
+- `size`: *string (optional)* The size of the generated images. Must be one of `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait), or `auto` (default value) for `gpt-image-1`, one of `256x256`, `512x512`, or `1024x1024` for `dall-e-2`, and one of `1024x1024`, `1792x1024`, or `1024x1792` for `dall-e-3`.
 
 - `timeout`: *integer* - The maximum time, in seconds, to wait for the API to respond. Defaults to 600 seconds (10 minutes).
 
@@ -148,13 +152,14 @@ Any non-openai params, will be treated as provider-specific params, and sent in 
 from litellm import image_generation
 import os
 os.environ['OPENAI_API_KEY'] = ""
-response = image_generation(model='dall-e-2', prompt="cute baby otter")
+response = image_generation(model='gpt-image-1', prompt="cute baby otter")
 ```
 
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
-| dall-e-2 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
+| gpt-image-1 | `image_generation(model='gpt-image-1', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
 | dall-e-3 | `image_generation(model='dall-e-3', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
+| dall-e-2 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Image Generation Models
 
@@ -182,8 +187,9 @@ print(response)
 
 | Model Name           | Function Call                               |
 |----------------------|---------------------------------------------|
-| dall-e-2 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
+| gpt-image-1 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
 | dall-e-3 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
+| dall-e-2 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
 
 
 ## OpenAI Compatible Image Generation Models

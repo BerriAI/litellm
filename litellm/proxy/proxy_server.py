@@ -150,7 +150,11 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
-from litellm.proxy.auth.auth_checks import get_team_object, log_db_metrics
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    get_team_object,
+    log_db_metrics,
+)
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -179,6 +183,7 @@ from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
+    get_form_data,
 )
 from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
@@ -4120,7 +4125,7 @@ async def audio_transcriptions(
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
+        form_data = await get_form_data(request)
         data = {key: value for key, value in form_data.items() if key != "file"}
 
         # Include original request and headers in the data
@@ -6723,7 +6728,7 @@ async def login(request: Request):  # noqa: PLR0915
         )
 
     # check if we can find the `username` in the db. on the ui, users can enter username=their email
-    _user_row = None
+    _user_row: Optional[LiteLLM_UserTable] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
@@ -6733,8 +6738,11 @@ async def login(request: Request):  # noqa: PLR0915
         ]
     ] = None
     if prisma_client is not None:
-        _user_row = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": {"equals": username}}
+        _user_row = cast(
+            Optional[LiteLLM_UserTable],
+            await prisma_client.db.litellm_usertable.find_first(
+                where={"user_email": {"equals": username}}
+            ),
         )
     disabled_non_admin_personal_key_creation = (
         get_disabled_non_admin_personal_key_creation()
@@ -6798,6 +6806,31 @@ async def login(request: Request):  # noqa: PLR0915
         else:
             litellm_dashboard_ui += "/ui/"
         import jwt
+
+        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            user_info: Optional[LiteLLM_UserTable] = None
+            if _user_row is not None:
+                user_info = _user_row
+            elif (
+                user_id is not None
+            ):  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
+                user_info = LiteLLM_UserTable(
+                    user_id=user_id,
+                    user_role=user_role,
+                    models=[],
+                    max_budget=litellm.max_ui_session_budget,
+                )
+            if user_info is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "User Information is required for experimental UI login"
+                    },
+                )
+
+            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+                user_info
+            )
 
         jwt_token = jwt.encode(  # type: ignore
             {

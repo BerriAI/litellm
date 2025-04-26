@@ -277,7 +277,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 
 ## Langfuse
 
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successful LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
 **Step 1** Install langfuse
 
@@ -534,15 +534,15 @@ print(response)
 
 Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
 
-| LiteLLM specific field               | Description                                           | Example Value                                       |
-|------------------------|-------------------------------------------------------|------------------------------------------------|
-| `cache_hit`            | Indicates whether a cache hit occured (True) or not (False)   | `true`, `false`                                |
-| `cache_key`            | The Cache key used for this request                | `d2b758c****`|
-| `proxy_base_url`       | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server                | `https://proxy.example.com`|
-| `user_api_key_alias`   | An alias for the LiteLLM Virtual Key.| `prod-app1`        |
-| `user_api_key_user_id` | The unique ID associated with a user's API key.       | `user_123`, `user_456`                         |
-| `user_api_key_user_email` | The email associated with a user's API key.        | `user@example.com`, `admin@example.com`        |
-| `user_api_key_team_alias` | An alias for a team associated with an API key.    | `team_alpha`, `dev_team`                       |
+| LiteLLM specific field    | Description                                                                             | Example Value                                  |
+|---------------------------|-----------------------------------------------------------------------------------------|------------------------------------------------|
+| `cache_hit`               | Indicates whether a cache hit occurred (True) or not (False)                            | `true`, `false`                                |
+| `cache_key`               | The Cache key used for this request                                                     | `d2b758c****`                                  |
+| `proxy_base_url`          | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server | `https://proxy.example.com`                    |
+| `user_api_key_alias`      | An alias for the LiteLLM Virtual Key.                                                   | `prod-app1`                                    |
+| `user_api_key_user_id`    | The unique ID associated with a user's API key.                                         | `user_123`, `user_456`                         |
+| `user_api_key_user_email` | The email associated with a user's API key.                                             | `user@example.com`, `admin@example.com`        |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.                                         | `team_alpha`, `dev_team`                       |
 
 
 **Usage**
@@ -1190,7 +1190,7 @@ We will use the `--config` to set
 
 - `litellm.success_callback = ["s3"]` 
 
-This will log all successfull LLM calls to s3 Bucket
+This will log all successful LLM calls to s3 Bucket
 
 **Step 1** Set AWS Credentials in .env
 
@@ -1279,7 +1279,7 @@ Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azur
 
 | Property | Details |
 |----------|---------|
-| Description | Log LLM Input/Output to Azure Blob Storag (Bucket) |
+| Description | Log LLM Input/Output to Azure Blob Storage (Bucket) |
 | Azure Docs on Data Lake Storage | [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction) |
 
 
@@ -1360,7 +1360,7 @@ LiteLLM Supports logging to the following Datdog Integrations:
 <Tabs>
 <TabItem value="datadog" label="Datadog Logs">
 
-We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successfull LLM calls to DataDog
+We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successful LLM calls to DataDog
 
 **Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
 
@@ -1636,7 +1636,7 @@ class MyCustomHandler(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
 
-            # Acess Exceptions & Traceback
+            # Access Exceptions & Traceback
             exception_event = kwargs.get("exception", None)
             traceback_event = kwargs.get("traceback_exception", None)
 
@@ -2205,7 +2205,7 @@ We will use the `--config` to set
 - `litellm.success_callback = ["dynamodb"]` 
 - `litellm.dynamodb_table_name = "your-table-name"`
 
-This will log all successfull LLM calls to DynamoDB
+This will log all successful LLM calls to DynamoDB
 
 **Step 1** Set AWS Credentials in .env
 
@@ -2370,7 +2370,7 @@ litellm --test
 
 [Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
 
-We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successfull LLM calls to athina
+We will use the `--config` to set `litellm.success_callback = ["athina"]` this will log all successful LLM calls to athina
 
 **Step 1** Set Athina API key
 

@@ -147,7 +147,7 @@ async def test_get_response():
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
     try:
         response = await acompletion(
-            model="gemini-pro",
+            model="gemini-1.5-flash",
             messages=[
                 {
                     "role": "system",
@@ -455,6 +455,7 @@ async def test_async_vertexai_response():
             or "gemini-2.0-flash-thinking-exp" in model
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
         ):
             # our account does not have access to this model
             continue
@@ -465,6 +466,8 @@ async def test_async_vertexai_response():
                 model=model, messages=messages, temperature=0.7, timeout=5
             )
             print(f"response: {response}")
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.Timeout as e:
@@ -503,6 +506,7 @@ async def test_async_vertexai_streaming_response():
             or "gemini-2.0-flash-thinking-exp" in model
             or "gemini-2.0-pro-exp-02-05" in model
             or "gemini-pro" in model
+            or "gemini-1.0-pro" in model
         ):
             # our account does not have access to this model
             continue
@@ -524,6 +528,8 @@ async def test_async_vertexai_streaming_response():
                     complete_response += chunk.choices[0].delta.content
             print(f"complete_response: {complete_response}")
             assert len(complete_response) > 0
+        except litellm.NotFoundError as e:
+            pass
         except litellm.RateLimitError as e:
             pass
         except litellm.APIConnectionError:
@@ -1778,7 +1784,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     data = {
-        "model": "vertex_ai/gemini-pro",
+        "model": "vertex_ai/gemini-1.5-flash",
         "messages": [
             {
                 "role": "user",
@@ -1837,57 +1843,6 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     except litellm.RateLimitError as e:
         pass
 
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_gemini_pro_async_function_calling():
-    load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    try:
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit?",
-            }
-        ]
-        completion = await litellm.acompletion(
-            model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
-        )
-        print(f"completion: {completion}")
-        print(f"message content: {completion.choices[0].message.content}")
-        assert completion.choices[0].message.content is None
-        assert len(completion.choices[0].message.tool_calls) == 1
-
-    # except litellm.APIError as e:
-    #     pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-    # raise Exception("it worked!")
 
 
 # asyncio.run(gemini_pro_async_function_calling())

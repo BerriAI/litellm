@@ -364,7 +364,7 @@ from litellm import completion
 ## SETUP ENVIRONMENT
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
@@ -391,7 +391,7 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gemini-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
-    tools=[{"googleSearchRetrieval": {}}],
+    tools=[{"googleSearch": {}}],
 )
 
 print(response)
@@ -410,7 +410,7 @@ curl http://localhost:4000/v1/chat/completions \
     ],
    "tools": [
         {
-            "googleSearchRetrieval": {} 
+            "googleSearch": {} 
         }
     ]
   }'
@@ -529,7 +529,7 @@ from litellm import completion
 
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 
-tools = [{"googleSearchRetrieval": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
                     model="vertex_ai/gemini-1.0-pro-001",
@@ -692,7 +692,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ### **Context Caching**
 
-Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support comin soon.).
+Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
@@ -910,7 +910,7 @@ export VERTEXAI_PROJECT="my-test-project" # ONLY use if model project is differe
 
 
 ## Specifying Safety Settings 
-In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
+In certain use-cases you may need to make calls to the models and pass [safety settings](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
 ### Set per model/request
 
@@ -2050,7 +2050,7 @@ response = completion(
 print(response.choices[0])
 ```
 </TabItem>
-<TabItem value="proxy" lable="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 1. Add model to config 
 

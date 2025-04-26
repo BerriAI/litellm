@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -9,13 +9,16 @@ import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
 import { FilterOption } from "./common_components/filter";
-import { Organization, userListCall } from "./networking";
+import { keyListCall, Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 import { useFilterLogic } from "./key_team_helpers/filter_logic";
 import { Setter } from "@/types";
 import { updateExistingKeys } from "@/utils/dataUtils";
-
+import { debounce } from "lodash";
+import { defaultPageSize } from "./constants";
+import { fetchAllTeams } from "./key_team_helpers/filter_helpers";
+import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers";
 interface AllKeysTableProps {
   keys: KeyResponse[];
   setKeys: Setter<KeyResponse[]>;
@@ -90,6 +93,8 @@ const TeamFilter = ({
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
+
+
 export function AllKeysTable({ 
   keys, 
   setKeys,
@@ -111,8 +116,8 @@ export function AllKeysTable({
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
-  
   // Use the filter logic hook
+
   const {
     filters,
     filteredKeys,
@@ -126,10 +131,9 @@ export function AllKeysTable({
     teams,
     organizations,
     accessToken,
-    setSelectedTeam,
-    setCurrentOrg,
-    setSelectedKeyAlias
   });
+
+  
 
   useEffect(() => {
     if (accessToken) {
@@ -208,7 +212,7 @@ export function AllKeysTable({
       accessorKey: "team_id", // Change to access the team_id
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
-        const team = allTeams?.find(t => t.team_id === teamId);
+        const team = teams?.find(t => t.team_id === teamId);
         return team?.team_alias || "Unknown";
       },
     },
@@ -379,7 +383,18 @@ export function AllKeysTable({
           }
         });
       }
+    },
+    {
+      name: 'User ID',
+      label: 'User ID',
+      isSearchable: false,
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
     }
+
   ];
   
   
@@ -414,34 +429,35 @@ export function AllKeysTable({
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full mb-2">
+          <div className="w-full mb-6">
             <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
-            <div className="flex items-center gap-4">
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+          </div>
+
+          <div className="flex items-center justify-between w-full mb-4">
+            <span className="inline-flex text-sm text-gray-700">
+              Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+            </span>
+            
+            <div className="inline-flex items-center gap-2">
+              <span className="text-sm text-gray-700">
+                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
               
-              <div className="inline-flex items-center gap-2">
-                <span className="text-sm text-gray-700">
-                  Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
-                </span>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage - 1)}
-                  disabled={isLoading || pagination.currentPage === 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage + 1)} 
-                  disabled={isLoading || pagination.currentPage === pagination.totalPages}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
+              <button
+                onClick={() => onPageChange(pagination.currentPage - 1)}
+                disabled={isLoading || pagination.currentPage === 1}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              
+              <button
+                onClick={() => onPageChange(pagination.currentPage + 1)} 
+                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
             </div>
           </div>
           <div className="h-[75vh] overflow-auto">
@@ -450,6 +466,8 @@ export function AllKeysTable({
               columns={columns.filter(col => col.id !== 'expander') as any}
               data={filteredKeys as any}
               isLoading={isLoading}
+              loadingMessage="🚅 Loading keys..."
+              noDataMessage="No keys found"
               getRowCanExpand={() => false}
               renderSubComponent={() => <></>}
             />

@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Using PDF Input
 
-How to send / receieve pdf's (other document types) to a `/chat/completions` endpoint
+How to send / receive pdf's (other document types) to a `/chat/completions` endpoint
 
 Works for:
 - Vertex AI models (Gemini + Anthropic)

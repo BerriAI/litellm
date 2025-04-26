@@ -107,6 +107,15 @@ class AmazonConverseConfig(BaseConfig):
             "response_format",
         ]
 
+        if (
+            "arn" in model
+        ):  # we can't infer the model from the arn, so just add all params
+            supported_params.append("tools")
+            supported_params.append("tool_choice")
+            supported_params.append("thinking")
+            supported_params.append("reasoning_effort")
+            return supported_params
+
         ## Filter out 'cross-region' from model name
         base_model = BedrockModelInfo.get_base_model(model)
 

@@ -483,7 +483,7 @@ response.stream_to_file(speech_file_path)
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
 Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
 ```shell
 brew update && brew install azure-cli
 ```

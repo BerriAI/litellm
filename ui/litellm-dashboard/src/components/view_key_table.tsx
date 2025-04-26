@@ -173,7 +173,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
   // NEW: Declare filter states for team and key alias.
   const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
-  const [keyAliasFilter, setKeyAliasFilter] = useState<string>("");
+
 
   // Keep the team filter in sync with the incoming prop.
   useEffect(() => {

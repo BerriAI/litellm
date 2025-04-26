@@ -57,6 +57,7 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
+    ImageGenerationRequestQuality,
     OpenAIRealtimeStreamList,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -642,9 +643,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -913,7 +914,7 @@ def completion_cost(  # noqa: PLR0915
 
 
 def get_response_cost_from_hidden_params(
-    hidden_params: Union[dict, BaseModel]
+    hidden_params: Union[dict, BaseModel],
 ) -> Optional[float]:
     if isinstance(hidden_params, BaseModel):
         _hidden_params_dict = hidden_params.model_dump()
@@ -1101,30 +1102,37 @@ def default_image_cost_calculator(
         f"{quality}/{base_model_name}" if quality else base_model_name
     )
 
+    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
+    model_name_with_v2_quality = (
+        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
+    )
+
     verbose_logger.debug(
         f"Looking up cost for models: {model_name_with_quality}, {base_model_name}"
     )
 
-    # Try model with quality first, fall back to base model name
-    if model_name_with_quality in litellm.model_cost:
-        cost_info = litellm.model_cost[model_name_with_quality]
-    elif base_model_name in litellm.model_cost:
-        cost_info = litellm.model_cost[base_model_name]
-    else:
-        # Try without provider prefix
-        model_without_provider = f"{size_str}/{model.split('/')[-1]}"
-        model_with_quality_without_provider = (
-            f"{quality}/{model_without_provider}" if quality else model_without_provider
-        )
+    model_without_provider = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider = (
+        f"{quality}/{model_without_provider}" if quality else model_without_provider
+    )
 
-        if model_with_quality_without_provider in litellm.model_cost:
-            cost_info = litellm.model_cost[model_with_quality_without_provider]
-        elif model_without_provider in litellm.model_cost:
-            cost_info = litellm.model_cost[model_without_provider]
-        else:
-            raise Exception(
-                f"Model not found in cost map. Tried {model_name_with_quality}, {base_model_name}, {model_with_quality_without_provider}, and {model_without_provider}"
-            )
+    # Try model with quality first, fall back to base model name
+    cost_info: Optional[dict] = None
+    models_to_check = [
+        model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+    ]
+    for model in models_to_check:
+        if model in litellm.model_cost:
+            cost_info = litellm.model_cost[model]
+            break
+    if cost_info is None:
+        raise Exception(
+            f"Model not found in cost map. Tried checking {models_to_check}"
+        )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
 

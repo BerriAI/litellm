@@ -651,6 +651,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   sortBy: filters.sort_by,
                   sortOrder: filters.sort_order
                 }}
+                possibleUIRoles={possibleUIRoles}
               />
             </div>
           </TabPanel>
