@@ -13,6 +13,7 @@
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
     "@remixicon/react": "^4.1.1",
+    "@tanstack/react-pacer": "^0.2.0",
     "@tanstack/react-query": "^5.64.1",
     "@tanstack/react-table": "^8.20.6",
     "@tremor/react": "^3.13.3",
