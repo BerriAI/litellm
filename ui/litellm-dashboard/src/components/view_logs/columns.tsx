@@ -129,18 +129,20 @@ export const columns: ColumnDef<LogEntry>[] = [
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
       return (
-        <Tooltip title={value}>
-          <span
-            className="font-mono text-xs max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
-            onClick={() => onSessionClick?.(value)}
-            style={{ textDecoration: onSessionClick ? "underline" : undefined }}
-          >
-            {value}
-          </span>
-        </Tooltip>
+        <Tooltip title={String(info.getValue() || "")}>
+        <Button 
+          size="xs"
+          variant="light"
+          className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal text-xs max-w-[15ch] truncate block"
+          onClick={() => onSessionClick?.(value)}
+        >
+          {String(info.getValue() || "")}
+        </Button>
+      </Tooltip>
       );
     },
   },
+  
   {
     header: "Request ID",
     accessorKey: "request_id",
