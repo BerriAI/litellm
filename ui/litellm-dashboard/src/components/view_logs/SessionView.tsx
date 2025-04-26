@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { LogEntry } from './columns';
 import { DataTable } from './table';
 import { columns } from './columns';
 import { Card, Title, Text, Metric, AreaChart } from '@tremor/react';
+import { RequestViewer } from './index';
 
 interface SessionViewProps {
   sessionId: string;
@@ -11,6 +12,8 @@ interface SessionViewProps {
 }
 
 export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBack }) => {
+  // Track which log row is expanded
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   // Calculate session metrics
   const totalCost = logs.reduce((sum, log) => sum + (log.spend || 0), 0);
   const totalTokens = logs.reduce((sum, log) => sum + (log.total_tokens || 0), 0);
@@ -68,14 +71,10 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
             <DataTable
               columns={columns}
               data={logs}
-              renderSubComponent={({ row }) => (
-                <div className="p-4 bg-gray-50">
-                  <pre className="whitespace-pre-wrap text-sm">
-                    {JSON.stringify(row.original, null, 2)}
-                  </pre>
-                </div>
-              )}
+              renderSubComponent={RequestViewer}
               getRowCanExpand={() => true}
+              expandedRequestId={expandedRequestId}
+              onRowExpand={setExpandedRequestId}
             />
           </div>
     </div>

@@ -700,7 +700,7 @@ export default function SpendLogsTable({
   );
 }
 
-function RequestViewer({ row }: { row: Row<LogEntry> }) {
+export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
