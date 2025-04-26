@@ -24,7 +24,6 @@ import TabItem from '@theme/TabItem';
 
 Let's dive in.
 
-## Responses API
 
 
 ## New Models / Updated Models
@@ -35,12 +34,14 @@ Let's dive in.
 - **Azure**
     1. Fixed timestamp granularities passing to whisper in Azure [Get Started](https://docs.litellm.ai/docs/audio_transcription)
     2. Added azure/gpt-image-1 pricing [Get Started](https://docs.litellm.ai/docs/image_generation), [PR](https://github.com/BerriAI/litellm/pull/10327)
+    3. Added cost tracking for `azure/computer-use-preview`, `azure/gpt-4o-audio-preview-2024-12-17`, `azure/gpt-4o-mini-audio-preview-2024-12-17` [PR](https://github.com/BerriAI/litellm/pull/10178)
 - **Bedrock**
     1. Added support for all compatible Bedrock parameters when model="arn:.." (Bedrock application inference profile models) [Get started](https://docs.litellm.ai/docs/providers/bedrock#bedrock-application-inference-profile), [PR](https://github.com/BerriAI/litellm/pull/10256)
     2. Fixed wrong system prompt transformation [PR](https://github.com/BerriAI/litellm/pull/10120)
 - **VertexAI / Google AI Studio**
     1. Allow setting `budget_tokens=0` for `gemini-2.5-flash` [Get Started](https://docs.litellm.ai/docs/providers/gemini#usage---thinking--reasoning_content),[PR](https://github.com/BerriAI/litellm/pull/10198)
     2. Ensure returned `usage` includes thinking token usage [PR](https://github.com/BerriAI/litellm/pull/10198)
+    3. Added cost tracking for `gemini-2.5-pro-preview-03-25` [PR](https://github.com/BerriAI/litellm/pull/10178)
 - **Cohere**
     1. Added support for cohere command-a-03-2025 [Get Started](https://docs.litellm.ai/docs/providers/cohere), [PR](https://github.com/BerriAI/litellm/pull/10295)
 - **SageMaker**
@@ -54,42 +55,43 @@ Let's dive in.
 ## Spend Tracking Improvements
 
 - **Bug Fix**: Fixed spend tracking bug, ensuring default litellm params aren't modified in memory [PR](https://github.com/BerriAI/litellm/pull/10167)
-- **Model Pricing**: Model pricing updates for Azure & VertexAI [PR](https://github.com/BerriAI/litellm/pull/10178)
-- **Updated Deprecation Dates**: Updated deprecation dates and prices [PR](https://github.com/BerriAI/litellm/pull/10308)
+- **Deprecation Dates**: Added deprecation dates for Azure, VertexAI models [PR](https://github.com/BerriAI/litellm/pull/10308)
 
 ## Management Endpoints / UI
 
-### User Management
+#### Users
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
 - **Global Sorting/Filtering**: 
   - Added global filtering to Users tab [PR](https://github.com/BerriAI/litellm/pull/10195)
   - Enabled global sorting to find users with highest spend [PR](https://github.com/BerriAI/litellm/pull/10211)
   - Support for filtering by user ID [PR](https://github.com/BerriAI/litellm/pull/10322)
 
-### Teams & Keys Management
+#### Teams
 - **Team Filtering**: 
   - Added team-based filtering to the models page [PR](https://github.com/BerriAI/litellm/pull/10325)
   - Support for filtering by team ID and team name [PR](https://github.com/BerriAI/litellm/pull/10324)
+- **Team Model Selector**: Bug fix for team model selection [PR](https://github.com/BerriAI/litellm/pull/10171)
+
+#### Keys
 - **Key Management**: 
   - Support for cross-filtering and filtering by key hash [PR](https://github.com/BerriAI/litellm/pull/10322)
   - Fixed key alias reset when resetting filters [PR](https://github.com/BerriAI/litellm/pull/10099)
   - Fixed table rendering on key creation [PR](https://github.com/BerriAI/litellm/pull/10224)
 
-### Logs page
+#### Logs
 
 - **Session Logs**: Added UI Session Logs documentation [PR](https://github.com/BerriAI/litellm/pull/10334)
 
 
-### Authentication & Security
+#### Authentication & Security
 - **Required Authentication**: Authentication now required for all dashboard pages [PR](https://github.com/BerriAI/litellm/pull/10229)
 - **SSO Fixes**: Fixed SSO user login invalid token error [PR](https://github.com/BerriAI/litellm/pull/10298)
 - **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
 - **Token Expiry**: Added token expiry logic to user dashboard [PR](https://github.com/BerriAI/litellm/pull/10250)
 
-### UI Refinements
+#### UI Refinements
 - **Fixed UI Flicker**: Addressed UI flickering issues in Dashboard [PR](https://github.com/BerriAI/litellm/pull/10261)
 - **Improved Terminology**: Better loading and no-data states on Keys and Tools pages [PR](https://github.com/BerriAI/litellm/pull/10253)
-- **Team Model Selector**: Bug fix for team model selection [PR](https://github.com/BerriAI/litellm/pull/10171)
 - **Azure Model Support**: Fixed editing Azure public model names and changing model names after creation [PR](https://github.com/BerriAI/litellm/pull/10249)
 
 
