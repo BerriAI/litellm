@@ -28,7 +28,6 @@ from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
-
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -249,7 +248,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id = litellm_trace_id
+        self.litellm_trace_id: str = litellm_trace_id or str(uuid.uuid4())
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[Any] = (
@@ -3500,6 +3499,21 @@ class StandardLoggingPayloadSetup:
         else:
             return end_time_float - start_time_float
 
+    @staticmethod
+    def _get_standard_logging_payload_trace_id(
+        logging_obj: Logging,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Returns the `litellm_trace_id` for this request
+
+        This helps link sessions when multiple requests are made in a single session
+        """
+        dynamic_trace_id = litellm_params.get("litellm_trace_id")
+        if dynamic_trace_id:
+            return str(dynamic_trace_id)
+        return logging_obj.litellm_trace_id
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -3652,7 +3666,10 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
-            trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
+            trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
             call_type=call_type or "",
             cache_hit=cache_hit,
             stream=stream,
