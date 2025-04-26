@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock
+from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+from litellm.types.llms.openai import ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
 
 
 def test_redacted_thinking_content_block_delta():
@@ -36,3 +38,7 @@ def test_redacted_thinking_content_block_delta():
         model_response.choices[0].delta.thinking_blocks[0]["type"]
         == "redacted_thinking"
     )
+    
+    # Verify the fix from commit 59f457d79
+    assert model_response.choices[0].delta.provider_specific_fields is not None
+    assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
