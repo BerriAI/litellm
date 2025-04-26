@@ -29,21 +29,21 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
   return (
     <div className="space-y-6">
       {/* Header with back button */}
-      <div className="flex items-center justify-between">
+      <div className="mb-8">
         <div className="flex items-center space-x-4">
           <button
             onClick={onBack}
-            className="flex items-center text-gray-600 hover:text-gray-900"
+            className="flex items-center text-gray-600 hover:text-gray-900 transition-colors"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
             Back to All Logs
           </button>
-          <div>
-            <h1 className="text-xl font-semibold">Session Details</h1>
-            <p className="text-sm text-gray-500 font-mono">{sessionId}</p>
-          </div>
+        </div>
+        <div className="mt-4">
+          <h1 className="text-2xl font-semibold text-gray-900">Session Details</h1>
+          <p className="text-sm text-gray-500 font-mono mt-1">{sessionId}</p>
         </div>
       </div>
 
