@@ -685,6 +685,8 @@ class ProxyLogging:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
+
+        print("In slack alerting_handler")
         if self.alerting is None:
             return
 
@@ -715,6 +717,7 @@ class ProxyLogging:
                 alerting_metadata = request_data["metadata"]["alerting_metadata"]
         for client in self.alerting:
             if client == "slack":
+                print("Calling slacks send_alert")
                 await self.slack_alerting_instance.send_alert(
                     message=message,
                     level=level,
