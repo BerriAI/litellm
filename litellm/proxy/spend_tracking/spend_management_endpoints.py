@@ -2858,3 +2858,47 @@ async def ui_get_spend_by_tags(
         )
 
     return {"spend_per_tag": ui_tags}
+
+
+@router.get(
+    "/spend/logs/session/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_session_spend_logs(
+    session_id: str = fastapi.Query(
+        description="Get all spend logs for a particular session",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all spend logs for a particular session
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database not connected",
+            )
+
+        # Build query conditions
+        where_conditions = {"session_id": session_id}
+        # Query the database
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions, order={"startTime": "asc"}
+        )
+        return result
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
