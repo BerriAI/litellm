@@ -10,7 +10,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Tuple
+from typing import Tuple, Optional
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
@@ -164,7 +164,7 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[
     
     return current_time, timezone
 
-def _parse_duration(duration: str) -> Tuple[int, str]:
+def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
     """Parse the duration string into value and unit."""
     match = re.match(r"(\d+)([a-z]+)", duration)
     if not match:
