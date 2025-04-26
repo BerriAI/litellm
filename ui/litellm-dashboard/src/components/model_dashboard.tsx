@@ -1211,7 +1211,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       data={modelData.data.filter(
                         (model: any) => (
                           (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.team_id === selectedTeamFilter || !selectedTeamFilter)
+                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
                         )
                       )}
                       isLoading={false}
