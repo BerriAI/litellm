@@ -60,17 +60,28 @@ Let's dive in.
 ## Management Endpoints / UI
 
 #### Users
+- **Filtering and Searching**: 
+  - Filter users by user_id, role, team, sso_id 
+  - Search users by email
+
+  <br/>
+
+  <Image img={require('../../img/release_notes/user_filters.png')}/>
+
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
-- **Global Sorting/Filtering**: 
-  - Added global filtering to Users tab [PR](https://github.com/BerriAI/litellm/pull/10195)
-  - Enabled global sorting to find users with highest spend [PR](https://github.com/BerriAI/litellm/pull/10211)
-  - Support for filtering by user ID [PR](https://github.com/BerriAI/litellm/pull/10322)
+
+
 
 #### Teams
-- **Team Filtering**: 
-  - Added team-based filtering to the models page [PR](https://github.com/BerriAI/litellm/pull/10325)
-  - Support for filtering by team ID and team name [PR](https://github.com/BerriAI/litellm/pull/10324)
-- **Team Model Selector**: Bug fix for team model selection [PR](https://github.com/BerriAI/litellm/pull/10171)
+- **Filtering and Searching**: 
+    - Filter teams by Organization, Team ID [PR](https://github.com/BerriAI/litellm/pull/10324)
+    - Search teams by Team Name [PR](https://github.com/BerriAI/litellm/pull/10324)
+
+  <br/>
+
+  <Image img={require('../../img/release_notes/team_filters.png')}/>
+
+
 
 #### Keys
 - **Key Management**: 
@@ -78,21 +89,22 @@ Let's dive in.
   - Fixed key alias reset when resetting filters [PR](https://github.com/BerriAI/litellm/pull/10099)
   - Fixed table rendering on key creation [PR](https://github.com/BerriAI/litellm/pull/10224)
 
-#### Logs
+#### UI Logs Page
 
-- **Session Logs**: Added UI Session Logs documentation [PR](https://github.com/BerriAI/litellm/pull/10334)
+- **Session Logs**: Added UI Session Logs [Get Started](https://docs.litellm.ai/docs/proxy/ui_logs_sessions)
 
 
-#### Authentication & Security
+#### UI Authentication & Security
 - **Required Authentication**: Authentication now required for all dashboard pages [PR](https://github.com/BerriAI/litellm/pull/10229)
 - **SSO Fixes**: Fixed SSO user login invalid token error [PR](https://github.com/BerriAI/litellm/pull/10298)
 - **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
 - **Token Expiry**: Added token expiry logic to user dashboard [PR](https://github.com/BerriAI/litellm/pull/10250)
 
-#### UI Refinements
+#### UI General fixes
 - **Fixed UI Flicker**: Addressed UI flickering issues in Dashboard [PR](https://github.com/BerriAI/litellm/pull/10261)
 - **Improved Terminology**: Better loading and no-data states on Keys and Tools pages [PR](https://github.com/BerriAI/litellm/pull/10253)
 - **Azure Model Support**: Fixed editing Azure public model names and changing model names after creation [PR](https://github.com/BerriAI/litellm/pull/10249)
+- **Team Model Selector**: Bug fix for team model selection [PR](https://github.com/BerriAI/litellm/pull/10171)
 
 
 ## Logging / Guardrail Integrations
