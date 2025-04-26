@@ -848,10 +848,85 @@ export const teamInfoCall = async (
   }
 };
 
+type TeamListResponse = {
+  teams: Team[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+export const v2TeamListCall = async (
+  accessToken: String, 
+  organizationID: string | null,
+  userID: String | null = null,
+  teamID: string | null = null,
+  team_alias: string | null = null,
+  page: number = 1,
+  page_size: number = 10,
+  sort_by: string | null = null,
+  sort_order: 'asc' | 'desc' | null = null,
+): Promise<TeamListResponse> => {
+  /**
+   * Get list of teams with filtering and sorting options
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/team/list` : `/v2/team/list`;
+    console.log("in teamInfoCall");
+    const queryParams = new URLSearchParams();
+    
+    if (userID) {
+      queryParams.append('user_id', userID.toString());
+    }
+    
+    if (organizationID) {
+      queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (teamID) {
+      queryParams.append('team_id', teamID.toString());
+    }
+
+    if (team_alias) {
+      queryParams.append('team_alias', team_alias.toString());
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/v2/team/list API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
 export const teamListCall = async (
   accessToken: String, 
   organizationID: string | null,
   userID: String | null = null,
+  teamID: string | null = null,
+  team_alias: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -867,6 +942,14 @@ export const teamListCall = async (
     
     if (organizationID) {
       queryParams.append('organization_id', organizationID.toString());
+    }
+
+    if (teamID) {
+      queryParams.append('team_id', teamID.toString());
+    }
+
+    if (team_alias) {
+      queryParams.append('team_alias', team_alias.toString());
     }
     
     const queryString = queryParams.toString();
