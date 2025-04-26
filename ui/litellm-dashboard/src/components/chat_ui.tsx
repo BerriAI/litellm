@@ -451,11 +451,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
-                    ...modelInfo.map((option) => ({
-                      value: option.model_group,
-                      label: option.model_group
-                    })),
-                    { value: 'custom', label: 'Enter custom model' }
+                    ...Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index
+                      })),
+                    { value: 'custom', label: 'Enter custom model', key: 'custom' }
                   ]}
                   style={{ width: "100%" }}
                   showSearch={true}
