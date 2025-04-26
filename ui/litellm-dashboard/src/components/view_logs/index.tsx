@@ -633,14 +633,6 @@ export default function SpendLogsTable({
 
 function RequestViewer({ row }: { row: Row<LogEntry> }) {
   // Helper function to clean metadata by removing specific fields
-  const getCleanedMetadata = (metadata: any) => {
-    const cleanedMetadata = {...metadata};
-    if ('proxy_server_request' in cleanedMetadata) {
-      delete cleanedMetadata.proxy_server_request;
-    }
-    return cleanedMetadata;
-  };
-
   const formatData = (input: any) => {
     if (typeof input === "string") {
       try {
@@ -655,8 +647,8 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
   // New helper function to get raw request
   const getRawRequest = () => {
     // First check if proxy_server_request exists in metadata
-    if (row.original.metadata?.proxy_server_request) {
-      return formatData(row.original.metadata.proxy_server_request);
+    if (row.original?.proxy_server_request) {
+      return formatData(row.original.proxy_server_request);
     }
     // Fall back to messages if proxy_server_request is empty
     return formatData(row.original.messages);
@@ -849,8 +841,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <h3 className="text-lg font-medium">Metadata</h3>
             <button 
               onClick={() => {
-                const cleanedMetadata = getCleanedMetadata(row.original.metadata);
-                navigator.clipboard.writeText(JSON.stringify(cleanedMetadata, null, 2));
+                navigator.clipboard.writeText(JSON.stringify(row.original.metadata, null, 2));
               }}
               className="p-1 hover:bg-gray-200 rounded"
               title="Copy metadata"
@@ -863,7 +854,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
           <div className="p-4 overflow-auto max-h-64">
             <pre className="text-xs font-mono whitespace-pre-wrap break-all">
-              {JSON.stringify(getCleanedMetadata(row.original.metadata), null, 2)}
+              {JSON.stringify(row.original.metadata, null, 2)}
             </pre>
           </div>
         </div>

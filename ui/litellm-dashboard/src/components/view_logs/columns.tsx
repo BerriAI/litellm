@@ -45,6 +45,8 @@ export type LogEntry = {
   requester_ip_address?: string;
   messages: string | any[] | Record<string, any>;
   response: string | any[] | Record<string, any>;
+  proxy_server_request?: string | any[] | Record<string, any>;
+  session_id?: string;
   onKeyHashClick?: (keyHash: string) => void;
 };
 
@@ -118,6 +120,17 @@ export const columns: ColumnDef<LogEntry>[] = [
         </span>
       );
     },
+  },
+  {
+    header: "Session ID",
+    accessorKey: "session_id",
+    cell: (info: any) => (
+      <Tooltip title={String(info.getValue() || "")}>
+        <span className="font-mono text-xs max-w-[15ch] truncate block">
+          {String(info.getValue() || "")}
+        </span>
+      </Tooltip>
+    ),
   },
   {
     header: "Request ID",
