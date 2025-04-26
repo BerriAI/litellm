@@ -137,6 +137,7 @@ class LiteLLMCompletionResponsesConfig:
             GenericChatCompletionMessage,
             ChatCompletionMessageToolCall,
             ChatCompletionResponseMessage,
+            Message,
         ]
     ]:
         """
@@ -148,6 +149,7 @@ class LiteLLMCompletionResponsesConfig:
                 GenericChatCompletionMessage,
                 ChatCompletionMessageToolCall,
                 ChatCompletionResponseMessage,
+                Message,
             ]
         ] = []
         if responses_api_request.get("instructions"):

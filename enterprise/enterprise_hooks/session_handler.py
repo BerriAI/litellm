@@ -3,7 +3,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from typing import Optional, List, Union
 import json
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Message
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -16,7 +16,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from typing import TypedDict
 
 class ChatCompletionSession(TypedDict, total=False):
-    messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionMessageToolCall, ChatCompletionResponseMessage]]
+    messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, Message]]
     litellm_session_id: Optional[str]
 
 class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
@@ -43,6 +43,7 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
                 GenericChatCompletionMessage,
                 ChatCompletionMessageToolCall,
                 ChatCompletionResponseMessage,
+                Message,
             ]
         ] = []
         for spend_log in all_spend_logs:
@@ -54,8 +55,9 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
             else:
                 proxy_server_request_dict = json.loads(proxy_server_request)
             
-            
-            # Get Response Input Param from `proxy_server_request`
+            ############################################################
+            # Add Input messages for this Spend Log
+            ############################################################
             if proxy_server_request_dict:
                 _response_input_param = proxy_server_request_dict.get("input", None)
                 if isinstance(_response_input_param, str):
@@ -63,19 +65,24 @@ class _ENTERPRISE_ResponsesSessionHandler(CustomLogger):
                 elif isinstance(_response_input_param, dict):
                     response_input_param = ResponseInputParam(**_response_input_param)
             
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=response_input_param,
-                responses_api_request=dict(proxy_server_request_dict)
-            )
-            chat_completion_message_history.extend(chat_completion_messages)
+            if response_input_param:
+                chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=response_input_param,
+                    responses_api_request=proxy_server_request_dict or {}
+                )
+                chat_completion_message_history.extend(chat_completion_messages)
             
-            # Get Response Output from `spend_log`
+            ############################################################
+            # Add Output messages for this Spend Log
+            ############################################################
             _response_output = spend_log.get("response", "{}")
             if isinstance(_response_output, dict):
                 # transform `ChatCompletion Response` to `ResponsesAPIResponse`
                 model_response = ModelResponse(**_response_output)
                 for choice in model_response.choices:
-                    chat_completion_message_history.append(choice.message)
+                    if hasattr(choice, "message"):
+                        chat_completion_message_history.append(choice.message)
+        
         verbose_proxy_logger.debug("chat_completion_message_history %s", json.dumps(chat_completion_message_history, indent=4, default=str))
         return ChatCompletionSession(
             messages=chat_completion_message_history,
