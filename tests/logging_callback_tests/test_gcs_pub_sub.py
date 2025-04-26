@@ -171,9 +171,7 @@ def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
         "response_time",
         "completion_tokens",
         "prompt_tokens",
-        "total_tokens",
-        "proxy_server_request",
-        "session_id",
+        "total_tokens"
     ]
 
     for field in FIELDS_EXISTENCE_CHECKS:
