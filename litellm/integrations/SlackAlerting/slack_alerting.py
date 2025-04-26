@@ -1375,6 +1375,7 @@ Model Info:
                 webhook_event=user_info, alert_type=alert_type
             )
 
+        print("slack in send_alert")
         if "slack" not in self.alerting:
             return
         if alert_type not in self.alert_types:
@@ -1419,6 +1420,7 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
+        print("slack url before log_queue {slack_webhook_url}")
         if isinstance(slack_webhook_url, list):
             for url in slack_webhook_url:
                 self.log_queue.append(
