@@ -42,7 +42,7 @@ Let's dive in.
     1. Fixed passing back Gemini thinking content to API [PR](https://github.com/BerriAI/litellm/pull/10173)
     2. Various Gemini-2.5-flash improvements [PR](https://github.com/BerriAI/litellm/pull/10198)
 - **Cohere**
-    1. Added support for cohere command-a-03-2025 [PR](https://github.com/BerriAI/litellm/pull/10295)
+    1. Added support for cohere command-a-03-2025 [Get Started](https://docs.litellm.ai/docs/providers/cohere), [PR](https://github.com/BerriAI/litellm/pull/10295)
 - **SageMaker**
     1. Added support for max_completion_tokens parameter [PR](https://github.com/BerriAI/litellm/pull/10300)
 
