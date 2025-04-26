@@ -30,7 +30,7 @@ Let's dive in.
 ## New Models / Updated Models
 
 - **OpenAI**
-    1. Added gpt-image-1 cost tracking [PR](https://github.com/BerriAI/litellm/pull/10241)
+    1. Added `gpt-image-1` cost tracking [Get Started](https://docs.litellm.ai/docs/image_generation)
     2. Added cost tracking for gpt-image-1 when quality is unspecified [PR](https://github.com/BerriAI/litellm/pull/10247)
 - **Azure**
     1. Added azure/gpt-image-1 pricing [PR](https://github.com/BerriAI/litellm/pull/10327)
