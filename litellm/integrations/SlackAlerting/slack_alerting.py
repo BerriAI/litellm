@@ -1422,6 +1422,7 @@ Model Info:
 
         print(f"slack url before log_queue {slack_webhook_url}")
         print(f"slack payload {payload}")
+        print(f"slack batchsize {self.batch_size}")
         if isinstance(slack_webhook_url, list):
             for url in slack_webhook_url:
                 self.log_queue.append(
