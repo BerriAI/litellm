@@ -204,4 +204,117 @@ response2 = litellm.completion(
 </TabItem>
 </Tabs>
 
-## `/responses`
+### `/responses`
+
+For the `/responses` endpoint, use `previous_response_id` to group requests into a session. The `previous_response_id` is returned in the response of each request.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+**Request 1**
+Make the initial request and store the response ID for linking follow-up requests.
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="<your litellm api key>",
+    base_url="http://0.0.0.0:4000"
+)
+
+# First request in session
+response1 = client.responses.create(
+    model="anthropic/claude-3-sonnet-20240229-v1:0",
+    input="Write a short story about a robot"
+)
+
+# Store the response ID for the next request
+response_id = response1.id
+```
+
+**Request 2**
+Make a follow-up request using the previous response ID to maintain the conversation context.
+
+```python showLineNumbers
+# Second request using previous response ID
+response2 = client.responses.create(
+    model="anthropic/claude-3-sonnet-20240229-v1:0",
+    input="Now write a poem about that robot",
+    previous_response_id=response_id  # Link to previous request
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+**Request 1**
+Make the initial request. The response will include an ID that can be used to link follow-up requests.
+
+```bash showLineNumbers
+# Store your API key
+API_KEY="<your litellm api key>"
+
+# First request in session
+curl http://localhost:4000/v1/responses \
+    --header 'Content-Type: application/json' \
+    --header "Authorization: Bearer $API_KEY" \
+    --data '{
+        "model": "anthropic/claude-3-sonnet-20240229-v1:0",
+        "input": "Write a short story about a robot"
+    }'
+
+# Response will include an 'id' field that you'll use in the next request
+```
+
+**Request 2**
+Make a follow-up request using the previous response ID to maintain the conversation context.
+
+```bash showLineNumbers
+# Second request using previous response ID
+curl http://localhost:4000/v1/responses \
+    --header 'Content-Type: application/json' \
+    --header "Authorization: Bearer $API_KEY" \
+    --data '{
+        "model": "anthropic/claude-3-sonnet-20240229-v1:0",
+        "input": "Now write a poem about that robot",
+        "previous_response_id": "resp_abc123..."  # Replace with actual response ID from previous request
+    }'
+```
+
+</TabItem>
+<TabItem value="litellm" label="LiteLLM Python SDK">
+
+**Request 1**
+Make the initial request and store the response ID for linking follow-up requests.
+
+```python showLineNumbers
+import litellm
+
+# First request in session
+response1 = litellm.responses(
+    model="anthropic/claude-3-sonnet-20240229-v1:0",
+    input="Write a short story about a robot",
+    api_base="http://0.0.0.0:4000",
+    api_key="<your litellm api key>"
+)
+
+# Store the response ID for the next request
+response_id = response1.id
+```
+
+**Request 2**
+Make a follow-up request using the previous response ID to maintain the conversation context.
+
+```python showLineNumbers
+# Second request using previous response ID
+response2 = litellm.responses(
+    model="anthropic/claude-3-sonnet-20240229-v1:0",
+    input="Now write a poem about that robot",
+    api_base="http://0.0.0.0:4000",
+    api_key="<your litellm api key>",
+    previous_response_id=response_id  # Link to previous request
+)
+```
+
+</TabItem>
+</Tabs>
