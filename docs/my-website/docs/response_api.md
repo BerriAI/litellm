@@ -732,3 +732,206 @@ follow_up = client.responses.create(
 
 </TabItem>
 </Tabs>
+
+## Session Management - Non-OpenAI Models
+
+LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+
+#### Usage
+
+1. Enable storing request / response content in the database
+
+Set `store_prompts_in_spend_logs: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the database.
+
+```yaml
+general_settings:
+  store_prompts_in_spend_logs: true
+```
+
+2. Make request 1 with no `previous_response_id` (new session)
+
+Start a new conversation by making a request without specifying a previous response ID.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "who is Michael Jordan"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make initial request to start a new conversation
+response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="who is Michael Jordan"
+)
+
+print(response.id)  # Store this ID for future requests in same session
+print(response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_123abc",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan is widely considered one of the greatest basketball players of all time. He played for the Chicago Bulls (1984-1993, 1995-1998) and Washington Wizards (2001-2003), winning 6 NBA Championships with the Bulls."
+    }]
+  }]
+}
+```
+
+3. Make request 2 with `previous_response_id` (same session)
+
+Continue the conversation by referencing the previous response ID to maintain conversation context.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him",
+    "previous_response_id": "resp_123abc"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make follow-up request in the same conversation session
+follow_up_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him",
+    previous_response_id="resp_123abc"  # ID from the previous response
+)
+
+print(follow_up_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_456def",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan was born February 17, 1963. He attended University of North Carolina before being drafted 3rd overall by the Bulls in 1984. Beyond basketball, he built the Air Jordan brand with Nike and later became owner of the Charlotte Hornets."
+    }]
+  }]
+}
+```
+
+4. Make request 3 with no `previous_response_id` (new session)
+
+Start a brand new conversation without referencing previous context to demonstrate how context is not maintained between sessions.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make a new request without previous context
+new_session_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him"
+    # No previous_response_id means this starts a new conversation
+)
+
+print(new_session_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_789ghi",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"I don't see who you're referring to in our conversation. Could you let me know which person you'd like to learn more about?"
+    }]
+  }]
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
