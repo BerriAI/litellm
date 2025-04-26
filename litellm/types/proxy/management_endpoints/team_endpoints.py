@@ -41,5 +41,7 @@ class TeamListResponse(BaseModel):
     """Response to get the list of teams"""
 
     teams: List[LiteLLM_TeamTable]
-    total_count: int
+    total: int
+    page: int
+    page_size: int
     total_pages: int

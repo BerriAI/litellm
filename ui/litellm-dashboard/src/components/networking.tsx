@@ -850,7 +850,9 @@ export const teamInfoCall = async (
 
 type TeamListResponse = {
   teams: Team[];
-  total_count: number;
+  total: number;
+  page: number;
+  page_size: number;
   total_pages: number;
 };
 
