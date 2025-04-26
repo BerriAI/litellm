@@ -38,13 +38,13 @@ Let's dive in.
 - **Bedrock**
     1. Added support for all compatible Bedrock parameters when model="arn:.." (Bedrock application inference profile models) [Get started](https://docs.litellm.ai/docs/providers/bedrock#bedrock-application-inference-profile), [PR](https://github.com/BerriAI/litellm/pull/10256)
     2. Fixed wrong system prompt transformation [PR](https://github.com/BerriAI/litellm/pull/10120)
-- **Gemini**
-    1. Fixed passing back Gemini thinking content to API [PR](https://github.com/BerriAI/litellm/pull/10173)
-    2. Various Gemini-2.5-flash improvements [PR](https://github.com/BerriAI/litellm/pull/10198)
+- **VertexAI / Google AI Studio**
+    1. Allow setting `budget_tokens=0` for `gemini-2.5-flash` [Get Started](https://docs.litellm.ai/docs/providers/gemini#usage---thinking--reasoning_content),[PR](https://github.com/BerriAI/litellm/pull/10198)
+    2. Ensure returned `usage` includes thinking token usage [PR](https://github.com/BerriAI/litellm/pull/10198)
 - **Cohere**
     1. Added support for cohere command-a-03-2025 [Get Started](https://docs.litellm.ai/docs/providers/cohere), [PR](https://github.com/BerriAI/litellm/pull/10295)
 - **SageMaker**
-    1. Added support for max_completion_tokens parameter [PR](https://github.com/BerriAI/litellm/pull/10300)
+    1. Added support for max_completion_tokens parameter [Get Started](https://docs.litellm.ai/docs/providers/sagemaker), [PR](https://github.com/BerriAI/litellm/pull/10300)
 
 
 ## Spend Tracking Improvements
