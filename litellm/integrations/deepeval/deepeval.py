@@ -39,7 +39,8 @@ class DeepEvalLogger(CustomLogger):
                     output=output
                 )
             )
-            # raise Exception(error_str)
+            #TODO: subject to change with next update in tracing
+            raise Exception(error_str)
         
         send_litellm_message_failure_trace(
             input=_prepare_input_str(kwargs["input"]),
@@ -128,7 +129,7 @@ class DeepEvalLogger(CustomLogger):
         ):
             update_current_span_attributes(
                 ToolAttributes(
-                    # TODO: input and output subject to change with next update in tracing
+                    # TODO: input and output subject to change with next update in tracing failure
                     input_parameters=input_parameters,
                     output=output           
                 )
