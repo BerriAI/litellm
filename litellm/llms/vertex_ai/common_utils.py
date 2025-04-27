@@ -192,6 +192,21 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    # Handle empty items objects
+    def process_items(schema):
+        if isinstance(schema, dict):
+            if "items" in schema and schema["items"] == {}:
+                schema["items"] = {"type": "object"}
+            for key, value in schema.items():
+                if isinstance(value, dict):
+                    process_items(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            process_items(item)
+
+    process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
@@ -199,6 +214,7 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     if add_property_ordering:
         set_schema_property_ordering(parameters)
+
     return parameters
 
 
@@ -285,6 +301,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
+            elif "type" not in atype and len(atype) == 0:
+                # Handle empty object case
+                atype["type"] = "object"
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -296,6 +315,13 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
+                # Remove items field if type is array and items is empty
+                if (
+                    atype.get("type") == "array"
+                    and "items" in atype
+                    and not atype["items"]
+                ):
+                    atype.pop("items")
                 atype["nullable"] = True
 
     properties = schema.get("properties", None)

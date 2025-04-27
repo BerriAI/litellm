@@ -164,3 +164,90 @@ def test_set_schema_property_ordering_with_excessive_nesting():
         match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
     ):
         set_schema_property_ordering(schema)
+
+
+def test_build_vertex_schema():
+    """Test build_vertex_schema with a sample schema"""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "properties": {
+            "state": {
+                "properties": {
+                    "messages": {"items": {}, "type": "array"},
+                    "conversation_id": {"type": "string"},
+                },
+                "required": ["messages", "conversation_id"],
+                "type": "object",
+            },
+            "config": {
+                "description": "Configuration for a Runnable.",
+                "properties": {
+                    "tags": {"items": {"type": "string"}, "type": "array"},
+                    "metadata": {"type": "object"},
+                    "callbacks": {
+                        "anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]
+                    },
+                    "run_name": {"type": "string"},
+                    "max_concurrency": {
+                        "anyOf": [{"type": "integer"}, {"type": "null"}]
+                    },
+                    "recursion_limit": {"type": "integer"},
+                    "configurable": {"type": "object"},
+                    "run_id": {
+                        "anyOf": [
+                            {"format": "uuid", "type": "string"},
+                            {"type": "null"},
+                        ]
+                    },
+                },
+                "type": "object",
+            },
+            "kwargs": {"default": None, "type": "object"},
+        },
+        "required": ["state", "config"],
+        "type": "object",
+    }
+
+    expected_output = {
+        "properties": {
+            "state": {
+                "properties": {
+                    "messages": {"items": {"type": "object"}, "type": "array"},
+                    "conversation_id": {"type": "string"},
+                },
+                "required": ["messages", "conversation_id"],
+                "type": "object",
+            },
+            "config": {
+                "description": "Configuration for a Runnable.",
+                "properties": {
+                    "tags": {"items": {"type": "string"}, "type": "array"},
+                    "metadata": {"type": "object"},
+                    "callbacks": {
+                        "anyOf": [
+                            {"type": "array", "nullable": True},
+                            {"type": "object", "nullable": True},
+                        ]
+                    },
+                    "run_name": {"type": "string"},
+                    "max_concurrency": {
+                        "anyOf": [{"type": "integer", "nullable": True}]
+                    },
+                    "recursion_limit": {"type": "integer"},
+                    "configurable": {"type": "object"},
+                    "run_id": {
+                        "anyOf": [
+                            {"format": "uuid", "type": "string", "nullable": True}
+                        ]
+                    },
+                },
+                "type": "object",
+            },
+            "kwargs": {"default": None, "type": "object"},
+        },
+        "required": ["state", "config"],
+        "type": "object",
+    }
+
+    assert _build_vertex_schema(parameters) == expected_output
