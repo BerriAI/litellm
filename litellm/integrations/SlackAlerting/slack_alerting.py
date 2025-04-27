@@ -89,6 +89,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[Router] = None,
     ):
+        print("Slack alerting update_values called")
         if alerting is not None:
             self.alerting = alerting
         if alerting_threshold is not None:
