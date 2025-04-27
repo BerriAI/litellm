@@ -1,5 +1,5 @@
 ---
-title: v1.67.4-stable
+title: v1.67.4-stable - Improved User Management
 slug: v1.67.4-stable
 date: 2025-04-26T10:00:00
 authors:
@@ -44,7 +44,7 @@ pip install litellm==1.67.4.post1
 
 ## Key Highlights
 
-- **Improved UI Usability and Security**: This release brings usability and security improvements to the Admin UI, making it easier to manage access across 200+ users. 
+- **Improved User Management**: This release enables search and filtering across users, keys, teams, and models. 
 - **Responses API Load Balancing**: Route requests across provider regions and ensure session continuity. 
 - **UI Session Logs**: Group several requests to LiteLLM into a session. 
 
