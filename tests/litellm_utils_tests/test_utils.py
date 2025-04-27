@@ -2180,3 +2180,50 @@ def test_get_valid_models_from_dynamic_api_key():
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
     
     
+def test_anthropic_tokenizer_json_utf8_readable(monkeypatch):
+    """
+    Test that UTF-8 strings in anthropic_tokenizer.json are correctly read
+    """
+    import sys
+    import types
+    import json
+
+    # JSON with UTF-8 strings for testing
+    test_json_content = '{"test": "日本語テキスト"}'
+
+    # Mock resources.files(...).joinpath(...).open(...)
+    class DummyFile:
+        def __enter__(self):
+            import io
+            return io.StringIO(test_json_content)
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    class DummyPath:
+        def open(self, mode, encoding=None):
+            assert encoding == "utf-8"
+            return DummyFile()
+
+    class DummyFiles:
+        def joinpath(self, filename):
+            assert filename == "anthropic_tokenizer.json"
+            return DummyPath()
+
+    class DummyResources:
+        @staticmethod
+        def files(pkg):
+            assert pkg == "litellm.litellm_core_utils.tokenizers"
+            return DummyFiles()
+
+    # Mock the resources module
+    monkeypatch.setattr("litellm.utils.resources", DummyResources)
+
+    # Reload utils.py to apply the monkeypatched resources
+    import importlib
+    import litellm.utils
+    importlib.reload(litellm.utils)
+
+    # Verify that json_data was read correctly
+    assert hasattr(litellm.utils, "json_data")
+    assert litellm.utils.json_data["test"] == "日本語テキスト"
+
