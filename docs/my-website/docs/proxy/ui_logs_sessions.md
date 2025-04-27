@@ -13,7 +13,7 @@ Group requests into sessions. This allows you to group related requests together
 
 ### `/chat/completions`
 
-To group multiple requests into a single session, pass the same `litellm_trace_id` in the metadata for each request. Here's how to do it:
+To group multiple requests into a single session, pass the same `litellm_session_id` in the metadata for each request. Here's how to do it:
 
 <Tabs>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
@@ -44,7 +44,7 @@ response1 = client.chat.completions.create(
     ],
     extra_body={
         "metadata": {
-            "litellm_trace_id": session_id  # Pass the session ID
+            "litellm_session_id": session_id  # Pass the session ID
         }
     }
 )
@@ -65,7 +65,7 @@ response2 = client.chat.completions.create(
     ],
     extra_body={
         "metadata": {
-            "litellm_trace_id": session_id  # Reuse the same session ID
+            "litellm_session_id": session_id  # Reuse the same session ID
         }
     }
 )
@@ -90,7 +90,7 @@ chat = ChatOpenAI(
     model="gpt-4o",
     extra_body={
         "metadata": {
-            "litellm_trace_id": session_id  # Pass the session ID
+            "litellm_session_id": session_id  # Pass the session ID
         }
     }
 )
@@ -133,7 +133,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }
     ],
     "metadata": {
-        "litellm_trace_id": "'$SESSION_ID'"
+        "litellm_session_id": "'$SESSION_ID'"
     }
 }'
 ```
@@ -155,7 +155,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }
     ],
     "metadata": {
-        "litellm_trace_id": "'$SESSION_ID'"
+        "litellm_session_id": "'$SESSION_ID'"
     }
 }'
 ```
@@ -180,7 +180,7 @@ response1 = litellm.completion(
     api_base="http://0.0.0.0:4000",
     api_key="<your litellm api key>",
     metadata={
-        "litellm_trace_id": session_id  # Pass the session ID
+        "litellm_session_id": session_id  # Pass the session ID
     }
 )
 ```
@@ -196,7 +196,7 @@ response2 = litellm.completion(
     api_base="http://0.0.0.0:4000",
     api_key="<your litellm api key>",
     metadata={
-        "litellm_trace_id": session_id  # Reuse the same session ID
+        "litellm_session_id": session_id  # Reuse the same session ID
     }
 )
 ```
