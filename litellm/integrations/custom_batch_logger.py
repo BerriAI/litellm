@@ -42,17 +42,14 @@ class CustomBatchLogger(CustomLogger):
             await self.flush_queue()
 
     async def flush_queue(self):
-        print(f"flushing queue: {self.flush_lock}")
         if self.flush_lock is None:
             return
 
-        print(f"Flush waiting on lock")
         async with self.flush_lock:
             if self.log_queue:
                 verbose_logger.debug(
                     "CustomLogger: Flushing batch of %s events", len(self.log_queue)
                 )
-                print("calling send_batch")
                 await self.async_send_batch()
                 self.log_queue.clear()
                 self.last_flush_time = time.time()

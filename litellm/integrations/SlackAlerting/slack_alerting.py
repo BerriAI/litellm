@@ -90,7 +90,6 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[Router] = None,
     ):
-        print(f"Slack alerting update_values called, {alerting}: {alert_types}: {alerting_args}: {alert_to_webhook_url}: {llm_router}")
         if alerting is not None:
             self.alerting = alerting
             asyncio.create_task(self.periodic_flush())
@@ -102,7 +101,6 @@ class SlackAlerting(CustomBatchLogger):
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
             if not self.periodic_started: 
-                print("Slack creating periodic flush task")
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
                 
@@ -1427,7 +1425,6 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
-        print(f"slack url before log_queue {slack_webhook_url}")
         if isinstance(slack_webhook_url, list):
             for url in slack_webhook_url:
                 self.log_queue.append(
