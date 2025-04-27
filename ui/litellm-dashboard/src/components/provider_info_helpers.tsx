@@ -51,7 +51,7 @@ export const provider_map: Record<string, string> = {
     Cerebras: "cerebras",
     Sambanova: "sambanova",
     Perplexity: "perplexity",
-    TogetherAI: "togetherai",
+    TogetherAI: "together_ai",
     Openrouter: "openrouter",
     FireworksAI: "fireworks_ai"
 };
