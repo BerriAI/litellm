@@ -4,13 +4,6 @@ from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionResponseMessage,
-    GenericChatCompletionMessage,
-    ResponseInputParam,
-)
-from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
