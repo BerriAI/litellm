@@ -19,36 +19,8 @@ variables:
   no_proxy: artifactory.photon.thalescloud.io,gitlab.photon.thalescloud.io,.local,localhost,127.0.0.1,github.com # Added github.com to no_proxy if direct access is needed/allowed, adjust if necessary
 
 stages:
-  - update # Add update stage
   - version
   - build
-
-# Job to update from the upstream LiteLLM repository
-Update from LiteLLM:
-  stage: update
-  tags:
-    - new_photon_runners # Use appropriate runner tags
-  variables:
-    # Ensure GIT_PUSH_TOKEN is configured as a protected CI/CD variable in GitLab
-    GIT_STRATEGY: clone # Ensure a clean clone for this job
-  script:
-    # Explicitly configure Git to use the proxy defined in global variables
-    - git config --global http.proxy $HTTP_PROXY
-    - git config --global https.proxy $HTTPS_PROXY
-    - git config --global user.email "ccoe-dis@thalesgroup.com" # Use your desired commit email
-    - git config --global user.name "Thales DIS CCoE CI" # Use your desired commit author name
-    - git remote add github https://github.com/BerriAI/litellm.git # Add upstream repo via HTTPS
-    - git fetch -v github main # Fetch only the main branch
-    - git checkout -B litellm-updates # Create/reset the update branch
-    - git reset --hard github/main # Reset local branch to match upstream main
-    # Push forcefully to the GitLab repo's update branch
-    # Ensure GIT_PUSH_TOKEN has write access
-    - git push "https://gitlab-ci-token:${GIT_PUSH_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" HEAD:litellm-updates --force
-  only:
-    # Trigger this job on schedules or manually via 'feature' branch (adjust as needed)
-    - schedules
-    - feature # Allows manual trigger if you push to a branch named 'feature'
-
 
 # Job to generate the version tag based on timestamp
 Generate Version:
