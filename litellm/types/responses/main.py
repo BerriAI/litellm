@@ -1,23 +1,16 @@
 from typing import List, Literal, Optional, Union
 
 from pydantic import PrivateAttr
-from typing_extensions import TYPE_CHECKING, Any, List, Optional, TypedDict
+from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-
-if TYPE_CHECKING:
-    from litellm.types.llms.openai import (
-        AllMessageValues,
-        ChatCompletionResponseMessage,
-        GenericChatCompletionMessage,
-    )
-    from litellm.types.utils import ChatCompletionMessageToolCall, Message
-else:
-    Message = Any
-    ChatCompletionMessageToolCall = Any
-    AllMessageValues = Any
-    ChatCompletionResponseMessage = Any
-    GenericChatCompletionMessage = Any
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionResponseMessage,
+    GenericChatCompletionMessage,
+    ResponseInputParam,
+)
+from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
@@ -88,16 +81,3 @@ class DecodedResponseId(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     model_id: Optional[str]
     response_id: str
-
-
-class ChatCompletionSession(TypedDict, total=False):
-    messages: List[
-        Union[
-            AllMessageValues,
-            GenericChatCompletionMessage,
-            ChatCompletionMessageToolCall,
-            ChatCompletionResponseMessage,
-            Message,
-        ]
-    ]
-    litellm_session_id: Optional[str]
