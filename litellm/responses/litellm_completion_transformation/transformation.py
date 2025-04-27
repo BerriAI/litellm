@@ -9,7 +9,6 @@ from typing_extensions import TypedDict
 
 HAS_ENTERPRISE_DIRECTORY = False
 try:
-    import enterprise
     from enterprise.enterprise_hooks.session_handler import (
         _ENTERPRISE_ResponsesSessionHandler,
     )
