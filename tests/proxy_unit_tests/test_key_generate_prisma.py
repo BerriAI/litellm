@@ -1361,8 +1361,15 @@ def test_generate_and_update_key(prisma_client):
             )
             current_time = datetime.now(timezone.utc)
 
-            # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 27
+            # Calculate days until end of current month
+            if current_time.month == 12:
+                end_of_month = datetime(current_time.year + 1, 1, 1, tzinfo=timezone.utc)
+            else:
+                end_of_month = datetime(current_time.year, current_time.month + 1, 1, tzinfo=timezone.utc)
+            days_until_end_of_month = (end_of_month - current_time).days - 1
+
+            # assert budget_reset_at is at the end of the current month
+            assert days_until_end_of_month >= (budget_reset_at - current_time).days >= days_until_end_of_month - 2 # handle time zone differences
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
