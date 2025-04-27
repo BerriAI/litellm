@@ -44,11 +44,45 @@ pip install litellm==1.67.4.post1
 
 ## Key Highlights
 
-- **Improved User Management**: This release enables search and filtering across users, keys, teams, and models. 
+- **Improved User Management**: This release enables search and filtering across users, keys, teams, and models.
 - **Responses API Load Balancing**: Route requests across provider regions and ensure session continuity. 
 - **UI Session Logs**: Group several requests to LiteLLM into a session. 
 
+## Improved User Management
 
+<Image img={require('../../img/release_notes/ui_search_users.png')}/>
+<br/>
+
+This release makes it easier to manage users and keys on LiteLLM. You can now search and filter across users, keys, teams, and models, and control user settings more easily.
+
+New features include:
+
+- Search for users by email, ID, role, or team.
+- See all of a user's models, teams, and keys in one place.
+- Change user roles and model access right from the Users Tab.
+
+These changes help you spend less time on user setup and management on LiteLLM.
+
+## Responses API Load Balancing
+
+<Image img={require('../../img/release_notes/ui_responses_lb.png')}/>
+<br/>
+
+This release introduces load balancing for the Responses API, allowing you to route requests across provider regions and ensure session continuity. It works as follows:
+
+- If a `previous_response_id` is provided, LiteLLM will route the request to the original deployment that generated the prior response — ensuring session continuity.
+- If no `previous_response_id` is provided, LiteLLM will load-balance requests across your available deployments.
+
+[Read more](https://docs.litellm.ai/docs/response_api#load-balancing-with-session-continuity)
+
+## UI Session Logs
+
+<Image img={require('../../img/ui_session_logs.png')}/>
+<br/>
+
+This release allow you to group requests to LiteLLM proxy into a session. If you specify a litellm_session_id in your request LiteLLM will automatically group all logs in the same session. This allows you to easily track usage and request content per session. 
+
+[Read more](https://docs.litellm.ai/docs/proxy/ui_logs_sessions)
 
 ## New Models / Updated Models
 
