@@ -1179,6 +1179,7 @@ def completion(  # type: ignore # noqa: PLR0915
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
             litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_session_id=kwargs.get("litellm_session_id"),
             hf_model_name=hf_model_name,
             custom_prompt_dict=custom_prompt_dict,
             litellm_metadata=kwargs.get("litellm_metadata"),
