@@ -78,6 +78,7 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
+        self.periodic_started = False
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -92,12 +93,19 @@ class SlackAlerting(CustomBatchLogger):
         print(f"Slack alerting update_values called, {alerting}: {alert_types}: {alerting_args}: {alert_to_webhook_url}: {llm_router}")
         if alerting is not None:
             self.alerting = alerting
+            asyncio.create_task(self.periodic_flush())
+            self.periodic_started = True
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
+            if not self.periodic_started: 
+                print("Slack creating periodic flush task")
+                asyncio.create_task(self.periodic_flush())
+                self.periodic_started = True
+                
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -114,8 +122,6 @@ class SlackAlerting(CustomBatchLogger):
                 self.alert_to_webhook_url.update(_new_values)
         if llm_router is not None:
             self.llm_router = llm_router
-            print("Slack creating periodic flush task")
-            asyncio.create_task(self.periodic_flush())
 
     async def deployment_in_cooldown(self):
         pass
