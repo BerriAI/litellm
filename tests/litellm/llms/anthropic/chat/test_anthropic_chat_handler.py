@@ -2,7 +2,6 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock
-from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +11,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
-from litellm.types.llms.openai import ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
 
 
 def test_redacted_thinking_content_block_delta():
