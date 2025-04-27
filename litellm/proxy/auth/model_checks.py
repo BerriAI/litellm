@@ -32,7 +32,8 @@ def get_provider_models(
     Returns the list of known models by provider
     """
     if model == "*":
-        custom_llm_provider = litellm_params.model.split("/")[0]
+        custom_llm_provider = litellm_params.model.split("/", maxsplit=1)[0] \
+            if litellm_params and litellm_params.model and "/" in litellm_params.model else None
         return get_valid_models(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
 
     if provider in litellm.models_by_provider:
