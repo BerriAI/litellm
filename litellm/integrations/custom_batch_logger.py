@@ -46,6 +46,7 @@ class CustomBatchLogger(CustomLogger):
         if self.flush_lock is None:
             return
 
+        print(f"Flush waiting on lock")
         async with self.flush_lock:
             if self.log_queue:
                 verbose_logger.debug(

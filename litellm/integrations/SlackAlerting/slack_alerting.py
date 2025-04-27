@@ -91,6 +91,7 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
+            print("Slack creating periodic flush task")
             asyncio.create_task(self.periodic_flush())
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
@@ -1375,7 +1376,6 @@ Model Info:
                 webhook_event=user_info, alert_type=alert_type
             )
 
-        print("slack in send_alert")
         if "slack" not in self.alerting:
             return
         if alert_type not in self.alert_types:
@@ -1421,8 +1421,6 @@ Model Info:
         headers = {"Content-type": "application/json"}
 
         print(f"slack url before log_queue {slack_webhook_url}")
-        print(f"slack payload {payload}")
-        print(f"slack batchsize {self.batch_size}")
         if isinstance(slack_webhook_url, list):
             for url in slack_webhook_url:
                 self.log_queue.append(
