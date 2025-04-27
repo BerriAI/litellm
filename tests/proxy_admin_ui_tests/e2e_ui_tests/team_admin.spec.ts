@@ -324,6 +324,7 @@ test.describe("team admin ui test", async () => {
     //Locate the delete button in the last row
     await invitedUserPage?.locator('table tbody tr:last-child td:nth-child(4) span.tremor-Icon-root').last().click();
 
+    //TODO: Add, edit and delete model in team. Able to see all team models in test key dropdown.
     // //Add model
     // //Go to models
     // await invitedUserPage.goto("http://localhost:4000/ui?page=models")
