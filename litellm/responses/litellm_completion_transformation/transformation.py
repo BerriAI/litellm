@@ -6,10 +6,17 @@ from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.tool_param import FunctionToolParam
 
-from enterprise.enterprise_hooks.session_handler import (
-    ChatCompletionSession,
-    _ENTERPRISE_ResponsesSessionHandler,
-)
+from litellm.types.responses.main import ChatCompletionSession
+
+try:
+    import enterprise
+    from enterprise.enterprise_hooks.session_handler import (
+        _ENTERPRISE_ResponsesSessionHandler,
+    )
+except ImportError:
+    enterprise = None
+    _ENTERPRISE_ResponsesSessionHandler = None
+
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import (
@@ -174,19 +181,20 @@ class LiteLLMCompletionResponsesConfig:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
-        chat_completion_session: ChatCompletionSession = ChatCompletionSession(
-            messages=[], litellm_session_id=None
-        )
-        if previous_response_id:
-            chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                previous_response_id=previous_response_id
+        if _ENTERPRISE_ResponsesSessionHandler and ChatCompletionSession:
+            chat_completion_session = ChatCompletionSession(
+                messages=[], litellm_session_id=None
             )
-        _messages = litellm_completion_request.get("messages") or []
-        session_messages = chat_completion_session.get("messages") or []
-        litellm_completion_request["messages"] = session_messages + _messages
-        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
-            "litellm_session_id"
-        )
+            if previous_response_id:
+                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                    previous_response_id=previous_response_id
+                )
+            _messages = litellm_completion_request.get("messages") or []
+            session_messages = chat_completion_session.get("messages") or []
+            litellm_completion_request["messages"] = session_messages + _messages
+            litellm_completion_request["litellm_trace_id"] = (
+                chat_completion_session.get("litellm_session_id")
+            )
         return litellm_completion_request
 
     @staticmethod
