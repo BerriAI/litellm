@@ -347,7 +347,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return headers
 
-    def strip_v1(self, api_base:str):
+    @staticmethod
+    def strip_v1(api_base:str):
         if api_base.endswith('/v1/'):
             return api_base[:-4]
         elif api_base.endswith('/v1'):
@@ -365,7 +366,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if api_base is None:
             api_base = "https://api.openai.com"
         else:
-            api_base = self.strip_v1(api_base)
+            api_base = strip_v1(api_base)
 
         if api_key is None:
             api_key = get_secret_str("OPENAI_API_KEY")
