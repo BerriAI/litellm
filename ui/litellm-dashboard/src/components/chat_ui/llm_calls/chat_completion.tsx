@@ -46,14 +46,15 @@ export async function makeOpenAIChatCompletionRequest(
       // For collecting complete response text
       let fullResponseContent = "";
       let fullReasoningContent = "";
-
+      
+      // @ts-ignore
       const response = await client.chat.completions.create({
         model: selectedModel,
         stream: true,
         stream_options: {
           include_usage: true,
         },
-        litellm_trace_id: traceId,
+        litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
       }, { signal });
   
