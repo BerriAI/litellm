@@ -11,8 +11,8 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall
-from litellm.types.responses.main import ChatCompletionSession
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 
 
 class _ENTERPRISE_ResponsesSessionHandler:
