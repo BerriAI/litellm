@@ -14,7 +14,7 @@ try:
     )
 except ImportError:
     enterprise = None
-    _ENTERPRISE_ResponsesSessionHandler = None
+    _ENTERPRISE_ResponsesSessionHandler = None  # type: ignore
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
