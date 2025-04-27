@@ -194,18 +194,6 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     convert_anyof_null_to_nullable(parameters)
 
     # Handle empty items objects
-    def process_items(schema):
-        if isinstance(schema, dict):
-            if "items" in schema and schema["items"] == {}:
-                schema["items"] = {"type": "object"}
-            for key, value in schema.items():
-                if isinstance(value, dict):
-                    process_items(value)
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            process_items(item)
-
     process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
@@ -216,6 +204,23 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         set_schema_property_ordering(parameters)
 
     return parameters
+
+
+def process_items(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    if isinstance(schema, dict):
+        if "items" in schema and schema["items"] == {}:
+            schema["items"] = {"type": "object"}
+        for key, value in schema.items():
+            if isinstance(value, dict):
+                process_items(value, depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        process_items(item, depth + 1)
 
 
 def set_schema_property_ordering(

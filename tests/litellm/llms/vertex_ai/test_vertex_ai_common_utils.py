@@ -251,3 +251,44 @@ def test_build_vertex_schema():
     }
 
     assert _build_vertex_schema(parameters) == expected_output
+
+
+def test_process_items_with_excessive_nesting():
+    """Test process_items with excessive nesting > max levels +1 deep."""
+    # generate a schema with excessive nesting
+    from litellm.llms.vertex_ai.common_utils import process_items
+
+    schema = {"type": "object", "properties": {}}
+    current = schema
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        current["properties"] = {"nested": {"type": "object", "properties": {}}}
+        current = current["properties"]["nested"]
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
+    ):
+        process_items(schema)
+
+
+def test_process_items_basic():
+    """Test basic functionality of process_items."""
+    from litellm.llms.vertex_ai.common_utils import process_items
+
+    # Test empty items
+    schema = {"type": "array", "items": {}}
+    process_items(schema)
+    assert schema["items"] == {"type": "object"}
+
+    # Test nested items
+    schema = {"type": "array", "items": {"type": "array", "items": {}}}
+    process_items(schema)
+    assert schema["items"]["items"] == {"type": "object"}
+
+    # Test items in properties
+    schema = {
+        "type": "object",
+        "properties": {"nested": {"type": "array", "items": {}}},
+    }
+    process_items(schema)
+    assert schema["properties"]["nested"]["items"] == {"type": "object"}
