@@ -5,8 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.tool_param import FunctionToolParam
-
-from litellm.types.responses.main import ChatCompletionSession
+from typing_extensions import TypedDict
 
 try:
     import enterprise
@@ -55,6 +54,21 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+
+class ChatCompletionSession(TypedDict, total=False):
+    messages: List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]
+    litellm_session_id: Optional[str]
+
+
 ########### End of Initialize Classes used for Responses API  ###########
 
 
