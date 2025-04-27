@@ -77,6 +77,8 @@ class SlackAlerting(CustomBatchLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
+        print("Init Slack creating periodic flush task")
+        asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
