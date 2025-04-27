@@ -238,3 +238,31 @@ def test_azure_realtime_cost_calculator():
     )
 
     assert cost > 0
+
+
+def test_default_image_cost_calculator(monkeypatch):
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    temp_object = {
+        "litellm_provider": "azure",
+        "input_cost_per_pixel": 10,
+    }
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object
+        },
+    )
+
+    args = {
+        "model": "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b",
+        "custom_llm_provider": "azure",
+        "quality": "standard",
+        "n": 1,
+        "size": "1024-x-1024",
+        "optional_params": {},
+    }
+    cost = default_image_cost_calculator(**args)
+    assert cost == 10485760

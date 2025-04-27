@@ -643,9 +643,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1124,6 +1124,7 @@ def default_image_cost_calculator(
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
+        model,
     ]
     for model in models_to_check:
         if model in litellm.model_cost:
