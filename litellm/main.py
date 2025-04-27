@@ -5511,7 +5511,10 @@ def speech(  # noqa: PLR0915
 
 
 async def ahealth_check_wildcard_models(
-    model: str, custom_llm_provider: str, model_params: dict
+    model: str,
+    custom_llm_provider: str,
+    model_params: dict,
+    litellm_logging_obj: Logging,
 ) -> dict:
     # this is a wildcard model, we need to pick a random model from the provider
     cheapest_models = pick_cheapest_chat_models_from_llm_provider(
@@ -5528,6 +5531,7 @@ async def ahealth_check_wildcard_models(
     else:
         fallback_models = None
     model_params["model"] = cheapest_models[0]
+    model_params["litellm_logging_obj"] = litellm_logging_obj
     model_params["fallbacks"] = fallback_models
     model_params["max_tokens"] = 1
     await acompletion(**model_params)
@@ -5594,6 +5598,7 @@ async def ahealth_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
+                litellm_logging_obj=litellm_logging_obj,
             )
         model_params["litellm_logging_obj"] = litellm_logging_obj
 
