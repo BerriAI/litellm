@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+from itertools import filterfalse
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -25,13 +26,14 @@ def _check_wildcard_routing(model: str) -> bool:
 
 
 def get_provider_models(
-    provider: str, litellm_params: Optional[LiteLLM_Params] = None
+    provider: str, model:str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> Optional[List[str]]:
     """
     Returns the list of known models by provider
     """
-    if provider == "*":
-        return get_valid_models(litellm_params=litellm_params)
+    if model == "*":
+        custom_llm_provider = litellm_params.model.split("/")[0]
+        return get_valid_models(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
 
     if provider in litellm.models_by_provider:
         provider_models = get_valid_models(
@@ -155,7 +157,8 @@ def get_complete_model_list(
         llm_router=llm_router,
     )
 
-    return list(unique_models) + all_wildcard_models
+    no_wildcards = filterfalse(_check_wildcard_routing, unique_models) # they were added above if necessary
+    return list(no_wildcards) + all_wildcard_models
 
 
 def get_known_models_from_wildcard(
@@ -167,12 +170,12 @@ def get_known_models_from_wildcard(
         return []
     # get all known provider models
     wildcard_models = get_provider_models(
-        provider=provider, litellm_params=litellm_params
+        provider=provider, model=model, litellm_params=litellm_params
     )
     if wildcard_models is None:
         return []
     if model == "*":
-        return wildcard_models or []
+        return [(provider+"/"+wc) for wc in wildcard_models] if wildcard_models else []
     else:
         model_prefix = model.replace("*", "")
         filtered_wildcard_models = [
