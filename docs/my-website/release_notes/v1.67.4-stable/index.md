@@ -93,6 +93,8 @@ pip install litellm==1.67.4.post1
   <Image img={require('../../img/release_notes/user_filters.png')}/>
 
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
+  - View teams, keys, models associated with User 
+  - Edit user role, model permissions 
 
 
 
@@ -121,8 +123,8 @@ pip install litellm==1.67.4.post1
 #### UI Authentication & Security
 - **Required Authentication**: Authentication now required for all dashboard pages [PR](https://github.com/BerriAI/litellm/pull/10229)
 - **SSO Fixes**: Fixed SSO user login invalid token error [PR](https://github.com/BerriAI/litellm/pull/10298)
-- **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
-- **Token Expiry**: Added token expiry logic to user dashboard [PR](https://github.com/BerriAI/litellm/pull/10250)
+- [BETA] **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
+- **Token Expiry**: Support token refresh by re-routing to login page (fixes issue where expired token would show a blank page) [PR](https://github.com/BerriAI/litellm/pull/10250)
 
 #### UI General fixes
 - **Fixed UI Flicker**: Addressed UI flickering issues in Dashboard [PR](https://github.com/BerriAI/litellm/pull/10261)
