@@ -3480,7 +3480,7 @@ def test_litellm_api_base(monkeypatch, provider, route):
         assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
 
 
-def test_gemini_tool_calling():
+def test_gemini_tool_calling_working_demo():
     load_vertex_ai_credentials()
     litellm._turn_on_debug()
     args = {
@@ -3588,6 +3588,121 @@ def test_gemini_tool_calling():
                 }
             }
         ]
+    }
+    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_gemini_tool_calling_not_working():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system"
+            },
+            {
+                "content": "Hello",
+                "role": "user"
+            }
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_agent",
+                "description": "This tool helps find relevant help content",
+                "parameters": {
+                    "properties": {
+                        "state": {
+                            "properties": {
+                                "messages": {
+                                    "items": {},
+                                    "type": "array"
+                                },
+                                "conversation_id": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "messages",
+                                "conversation_id"
+                            ],
+                            "type": "object"
+                        },
+                        "config": {
+                            "description": "Configuration for a Runnable.",
+                            "properties": {
+                                "tags": {
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "type": "array"
+                                },
+                                "metadata": {
+                                    "type": "object"
+                                },
+                                "callbacks": {
+                                    "anyOf": [
+                                        {
+                                            "items": {},
+                                            "type": "array"
+                                        },
+                                        {},
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "run_name": {
+                                    "type": "string"
+                                },
+                                "max_concurrency": {
+                                    "anyOf": [
+                                        {
+                                            "type": "integer"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "recursion_limit": {
+                                    "type": "integer"
+                                },
+                                "configurable": {
+                                    "type": "object"
+                                },
+                                "run_id": {
+                                    "anyOf": [
+                                        {
+                                            "format": "uuid",
+                                            "type": "string"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "kwargs": {
+                            "default": None,
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "state",
+                        "config"
+                    ],
+                    "type": "object"
+                }
+            }
+        }
+    ]
     }
     response = completion(model="vertex_ai/gemini-2.0-flash", **args)
     print(response)
