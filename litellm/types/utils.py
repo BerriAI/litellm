@@ -1988,6 +1988,7 @@ all_litellm_params = [
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
     "allowed_openai_params",
+    "litellm_session_id",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
