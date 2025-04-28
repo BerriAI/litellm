@@ -1028,14 +1028,11 @@ async def test_x_litellm_api_key():
     # Create request with headers as bytes
     request = Request(
         scope={
-            "type": "http",
-            "headers": [
-                (b"x-litellm-api-key", master_key.encode("latin-1")),
-            ],
+            "type": "http"
         }
     )
     request._url = URL(url="/chat/completions")
 
-    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key)
+    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
     assert valid_token.token == hash_token(master_key)
 
