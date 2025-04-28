@@ -1,4 +1,4 @@
-import { Page, Locator } from "@playwright/test";
+import { Page, Locator, expect } from "@playwright/test";
 
 export class DashboardLinks {
   private readonly userButton: Locator;
@@ -24,5 +24,9 @@ export class DashboardLinks {
 
   getModelsPageLink(): Locator {
     return this.modelsPageLink;
+  }
+
+  verifyLogout() {
+    expect(this.page.getByRole("heading", { name: "Login" })).toBeVisible();
   }
 }
