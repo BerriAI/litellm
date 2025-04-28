@@ -84,8 +84,7 @@ export default function Onboarding() {
       formValues.password
     ).then((data) => {
       let litellm_dashboard_ui = "/ui/";
-      const user_id = data.data?.user_id || data.user_id;
-      litellm_dashboard_ui += "?userID=" + user_id;
+      litellm_dashboard_ui += "?login=success";
 
       // set cookie "token" to jwtToken
       document.cookie = "token=" + jwtToken;

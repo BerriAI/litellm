@@ -1,13 +1,14 @@
 import re
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
 import httpx
 
 import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.vertex_ai import PartType
+from litellm.types.llms.vertex_ai import PartType, Schema
 
 
 class VertexAIError(BaseLLMException):
@@ -164,10 +165,22 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
     return has_text_param
 
 
-def _build_vertex_schema(parameters: dict):
+def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
+
+    Updates the input parameters, removing extraneous fields, adjusting types, unwinding $defs, and adding propertyOrdering if specified, returning the updated parameters.
+
+    Parameters:
+        parameters: dict - the json schema to build from
+        add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
+          set_schema_property_ordering for more details.
+    Returns:
+        parameters: dict - the input parameters, modified in place
     """
+    # Get valid fields from Schema TypedDict
+    valid_schema_fields = set(get_type_hints(Schema).keys())
+
     defs = parameters.pop("$defs", {})
     # flatten the defs
     for name, value in defs.items():
@@ -181,52 +194,81 @@ def _build_vertex_schema(parameters: dict):
     convert_anyof_null_to_nullable(parameters)
     add_object_type(parameters)
     # Postprocessing
-    # 4. Suppress unnecessary title generation:
-    #    * https://github.com/pydantic/pydantic/issues/1051
-    #    * http://cl/586221780
-    strip_field(parameters, field_name="title")
+    # Filter out fields that don't exist in Schema
+    parameters = filter_schema_fields(parameters, valid_schema_fields)
 
-    strip_field(
-        parameters, field_name="$schema"
-    )  # 5. Remove $schema - json schema value, not supported by OpenAPI - causes vertex errors.
-    strip_field(
-        parameters, field_name="$id"
-    )  # 6. Remove id - json schema value, not supported by OpenAPI - causes vertex errors.
-
+    if add_property_ordering:
+        set_schema_property_ordering(parameters)
     return parameters
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+def set_schema_property_ordering(
+    schema: Dict[str, Any], depth: int = 0
+) -> Dict[str, Any]:
+    """
+    vertex ai and generativeai apis order output of fields alphabetically, unless you specify the order.
+    python dicts retain order, so we just use that. Note that this field only applies to structured outputs, and not tools.
+    Function tools are not afflicted by the same alphabetical ordering issue, (the order of keys returned seems to be arbitrary, up to the model)
+    https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.cachedContents#Schema.FIELDS.property_ordering
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
+    Args:
+        schema: The schema dictionary to process
+        depth: Current recursion depth to prevent infinite loops
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        # retain propertyOrdering as an escape hatch if user already specifies it
+        if "propertyOrdering" not in schema:
+            schema["propertyOrdering"] = [k for k, v in schema["properties"].items()]
+        for k, v in schema["properties"].items():
+            set_schema_property_ordering(v, depth + 1)
+    if "items" in schema:
+        set_schema_property_ordering(schema["items"], depth + 1)
+    return schema
+
+
+def filter_schema_fields(
+    schema_dict: Dict[str, Any], valid_fields: Set[str], processed=None
+) -> Dict[str, Any]:
+    """
+    Recursively filter a schema dictionary to keep only valid fields.
+    """
+    if processed is None:
+        processed = set()
+
+    # Handle circular references
+    schema_id = id(schema_dict)
+    if schema_id in processed:
+        return schema_dict
+    processed.add(schema_id)
+
+    if not isinstance(schema_dict, dict):
+        return schema_dict
+
+    result = {}
+    for key, value in schema_dict.items():
+        if key not in valid_fields:
             continue
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+        if key == "properties" and isinstance(value, dict):
+            result[key] = {
+                k: filter_schema_fields(v, valid_fields, processed)
+                for k, v in value.items()
+            }
+        elif key == "items" and isinstance(value, dict):
+            result[key] = filter_schema_fields(value, valid_fields, processed)
+        elif key == "anyOf" and isinstance(value, list):
+            result[key] = [
+                filter_schema_fields(item, valid_fields, processed) for item in value  # type: ignore
+            ]
+        else:
+            result[key] = value
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
-                continue
+    return result
 
 
 def convert_anyof_null_to_nullable(schema, depth=0):
@@ -359,6 +401,7 @@ def construct_target_url(
     Constructed Url:
     POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
     """
+
     new_base_url = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
         if vertex_project and vertex_location:

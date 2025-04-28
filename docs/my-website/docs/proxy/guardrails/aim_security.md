@@ -140,7 +140,7 @@ The above request should not be blocked, and you should receive a regular LLM re
 
 </Tabs>
 
-# Advanced
+## Advanced
 
 Aim Guard provides user-specific Guardrail policies, enabling you to apply tailored policies to individual users.
 To utilize this feature, include the end-user's email in the request payload by setting the `x-aim-user-email` header of your request.

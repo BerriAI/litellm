@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -18,7 +18,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
 
-
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://router.huggingface.co"
@@ -34,7 +33,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
-        optional_params: dict,
+        optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -51,7 +51,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
+        return HuggingFaceError(
+            status_code=status_code, message=error_message, headers=headers
+        )
 
     def get_base_url(self, model: str, base_url: Optional[str]) -> Optional[str]:
         """
@@ -82,7 +84,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if api_base is not None:
             complete_url = api_base
         elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
+            complete_url = str(os.getenv("HF_API_BASE")) or str(
+                os.getenv("HUGGINGFACE_API_BASE")
+            )
         elif model.startswith(("http://", "https://")):
             complete_url = model
         # 4. Default construction with provider
@@ -138,4 +142,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             )
         mapped_model = provider_mapping["providerId"]
         messages = self._transform_messages(messages=messages, model=mapped_model)
-        return dict(ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params))
+        return dict(
+            ChatCompletionRequest(
+                model=mapped_model, messages=messages, **optional_params
+            )
+        )

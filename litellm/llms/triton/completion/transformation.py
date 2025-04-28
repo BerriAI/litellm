@@ -48,6 +48,7 @@ class TritonConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -200,8 +201,6 @@ class TritonGenerateConfig(TritonConfig):
                 "max_tokens": int(
                     optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)
                 ),
-                "bad_words": [""],
-                "stop_words": [""],
             },
             "stream": bool(stream),
         }

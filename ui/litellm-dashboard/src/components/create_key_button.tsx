@@ -52,8 +52,8 @@ interface CreateKeyProps {
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
-  setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
+  addKey: (data: any) => void;
 }
 
 interface User {
@@ -149,7 +149,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   userRole,
   accessToken,
   data,
-  setData,
+  addKey,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -267,13 +267,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       console.log("key create Response:", response);
       
-      // Update the data state in this component
-      setData((prevData) => (prevData ? [...prevData, response] : [response]));
-      
+      // Add the data to the state in the parent component
       // Also directly update the keys list in AllKeysTable without an API call
-      if (window.addNewKeyToList) {
-        window.addNewKeyToList(response);
-      }
+      addKey(response)
       
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);

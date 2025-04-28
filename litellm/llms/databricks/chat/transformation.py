@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.types.llms.anthropic import AnthropicMessagesTool
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
@@ -37,6 +37,7 @@ from litellm.types.llms.databricks import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -116,6 +117,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -160,7 +162,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         ]
 
     def convert_anthropic_tool_to_databricks_tool(
-        self, tool: Optional[AnthropicMessagesTool]
+        self, tool: Optional[AllAnthropicToolsValues]
     ) -> Optional[DatabricksTool]:
         if tool is None:
             return None
@@ -172,6 +174,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 parameters=cast(dict, tool.get("input_schema") or {}),
             ),
         )
+
+    def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
+        # if not claude, send as is
+        if "claude" not in model:
+            return tools
+
+        # if claude, convert to anthropic tool and then to databricks tool
+        anthropic_tools = self._map_tools(tools=tools)
+        databricks_tools = [
+            cast(DatabricksTool, self.convert_anthropic_tool_to_databricks_tool(tool))
+            for tool in anthropic_tools
+        ]
+        return databricks_tools
 
     def map_response_format_to_databricks_tool(
         self,
@@ -202,6 +217,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         mapped_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+        if "tools" in mapped_params:
+            mapped_params["tools"] = self._map_openai_to_dbrx_tool(
+                model=model, tools=mapped_params["tools"]
+            )
         if (
             "max_completion_tokens" in non_default_params
             and replace_max_completion_tokens_with_max_tokens
@@ -240,6 +259,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                 non_default_params.get("reasoning_effort")
             )
+            optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
@@ -295,13 +315,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @staticmethod
     def extract_reasoning_content(
         content: Optional[AllDatabricksContentValues],
-    ) -> Tuple[Optional[str], Optional[List[ChatCompletionThinkingBlock]]]:
+    ) -> Tuple[
+        Optional[str],
+        Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
+    ]:
         """
         Extract and return the reasoning content and thinking blocks
         """
         if content is None:
             return None, None
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:
@@ -498,7 +529,10 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                                 message.content = ""
                             choice["delta"]["content"] = message.content
                             choice["delta"]["tool_calls"] = None
-
+                elif tool_calls:
+                    for _tc in tool_calls:
+                        if _tc.get("function", {}).get("arguments") == "{}":
+                            _tc["function"]["arguments"] = ""  # avoid invalid json
                 # extract the content str
                 content_str = DatabricksConfig.extract_content_str(
                     choice["delta"].get("content")

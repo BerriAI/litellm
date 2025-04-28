@@ -241,7 +241,7 @@ tools_schema = [
 def test_completion_azure_stream_special_char():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
-    response = completion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+    response = completion(model="azure/chatgpt-v-3", messages=messages, stream=True)
     response_str = ""
     for part in response:
         response_str += part.choices[0].delta.content or ""
@@ -449,7 +449,7 @@ def test_completion_azure_stream():
             },
         ]
         response = completion(
-            model="azure/chatgpt-v-2", messages=messages, stream=True, max_tokens=50
+            model="azure/chatgpt-v-3", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -2070,7 +2070,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/chatgpt-v-2",
+        "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
         "o1-preview",
         "o1",
@@ -2947,48 +2947,6 @@ def test_azure_streaming_and_function_calling():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
-    try:
-        import os
-        from litellm import stream_chunk_builder
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_MISTRAL_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_MISTRAL_API_KEY", "")
-
-        data = {
-            "model": "azure_ai/mistral",
-            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.1,
-            "drop_params": True,
-            "stream": True,
-        }
-        chunks = []
-        if sync_mode:
-            response = completion(**data)  # type: ignore
-            for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        else:
-            response = await litellm.acompletion(**data)  # type: ignore
-
-            async for chunk in response:
-                print(chunk)
-                chunks.append(chunk)
-        print(f"chunks: {chunks}")
-        response = stream_chunk_builder(chunks=chunks)
-        assert response.choices[0].message.content is not None
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():

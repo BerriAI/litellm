@@ -109,7 +109,7 @@ client = anthropic.Anthropic(
 
 response = client.messages.create(
     messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
-    model="anthropic/claude-3-haiku-20240307",
+    model="anthropic-claude",
     max_tokens=100,
 )
 ```

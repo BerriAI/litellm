@@ -71,6 +71,7 @@ import useKeyList from "./key_team_helpers/key_list";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { AllKeysTable } from "./all_keys_table";
 import { Team } from "./key_team_helpers/key_list";
+import { Setter } from "@/types";
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -107,6 +108,9 @@ interface ViewKeyTableProps {
   currentOrg: Organization | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
+  createClicked: boolean;
 }
 
 interface ItemData {
@@ -154,7 +158,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   premiumUser,
   currentOrg,
   organizations,
-  setCurrentOrg
+  setCurrentOrg,
+  selectedKeyAlias,
+  setSelectedKeyAlias,
+  createClicked
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -166,7 +173,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
   // NEW: Declare filter states for team and key alias.
   const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
-  const [keyAliasFilter, setKeyAliasFilter] = useState<string>("");
+
 
   // Keep the team filter in sync with the incoming prop.
   useEffect(() => {
@@ -179,17 +186,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
+    createClicked,
   });
 
-  // Make both refresh and addKey functions available globally
-  if (typeof window !== 'undefined') {
-    window.refreshKeysList = refresh;
-    window.addNewKeyToList = (newKey) => {
-      // Add the new key to the keys list without making an API call
-      setKeys((prevKeys) => [newKey, ...prevKeys]);
-    };
-  }
 
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });
@@ -418,6 +419,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     <div>
       <AllKeysTable 
         keys={keys}
+        setKeys={setKeys}
         isLoading={isLoading}
         pagination={pagination}
         onPageChange={handlePageChange}
@@ -431,6 +433,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
         refresh={refresh}
+        selectedKeyAlias={selectedKeyAlias}
+        setSelectedKeyAlias={setSelectedKeyAlias}
       />
 
       {isDeleteModalOpen && (

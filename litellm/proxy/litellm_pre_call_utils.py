@@ -191,6 +191,7 @@ def clean_headers(
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
+
     for header, value in headers.items():
         if header.lower() not in special_headers:
             clean_headers[header] = value
@@ -432,14 +433,13 @@ class LiteLLMProxyRequestSetup:
     ) -> Optional[List[str]]:
         tags = None
 
-        if llm_router and llm_router.enable_tag_filtering is True:
-            # Check request headers for tags
-            if "x-litellm-tags" in headers:
-                if isinstance(headers["x-litellm-tags"], str):
-                    _tags = headers["x-litellm-tags"].split(",")
-                    tags = [tag.strip() for tag in _tags]
-                elif isinstance(headers["x-litellm-tags"], list):
-                    tags = headers["x-litellm-tags"]
+        # Check request headers for tags
+        if "x-litellm-tags" in headers:
+            if isinstance(headers["x-litellm-tags"], str):
+                _tags = headers["x-litellm-tags"].split(",")
+                tags = [tag.strip() for tag in _tags]
+            elif isinstance(headers["x-litellm-tags"], list):
+                tags = headers["x-litellm-tags"]
         # Check request body for tags
         if "tags" in data and isinstance(data["tags"], list):
             tags = data["tags"]

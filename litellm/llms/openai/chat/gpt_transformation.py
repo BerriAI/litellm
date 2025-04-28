@@ -22,6 +22,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
 )
@@ -188,6 +190,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             message_content = message.get("content")
             if message_content and isinstance(message_content, list):
                 for content_item in message_content:
+                    litellm_specific_params = {"format"}
                     if content_item.get("type") == "image_url":
                         content_item = cast(ChatCompletionImageObject, content_item)
                         if isinstance(content_item["image_url"], str):
@@ -195,7 +198,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 "url": content_item["image_url"],
                             }
                         elif isinstance(content_item["image_url"], dict):
-                            litellm_specific_params = {"format"}
                             new_image_url_obj = ChatCompletionImageUrlObject(
                                 **{  # type: ignore
                                     k: v
@@ -204,6 +206,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 }
                             )
                             content_item["image_url"] = new_image_url_obj
+                    elif content_item.get("type") == "file":
+                        content_item = cast(ChatCompletionFileObject, content_item)
+                        file_obj = content_item["file"]
+                        new_file_obj = ChatCompletionFileObjectFile(
+                            **{  # type: ignore
+                                k: v
+                                for k, v in file_obj.items()
+                                if k not in litellm_specific_params
+                            }
+                        )
+                        content_item["file"] = new_file_obj
         return messages
 
     def transform_request(
@@ -321,6 +334,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -375,7 +389,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def get_base_model(model: str) -> str:
+    def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model
 
     def get_model_response_iterator(

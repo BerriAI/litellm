@@ -63,26 +63,30 @@ def test_completion_pydantic_obj_2():
                     "events": {
                         "items": {
                             "properties": {
-                                "name": {"type": "string"},
-                                "date": {"type": "string"},
+                                "name": {"title": "Name", "type": "string"},
+                                "date": {"title": "Date", "type": "string"},
                                 "participants": {
                                     "items": {"type": "string"},
+                                    "title": "Participants",
                                     "type": "array",
                                 },
                             },
-                            "required": [
+                            "propertyOrdering": [
                                 "name",
                                 "date",
                                 "participants",
                             ],
+                            "required": ["name", "date", "participants"],
+                            "title": "CalendarEvent",
                             "type": "object",
                         },
+                        "title": "Events",
                         "type": "array",
                     }
                 },
-                "required": [
-                    "events",
-                ],
+                "propertyOrdering": ["events"],
+                "required": ["events"],
+                "title": "EventsList",
                 "type": "object",
             },
         },
@@ -91,12 +95,13 @@ def test_completion_pydantic_obj_2():
     with patch.object(client, "post", new=MagicMock()) as mock_post:
         mock_post.return_value = expected_request_body
         try:
-            litellm.completion(
+            response = litellm.completion(
                 model="gemini/gemini-1.5-pro",
                 messages=messages,
                 response_format=EventsList,
                 client=client,
             )
+            # print(response)
         except Exception as e:
             print(e)
 
@@ -115,7 +120,7 @@ def test_build_vertex_schema():
 
     schema = {
         "type": "object",
-        "$id": "my-special-id",
+        "my-random-key": "my-random-value",
         "properties": {
             "recipes": {
                 "type": "array",
@@ -134,7 +139,7 @@ def test_build_vertex_schema():
     assert new_schema["type"] == schema["type"]
     assert new_schema["properties"] == schema["properties"]
     assert "required" in new_schema and new_schema["required"] == schema["required"]
-    assert "$id" not in new_schema
+    assert "my-random-key" not in new_schema
 
 
 @pytest.mark.parametrize(
@@ -142,6 +147,7 @@ def test_build_vertex_schema():
     [
         ([{"googleSearch": {}}], "googleSearch"),
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
+        ([{"enterpriseWebSearch": {}}], "enterpriseWebSearch"),
         ([{"code_execution": {}}], "code_execution"),
     ],
 )

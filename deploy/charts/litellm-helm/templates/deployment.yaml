@@ -97,6 +97,9 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.extraEnvVars }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
             - secretRef:

@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
@@ -251,7 +250,7 @@ def ollama_pt(
                     f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                 )
 
-            msg_i += 1
+                msg_i += 1
 
         if assistant_content_str:
             prompt += f"### Assistant:\n{assistant_content_str}\n\n"
@@ -748,7 +747,6 @@ def convert_to_anthropic_image_obj(
             data=base64_data,
         )
     except Exception as e:
-        traceback.print_exc()
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
@@ -2260,6 +2258,14 @@ def _parse_content_type(content_type: str) -> str:
     return m.get_content_type()
 
 
+def _parse_mime_type(base64_data: str) -> Optional[str]:
+    mime_type_match = re.match(r"data:(.*?);base64", base64_data)
+    if mime_type_match:
+        return mime_type_match.group(1)
+    else:
+        return None
+
+
 class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
@@ -3442,6 +3448,8 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         }
     ]
     """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
         parameters = tool.get("function", {}).get(
@@ -3455,6 +3463,13 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         description = tool.get("function", {}).get(
             "description", name
         )  # converse api requires a description
+
+        defs = parameters.pop("$defs", {})
+        defs_copy = copy.deepcopy(defs)
+        # flatten the defs
+        for _, value in defs_copy.items():
+            unpack_defs(value, defs_copy)
+        unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description

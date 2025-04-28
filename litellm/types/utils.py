@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -29,11 +29,14 @@ from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     FileSearchTool,
     OpenAIChatCompletionChunk,
+    OpenAIFileObject,
+    OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -100,6 +103,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_streaming: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
+    supports_reasoning: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -120,6 +124,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
+    input_cost_per_token_above_200k_tokens: Optional[
+        float
+    ]  # only for vertex ai gemini-2.5-pro models
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -136,11 +143,15 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
+    output_cost_per_token_above_200k_tokens: Optional[
+        float
+    ]  # only for vertex ai gemini-2.5-pro models
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_vector_size: Optional[int]
+    output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -368,12 +379,18 @@ class Function(OpenAIObject):
 
     def __init__(
         self,
-        arguments: Optional[Union[Dict, str]],
+        arguments: Optional[Union[Dict, str]] = None,
         name: Optional[str] = None,
         **params,
     ):
         if arguments is None:
-            arguments = ""
+            if params.get("parameters", None) is not None and isinstance(
+                params["parameters"], dict
+            ):
+                arguments = json.dumps(params["parameters"])
+                params.pop("parameters")
+            else:
+                arguments = ""
         elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
@@ -382,7 +399,7 @@ class Function(OpenAIObject):
         name = name
 
         # Build a dictionary with the structure your BaseModel expects
-        data = {"arguments": arguments, "name": name, **params}
+        data = {"arguments": arguments, "name": name}
 
         super(Function, self).__init__(**data)
 
@@ -536,7 +553,9 @@ class Message(OpenAIObject):
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -551,7 +570,11 @@ class Message(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -634,7 +657,9 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -645,7 +670,11 @@ class Delta(OpenAIObject):
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -718,7 +747,7 @@ class Choices(OpenAIObject):
         finish_reason=None,
         index=0,
         message: Optional[Union[Message, dict]] = None,
-        logprobs=None,
+        logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
         enhancements=None,
         **params,
     ):
@@ -820,8 +849,11 @@ class Usage(CompletionUsage):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if reasoning_tokens:
+            text_tokens = (
+                completion_tokens - reasoning_tokens if completion_tokens else None
+            )
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens
+                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
@@ -1002,7 +1034,9 @@ class ModelResponseStream(ModelResponseBase):
 
     def __init__(
         self,
-        choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        choices: Optional[
+            Union[List[StreamingChoices], Union[StreamingChoices, dict, BaseModel]]
+        ] = None,
         id: Optional[str] = None,
         created: Optional[int] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
@@ -1703,6 +1737,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     applied_guardrails: Optional[List[str]]
+    usage_object: Optional[dict]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1723,6 +1758,7 @@ class StandardLoggingHiddenParams(TypedDict):
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
+    usage_object: Optional[dict]
 
 
 class StandardLoggingModelInformation(TypedDict):
@@ -1952,6 +1988,7 @@ all_litellm_params = [
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
     "allowed_openai_params",
+    "litellm_session_id",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2144,6 +2181,31 @@ class LiteLLMBatch(Batch):
             return self.dict()
 
 
+class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
+    results: OpenAIRealtimeStreamList
+    usage: Usage
+    _hidden_params: dict = {}
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
 class RawRequestTypedDict(TypedDict, total=False):
     raw_request_api_base: Optional[str]
     raw_request_body: Optional[dict]
@@ -2170,3 +2232,34 @@ class CreateCredentialItem(CredentialBase):
         if not values.get("credential_values") and not values.get("model_id"):
             raise ValueError("Either credential_values or model_id must be set")
         return values
+
+
+class ExtractedFileData(TypedDict):
+    """
+    TypedDict for storing processed file data
+
+    Attributes:
+        filename: Name of the file if provided
+        content: The file content in bytes
+        content_type: MIME type of the file
+        headers: Any additional headers for the file
+    """
+
+    filename: Optional[str]
+    content: bytes
+    content_type: Optional[str]
+    headers: Mapping[str, str]
+
+
+class SpecialEnums(Enum):
+    LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
+    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+
+    LITELLM_MANAGED_RESPONSE_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
+    )
+
+
+LLMResponseTypes = Union[
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+]

@@ -66,8 +66,8 @@ class BaseImageGenTest(ABC):
             logged_standard_logging_payload = custom_logger.standard_logging_payload
             print("logged_standard_logging_payload", logged_standard_logging_payload)
             assert logged_standard_logging_payload is not None
-            # assert logged_standard_logging_payload["response_cost"] is not None
-            # assert logged_standard_logging_payload["response_cost"] > 0
+            assert logged_standard_logging_payload["response_cost"] is not None
+            assert logged_standard_logging_payload["response_cost"] > 0
 
             from openai.types.images_response import ImagesResponse
 

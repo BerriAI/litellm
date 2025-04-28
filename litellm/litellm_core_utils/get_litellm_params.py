@@ -48,6 +48,7 @@ def get_litellm_params(
     user_continue_message=None,
     base_model: Optional[str] = None,
     litellm_trace_id: Optional[str] = None,
+    litellm_session_id: Optional[str] = None,
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
     litellm_metadata: Optional[dict] = None,
@@ -91,6 +92,7 @@ def get_litellm_params(
         "base_model": base_model
         or _get_base_model_from_litellm_call_metadata(metadata=metadata),
         "litellm_trace_id": litellm_trace_id,
+        "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
@@ -110,5 +112,8 @@ def get_litellm_params(
         "azure_password": kwargs.get("azure_password"),
         "max_retries": max_retries,
         "timeout": kwargs.get("timeout"),
+        "bucket_name": kwargs.get("bucket_name"),
+        "vertex_credentials": kwargs.get("vertex_credentials"),
+        "vertex_project": kwargs.get("vertex_project"),
     }
     return litellm_params
