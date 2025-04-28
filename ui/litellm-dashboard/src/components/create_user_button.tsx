@@ -10,7 +10,16 @@ import {
   InputNumber,
   Select as Select2,
 } from "antd";
-import { Button as Button2, Text, TextInput, SelectItem, Accordion, AccordionHeader, AccordionBody, Title, } from "@tremor/react";
+import {
+  Button as Button2,
+  Text,
+  TextInput,
+  SelectItem,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
+  Title,
+} from "@tremor/react";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import {
@@ -22,7 +31,7 @@ import {
 import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 import { Tooltip } from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -73,7 +82,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         const modelDataResponse = await modelAvailableCall(
           accessToken,
           userID,
-          userRole,
+          userRole
         );
         // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
         const availableModels = [];
@@ -119,20 +128,27 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string, models?: string[], user_role: string }) => {
+  const handleCreate = async (formValues: {
+    user_id: string;
+    models?: string[];
+    user_role: string;
+  }) => {
     try {
       message.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
-        console.log("formValues.user_role", formValues.user_role)
+      if (
+        (!formValues.models || formValues.models.length === 0) &&
+        formValues.user_role !== "proxy_admin"
+      ) {
+        console.log("formValues.user_role", formValues.user_role);
         // If models is empty or undefined, set it to "no-default-models"
         formValues.models = ["no-default-models"];
       }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
-      await queryClient.invalidateQueries({ queryKey: ['userList'] })
+      await queryClient.invalidateQueries({ queryKey: ["userList"] });
       console.log("user create Response:", response);
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
@@ -174,7 +190,10 @@ const Createuser: React.FC<CreateuserProps> = ({
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      const errorMessage =
+        error.response?.data?.detail ||
+        error?.message ||
+        "Error creating the user";
       message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
@@ -209,7 +228,7 @@ const Createuser: React.FC<CreateuserProps> = ({
                       </p>
                     </div>
                   </SelectItem>
-                ),
+                )
               )}
           </Select2>
         </Form.Item>
@@ -232,7 +251,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
-        
+
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button htmlType="submit">Create User</Button>
         </div>
@@ -246,7 +265,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
-      <BulkCreateUsers 
+      <BulkCreateUsers
         accessToken={accessToken}
         teams={teams}
         possibleUIRoles={possibleUIRoles}
@@ -270,15 +289,17 @@ const Createuser: React.FC<CreateuserProps> = ({
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item label={
-                  <span>
-                    Global Proxy Role{' '}
-                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
-                      <InfoCircleOutlined/>
-                    </Tooltip>
-                  </span>
-                } 
-              name="user_role">
+          <Form.Item
+            label={
+              <span>
+                Global Proxy Role{" "}
+                <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="user_role"
+          >
             <Select2>
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(
@@ -294,12 +315,17 @@ const Createuser: React.FC<CreateuserProps> = ({
                         </p>
                       </div>
                     </SelectItem>
-                  ),
+                  )
                 )}
             </Select2>
           </Form.Item>
-          
-          <Form.Item label="Team ID" className="gap-2" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
+
+          <Form.Item
+            label="Team ID"
+            className="gap-2"
+            name="team_id"
+            help="If selected, user will be added as a 'user' role to the team."
+          >
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
                 teams.map((team: any) => (
@@ -315,42 +341,54 @@ const Createuser: React.FC<CreateuserProps> = ({
             </Select>
           </Form.Item>
 
+          <Form.Item label="Team Role" className="gap-2" name="team_role">
+            <Select placeholder="Select Team Role" style={{ width: "100%" }}>
+              <Option>Admin</Option>
+              <Option>User</Option>
+            </Select>
+          </Form.Item>
+
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
           <Accordion>
-          <AccordionHeader>
-            <Title>Personal Key Creation</Title>
-          </AccordionHeader>
-          <AccordionBody>
-            <Form.Item className="gap-2" label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Models user has access to, outside of team scope.">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              } name="models" help="Models user has access to, outside of team scope.">
-              <Select2
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
+            <AccordionHeader>
+              <Title>Personal Key Creation</Title>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                className="gap-2"
+                label={
+                  <span>
+                    Models{" "}
+                    <Tooltip title="Models user has access to, outside of team scope.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="models"
+                help="Models user has access to, outside of team scope."
               >
-                <Select2.Option
-                  key="all-proxy-models"
-                  value="all-proxy-models"
+                <Select2
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
                 >
-                  All Proxy Models
-                </Select2.Option>
-                {userModels.map((model) => (
-                  <Select2.Option key={model} value={model}>
-                    {getModelDisplayName(model)}
+                  <Select2.Option
+                    key="all-proxy-models"
+                    value="all-proxy-models"
+                  >
+                    All Proxy Models
                   </Select2.Option>
-                ))}
-              </Select2>
-            </Form.Item>
-          </AccordionBody>
-        </Accordion>
+                  {userModels.map((model) => (
+                    <Select2.Option key={model} value={model}>
+                      {getModelDisplayName(model)}
+                    </Select2.Option>
+                  ))}
+                </Select2>
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>
