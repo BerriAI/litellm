@@ -13,8 +13,6 @@ import os
 import time
 import json
 
-# this file is to test litellm/proxy
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -53,9 +51,9 @@ async def test_moderations_api_logging(model):
     custom_logger = TestCustomLogger()
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
 
-
+    input_content = "Hello, how are you?"
     response = await litellm.amoderation(
-        input="Hello, how are you?",
+        input=input_content,
         model=model,
     )
 
@@ -71,6 +69,9 @@ async def test_moderations_api_logging(model):
     assert standard_logging_payload["status"] == "success"
     assert standard_logging_payload["custom_llm_provider"] == litellm.LlmProviders.OPENAI.value
 
+
+    # assert the logged input == input
+    assert standard_logging_payload["messages"][0]["content"] == input_content
 
     # assert the logged response == response user received client side 
     assert dict(standard_logging_payload["response"]) == response.model_dump()
