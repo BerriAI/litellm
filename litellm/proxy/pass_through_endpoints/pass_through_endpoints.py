@@ -472,6 +472,7 @@ async def pass_through_request(  # noqa: PLR0915
 ):
     litellm_call_id = str(uuid.uuid4())
     url: Optional[httpx.URL] = None
+    data: dict = {}
     try:
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy.proxy_server import proxy_logging_obj
@@ -524,7 +525,7 @@ async def pass_through_request(  # noqa: PLR0915
         # create logging object
         start_time = datetime.now()
 
-        data = {}
+        
         data = await add_litellm_data_to_request(
             data=data,  # type: ignore
             request=request,
