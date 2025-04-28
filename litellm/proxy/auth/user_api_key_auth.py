@@ -875,11 +875,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            await _virtual_key_max_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
+            if route in LiteLLMRoutes.llm_api_routes.value:
+                await _virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
+                )
 
             # Check 5. Soft Budget Check
             await _virtual_key_soft_budget_check(

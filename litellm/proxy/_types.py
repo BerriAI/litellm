@@ -326,6 +326,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/messages",
     ]
 
+    llm_api_routes = openai_routes + anthropic_routes + mapped_pass_through_routes
     info_routes = [
         "/key/info",
         "/key/health",
