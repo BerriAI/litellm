@@ -1173,6 +1173,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    sso_user_id: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1251,6 +1252,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "budget_duration": budget_duration,
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
+            "sso_user_id": sso_user_id,
         }
         if teams is not None:
             user_data["teams"] = teams
@@ -1859,6 +1861,7 @@ async def validate_key_list_check(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     prisma_client: PrismaClient,
 ) -> Optional[LiteLLM_UserTable]:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1922,6 +1925,31 @@ async def validate_key_list_check(
                 param="organization_id",
                 code=status.HTTP_403_FORBIDDEN,
             )
+
+    if key_hash:
+        try:
+            key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": key_hash},
+            )
+        except Exception:
+            raise ProxyException(
+                message="Key Hash not found.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_hash",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        can_user_query_key_info = await _can_user_query_key_info(
+            user_api_key_dict=user_api_key_dict,
+            key=key_hash,
+            key_info=key_info,
+        )
+        if not can_user_query_key_info:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
     return complete_user_info
 
 
@@ -1970,6 +1998,7 @@ async def list_keys(
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
+    key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
@@ -2002,6 +2031,7 @@ async def list_keys(
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             prisma_client=prisma_client,
         )
 
@@ -2027,6 +2057,7 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
@@ -2063,6 +2094,7 @@ async def _list_key_helper(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
     admin_team_ids: Optional[
@@ -2109,6 +2141,8 @@ async def _list_key_helper(
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
         user_condition["organization_id"] = organization_id
+    if key_hash and isinstance(key_hash, str):
+        user_condition["token"] = key_hash
 
     if user_condition:
         or_conditions.append(user_condition)

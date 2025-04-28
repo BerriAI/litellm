@@ -22,6 +22,7 @@ import {
   Button,
   Divider,
 } from "@tremor/react";
+import { v4 as uuidv4 } from 'uuid';
 
 import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
@@ -82,6 +83,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -300,6 +302,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
     
+    // Generate new trace ID for a new conversation or use existing one
+    const traceId = messageTraceId || uuidv4();
+    if (!messageTraceId) {
+      setMessageTraceId(traceId);
+    }
+    
     // Update UI with full message object
     setChatHistory([...chatHistory, newUserMessage]);
     setIsLoading(true);
@@ -319,7 +327,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             signal,
             updateReasoningContent,
             updateTimingData,
-            updateUsageData
+            updateUsageData,
+            traceId
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -344,7 +353,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             signal,
             updateReasoningContent,
             updateTimingData,
-            updateUsageData
+            updateUsageData,
+            traceId
           );
         }
       }
@@ -365,6 +375,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const clearChatHistory = () => {
     setChatHistory([]);
+    setMessageTraceId(null);
     message.success("Chat history cleared.");
   };
 
@@ -440,11 +451,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
-                    ...modelInfo.map((option) => ({
-                      value: option.model_group,
-                      label: option.model_group
-                    })),
-                    { value: 'custom', label: 'Enter custom model' }
+                    ...Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index
+                      })),
+                    { value: 'custom', label: 'Enter custom model', key: 'custom' }
                   ]}
                   style={{ width: "100%" }}
                   showSearch={true}

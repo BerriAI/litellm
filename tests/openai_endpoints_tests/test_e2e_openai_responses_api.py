@@ -77,6 +77,19 @@ def test_basic_response():
     )
     print("basic response=", response)
 
+    # get the response
+    response = client.responses.retrieve(response.id)
+    print("GET response=", response)
+
+
+    # delete the response
+    delete_response = client.responses.delete(response.id)
+    print("DELETE response=", delete_response)
+
+    # expect an error when getting the response again since it was deleted
+    with pytest.raises(Exception):
+        get_response = client.responses.retrieve(response.id)
+
 
 def test_streaming_response():
     client = get_test_client()

@@ -226,6 +226,8 @@ model LiteLLM_SpendLogs {
   requester_ip_address String?
   messages            Json?     @default("{}")
   response            Json?     @default("{}")
+  session_id          String?
+  proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
 }

@@ -103,7 +103,7 @@ export default function CreateKeyPage() {
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
-  const [keys, setKeys] = useState<null | any[]>(null);
+  const [keys, setKeys] = useState<null | any[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
@@ -115,6 +115,7 @@ export default function CreateKeyPage() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
+  const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
 
@@ -139,6 +140,12 @@ export default function CreateKeyPage() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
+  const addKey = (data: any) => {
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
+    setCreateClicked(() => !createClicked);
+  } 
+  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+
   useEffect(() => {
     const token = getCookie("token");
     setToken(token);
@@ -146,10 +153,10 @@ export default function CreateKeyPage() {
   }, []);
 
   useEffect(() => {
-    if (authLoading === false && token === null) {
+    if (redirectToLogin) {
       window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
     }
-  }, [token, authLoading])
+  }, [redirectToLogin])
 
   useEffect(() => {
     if (!token) {
@@ -221,7 +228,7 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
-  if (authLoading || (authLoading == false && token === null)) {
+  if (authLoading || redirectToLogin) {
     return <LoadingScreen />
   }
 
@@ -241,6 +248,8 @@ export default function CreateKeyPage() {
             setTeams={setTeams}
             setKeys={setKeys}
             organizations={organizations}
+            addKey={addKey}
+            createClicked={createClicked}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -275,6 +284,8 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   setKeys={setKeys}
                   organizations={organizations}
+                  addKey={addKey}
+                  createClicked={createClicked}
                 />
               ) : page == "models" ? (
                 <ModelDashboard

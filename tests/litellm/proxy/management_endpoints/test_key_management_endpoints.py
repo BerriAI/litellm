@@ -30,6 +30,7 @@ async def test_list_keys():
         "team_id": None,
         "organization_id": None,
         "key_alias": None,
+        "key_hash": None,
         "exclude_team_id": None,
         "return_full_object": True,
         "admin_team_ids": ["28bd3181-02c5-48f2-b408-ce790fb3d5ba"],
