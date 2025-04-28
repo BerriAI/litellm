@@ -26,7 +26,7 @@ MESSAGE_CHAIN_FAILS_NO_FUNCTION_ARGS = [
     },
 ]
 
-MESSAGE_CHAIN_FAILS_NO_FUNCTION = [
+MESSAGE_CHAIN_NO_FUNCTION = [
     {"role": "system", "content": "System prompt"},
     {
         "role": "assistant",
