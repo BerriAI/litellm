@@ -1,5 +1,5 @@
 ---
-title: v1.67.4-stable
+title: v1.67.4-stable - Improved User Management
 slug: v1.67.4-stable
 date: 2025-04-26T10:00:00
 authors:
@@ -44,11 +44,45 @@ pip install litellm==1.67.4.post1
 
 ## Key Highlights
 
-- **Improved UI Usability and Security**: This release brings usability and security improvements to the Admin UI, making it easier to manage access across 200+ users. 
+- **Improved User Management**: This release enables search and filtering across users, keys, teams, and models.
 - **Responses API Load Balancing**: Route requests across provider regions and ensure session continuity. 
 - **UI Session Logs**: Group several requests to LiteLLM into a session. 
 
+## Improved User Management
 
+<Image img={require('../../img/release_notes/ui_search_users.png')}/>
+<br/>
+
+This release makes it easier to manage users and keys on LiteLLM. You can now search and filter across users, keys, teams, and models, and control user settings more easily.
+
+New features include:
+
+- Search for users by email, ID, role, or team.
+- See all of a user's models, teams, and keys in one place.
+- Change user roles and model access right from the Users Tab.
+
+These changes help you spend less time on user setup and management on LiteLLM.
+
+## Responses API Load Balancing
+
+<Image img={require('../../img/release_notes/ui_responses_lb.png')}/>
+<br/>
+
+This release introduces load balancing for the Responses API, allowing you to route requests across provider regions and ensure session continuity. It works as follows:
+
+- If a `previous_response_id` is provided, LiteLLM will route the request to the original deployment that generated the prior response — ensuring session continuity.
+- If no `previous_response_id` is provided, LiteLLM will load-balance requests across your available deployments.
+
+[Read more](https://docs.litellm.ai/docs/response_api#load-balancing-with-session-continuity)
+
+## UI Session Logs
+
+<Image img={require('../../img/ui_session_logs.png')}/>
+<br/>
+
+This release allow you to group requests to LiteLLM proxy into a session. If you specify a litellm_session_id in your request LiteLLM will automatically group all logs in the same session. This allows you to easily track usage and request content per session. 
+
+[Read more](https://docs.litellm.ai/docs/proxy/ui_logs_sessions)
 
 ## New Models / Updated Models
 
@@ -93,6 +127,8 @@ pip install litellm==1.67.4.post1
   <Image img={require('../../img/release_notes/user_filters.png')}/>
 
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
+  - View teams, keys, models associated with User 
+  - Edit user role, model permissions 
 
 
 
@@ -121,8 +157,8 @@ pip install litellm==1.67.4.post1
 #### UI Authentication & Security
 - **Required Authentication**: Authentication now required for all dashboard pages [PR](https://github.com/BerriAI/litellm/pull/10229)
 - **SSO Fixes**: Fixed SSO user login invalid token error [PR](https://github.com/BerriAI/litellm/pull/10298)
-- **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
-- **Token Expiry**: Added token expiry logic to user dashboard [PR](https://github.com/BerriAI/litellm/pull/10250)
+- [BETA] **Encrypted Tokens**: Moved UI to encrypted token usage [PR](https://github.com/BerriAI/litellm/pull/10302)
+- **Token Expiry**: Support token refresh by re-routing to login page (fixes issue where expired token would show a blank page) [PR](https://github.com/BerriAI/litellm/pull/10250)
 
 #### UI General fixes
 - **Fixed UI Flicker**: Addressed UI flickering issues in Dashboard [PR](https://github.com/BerriAI/litellm/pull/10261)

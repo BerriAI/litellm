@@ -217,6 +217,7 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
@@ -6376,6 +6377,7 @@ async def model_group_info(
         raise HTTPException(
             status_code=500, detail={"error": "LLM Router is not loaded in"}
         )
+
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
     model_access_groups: Dict[str, List[str]] = defaultdict(list)
     if llm_router is None:
@@ -6389,11 +6391,36 @@ async def model_group_info(
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
+    team_models = []
+    if (
+        not user_api_key_dict.team_id
+        and user_api_key_dict.user_id is not None
+        and not _user_has_admin_view(user_api_key_dict)
+    ):
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        user_object = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        user_object_typed = LiteLLM_UserTable(**user_object.model_dump())
+        user_models = []
+        if user_object is not None:
+            user_models = get_team_models(
+                team_models=user_object_typed.models,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+        team_models = user_models
+    else:
+        team_models = get_team_models(
+            team_models=user_api_key_dict.team_models,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+
     all_models_str = get_complete_model_list(
         key_models=key_models,
         team_models=team_models,

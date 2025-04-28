@@ -11,13 +11,9 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall
-
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from typing import TypedDict
+from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 
-class ChatCompletionSession(TypedDict, total=False):
-    messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, Message]]
-    litellm_session_id: Optional[str]
 
 class _ENTERPRISE_ResponsesSessionHandler:
     @staticmethod
