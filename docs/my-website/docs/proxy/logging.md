@@ -1587,6 +1587,11 @@ You can obtain your `CONFIDENT_API_KEY` by logging into [Confident AI](https://a
 
 3. Start your proxy server:
 ```shell
+litellm --config config.yaml --debug
+```
+
+4. Make a request:
+```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
@@ -1608,10 +1613,12 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 :::info
-`metrics` A list of strings specifying the names of the online metrics you wish to run upon tracing to Confident AI. Learn more about using online metrics [here](https://documentation.confident-ai.com/llm-observability/online-metrics)
+`deepeval_metrics` A list of strings specifying the names of the online metrics you wish to run upon tracing to Confident AI. Learn more about using online metrics [here](https://documentation.confident-ai.com/llm-observability/online-metrics)
 :::
 
+5. Check trace on platform: 
 
+<Image img={require('../../img/deepeval_visible_trace.png')} />
 
 
 ## Custom Callback Class [Async]
