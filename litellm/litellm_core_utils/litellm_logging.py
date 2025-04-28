@@ -63,7 +63,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
+from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -446,13 +446,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        if (
-            litellm_params.get("input_cost_per_token") is not None
-            or litellm_params.get("input_cost_per_second") is not None
-            or litellm_params.get("output_cost_per_token") is not None
-            or litellm_params.get("output_cost_per_second") is not None
-        ):
-            self.custom_pricing = True
+        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+        for key in custom_pricing_keys:
+            if litellm_params.get(key) is not None:
+                self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -3148,10 +3145,11 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    for _custom_cost_param in SPECIAL_MODEL_INFO_PARAMS:
-        if litellm_params.get(_custom_cost_param, None) is not None:
+    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+    for key in custom_pricing_keys:
+        if litellm_params.get(key, None) is not None:
             return True
-        elif model_info.get(_custom_cost_param, None) is not None:
+        elif model_info.get(key, None) is not None:
             return True
 
     return False
@@ -3509,10 +3507,17 @@ class StandardLoggingPayloadSetup:
 
         This helps link sessions when multiple requests are made in a single session
         """
-        dynamic_trace_id = litellm_params.get("litellm_trace_id")
-        if dynamic_trace_id:
-            return str(dynamic_trace_id)
-        return logging_obj.litellm_trace_id
+        dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
+        dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
+
+        # Note: we recommend using `litellm_session_id` for session tracking
+        # `litellm_trace_id` is an internal litellm param
+        if dynamic_litellm_session_id:
+            return str(dynamic_litellm_session_id)
+        elif dynamic_litellm_trace_id:
+            return str(dynamic_litellm_trace_id)
+        else:
+            return logging_obj.litellm_trace_id
 
 
 def get_standard_logging_object_payload(

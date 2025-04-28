@@ -1148,7 +1148,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </div>
                           
                           {/* Column Selector will be rendered here */}
-                          <div className="relative" ref={dropdownRef}>
+                          {/* <div className="relative" ref={dropdownRef}>
                             <button
                               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                               className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
@@ -1184,7 +1184,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 </div>
                               </div>
                             )}
-                          </div>
+                          </div> */}
                         </div>
 
                         {/* Results Count */}
@@ -1211,7 +1211,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       data={modelData.data.filter(
                         (model: any) => (
                           (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
-                          (selectedTeamFilter === "all" || model.team_id === selectedTeamFilter || !selectedTeamFilter)
+                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
                         )
                       )}
                       isLoading={false}

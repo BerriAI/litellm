@@ -5,11 +5,19 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.tool_param import FunctionToolParam
+from typing_extensions import TypedDict
 
-from enterprise.enterprise_hooks.session_handler import (
-    ChatCompletionSession,
-    _ENTERPRISE_ResponsesSessionHandler,
-)
+HAS_ENTERPRISE_DIRECTORY = False
+try:
+    from enterprise.enterprise_hooks.session_handler import (
+        _ENTERPRISE_ResponsesSessionHandler,
+    )
+
+    HAS_ENTERPRISE_DIRECTORY = True
+except ImportError:
+    _ENTERPRISE_ResponsesSessionHandler = None  # type: ignore
+    HAS_ENTERPRISE_DIRECTORY = False
+
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import (
@@ -48,6 +56,21 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+
+class ChatCompletionSession(TypedDict, total=False):
+    messages: List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+            Message,
+        ]
+    ]
+    litellm_session_id: Optional[str]
+
+
 ########### End of Initialize Classes used for Responses API  ###########
 
 
@@ -174,19 +197,23 @@ class LiteLLMCompletionResponsesConfig:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
-        chat_completion_session: ChatCompletionSession = ChatCompletionSession(
-            messages=[], litellm_session_id=None
-        )
-        if previous_response_id:
-            chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                previous_response_id=previous_response_id
+        if (
+            HAS_ENTERPRISE_DIRECTORY is True
+            and _ENTERPRISE_ResponsesSessionHandler is not None
+        ):
+            chat_completion_session = ChatCompletionSession(
+                messages=[], litellm_session_id=None
             )
-        _messages = litellm_completion_request.get("messages") or []
-        session_messages = chat_completion_session.get("messages") or []
-        litellm_completion_request["messages"] = session_messages + _messages
-        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
-            "litellm_session_id"
-        )
+            if previous_response_id:
+                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                    previous_response_id=previous_response_id
+                )
+            _messages = litellm_completion_request.get("messages") or []
+            session_messages = chat_completion_session.get("messages") or []
+            litellm_completion_request["messages"] = session_messages + _messages
+            litellm_completion_request["litellm_trace_id"] = (
+                chat_completion_session.get("litellm_session_id")
+            )
         return litellm_completion_request
 
     @staticmethod

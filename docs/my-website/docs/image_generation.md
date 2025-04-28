@@ -1,8 +1,15 @@
-# Images
+
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Image Generations
 
 ## Quick Start
 
-```python
+### LiteLLM Python SDK
+
+```python showLineNumbers
 from litellm import image_generation
 import os 
 
@@ -14,24 +21,23 @@ response = image_generation(prompt="A cute baby sea otter", model="dall-e-3")
 print(f"response: {response}")
 ```
 
-## Proxy Usage
+### LiteLLM Proxy
 
 ### Setup config.yaml 
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: gpt-image-1 ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.image_generation()
       model: azure/gpt-image-1 ### MODEL NAME sent to `litellm.image_generation()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
-      rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
 
 ```
 
 ### Start proxy 
 
-```bash
+```bash showLineNumbers
 litellm --config /path/to/config.yaml 
 
 # RUNNING on http://0.0.0.0:4000
@@ -57,7 +63,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 </TabItem>
 <TabItem value="openai" label="OpenAI">
 
-```python
+```python showLineNumbers
 from openai import OpenAI
 client = openai.OpenAI(
     api_key="sk-1234",
