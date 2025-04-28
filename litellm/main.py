@@ -183,6 +183,7 @@ from .types.llms.openai import (
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
+    OpenAIModerationResponse,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -4436,7 +4437,7 @@ def adapter_completion(
 
 def moderation(
     input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
-):
+) -> OpenAIModerationResponse:
     # only supports open ai for now
     api_key = (
         api_key
@@ -4455,7 +4456,11 @@ def moderation(
         response = openai_client.moderations.create(input=input, model=model)
     else:
         response = openai_client.moderations.create(input=input)
-    return response
+
+    response_dict: Dict = response.model_dump()
+    return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
+        response_object=response_dict,
+    )
 
 
 @client
@@ -4465,7 +4470,7 @@ async def amoderation(
     api_key: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-):
+) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
     # only supports open ai for now
@@ -4506,7 +4511,10 @@ async def amoderation(
         response = await _openai_client.moderations.create(input=input, model=model)
     else:
         response = await _openai_client.moderations.create(input=input)
-    return response
+    response_dict: Dict = response.model_dump()
+    return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
+        response_object=response_dict,
+    )
 
 
 ##### Image Generation #######################
