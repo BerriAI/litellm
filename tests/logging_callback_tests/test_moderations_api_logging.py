@@ -1,0 +1,60 @@
+import os
+import sys
+import traceback
+import uuid
+import pytest
+from dotenv import load_dotenv
+from fastapi import Request
+from fastapi.routing import APIRoute
+
+load_dotenv()
+import io
+import os
+import time
+import json
+
+# this file is to test litellm/proxy
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+import litellm
+import asyncio
+from typing import Optional
+from litellm.types.utils import StandardLoggingPayload, Usage, ModelInfoBase
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        self.recorded_usage: Optional[Usage] = None
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        standard_logging_payload = kwargs.get("standard_logging_object")
+        self.standard_logging_payload = standard_logging_payload
+        print(
+            "standard_logging_payload",
+            json.dumps(standard_logging_payload, indent=4, default=str),
+        )
+
+        pass
+
+@pytest.mark.asyncio
+async def test_moderations_api_logging():
+    """
+    When moderations API is called, it should log the event on standard_logging_payload
+    """
+    custom_logger = TestCustomLogger()
+    litellm.logging_callback_manager.add_litellm_callback(custom_logger)
+
+
+    response = await litellm.amoderation(
+        input="Hello, how are you?",
+    )
+
+    print("response", json.dumps(response, indent=4, default=str))
+
+    await asyncio.sleep(2)
+
+    assert custom_logger.standard_logging_payload is not None
