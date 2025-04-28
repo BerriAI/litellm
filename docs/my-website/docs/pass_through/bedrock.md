@@ -274,9 +274,7 @@ runtime_client = boto3.client(
 
 # Custom header injection
 def inject_custom_headers(request, **kwargs):
-    request.headers.update({
-        'litellm_user_api_key': 'sk-1234',
-    })
+    request.headers.update(custom_headers)
 
 # Attach the event to inject custom headers before the request is sent
 runtime_client.meta.events.register('before-send.*.*', inject_custom_headers)
