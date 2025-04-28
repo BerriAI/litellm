@@ -1821,7 +1821,10 @@ def _get_num_tokens_from_content_list(
         num_tokens = 0
         text = ""
         for c in content_list:
-            if c["type"] == "text":
+            if isinstance(c, str):
+                text += c
+                num_tokens += len(encoding.encode(c, disallowed_special=()))
+            elif c["type"] == "text":
                 text += c["text"]
                 num_tokens += len(encoding.encode(c["text"], disallowed_special=()))
             elif c["type"] == "image_url":
