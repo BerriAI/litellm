@@ -28,7 +28,6 @@ from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
-
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -64,7 +63,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
+from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -249,7 +248,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id = litellm_trace_id
+        self.litellm_trace_id: str = litellm_trace_id or str(uuid.uuid4())
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[Any] = (
@@ -447,13 +446,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        if (
-            litellm_params.get("input_cost_per_token") is not None
-            or litellm_params.get("input_cost_per_second") is not None
-            or litellm_params.get("output_cost_per_token") is not None
-            or litellm_params.get("output_cost_per_second") is not None
-        ):
-            self.custom_pricing = True
+        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+        for key in custom_pricing_keys:
+            if litellm_params.get(key) is not None:
+                self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -3149,10 +3145,11 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    for _custom_cost_param in SPECIAL_MODEL_INFO_PARAMS:
-        if litellm_params.get(_custom_cost_param, None) is not None:
+    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+    for key in custom_pricing_keys:
+        if litellm_params.get(key, None) is not None:
             return True
-        elif model_info.get(_custom_cost_param, None) is not None:
+        elif model_info.get(key, None) is not None:
             return True
 
     return False
@@ -3500,6 +3497,28 @@ class StandardLoggingPayloadSetup:
         else:
             return end_time_float - start_time_float
 
+    @staticmethod
+    def _get_standard_logging_payload_trace_id(
+        logging_obj: Logging,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Returns the `litellm_trace_id` for this request
+
+        This helps link sessions when multiple requests are made in a single session
+        """
+        dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
+        dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
+
+        # Note: we recommend using `litellm_session_id` for session tracking
+        # `litellm_trace_id` is an internal litellm param
+        if dynamic_litellm_session_id:
+            return str(dynamic_litellm_session_id)
+        elif dynamic_litellm_trace_id:
+            return str(dynamic_litellm_trace_id)
+        else:
+            return logging_obj.litellm_trace_id
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -3652,7 +3671,10 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
-            trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
+            trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
             call_type=call_type or "",
             cache_hit=cache_hit,
             stream=stream,

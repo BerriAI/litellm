@@ -1,4 +1,8 @@
-# Text to Speech
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# /audio/speech
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 

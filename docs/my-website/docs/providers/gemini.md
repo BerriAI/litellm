@@ -655,7 +655,7 @@ import os
 
 os.environ["GEMINI_API_KEY"] = ".."
 
-tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {}}] # 👈 ADD GOOGLE SEARCH
 
 response = completion(
     model="gemini/gemini-2.0-flash",
@@ -691,7 +691,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
   "model": "gemini-2.0-flash",
   "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
-  "tools": [{"googleSearchRetrieval": {}}]
+  "tools": [{"googleSearch": {}}]
 }
 '
 ```

@@ -13,6 +13,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 | Streaming | ✅ | |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
+| Supported operations | Create a response, Get a response, Delete a response | |
 | Supported LiteLLM Versions | 1.63.8+ | |
 | Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
 
@@ -50,6 +51,56 @@ response = litellm.responses(
 
 for event in response:
     print(event)
+```
+
+#### GET a Response
+```python showLineNumbers title="Get Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = litellm.get_responses(
+    response_id=response_id
+)
+
+print(retrieved_response)
+
+# For async usage
+# retrieved_response = await litellm.aget_responses(response_id=response_id)
+```
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = litellm.delete_responses(
+    response_id=response_id
+)
+
+print(delete_response)
+
+# For async usage
+# delete_response = await litellm.adelete_responses(response_id=response_id)
 ```
 
 </TabItem>
@@ -289,6 +340,56 @@ for event in response:
     print(event)
 ```
 
+#### GET a Response
+```python showLineNumbers title="Get Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = client.responses.retrieve(response_id)
+
+print(retrieved_response)
+```
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = client.responses.delete(response_id)
+
+print(delete_response)
+```
+
 </TabItem>
 
 <TabItem value="anthropic" label="Anthropic">
@@ -520,9 +621,9 @@ for event in response:
 | `azure_ai` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 | All other llm api providers | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
 
-## Load Balancing with Routing Affinity
+## Load Balancing with Session Continuity.
 
-When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides routing affinity for conversations. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
+When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides session continuity. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
 
 
 #### Example Usage
@@ -530,7 +631,7 @@ When using the Responses API with multiple deployments of the same model (e.g., 
 <Tabs>
 <TabItem value="python-sdk" label="Python SDK">
 
-```python showLineNumbers title="Python SDK with Routing Affinity"
+```python showLineNumbers title="Python SDK with Session Continuity"
 import litellm
 
 # Set up router with multiple deployments of the same model
@@ -580,11 +681,11 @@ follow_up = await router.aresponses(
 </TabItem>
 <TabItem value="proxy-server" label="Proxy Server">
 
-#### 1. Setup routing affinity on proxy config.yaml
+#### 1. Setup session continuity on proxy config.yaml
 
-To enable routing affinity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
 
-```yaml showLineNumbers title="config.yaml with Responses API Routing Affinity"
+```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
   - model_name: azure-gpt4-turbo
     litellm_params:
@@ -631,3 +732,206 @@ follow_up = client.responses.create(
 
 </TabItem>
 </Tabs>
+
+## Session Management - Non-OpenAI Models
+
+LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+
+#### Usage
+
+1. Enable storing request / response content in the database
+
+Set `store_prompts_in_spend_logs: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the database.
+
+```yaml
+general_settings:
+  store_prompts_in_spend_logs: true
+```
+
+2. Make request 1 with no `previous_response_id` (new session)
+
+Start a new conversation by making a request without specifying a previous response ID.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "who is Michael Jordan"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make initial request to start a new conversation
+response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="who is Michael Jordan"
+)
+
+print(response.id)  # Store this ID for future requests in same session
+print(response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_123abc",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan is widely considered one of the greatest basketball players of all time. He played for the Chicago Bulls (1984-1993, 1995-1998) and Washington Wizards (2001-2003), winning 6 NBA Championships with the Bulls."
+    }]
+  }]
+}
+```
+
+3. Make request 2 with `previous_response_id` (same session)
+
+Continue the conversation by referencing the previous response ID to maintain conversation context.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him",
+    "previous_response_id": "resp_123abc"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make follow-up request in the same conversation session
+follow_up_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him",
+    previous_response_id="resp_123abc"  # ID from the previous response
+)
+
+print(follow_up_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_456def",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan was born February 17, 1963. He attended University of North Carolina before being drafted 3rd overall by the Bulls in 1984. Beyond basketball, he built the Air Jordan brand with Nike and later became owner of the Charlotte Hornets."
+    }]
+  }]
+}
+```
+
+4. Make request 3 with no `previous_response_id` (new session)
+
+Start a brand new conversation without referencing previous context to demonstrate how context is not maintained between sessions.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make a new request without previous context
+new_session_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him"
+    # No previous_response_id means this starts a new conversation
+)
+
+print(new_session_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_789ghi",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"I don't see who you're referring to in our conversation. Could you let me know which person you'd like to learn more about?"
+    }]
+  }]
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

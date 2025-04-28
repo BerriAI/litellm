@@ -182,6 +182,7 @@ from .types.llms.openai import (
     ChatCompletionPredictionContentParam,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
+    ImageGenerationRequestQuality,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -1178,6 +1179,7 @@ def completion(  # type: ignore # noqa: PLR0915
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
             litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_session_id=kwargs.get("litellm_session_id"),
             hf_model_name=hf_model_name,
             custom_prompt_dict=custom_prompt_dict,
             litellm_metadata=kwargs.get("litellm_metadata"),
@@ -2688,9 +2690,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4412,9 +4414,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -4567,7 +4569,7 @@ def image_generation(  # noqa: PLR0915
     prompt: str,
     model: Optional[str] = None,
     n: Optional[int] = None,
-    quality: Optional[str] = None,
+    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
     response_format: Optional[str] = None,
     size: Optional[str] = None,
     style: Optional[str] = None,
@@ -5510,7 +5512,10 @@ def speech(  # noqa: PLR0915
 
 
 async def ahealth_check_wildcard_models(
-    model: str, custom_llm_provider: str, model_params: dict
+    model: str,
+    custom_llm_provider: str,
+    model_params: dict,
+    litellm_logging_obj: Logging,
 ) -> dict:
     # this is a wildcard model, we need to pick a random model from the provider
     cheapest_models = pick_cheapest_chat_models_from_llm_provider(
@@ -5527,6 +5532,7 @@ async def ahealth_check_wildcard_models(
     else:
         fallback_models = None
     model_params["model"] = cheapest_models[0]
+    model_params["litellm_logging_obj"] = litellm_logging_obj
     model_params["fallbacks"] = fallback_models
     model_params["max_tokens"] = 1
     await acompletion(**model_params)
@@ -5593,6 +5599,7 @@ async def ahealth_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
+                litellm_logging_obj=litellm_logging_obj,
             )
         model_params["litellm_logging_obj"] = litellm_logging_obj
 
@@ -5834,9 +5841,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5847,9 +5854,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk

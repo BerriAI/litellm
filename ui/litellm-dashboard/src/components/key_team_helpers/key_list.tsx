@@ -87,7 +87,7 @@ selectedTeam?: Team;
 currentOrg: Organization | null;
 selectedKeyAlias: string | null;
 accessToken: string;
-currentPage?: number;
+createClicked: boolean;
 }
 
 interface PaginationData {
@@ -111,7 +111,7 @@ const useKeyList = ({
     currentOrg,
     selectedKeyAlias,
     accessToken,
-    currentPage = 1,
+    createClicked,
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -133,10 +133,12 @@ const useKeyList = ({
 
             const data = await keyListCall(
                 accessToken,
-                currentOrg?.organization_id || null,
-                selectedTeam?.team_id || "",
-                selectedKeyAlias,
-                params.page as number || 1,
+                null,
+                null,
+                null,
+                null,
+                null,
+                1,
                 50,
             );
             console.log("data", data);
@@ -161,7 +163,7 @@ const useKeyList = ({
           'selectedKeyAlias',
           selectedKeyAlias
         );
-    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias]);
+    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
     const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
         setKeyData(prevData => {

@@ -176,6 +176,16 @@ class ResponsesAPIRequestUtils:
                 response_id=response_id,
             )
 
+    @staticmethod
+    def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:
+        """Get the model_id from the response_id"""
+        if response_id is None:
+            return None
+        decoded_response_id = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        )
+        return decoded_response_id.get("model_id") or None
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
