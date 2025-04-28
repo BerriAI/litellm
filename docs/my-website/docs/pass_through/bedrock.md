@@ -257,7 +257,7 @@ proxy_endpoint = "http://0.0.0.0:4000/bedrock" # 👈 your proxy base url
 # # Create a Config object with the proxy
 # Custom headers
 custom_headers = {
-    'litellm_user_api_key': 'sk-1234', # 👈 your proxy api key
+    'litellm_user_api_key': 'Bearer sk-1234', # 👈 your proxy api key
 }
 
 
