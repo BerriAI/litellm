@@ -60,3 +60,11 @@ def test_sentry_sample_rate():
         else:
             if "SENTRY_API_SAMPLE_RATE" in os.environ:
                 del os.environ["SENTRY_API_SAMPLE_RATE"]
+def test_use_custom_pricing_for_model():
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "custom_llm_provider": "azure",
+        "input_cost_per_pixel": 10,
+    }
+    assert use_custom_pricing_for_model(litellm_params) == True

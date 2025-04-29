@@ -26,6 +26,8 @@ interface DataTableProps<TData, TValue> {
   expandedRequestId?: string | null;
   onRowExpand?: (requestId: string | null) => void;
   setSelectedKeyIdInfoView?: (keyId: string | null) => void;
+  loadingMessage?: string;
+  noDataMessage?: string;
 }
 
 export function DataTable<TData extends { request_id: string }, TValue>({
@@ -36,6 +38,8 @@ export function DataTable<TData extends { request_id: string }, TValue>({
   isLoading = false,
   expandedRequestId,
   onRowExpand,
+  loadingMessage = "🚅 Loading logs...",
+  noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
@@ -114,7 +118,7 @@ export function DataTable<TData extends { request_id: string }, TValue>({
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>🚅 Loading logs...</p>
+                  <p>{loadingMessage}</p>
                 </div>
               </TableCell>
             </TableRow>
@@ -147,7 +151,7 @@ export function DataTable<TData extends { request_id: string }, TValue>({
           : <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>No logs found</p>
+                  <p>{noDataMessage}</p>
                 </div>
               </TableCell>
             </TableRow>

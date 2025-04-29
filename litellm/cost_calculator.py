@@ -58,6 +58,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
+    OpenAIModerationResponse,
     OpenAIRealtimeStreamList,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -944,6 +945,7 @@ def response_cost_calculator(
         RerankResponse,
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
+        OpenAIModerationResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1124,6 +1126,7 @@ def default_image_cost_calculator(
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
+        model,
     ]
     for model in models_to_check:
         if model in litellm.model_cost:

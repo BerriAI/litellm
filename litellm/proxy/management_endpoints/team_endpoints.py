@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -85,6 +85,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
+    TeamListResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -537,6 +538,7 @@ async def update_team(
             detail={"error": "Team doesn't exist. Got={}".format(team_row)},
         )
 
+    verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
     await _cache_team_object(
         team_id=team_row.team_id,
         team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
@@ -1551,6 +1553,150 @@ async def list_available_teams(
     ]
 
     return available_teams_correct_type
+
+
+@router.get(
+    "/v2/team/list",
+    tags=["team management"],
+    response_model=TeamListResponse,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_team_v2(
+    http_request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="Only return teams which this 'user_id' belongs to"
+    ),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Only return teams which this 'organization_id' belongs to",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None, description="Only return teams which this 'team_id' belongs to"
+    ),
+    team_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Only return teams which this 'team_alias' belongs to. Supports partial matching.",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=10, description="Number of teams per page", ge=1, le=100
+    ),
+    sort_by: Optional[str] = fastapi.Query(
+        default=None,
+        description="Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')",
+    ),
+    sort_order: str = fastapi.Query(
+        default="asc", description="Sort order ('asc' or 'desc')"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get a paginated list of teams with filtering and sorting options.
+
+    Parameters:
+        user_id: Optional[str]
+            Only return teams which this user belongs to
+        organization_id: Optional[str]
+            Only return teams which belong to this organization
+        team_id: Optional[str]
+            Filter teams by exact team_id match
+        team_alias: Optional[str]
+            Filter teams by partial team_alias match
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
+        sort_by: Optional[str]
+            Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')
+        sort_order: str
+            Sort order ('asc' or 'desc')
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"No db connected. prisma client={prisma_client}"},
+        )
+
+    if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        user_id = user_api_key_dict.user_id
+
+    # Calculate skip and take for pagination
+    skip = (page - 1) * page_size
+
+    # Build where conditions based on provided parameters
+    where_conditions: Dict[str, Any] = {}
+
+    if team_id:
+        where_conditions["team_id"] = team_id
+
+    if team_alias:
+        where_conditions["team_alias"] = {
+            "contains": team_alias,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if organization_id:
+        where_conditions["organization_id"] = organization_id
+
+    if user_id:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        if user_object is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        # Find teams where this user is a member by checking members_with_roles array
+        if team_id is None:
+            where_conditions["team_id"] = {"in": user_object_correct_type.teams}
+        elif team_id in user_object_correct_type.teams:
+            where_conditions["team_id"] = team_id
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User is not a member of team_id={team_id}"},
+            )
+
+    # Build order_by conditions
+    valid_sort_columns = ["team_id", "team_alias", "created_at"]
+    order_by = None
+    if sort_by and sort_by in valid_sort_columns:
+        if sort_order.lower() not in ["asc", "desc"]:
+            sort_order = "asc"
+        order_by = {sort_by: sort_order.lower()}
+
+    # Get teams with pagination
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        where=where_conditions,
+        skip=skip,
+        take=page_size,
+        order=order_by if order_by else {"created_at": "desc"},  # Default sort
+    )
+    # Get total count for pagination
+    total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
+
+    # Calculate total pages
+    total_pages = -(-total_count // page_size)  # Ceiling division
+
+    return {
+        "teams": [team.model_dump() for team in teams] if teams else [],
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.get(

@@ -183,6 +183,7 @@ from .types.llms.openai import (
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
+    OpenAIModerationResponse,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -1179,6 +1180,7 @@ def completion(  # type: ignore # noqa: PLR0915
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
             litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_session_id=kwargs.get("litellm_session_id"),
             hf_model_name=hf_model_name,
             custom_prompt_dict=custom_prompt_dict,
             litellm_metadata=kwargs.get("litellm_metadata"),
@@ -4435,7 +4437,7 @@ def adapter_completion(
 
 def moderation(
     input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
-):
+) -> OpenAIModerationResponse:
     # only supports open ai for now
     api_key = (
         api_key
@@ -4454,7 +4456,11 @@ def moderation(
         response = openai_client.moderations.create(input=input, model=model)
     else:
         response = openai_client.moderations.create(input=input)
-    return response
+
+    response_dict: Dict = response.model_dump()
+    return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
+        response_object=response_dict,
+    )
 
 
 @client
@@ -4464,7 +4470,7 @@ async def amoderation(
     api_key: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-):
+) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
     # only supports open ai for now
@@ -4486,10 +4492,13 @@ async def amoderation(
         _openai_client = openai_client
 
     optional_params = GenericLiteLLMParams(**kwargs)
+    litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+        "litellm_logging_obj", None
+    )
     try:
         (
             model,
-            _custom_llm_provider,
+            custom_llm_provider,
             _dynamic_api_key,
             _dynamic_api_base,
         ) = litellm.get_llm_provider(
@@ -4501,11 +4510,28 @@ async def amoderation(
     except litellm.BadRequestError:
         # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
         pass
+
+    # update litellm_logging_obj with environment variables
+    custom_llm_provider = custom_llm_provider or litellm.LlmProviders.OPENAI.value
+    if litellm_logging_obj is not None:
+        litellm_logging_obj.update_environment_variables(
+            model=model,
+            user=kwargs.get("user", None),
+            optional_params={},
+            litellm_params={
+                **kwargs,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)
     else:
         response = await _openai_client.moderations.create(input=input)
-    return response
+    response_dict: Dict = response.model_dump()
+    return litellm.utils.LiteLLMResponseObjectHandler.convert_to_moderation_response(
+        response_object=response_dict,
+    )
 
 
 ##### Image Generation #######################
@@ -5511,7 +5537,10 @@ def speech(  # noqa: PLR0915
 
 
 async def ahealth_check_wildcard_models(
-    model: str, custom_llm_provider: str, model_params: dict
+    model: str,
+    custom_llm_provider: str,
+    model_params: dict,
+    litellm_logging_obj: Logging,
 ) -> dict:
     # this is a wildcard model, we need to pick a random model from the provider
     cheapest_models = pick_cheapest_chat_models_from_llm_provider(
@@ -5528,6 +5557,7 @@ async def ahealth_check_wildcard_models(
     else:
         fallback_models = None
     model_params["model"] = cheapest_models[0]
+    model_params["litellm_logging_obj"] = litellm_logging_obj
     model_params["fallbacks"] = fallback_models
     model_params["max_tokens"] = 1
     await acompletion(**model_params)
@@ -5594,6 +5624,7 @@ async def ahealth_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
+                litellm_logging_obj=litellm_logging_obj,
             )
         model_params["litellm_logging_obj"] = litellm_logging_obj
 

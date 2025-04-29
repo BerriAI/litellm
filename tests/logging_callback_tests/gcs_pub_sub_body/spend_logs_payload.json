@@ -1,5 +1,6 @@
 {
     "request_id": "chatcmpl-2283081b-dc89-41f6-93e6-d4f914774027",
+    "session_id": "1234567890",
     "call_type": "acompletion",
     "api_key": "",
     "cache_hit": "None",
@@ -23,5 +24,6 @@
     "requester_ip_address": null,
     "custom_llm_provider": "openai",
     "messages": "{}",
-    "response": "{}"
+    "response": "{}",
+    "proxy_server_request": "{}"
 }
