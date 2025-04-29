@@ -1270,6 +1270,13 @@ class ImageGenerationRequestQuality(str, Enum):
     HD = "hd"
 
 
+class OpenAIModerationResult(BaseLiteLLMOpenAIResponseObject):
+    categories: Optional[Dict]
+    category_applied_input_types: Optional[Dict]
+    category_scores: Optional[Dict]
+    flagged: Optional[bool]
+
+
 class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     """
     Response from the OpenAI Moderation API.
@@ -1281,7 +1288,7 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     model: str
     """The model used to generate the moderation results."""
 
-    results: List[Dict]
+    results: List[OpenAIModerationResult]
     """A list of moderation objects."""
 
     # Define private attributes using PrivateAttr
