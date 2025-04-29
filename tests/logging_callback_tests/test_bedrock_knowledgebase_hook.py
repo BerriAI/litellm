@@ -84,16 +84,16 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call():
     """
     Test that the Bedrock Knowledge Base Hook works when making a real llm api call
     """
-    from openai import AsyncOpenAI
     litellm._turn_on_debug()
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    async_client = AsyncHTTPHandler()
+    litellm.callbacks = [BedrockKnowledgeBaseHook()]
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
         knowledge_bases = [
             "T37J8R4WTM"
         ],
-        client=client
+        client=async_client
     )
     assert response is not None
 
@@ -103,6 +103,7 @@ async def test_openai_with_knowledge_base_mock_openai():
     """
     Tests that knowledge base content is correctly passed to the OpenAI API call
     """
+    litellm.callbacks = [BedrockKnowledgeBaseHook()]
     litellm.set_verbose = True
     from openai import AsyncOpenAI
 

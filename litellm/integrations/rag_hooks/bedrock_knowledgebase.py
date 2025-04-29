@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -32,7 +33,7 @@ else:
     StandardCallbackDynamicParams = Any
 
 
-class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
+class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
     CONTENT_PREFIX_STRING = "Context: \n\n"
 
     def __init__(
@@ -40,7 +41,7 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
         # store kwargs as optional_params
