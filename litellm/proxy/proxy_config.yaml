@@ -1,7 +1,10 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: computer-user-agent
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: azure/computer-use-preview
+      truncation: auto
+      api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
+      api_base: os.environ/AZURE_RESPONSES_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_RESPONSES_OPENAI_API_VERSION
 general_settings:
   store_prompts_in_spend_logs: true
