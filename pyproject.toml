@@ -94,7 +94,6 @@ extra_proxy = [
     "azure-keyvault-secrets",
     "google-cloud-kms",
     "resend",
-
     "spark_ai_python",
 ]
 
