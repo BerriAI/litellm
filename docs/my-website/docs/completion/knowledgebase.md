@@ -38,16 +38,48 @@ model_list:
 
 #### 2. Make a request with knowledge_bases parameter
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
 ```bash showLineNumbers title="Curl Request to LiteLLM Proxy"
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -d '{
-    "model": "claude-with-kb",
+    "model": "claude-3-5-sonnet",
     "messages": [{"role": "user", "content": "What is litellm?"}],
     "knowledge_bases": ["YOUR_KNOWLEDGE_BASE_ID"]
   }'
 ```
+
+</TabItem>
+
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python showLineNumbers title="OpenAI Python SDK Request"
+from openai import OpenAI
+
+# Initialize client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+# Make a completion request with knowledge_bases parameter
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What is litellm?"}],
+    extra_body={"knowledge_bases": ["YOUR_KNOWLEDGE_BASE_ID"]}
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+</Tabs>
 
 ## How It Works
 
