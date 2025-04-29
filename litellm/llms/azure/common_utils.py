@@ -177,7 +177,8 @@ def get_azure_ad_token_from_oidc(
     azure_authority_host = os.getenv(
         "AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com"
     )
-
+    azure_client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
+    azure_tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
     if azure_client_id is None or azure_tenant_id is None:
         raise AzureOpenAIError(
             status_code=422,
