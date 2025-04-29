@@ -895,31 +895,35 @@ def test_anthropic_citations_api():
     """
     from litellm import completion
 
-    resp = completion(
-        model="claude-3-5-sonnet-20241022",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "text",
-                            "media_type": "text/plain",
-                            "data": "The grass is green. The sky is blue.",
+    try: 
+        resp = completion(
+            model="claude-3-5-sonnet-20241022",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "The grass is green. The sky is blue.",
+                            },
+                            "title": "My Document",
+                            "context": "This is a trustworthy document.",
+                            "citations": {"enabled": True},
                         },
-                        "title": "My Document",
-                        "context": "This is a trustworthy document.",
-                        "citations": {"enabled": True},
-                    },
-                    {
-                        "type": "text",
-                        "text": "What color is the grass and sky?",
-                    },
-                ],
-            }
-        ],
-    )
+                        {
+                            "type": "text",
+                            "text": "What color is the grass and sky?",
+                        },
+                    ],
+                }
+            ],
+        )
+
+    except litellm.InternalServerError:
+        pytest.skip("Anthropic overloaded")
 
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 

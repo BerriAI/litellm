@@ -444,6 +444,17 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
+                
+                daily_tag_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
+                if daily_tag_spend_update_transactions is not None:
+                    await DBSpendUpdateWriter.update_daily_tag_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_tag_spend_update_transactions,
+                    )
             except Exception as e:
                 verbose_proxy_logger.error(f"Error committing spend updates: {e}")
             finally:
