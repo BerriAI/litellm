@@ -13,33 +13,32 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
-)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
+    BedrockKBContent,
     BedrockKBGuardrailConfiguration,
     BedrockKBRequest,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
+    BedrockKBRetrievalResult,
 )
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
-GUARDRAIL_NAME = "bedrock"
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
+else:
+    StandardCallbackDynamicParams = Any
 
 
 class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
@@ -56,6 +55,50 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
 
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
+        """
+        knowledge_bases = non_default_params.pop("knowledge_bases", None)
+        if knowledge_bases:
+            for knowledge_base in knowledge_bases:
+                response = await self.make_bedrock_kb_retrieve_request(
+                    knowledge_base_id=knowledge_base,
+                    query=self._get_kb_query_from_messages(messages),
+                )
+                verbose_logger.debug(f"Bedrock Knowledge Base Response: {response}")
+
+                context_message = (
+                    self.get_chat_completion_message_from_bedrock_kb_response(response)
+                )
+                if context_message is not None:
+                    messages.append(context_message)
+        return model, messages, non_default_params
+
+    def _get_kb_query_from_messages(self, messages: List[AllMessageValues]) -> str:
+        """
+        Uses the text `content` field of the last message in the list of messages
+        """
+        if len(messages) == 0:
+            return ""
+        last_message = messages[-1]
+        last_message_content = last_message.get("content", None)
+        if last_message_content is None:
+            return ""
+        if isinstance(last_message_content, str):
+            return last_message_content
+        elif isinstance(last_message_content, list):
+            return "\n".join([item.get("text", "") for item in last_message_content])
+        return ""
 
     def _prepare_request(
         self,
@@ -134,11 +177,17 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
         # Prepare request data
         request_data: BedrockKBRequest = BedrockKBRequest(
             retrievalQuery=BedrockKBRetrievalQuery(text=query),
-            nextToken=next_token,
-            retrievalConfiguration=retrieval_configuration,
-            guardrailConfiguration=BedrockKBGuardrailConfiguration(
+        )
+        if next_token:
+            request_data["nextToken"] = next_token
+        if retrieval_configuration:
+            request_data["retrievalConfiguration"] = retrieval_configuration
+        if guardrail_id and guardrail_version:
+            request_data["guardrailConfiguration"] = BedrockKBGuardrailConfiguration(
                 guardrailId=guardrail_id, guardrailVersion=guardrail_version
-            ),
+            )
+        verbose_logger.debug(
+            f"Request Data: {json.dumps(request_data, indent=4, default=str)}"
         )
 
         # Prepare the request
@@ -183,3 +232,54 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
                     "response": response.text,
                 },
             )
+
+    @staticmethod
+    def should_use_prompt_management_hook(non_default_params: Dict) -> bool:
+        if non_default_params.get("knowledge_bases", None):
+            return True
+        return False
+
+    @staticmethod
+    def get_initialized_custom_logger(
+        non_default_params: Dict,
+    ) -> Optional[CustomLogger]:
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
+        if BedrockKnowledgeBaseHook.should_use_prompt_management_hook(
+            non_default_params
+        ):
+            return _init_custom_logger_compatible_class(
+                logging_integration="bedrock_knowledgebase_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+        return None
+
+    @staticmethod
+    def get_chat_completion_message_from_bedrock_kb_response(
+        response: BedrockKBResponse,
+    ) -> Optional[ChatCompletionUserMessage]:
+        """
+        Retrieves the context from the Bedrock Knowledge Base response and returns a ChatCompletionUserMessage object.
+        """
+        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = response.get(
+            "retrievalResults", None
+        )
+        context_string: str = "Context: \n\n"
+        for retrieval_result in retrieval_results:
+            retrieval_result_content: Optional[BedrockKBContent] = (
+                retrieval_result.get("content", None) or {}
+            )
+            retrieval_result_text: Optional[str] = retrieval_result_content.get(
+                "text", None
+            )
+            if retrieval_result_text is None:
+                continue
+            context_string += retrieval_result_text
+        message = ChatCompletionUserMessage(
+            role="user",
+            content=context_string,
+        )
+        return message

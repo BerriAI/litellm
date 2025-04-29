@@ -31,3 +31,17 @@ async def test_basic_bedrock_knowledgebase_retrieval():
     )
     assert response is not None
 
+
+@pytest.mark.asyncio
+async def test_e2e_bedrock_knowledgebase_retrieval_with_completion():
+    litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        knowledge_bases = [
+            "T37J8R4WTM"
+        ]
+        
+    )
+    assert response is not None
+

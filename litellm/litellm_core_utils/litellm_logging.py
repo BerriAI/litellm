@@ -43,6 +43,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.integrations.rag_hooks.bedrock_knowledgebase import (
+    BedrockKnowledgeBaseHook,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -469,6 +472,10 @@ class Logging(LiteLLMLoggingBaseClass):
             non_default_params
         ):
             return True
+        if BedrockKnowledgeBaseHook.should_use_prompt_management_hook(
+            non_default_params
+        ):
+            return True
         return False
 
     def get_chat_completion_prompt(
@@ -493,6 +500,38 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages,
                 non_default_params,
             ) = custom_logger.get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params or {},
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
+            )
+        self.messages = messages
+        return model, messages, non_default_params
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: Dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(
+                model=model, non_default_params=non_default_params
+            )
+        )
+
+        if custom_logger:
+            (
+                model,
+                messages,
+                non_default_params,
+            ) = await custom_logger.async_get_chat_completion_prompt(
                 model=model,
                 messages=messages,
                 non_default_params=non_default_params or {},
@@ -547,6 +586,13 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return anthropic_cache_control_logger
 
+        if bedrock_knowledgebase_logger := BedrockKnowledgeBaseHook.get_initialized_custom_logger(
+            non_default_params
+        ):
+            self.model_call_details["prompt_integration"] = (
+                bedrock_knowledgebase_logger.__class__.__name__
+            )
+            return bedrock_knowledgebase_logger
         return None
 
     def get_custom_logger_for_anthropic_cache_control_hook(
@@ -2964,6 +3010,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
+        elif logging_integration == "bedrock_knowledgebase_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockKnowledgeBaseHook):
+                    return callback
+            bedrock_knowledgebase_hook = BedrockKnowledgeBaseHook()
+            _in_memory_loggers.append(bedrock_knowledgebase_hook)
+            return bedrock_knowledgebase_hook  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -3105,6 +3158,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "bedrock_knowledgebase_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockKnowledgeBaseHook):
                     return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
