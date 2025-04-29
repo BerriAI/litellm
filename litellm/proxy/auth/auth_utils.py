@@ -1,14 +1,22 @@
 import os
 import re
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
+from typing_extensions import NotRequired, TypedDict
 
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+
+
+class RouteConfig(TypedDict):
+    """TypedDict for route configuration in allowed_routes"""
+
+    route: str
+    allowed_methods: NotRequired[List[str]]  # Optional list of allowed HTTP methods
 
 
 def _get_request_ip_address(
@@ -178,6 +186,49 @@ def is_request_body_safe(
     return True
 
 
+def _is_route_allowed(
+    route: str,
+    request_method: Optional[str],
+    allowed_routes: List[Union[str, Dict[str, Any]]],
+) -> bool:
+    """
+    Check if the given route and method are allowed based on the allowed_routes configuration
+
+    Args:
+        route: The current route being accessed
+        request_method: The HTTP method being used (GET, POST, etc.)
+        allowed_routes: List of allowed routes, can be strings or RouteConfig objects
+
+    Returns:
+        bool: True if the route and method are allowed, False otherwise
+    """
+    if allowed_routes is None:
+        return False
+
+    for route_config in allowed_routes:
+        if isinstance(route_config, str):
+            if route_config == route:
+                return True
+        elif isinstance(route_config, dict) and route_config.get("route") == route:
+            route_config = RouteConfig(**route_config)
+            allowed_methods = route_config.get("allowed_methods") or None
+            if allowed_methods is None:
+                return True
+            elif request_method in allowed_methods:
+                return True
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access forbidden: {route} {request_method} not allowed. Only {allowed_methods} are allowed for route {route}",
+                )
+
+    verbose_proxy_logger.error(f"Route {route} not in allowed_routes={allowed_routes}")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Access forbidden: Route {route} not allowed",
+    )
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
@@ -230,14 +281,12 @@ async def pre_db_read_auth_checks(
             verbose_proxy_logger.error(
                 f"Trying to set allowed_routes. This is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
             )
-        if route not in _allowed_routes:
-            verbose_proxy_logger.error(
-                f"Route {route} not in allowed_routes={_allowed_routes}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: Route {route} not allowed",
-            )
+
+        _is_route_allowed(
+            route=route,
+            request_method=request_data.get("method", None),
+            allowed_routes=_allowed_routes,
+        )
 
 
 def route_in_additonal_public_routes(current_route: str):
