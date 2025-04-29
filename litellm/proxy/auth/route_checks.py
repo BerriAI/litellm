@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.proxy_server import general_settings # Add this import
 
 from .auth_checks_organization import _user_is_org_admin
 
@@ -149,6 +150,10 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
+        elif RouteChecks.check_route_access( # Check if route is explicitly public
+            route=route, allowed_routes=general_settings.get("public_routes", [])
+        ):
+             pass
         else:
             user_role = "unknown"
             user_id = "unknown"
