@@ -1,6 +1,7 @@
 import os
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.utils import _prepare_input_str
+from litellm._logging import verbose_logger
 
 
 class DeepEvalLogger(CustomLogger):
@@ -102,13 +103,13 @@ class DeepEvalLogger(CustomLogger):
             )
         except Exception as e:
             # TODO: see if there is any verbose print method
-            print(f"Error getting cost per token: {e}")
+            verbose_logger.debug(f"Unable to get cost per token: {e}")
 
         # Get token count
         try:
             input_token_count, output_token_count = self._get_token_count(response_obj)
         except Exception as e:
-            print(f"Error getting token count: {e}")
+            verbose_logger.debug(f"Unable to get token count: {e}")
 
         # Get metrics
         try:
@@ -117,7 +118,7 @@ class DeepEvalLogger(CustomLogger):
                 if metrics is not None:
                     metrics = metrics.get("deepeval_metrics")
         except Exception as e:
-            print(f"Error getting metrics: {e}")
+            verbose_logger.debug(f"Unable to get metrics: {e}")
 
         # message success Trace
         # PS: execution time is logged as 0 (spanned on a hook rather than a llm call)
