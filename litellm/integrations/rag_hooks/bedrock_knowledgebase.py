@@ -5,17 +5,8 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import os
-import sys
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import json
-import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-
-from fastapi import HTTPException
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -171,6 +162,8 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
         Returns:
             BedrockKBRetrievalResponse: A typed response object containing the retrieval results
         """
+        from fastapi import HTTPException
+
         credentials = self.get_credentials()
         aws_region_name = self._get_aws_region_name(
             optional_params=self.optional_params
@@ -220,7 +213,7 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
 
         if response.status_code == 200:
             response_data = response.json()
-            return BedrockKBResponse(response_data)
+            return BedrockKBResponse(**response_data)
         else:
             verbose_proxy_logger.error(
                 "Bedrock Knowledge Base: error in response. Status code: %s, response: %s",
@@ -269,11 +262,17 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
         retrieval_results: Optional[List[BedrockKBRetrievalResult]] = response.get(
             "retrievalResults", None
         )
+        if retrieval_results is None:
+            return None
+
+        # string to combine the context from the knowledge base
         context_string: str = BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING
         for retrieval_result in retrieval_results:
             retrieval_result_content: Optional[BedrockKBContent] = (
                 retrieval_result.get("content", None) or {}
             )
+            if retrieval_result_content is None:
+                continue
             retrieval_result_text: Optional[str] = retrieval_result_content.get(
                 "text", None
             )

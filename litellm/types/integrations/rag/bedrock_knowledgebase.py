@@ -32,21 +32,21 @@ class BedrockKBContent(TypedDict, total=False):
     row: Optional[List[BedrockKBRowValue]]
 
 
-class BedrockKBRetrievalResult(TypedDict):
+class BedrockKBRetrievalResult(TypedDict, total=False):
     """Individual result from a knowledge base retrieval."""
 
-    content: BedrockKBContent
-    location: BedrockKBLocation
-    score: float
+    content: Optional[BedrockKBContent]
+    location: Optional[BedrockKBLocation]
+    score: Optional[float]
     metadata: Optional[Dict[str, Any]]
 
 
-class BedrockKBResponse(TypedDict):
+class BedrockKBResponse(TypedDict, total=False):
     """Response from a Bedrock Knowledge Base retrieval request."""
 
-    guardrailAction: Literal["INTERVENED", "NONE"]
+    guardrailAction: Optional[Literal["INTERVENED", "NONE"]]
     nextToken: Optional[str]
-    retrievalResults: List[BedrockKBRetrievalResult]
+    retrievalResults: Optional[List[BedrockKBRetrievalResult]]
 
 
 ################ Bedrock Knowledge Base Request Types #################
