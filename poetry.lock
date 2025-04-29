@@ -2751,9 +2751,6 @@ files = [
 type = "legacy"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 reference = "tsinghua"
-
-    {file = "opentelemetry_api-1.25.0-py3-none-any.whl", hash = "sha256:757fa1aa020a0f8fa139f8959e53dec2051cc26b832e76fa839a6d76ecefd737"},
-    {file = "opentelemetry_api-1.25.0.tar.gz", hash = "sha256:77c4985f62f2614e42ce77ee4c9da5fa5f0bc1e1821085e9a47533a9323ae869"},
 ]
 
 
