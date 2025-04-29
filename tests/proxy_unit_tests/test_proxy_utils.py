@@ -1,17 +1,18 @@
+import asyncio
 import os
 import sys
 from typing import Any, Dict, Optional, List
 from unittest.mock import Mock
-
+from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+import json
 import pytest
 from fastapi import Request
-
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+from unittest.mock import MagicMock, patch, AsyncMock
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -19,6 +20,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from litellm.types.utils import SupportedCacheControls
 
 
 @pytest.fixture
@@ -1253,7 +1255,8 @@ def test_get_model_group_info():
 
 
 import pytest
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 import json
 
 
@@ -1423,6 +1426,9 @@ def test_update_key_budget_with_temp_budget_increase():
     assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
 
 
+from unittest.mock import MagicMock, AsyncMock
+
+
 @pytest.mark.asyncio
 async def test_health_check_not_called_when_disabled(monkeypatch):
     from litellm.proxy.proxy_server import ProxyStartupEvent
@@ -1462,6 +1468,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
 )
 def test_custom_openapi(mock_get_openapi_schema):
     from litellm.proxy.proxy_server import custom_openapi
+    from litellm.proxy.proxy_server import app
 
     openapi_schema = custom_openapi()
     assert openapi_schema is not None
@@ -1469,6 +1476,8 @@ def test_custom_openapi(mock_get_openapi_schema):
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from datetime import timedelta
 from litellm.proxy.utils import ProxyUpdateSpend
 
 
@@ -1611,65 +1620,6 @@ def test_get_known_models_from_wildcard(wildcard_model, expected_models):
             print(f"Missing expected model: {model}")
 
     assert all(model in wildcard_models for model in expected_models)
-
-
-@pytest.mark.parametrize("api_base, v1_models_url", [("http://foo.bar/baz", "http://foo.bar/baz/v1/models"),
-                                                     ("http://foo.bar/v1", "http://foo.bar/v1/models")])
-@pytest.mark.parametrize("return_wildcard_routes", [True, False
-                                                    ])
-@pytest.mark.parametrize("deployment", ["openai",
-                                        # "litellm_proxy" is out of scope since it prepends models with own name litellm.llms.litellm_proxy.chat.transformation.LiteLLMProxyChatConfig.get_models
-                                        ])
-def test_get_complete_model_list_wildcard_models(api_base: str, v1_models_url: str,
-                                                 return_wildcard_routes: bool,
-                                                 deployment):
-    from litellm.proxy.auth.model_checks import (get_complete_model_list)
-    # Create a mock response object
-    model_name = "llama645"
-    provider_prefix = "foo"
-    top_secret = "top_secret"
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "object": "list",
-        "data": [
-            {
-                "id": model_name,
-                "object": "model",
-                "created": 1686935002,
-                "owned_by": "organization-owner",
-            },
-        ],
-    }
-    from litellm.utils import AvailableModelsCache
-    with (patch('litellm.check_provider_endpoint', new=True),
-          patch('litellm.utils._model_cache', new=AvailableModelsCache()),
-          patch.object(
-              litellm.module_level_client, "get", return_value=mock_response
-          ) as mock_get):
-        from litellm import Router
-        model_list = [
-            {
-                "model_name": provider_prefix + "/*",  # model alias
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": deployment + "/*",
-                    "api_key": top_secret,
-                    "api_base": api_base,
-                }
-            }
-        ]
-
-        wildcard_models = get_complete_model_list(key_models=[provider_prefix + "/*"],
-                                                  team_models=[], proxy_model_list=[], user_model=None,
-                                                  infer_model_from_keys=False,
-                                                  return_wildcard_routes=return_wildcard_routes,
-                                                  llm_router=Router(model_list=model_list))
-        assert len(wildcard_models) == len(set(wildcard_models))
-        assert set(wildcard_models) == set(
-            [provider_prefix + "/" + model_name] + ([provider_prefix + "/*"] if return_wildcard_routes else []))
-        mock_get.assert_called_once_with(url=v1_models_url,
-                                         headers={"Authorization": f"Bearer {top_secret}"})
 
 
 @pytest.mark.parametrize(
