@@ -2336,13 +2336,16 @@ def test_completion_openrouter_reasoning_effort():
 # test_completion_openrouter1()
 
 def test_completion_datarobot():
+    messages = [
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
+    ]
     try:
         litellm.set_verbose = True
         response = completion(
             model="datarobot/azure/gpt-4",
             messages=messages,
             max_tokens=5,
-            client_id="custom-model"
+            clientId="custom-model"
         )
         # Add any assertions here to check the response
         print(response)
