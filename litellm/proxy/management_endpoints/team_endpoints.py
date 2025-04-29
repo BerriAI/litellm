@@ -13,7 +13,7 @@ import asyncio
 import json
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
@@ -466,7 +466,6 @@ async def update_team(
     from litellm.proxy.auth.auth_checks import _cache_team_object
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
