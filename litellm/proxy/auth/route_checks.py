@@ -11,7 +11,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.proxy_server import general_settings # Add this import
+# Removed import: from litellm.proxy.proxy_server import general_settings
 
 from .auth_checks_organization import _user_is_org_admin
 
@@ -60,6 +60,7 @@ class RouteChecks:
         """
         Checks if Non Proxy Admin User is allowed to access the route
         """
+        from litellm.proxy.proxy_server import general_settings # Moved import here
 
         # Check user has defined custom admin routes
         RouteChecks.custom_admin_only_route_check(
@@ -153,6 +154,7 @@ class RouteChecks:
         elif RouteChecks.check_route_access( # Check if route is explicitly public
             route=route, allowed_routes=general_settings.get("public_routes", [])
         ):
+             # Removed import from here
              pass
         else:
             user_role = "unknown"
