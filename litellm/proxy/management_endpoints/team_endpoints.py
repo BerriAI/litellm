@@ -1020,7 +1020,7 @@ async def team_member_update(
             status_code=403,
             detail={
                 "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_delete", existing_team_row.team_id
+                    "/team/member_update", existing_team_row.team_id
                 )
             },
         )
@@ -1050,6 +1050,14 @@ async def team_member_update(
                 "error": "User id doesn't exist in team table. Data={}".format(data)
             },
         )
+    
+    user_email = data.user_email
+    if user_email is None:
+        for member in returned_team_info["team_info"].members_with_roles:
+            if member.user_id == received_user_id:
+                user_email = member.user_email
+                break
+            
     ## find the relevant team membership
     identified_budget_id: Optional[str] = None
     for tm in returned_team_info["team_memberships"]:
@@ -1107,8 +1115,9 @@ async def team_member_update(
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
         user_id=received_user_id,
-        user_email=data.user_email,
+        user_email=user_email,
         max_budget_in_team=data.max_budget_in_team,
+        role=data.role
     )
 
 

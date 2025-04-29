@@ -119,6 +119,7 @@ async def update_member(
     user_id=None,
     user_email=None,
     max_budget=None,
+    role="admin",
 ):
     url = "http://0.0.0.0:4000/team/member_update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -131,18 +132,21 @@ async def update_member(
     if max_budget is not None:
         data["max_budget_in_team"] = max_budget
 
+    if role is not None:
+        data["role"] = role
+
     print("sent data: {}".format(data))
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
         response_text = await response.text()
 
-        print(f"ADD MEMBER Response {i} (Status code: {status}):")
+        print(f"UPDATE MEMBER Response {i} (Status code: {status}):")
         print(response_text)
         print()
 
         if status != 200:
             raise Exception(
-                f"Request {i} did not return a 200 status code: {status}, response: {response_text}"
+                f"Request {i} failed. Sent data: {data}. Status: {status}. Response: {response_text}"
             )
 
         return await response.json()
@@ -685,12 +689,12 @@ async def test_users_in_team_budget():
     - Create User
     - Add User to team with budget = 0.0000001
     - Make Call 1 -> pass
-    - Make Call 2 -> fail
+    - Make Call 2 -> fail (due to budget)
+    - Assert budget is stored correctly
     """
     get_user = f"krrish_{time.time()}@berri.ai"
     async with aiohttp.ClientSession() as session:
         team = await new_team(session, 0, user_id=get_user)
-        print("New team=", team)
         key_gen = await new_user(
             session,
             0,
@@ -702,9 +706,14 @@ async def test_users_in_team_budget():
         )
         key = key_gen["key"]
 
-        # update user to have budget = 0.0000001
+        # Only update budget (no role)
         await update_member(
-            session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001
+            session,
+            0,
+            team_id=team["team_id"],
+            user_id=get_user,
+            max_budget=0.0000001,
+            role="user"
         )
 
         # Call 1
@@ -713,18 +722,15 @@ async def test_users_in_team_budget():
 
         await asyncio.sleep(2)
 
-        # Call 2
+        # Call 2 (should fail)
         try:
             await chat_completion(session, key, model="fake-openai-endpoint")
-            pytest.fail(
-                "Call 2 should have failed. The user crossed their budget within their team"
-            )
+            pytest.fail("Call 2 should have failed. User exceeded team budget")
         except Exception as e:
-            print("got exception, this is expected")
-            print(e)
+            print("Got expected exception:", e)
             assert "Budget has been exceeded" in str(e)
 
-        ## Check user info
+        # Confirm budget was updated
         user_info = await get_user_info(session, get_user, call_user="sk-1234")
 
         assert (
@@ -733,3 +739,43 @@ async def test_users_in_team_budget():
             ]
             == 0.0000001
         )
+
+@pytest.mark.asyncio
+async def test_update_user_role_to_admin():
+    """
+    - Create Team
+    - Create User
+    - Add User to team (default role)
+    - Update user's role to 'admin'
+    - Fetch team info and assert role == 'admin'
+    """
+    get_user = f"test_role_{time.time()}@berri.ai"
+    async with aiohttp.ClientSession() as session:
+        team = await new_team(session, 0, user_id=get_user)
+        await new_user(
+            session,
+            0,
+            user_id=get_user,
+            budget=5,
+            team_id=team["team_id"],
+            models=["fake-openai-endpoint"],
+        )
+
+        # Update role
+        await update_member(
+            session,
+            0,
+            team_id=team["team_id"],
+            user_id=get_user,
+            role="admin",
+        )
+
+        # Fetch user info and assert role
+        user_info = await get_user_info(session, get_user, call_user="sk-1234")
+        role_found = None
+        for member in user_info["teams"][0]["members_with_roles"]:
+            if member["user_id"] == get_user:
+                role_found = member["role"]
+                break
+
+        assert role_found == "admin", f"Expected role to be 'admin', found {role_found}"
