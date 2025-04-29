@@ -45,4 +45,4 @@ class DataRobotConfig(OpenAIGPTConfig):
                 api_base += "/"
             else:
                 api_base += "/api/v2/genai/llmgw/chat/completions/"
-        return api_base
+        return str(api_base)
