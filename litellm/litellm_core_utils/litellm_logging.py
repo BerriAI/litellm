@@ -70,6 +70,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
@@ -468,14 +469,26 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if prompt_id:
             return True
-        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
+
+        if self._should_run_prompt_management_hooks_without_prompt_id(
             non_default_params
         ):
             return True
-        if BedrockKnowledgeBaseHook.should_use_prompt_management_hook(
-            non_default_params
-        ):
-            return True
+
+        return False
+
+    def _should_run_prompt_management_hooks_without_prompt_id(
+        self,
+        non_default_params: Dict,
+    ) -> bool:
+        """
+        Certain prompt management hooks don't need a `prompt_id` to be passed in, they are triggered by dynamic params
+
+        eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
+        """
+        for param in non_default_params:
+            if param in DynamicPromptManagementParamLiteral:
+                return True
         return False
 
     def get_chat_completion_prompt(

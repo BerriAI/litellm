@@ -2263,3 +2263,12 @@ class SpecialEnums(Enum):
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
 ]
+
+
+DynamicPromptManagementParamLiteral = Literal[
+    "cache_control_injection_points",
+    "knowledge_bases",
+]
+"""
+If any of these params are passed, the user is trying to use dynamic prompt management
+"""
