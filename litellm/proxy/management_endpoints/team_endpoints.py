@@ -494,9 +494,9 @@ async def update_team(
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
-        duration_s = duration_in_seconds(duration=data.budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
