@@ -36,7 +36,7 @@ def migrate_models(config_file, proxy_base_url):
 
         litellm_model_name = litellm_params.get("model", "") or ""
         if "vertex_ai/" in litellm_model_name:
-            print(f"\033[91m\nSkipping Vertex AI model\033[0m", model)
+            print("\033[91m\nSkipping Vertex AI model\033[0m", model)
             continue
 
         for param, value in litellm_params.items():
@@ -54,6 +54,9 @@ def migrate_models(config_file, proxy_base_url):
                     new_value = input(f"Enter value for {value}: ")
                     _in_memory_os_variables[value] = new_value
                 litellm_params[param] = new_value
+        if "api_key" not in litellm_params:
+            new_value = input(f"Enter api key for {model_name}: ")
+            litellm_params["api_key"] = new_value
 
         print("\nlitellm_params: ", litellm_params)
         # Confirm before sending POST request

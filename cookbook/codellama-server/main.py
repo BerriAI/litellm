@@ -1,11 +1,12 @@
 import traceback
-from flask import Flask, request, jsonify, abort, Response
+from flask import Flask, request, Response
 from flask_cors import CORS
-import traceback
 import litellm
 from util import handle_error
 from litellm import completion
-import os, dotenv, time
+import os
+import dotenv
+import time
 import json
 
 dotenv.load_dotenv()
@@ -20,9 +21,9 @@ verbose = True
 
 # litellm.caching_with_models = True # CACHING: caching_with_models Keys in the cache are messages + model. - to learn more: https://docs.litellm.ai/docs/caching/
 ######### PROMPT LOGGING ##########
-os.environ[
-    "PROMPTLAYER_API_KEY"
-] = ""  # set your promptlayer key here - https://promptlayer.com/
+os.environ["PROMPTLAYER_API_KEY"] = (
+    ""  # set your promptlayer key here - https://promptlayer.com/
+)
 
 # set callbacks
 litellm.success_callback = ["promptlayer"]
@@ -57,9 +58,9 @@ def api_completion():
     try:
         if "prompt" not in data:
             raise ValueError("data needs to have prompt")
-        data[
-            "model"
-        ] = "togethercomputer/CodeLlama-34b-Instruct"  # by default use Together AI's CodeLlama model - https://api.together.xyz/playground/chat?model=togethercomputer%2FCodeLlama-34b-Instruct
+        data["model"] = (
+            "togethercomputer/CodeLlama-34b-Instruct"  # by default use Together AI's CodeLlama model - https://api.together.xyz/playground/chat?model=togethercomputer%2FCodeLlama-34b-Instruct
+        )
         # COMPLETION CALL
         system_prompt = "Only respond to questions about code. Say 'I don't know' to anything outside of that."
         messages = [
@@ -75,7 +76,7 @@ def api_completion():
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             return Response(data_generator(response), mimetype="text/event-stream")
-    except Exception as e:
+    except Exception:
         # call handle_error function
         print_verbose(f"Got Error api_completion(): {traceback.format_exc()}")
         ## LOG FAILURE

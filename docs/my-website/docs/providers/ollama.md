@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Ollama 
 LiteLLM supports all models from [Ollama](https://github.com/ollama/ollama)
 
@@ -84,6 +87,182 @@ response = completion(
 )
 ```
 
+## Example Usage - Tool Calling 
+
+To use ollama tool calling, pass `tools=[{..}]` to `litellm.completion()` 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import litellm 
+
+## [OPTIONAL] REGISTER MODEL - not all ollama models support function calling, litellm defaults to json mode tool calls if native tool calling not supported.
+
+# litellm.register_model(model_cost={
+#                 "ollama_chat/llama3.1": { 
+#                   "supports_function_calling": true
+#                 },
+#             })
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+
+response = completion(
+  model="ollama_chat/llama3.1",
+  messages=messages,
+  tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "llama3.1"             
+    litellm_params:
+      model: "ollama_chat/llama3.1"
+      keep_alive: "8m" # Optional: Overrides default keep_alive, use -1 for Forever
+    model_info:
+      supports_function_calling: true
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "llama3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "stream": true
+}'
+```
+</TabItem>
+</Tabs>
+
+
+## Using Ollama FIM on `/v1/completions`
+
+LiteLLM supports calling Ollama's `/api/generate` endpoint on `/v1/completions` requests. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm 
+litellm._turn_on_debug() # turn on debug to see the request
+from litellm import completion
+
+response = completion(
+    model="ollama/llama3.1",
+    prompt="Hello, world!",
+    api_base="http://localhost:11434"
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "llama3.1"             
+    litellm_params:
+      model: "ollama/llama3.1"
+      api_base: "http://localhost:11434"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml --detailed_debug
+
+# RUNNING ON http://0.0.0.0:4000 
+```
+
+3. Test it! 
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="anything", # 👈 PROXY KEY (can be anything, if master_key not set)
+    base_url="http://0.0.0.0:4000" # 👈 PROXY BASE URL
+)
+
+response = client.completions.create(
+    model="ollama/llama3.1",
+    prompt="Hello, world!",
+    api_base="http://localhost:11434"
+)
+print(response)
+```
+</TabItem>
+</Tabs>
+
 ## Using ollama `api/chat` 
 In order to send ollama requests to `POST /api/chat` on your ollama server, set the model prefix to `ollama_chat`
 
@@ -101,18 +280,94 @@ Ollama supported models: https://github.com/ollama/ollama
 
 | Model Name           | Function Call                                                                     |
 |----------------------|-----------------------------------------------------------------------------------
-| Mistral    | `completion(model='ollama/mistral', messages, api_base="http://localhost:11434", stream=True)` | 
+| Mistral    | `completion(model='ollama/mistral', messages, api_base="http://localhost:11434", stream=True)` |
+| Mistral-7B-Instruct-v0.1 | `completion(model='ollama/mistral-7B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
+| Mistral-7B-Instruct-v0.2 | `completion(model='ollama/mistral-7B-Instruct-v0.2', messages, api_base="http://localhost:11434", stream=False)` |
+| Mixtral-8x7B-Instruct-v0.1 | `completion(model='ollama/mistral-8x7B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
+| Mixtral-8x22B-Instruct-v0.1 | `completion(model='ollama/mixtral-8x22B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
 | Llama2 7B            | `completion(model='ollama/llama2', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 13B           | `completion(model='ollama/llama2:13b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 70B           | `completion(model='ollama/llama2:70b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
 | Code Llama    | `completion(model='ollama/codellama', messages, api_base="http://localhost:11434", stream=True)` | 
-| Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
+| Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` |
+|Meta LLaMa3 8B | `completion(model='ollama/llama3', messages, api_base="http://localhost:11434", stream=False)` |
+| Meta LLaMa3 70B | `completion(model='ollama/llama3:70b', messages, api_base="http://localhost:11434", stream=False)` |
 | Orca Mini            | `completion(model='ollama/orca-mini', messages, api_base="http://localhost:11434", stream=True)` |
 | Vicuna               | `completion(model='ollama/vicuna', messages, api_base="http://localhost:11434", stream=True)` |
 | Nous-Hermes          | `completion(model='ollama/nous-hermes', messages, api_base="http://localhost:11434", stream=True)` |
 | Nous-Hermes 13B     | `completion(model='ollama/nous-hermes:13b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Wizard Vicuna Uncensored | `completion(model='ollama/wizard-vicuna', messages, api_base="http://localhost:11434", stream=True)` |
+
+
+### JSON Schema support 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="ollama_chat/deepseek-r1", 
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    response_format={"type": "json_schema", "json_schema": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}},
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "deepseek-r1"             
+    litellm_params:
+      model: "ollama_chat/deepseek-r1"
+      api_base: "http://localhost:11434"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING ON http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```python
+from pydantic import BaseModel
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="anything", # 👈 PROXY KEY (can be anything, if master_key not set)
+    base_url="http://0.0.0.0:4000" # 👈 PROXY BASE URL
+)
+
+class Step(BaseModel):
+    explanation: str
+    output: str
+
+class MathReasoning(BaseModel):
+    steps: list[Step]
+    final_answer: str
+
+completion = client.beta.chat.completions.parse(
+    model="deepseek-r1",
+    messages=[
+        {"role": "system", "content": "You are a helpful math tutor. Guide the user through the solution step by step."},
+        {"role": "user", "content": "how can I solve 8x + 7 = -23"}
+    ],
+    response_format=MathReasoning,
+)
+
+math_reasoning = completion.choices[0].message.parsed
+```
+</TabItem>
+</Tabs>
 
 ## Ollama Vision Models
 | Model Name       | Function Call                        |
@@ -232,8 +487,6 @@ for chunk in response:
 }
 ```
 
-## Support / talk with founders
-- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
+## Calling Docker Container (host.docker.internal)
+
+[Follow these instructions](https://github.com/BerriAI/litellm/issues/1517#issuecomment-1922022209/)

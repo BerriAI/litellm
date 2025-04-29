@@ -1,0 +1,56 @@
+# Base image for building
+ARG LITELLM_BUILD_IMAGE=python:3.11-alpine
+
+# Runtime image
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine
+
+# Builder stage
+FROM $LITELLM_BUILD_IMAGE AS builder
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache gcc python3-dev musl-dev
+
+RUN pip install --upgrade pip && \
+    pip install build
+
+# Copy the current directory contents into the container at /app
+COPY . .
+
+# Build the package
+RUN rm -rf dist/* && python -m build
+
+# There should be only one wheel file now, assume the build only creates one
+RUN ls -1 dist/*.whl | head -1
+
+# Install the package
+RUN pip install dist/*.whl
+
+# install dependencies as wheels
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+
+# Runtime stage
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
+
+# Update dependencies and clean up
+RUN apk upgrade --no-cache
+
+WORKDIR /app
+
+# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
+COPY --from=builder /app/dist/*.whl .
+COPY --from=builder /wheels/ /wheels/
+
+# Install the built wheel using pip; again using a wildcard if it's the only file
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
+RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
+
+EXPOSE 4000/tcp
+
+# Set your entrypoint and command
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
+CMD ["--port", "4000"]

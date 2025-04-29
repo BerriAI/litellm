@@ -2,6 +2,15 @@ import Image from '@theme/IdealImage';
 
 # Athina
 
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
+
 [Athina](https://athina.ai/) is an evaluation framework and production monitoring platform for your LLM-powered app. Athina is designed to enhance the performance and reliability of AI applications through real-time monitoring, granular analytics, and plug-and-play evaluations.
 
 <Image img={require('../../img/athina_dashboard.png')} />
@@ -69,6 +78,20 @@ Following are the allowed fields in metadata, their types, and their description
 * `context: Optional[Union[dict, str]]` - This is the context used as information for the prompt. For RAG applications, this is the "retrieved" data. You may log context as a string or as an object (dictionary).
 * `expected_response: Optional[str]` - This is the reference response to compare against for evaluation purposes. This is useful for segmenting inference calls by expected response.
 * `user_query: Optional[str]` - This is the user's query. For conversational applications, this is the user's last message.
+* `tags: Optional[list]` - This is a list of tags. This is useful for segmenting inference calls by tags.
+* `user_feedback: Optional[str]` - The end user’s feedback.
+* `model_options: Optional[dict]` - This is a dictionary of model options. This is useful for getting insights into how model behavior affects your end users.
+* `custom_attributes: Optional[dict]` - This is a dictionary of custom attributes. This is useful for additional information about the inference.
+
+## Using a self hosted deployment of Athina
+
+If you are using a self hosted deployment of Athina, you will need to set the `ATHINA_BASE_URL` environment variable to point to your self hosted deployment.
+
+```python
+...
+os.environ["ATHINA_BASE_URL"]= "http://localhost:9000"
+...
+```
 
 ## Support & Talk with Athina Team
 

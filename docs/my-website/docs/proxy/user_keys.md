@@ -1,7 +1,43 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, LlamaIndex, Curl
+# Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl examples
+
+LiteLLM Proxy is **OpenAI-Compatible**, and supports:
+* /chat/completions 
+* /embeddings
+* /completions 
+* /image/generations 
+* /moderations 
+* /audio/transcriptions
+* /audio/speech
+* [Assistants API endpoints](https://docs.litellm.ai/docs/assistants)
+* [Batches API endpoints](https://docs.litellm.ai/docs/batches)
+* [Fine-Tuning API endpoints](https://docs.litellm.ai/docs/fine_tuning)
+
+LiteLLM Proxy is **Azure OpenAI-compatible**:
+* /chat/completions
+* /completions
+* /embeddings 
+
+LiteLLM Proxy is **Anthropic-compatible**: 
+* /messages 
+
+LiteLLM Proxy is **Vertex AI compatible**:
+- [Supports ALL Vertex Endpoints](../vertex_ai)
+
+This doc covers:
+
+*   /chat/completion
+*   /embedding
+
+
+These are **selected examples**. LiteLLM Proxy is **OpenAI-Compatible**, it works with any project that calls OpenAI. Just change the `base_url`, `api_key` and `model`.
+
+To pass provider-specific args, [go here](https://docs.litellm.ai/docs/completion/provider_specific_params#proxy-usage)
+
+To drop unsupported params (E.g. frequency_penalty for bedrock with librechat), [go here](https://docs.litellm.ai/docs/completion/drop_params#openai-proxy-usage)
+
 
 :::info
 
@@ -25,6 +61,39 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={ # pass in any provider-specific param, if not supported by openai, https://docs.litellm.ai/docs/completion/input#provider-specific-params
+        "metadata": { # 👈 use for logging additional params (e.g. to langfuse)
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="azureopenai" label="AzureOpenAI Python">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.AzureOpenAI(
     api_key="anything",
     base_url="http://0.0.0.0:4000"
 )
@@ -121,6 +190,9 @@ from langchain.prompts.chat import (
     SystemMessagePromptTemplate,
 )
 from langchain.schema import HumanMessage, SystemMessage
+import os 
+
+os.environ["OPENAI_API_KEY"] = "anything"
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
@@ -149,6 +221,134 @@ response = chat(messages)
 print(response)
 ```
 
+</TabItem>
+<TabItem value="langchain js" label="Langchain JS">
+
+```js
+import { ChatOpenAI } from "@langchain/openai";
+
+
+const model = new ChatOpenAI({
+  modelName: "gpt-4",
+  openAIApiKey: "sk-1234",
+  modelKwargs: {"metadata": "hello world"} // 👈 PASS Additional params here
+}, {
+  basePath: "http://0.0.0.0:4000",
+});
+
+const message = await model.invoke("Hi there!");
+
+console.log(message);
+
+```
+
+</TabItem>
+<TabItem value="openai JS" label="OpenAI JS">
+
+```js
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: "sk-1234", // This is the default and can be omitted
+  baseURL: "http://0.0.0.0:4000"
+});
+
+async function main() {
+  const chatCompletion = await openai.chat.completions.create({
+    messages: [{ role: 'user', content: 'Say this is a test' }],
+    model: 'gpt-3.5-turbo',
+  }, {"metadata": {
+            "generation_name": "ishaan-generation-openaijs-client",
+            "generation_id": "openaijs-client-gen-id22",
+            "trace_id": "openaijs-client-trace-id22",
+            "trace_user_id": "openaijs-client-user-id2"
+        }});
+}
+
+main();
+
+```
+
+</TabItem>
+
+<TabItem value="anthropic-py" label="Anthropic Python SDK">
+
+```python
+import os
+
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://localhost:4000", # proxy endpoint
+    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+)
+
+message = client.messages.create(
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": "Hello, Claude",
+        }
+    ],
+    model="claude-3-opus-20240229",
+)
+print(message.content)
+```
+
+</TabItem>
+
+<TabItem value="mistral-py" label="Mistral Python SDK">
+
+```python
+import os
+from mistralai.client import MistralClient
+from mistralai.models.chat_completion import ChatMessage
+
+
+client = MistralClient(api_key="sk-1234", endpoint="http://0.0.0.0:4000")
+chat_response = client.chat(
+    model="mistral-small-latest",
+    messages=[
+        {"role": "user", "content": "this is a test request, write a short poem"}
+    ],
+)
+print(chat_response.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="instructor" label="Instructor">
+
+```python
+from openai import OpenAI
+import instructor
+from pydantic import BaseModel
+
+my_proxy_api_key = "" # e.g. sk-1234 - LITELLM KEY
+my_proxy_base_url = "" # e.g. http://0.0.0.0:4000 - LITELLM PROXY BASE URL
+
+# This enables response_model keyword
+# from client.chat.completions.create
+## WORKS ACROSS OPENAI/ANTHROPIC/VERTEXAI/ETC. - all LITELLM SUPPORTED MODELS!
+client = instructor.from_openai(OpenAI(api_key=my_proxy_api_key, base_url=my_proxy_base_url))
+
+class UserDetail(BaseModel):
+    name: str
+    age: int
+
+user = client.chat.completions.create(
+    model="gemini-pro-flash",
+    response_model=UserDetail,
+    messages=[
+        {"role": "user", "content": "Extract Jason is 25 years old"},
+    ]
+)
+
+assert isinstance(user, UserDetail)
+assert user.name == "Jason"
+assert user.age == 25
+```
 </TabItem>
 </Tabs>
 
@@ -180,6 +380,142 @@ print(response)
 }
 
 ```
+
+### **Streaming**
+
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY" \
+-d '{
+  "model": "gpt-4-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "this is a test request, write a short poem"
+    }
+  ],
+  "stream": true
+}'
+```
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    base_url="http://0.0.0.0:4000",
+)
+
+messages = [{"role": "user", "content": "this is a test request, write a short poem"}]
+completion = client.chat.completions.create(
+  model="gpt-4o",
+  messages=messages,
+  stream=True
+)
+
+print(completion)
+
+```
+</TabItem>
+</Tabs>
+
+
+### Function Calling 
+
+Here's some examples of doing function calling with the proxy. 
+
+You can use the proxy for function calling with **any** openai-compatible project. 
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY" \
+-d '{
+  "model": "gpt-4-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}'
+```
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    base_url="http://0.0.0.0:4000",
+)
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+completion = client.chat.completions.create(
+  model="gpt-4o", # use 'model_name' from config.yaml
+  messages=messages,
+  tools=tools,
+  tool_choice="auto"
+)
+
+print(completion)
+
+```
+</TabItem>
+</Tabs>
 
 ## `/embeddings`
 
@@ -360,231 +696,348 @@ curl --location 'http://0.0.0.0:4000/moderations' \
 ```
 
 
+## Using with OpenAI compatible projects
+Set `base_url` to the LiteLLM Proxy server
+
+<Tabs>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="librechat" label="LibreChat">
+
+#### Start the LiteLLM proxy
+```shell
+litellm --model gpt-3.5-turbo
+
+#INFO: Proxy running on http://0.0.0.0:4000
+```
+
+#### 1. Clone the repo
+
+```shell
+git clone https://github.com/danny-avila/LibreChat.git
+```
+
+
+#### 2. Modify Librechat's `docker-compose.yml`
+LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
+```yaml
+OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
+```
+
+#### 3. Save fake OpenAI key in Librechat's `.env` 
+
+Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
+```env
+OPENAI_API_KEY=sk-1234
+```
+
+#### 4. Run LibreChat: 
+```shell
+docker compose up
+```
+</TabItem>
+
+<TabItem value="continue-dev" label="ContinueDev">
+
+Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
+
+In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
+```python
+  default=OpenAI(
+      api_key="IGNORED",
+      model="fake-model-name",
+      context_length=2048, # customize if needed for your model
+      api_base="http://localhost:4000" # your proxy server url
+  ),
+```
+
+Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+</TabItem>
+
+<TabItem value="aider" label="Aider">
+
+```shell
+$ pip install aider 
+
+$ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
+```
+</TabItem>
+<TabItem value="autogen" label="AutoGen">
+
+```python
+pip install pyautogen
+```
+
+```python
+from autogen import AssistantAgent, UserProxyAgent, oai
+config_list=[
+    {
+        "model": "my-fake-model",
+        "api_base": "http://localhost:4000",  #litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL", # just a placeholder
+    }
+]
+
+response = oai.Completion.create(config_list=config_list, prompt="Hi")
+print(response) # works fine
+
+llm_config={
+    "config_list": config_list,
+}
+
+assistant = AssistantAgent("assistant", llm_config=llm_config)
+user_proxy = UserProxyAgent("user_proxy")
+user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
+```
+
+Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
+</TabItem>
+
+<TabItem value="guidance" label="guidance">
+A guidance language for controlling large language models.
+https://github.com/guidance-ai/guidance
+
+**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
+
+**Fix**: Start your proxy using the `--drop_params` flag
+
+```shell
+litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048 --drop_params
+```
+
+```python
+import guidance
+
+# set api_base to your proxy
+# set api_key to anything
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
+
+experts = guidance('''
+{{#system~}}
+You are a helpful and terse assistant.
+{{~/system}}
+
+{{#user~}}
+I want a response to the following question:
+{{query}}
+Name 3 world-class experts (past or present) who would be great at answering this?
+Don't answer the question yet.
+{{~/user}}
+
+{{#assistant~}}
+{{gen 'expert_names' temperature=0 max_tokens=300}}
+{{~/assistant}}
+''', llm=gpt4)
+
+result = experts(query='How can I be more productive?')
+print(result)
+```
+</TabItem>
+</Tabs>
+
+## Using with Vertex, Boto3, Anthropic SDK (Native format)
+
+👉 **[Here's how to use litellm proxy with Vertex, boto3, Anthropic SDK - in the native format](../pass_through/vertex_ai.md)**
+
 ## Advanced
 
-### Pass User LLM API Keys, Fallbacks
-Allow your end-users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
+### (BETA) Batch Completions - pass multiple models
 
-**Note** This is not related to [virtual keys](./virtual_keys.md). This is for when you want to pass in your users actual LLM API keys. 
+Use this when you want to send 1 request to N Models
 
-:::info
+#### Expected Request Format
 
-**You can pass a litellm.RouterConfig as `user_config`, See all supported params here https://github.com/BerriAI/litellm/blob/main/litellm/types/router.py **
+Pass model as a string of comma separated value of models. Example `"model"="llama3,gpt-3.5-turbo"`
 
-:::
+This same request will be sent to the following model groups on the [litellm proxy config.yaml](https://docs.litellm.ai/docs/proxy/configs)
+- `model_name="llama3"`
+- `model_name="gpt-3.5-turbo"` 
 
 <Tabs>
 
-<TabItem value="openai-py" label="OpenAI Python">
+<TabItem value="openai-py" label="OpenAI Python SDK">
 
-#### Step 1: Define user model list & config
+
 ```python
-import os
+import openai
 
-user_config = {
-    'model_list': [
-        {
-            'model_name': 'user-azure-instance',
-            'litellm_params': {
-                'model': 'azure/chatgpt-v-2',
-                'api_key': os.getenv('AZURE_API_KEY'),
-                'api_version': os.getenv('AZURE_API_VERSION'),
-                'api_base': os.getenv('AZURE_API_BASE'),
-                'timeout': 10,
-            },
-            'tpm': 240000,
-            'rpm': 1800,
-        },
-        {
-            'model_name': 'user-openai-instance',
-            'litellm_params': {
-                'model': 'gpt-3.5-turbo',
-                'api_key': os.getenv('OPENAI_API_KEY'),
-                'timeout': 10,
-            },
-            'tpm': 240000,
-            'rpm': 1800,
-        },
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo,llama3",
+    messages=[
+        {"role": "user", "content": "this is a test request, write a short poem"}
     ],
-    'num_retries': 2,
-    'allowed_fails': 3,
-    'fallbacks': [
+)
+
+print(response)
+```
+
+
+
+#### Expected Response Format
+
+Get a list of responses when `model` is passed as a list
+
+```python
+[
+    ChatCompletion(
+        id='chatcmpl-9NoYhS2G0fswot0b6QpoQgmRQMaIf',
+        choices=[
+            Choice(
+                finish_reason='stop',
+                index=0,
+                logprobs=None,
+                message=ChatCompletionMessage(
+                    content='In the depths of my soul, a spark ignites\nA light that shines so pure and bright\nIt dances and leaps, refusing to die\nA flame of hope that reaches the sky\n\nIt warms my heart and fills me with bliss\nA reminder that in darkness, there is light to kiss\nSo I hold onto this fire, this guiding light\nAnd let it lead me through the darkest night.',
+                    role='assistant',
+                    function_call=None,
+                    tool_calls=None
+                )
+            )
+        ],
+        created=1715462919,
+        model='gpt-3.5-turbo-0125',
+        object='chat.completion',
+        system_fingerprint=None,
+        usage=CompletionUsage(
+            completion_tokens=83,
+            prompt_tokens=17,
+            total_tokens=100
+        )
+    ),
+    ChatCompletion(
+        id='chatcmpl-4ac3e982-da4e-486d-bddb-ed1d5cb9c03c',
+        choices=[
+            Choice(
+                finish_reason='stop',
+                index=0,
+                logprobs=None,
+                message=ChatCompletionMessage(
+                    content="A test request, and I'm delighted!\nHere's a short poem, just for you:\n\nMoonbeams dance upon the sea,\nA path of light, for you to see.\nThe stars up high, a twinkling show,\nA night of wonder, for all to know.\n\nThe world is quiet, save the night,\nA peaceful hush, a gentle light.\nThe world is full, of beauty rare,\nA treasure trove, beyond compare.\n\nI hope you enjoyed this little test,\nA poem born, of whimsy and jest.\nLet me know, if there's anything else!",
+                    role='assistant',
+                    function_call=None,
+                    tool_calls=None
+                )
+            )
+        ],
+        created=1715462919,
+        model='groq/llama3-8b-8192',
+        object='chat.completion',
+        system_fingerprint='fp_a2c8d063cb',
+        usage=CompletionUsage(
+            completion_tokens=120,
+            prompt_tokens=20,
+            total_tokens=140
+        )
+    )
+]
+```
+
+
+</TabItem>
+
+<TabItem value="curl" label="Curl">
+
+
+
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3,gpt-3.5-turbo",
+    "max_tokens": 10,
+    "user": "litellm2",
+    "messages": [
         {
-            'user-azure-instance': ['user-openai-instance']
+        "role": "user",
+        "content": "is litellm getting better"
         }
     ]
-}
-
-
+}'
 ```
 
-#### Step 2: Send user_config in `extra_body`
-```python
-import openai
-client = openai.OpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:4000"
-)
 
-# send request to `user-azure-instance`
-response = client.chat.completions.create(model="user-azure-instance", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-], 
-    extra_body={
-      "user_config": user_config
-    }
-) # 👈 User config
 
-print(response)
-```
 
-</TabItem>
+#### Expected Response Format
 
-<TabItem value="openai-js" label="OpenAI JS">
+Get a list of responses when `model` is passed as a list
 
-#### Step 1: Define user model list & config
-```javascript
-const os = require('os');
-
-const userConfig = {
-    model_list: [
-        {
-            model_name: 'user-azure-instance',
-            litellm_params: {
-                model: 'azure/chatgpt-v-2',
-                api_key: process.env.AZURE_API_KEY,
-                api_version: process.env.AZURE_API_VERSION,
-                api_base: process.env.AZURE_API_BASE,
-                timeout: 10,
-            },
-            tpm: 240000,
-            rpm: 1800,
-        },
-        {
-            model_name: 'user-openai-instance',
-            litellm_params: {
-                model: 'gpt-3.5-turbo',
-                api_key: process.env.OPENAI_API_KEY,
-                timeout: 10,
-            },
-            tpm: 240000,
-            rpm: 1800,
-        },
-    ],
-    num_retries: 2,
-    allowed_fails: 3,
-    fallbacks: [
-        {
-            'user-azure-instance': ['user-openai-instance']
+```json
+[
+  {
+    "id": "chatcmpl-3dbd5dd8-7c82-4ca3-bf1f-7c26f497cf2b",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "message": {
+          "content": "The Elder Scrolls IV: Oblivion!\n\nReleased",
+          "role": "assistant"
         }
-    ]
-};
+      }
+    ],
+    "created": 1715459876,
+    "model": "groq/llama3-8b-8192",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_179b0f92c9",
+    "usage": {
+      "completion_tokens": 10,
+      "prompt_tokens": 12,
+      "total_tokens": 22
+    }
+  },
+  {
+    "id": "chatcmpl-9NnldUfFLmVquFHSX4yAtjCw8PGei",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "message": {
+          "content": "TES4 could refer to The Elder Scrolls IV:",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1715459877,
+    "model": "gpt-3.5-turbo-0125",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 10,
+      "prompt_tokens": 9,
+      "total_tokens": 19
+    }
+  }
+]
 ```
 
-#### Step 2: Send `user_config` as a param to `openai.chat.completions.create`
-
-```javascript
-const { OpenAI } = require('openai');
-
-const openai = new OpenAI({
-  apiKey: "sk-1234",
-  baseURL: "http://0.0.0.0:4000"
-});
-
-async function main() {
-  const chatCompletion = await openai.chat.completions.create({
-    messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
-    user_config: userConfig // # 👈 User config
-  });
-}
-
-main();
-```
 
 </TabItem>
-
 </Tabs>
 
-### Pass User LLM API Keys
-Allows your users to pass in their OpenAI API key (any LiteLLM supported provider) to make requests 
-
-Here's how to do it: 
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-], 
-    extra_body={"api_key": "my-bad-key"}) # 👈 User Key
-
-print(response)
-```
-
-More examples: 
-<Tabs>
-<TabItem value="openai-py" label="Azure Credentials">
-
-Pass in the litellm_params (E.g. api_key, api_base, etc.) via the `extra_body` parameter in the OpenAI client. 
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-], 
-    extra_body={
-      "api_key": "my-azure-key",
-      "api_base": "my-azure-base",
-      "api_version": "my-azure-version"
-    }) # 👈 User Key
-
-print(response)
-```
 
 
-</TabItem>
-<TabItem value="openai-js" label="OpenAI JS">
-
-For JS, the OpenAI client accepts passing params in the `create(..)` body as normal.
-
-```javascript
-const { OpenAI } = require('openai');
-
-const openai = new OpenAI({
-  apiKey: "sk-1234",
-  baseURL: "http://0.0.0.0:4000"
-});
-
-async function main() {
-  const chatCompletion = await openai.chat.completions.create({
-    messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
-    api_key: "my-bad-key" // 👈 User Key
-  });
-}
-
-main();
-```
-</TabItem>
-</Tabs>

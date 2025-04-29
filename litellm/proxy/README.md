@@ -29,3 +29,16 @@ print(response)
 ``` 
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
+
+
+---
+
+### Folder Structure
+
+**Routes**
+- `proxy_server.py` - all openai-compatible routes - `/v1/chat/completion`, `/v1/embedding` + model info routes - `/v1/models`, `/v1/model/info`, `/v1/model_group_info` routes.
+- `health_endpoints/` - `/health`, `/health/liveliness`, `/health/readiness`
+- `management_endpoints/key_management_endpoints.py` - all `/key/*` routes
+- `management_endpoints/team_endpoints.py` - all `/team/*` routes
+- `management_endpoints/internal_user_endpoints.py` - all `/user/*` routes
+- `management_endpoints/ui_sso.py` - all `/sso/*` routes

@@ -1,4 +1,12 @@
 # Supabase Tutorial 
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
 [Supabase](https://supabase.com/) is an open source Firebase alternative.
 Start your project with a Postgres database, Authentication, instant APIs, Edge Functions, Realtime subscriptions, Storage, and Vector embeddings.
 

@@ -1,20 +1,70 @@
 import React, { useState, useEffect } from "react";
-import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
-import { Button as Button2 } from "@tremor/react";
-import { userCreateCall, modelAvailableCall } from "./networking";
+import { useRouter } from "next/navigation";
+import {
+  Button,
+  Modal,
+  Form,
+  Input,
+  message,
+  Select,
+  InputNumber,
+  Select as Select2,
+} from "antd";
+import { Button as Button2, Text, TextInput, SelectItem, Accordion, AccordionHeader, AccordionBody, Title, } from "@tremor/react";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
+import {
+  userCreateCall,
+  modelAvailableCall,
+  invitationCreateCall,
+  getProxyUISettings,
+} from "./networking";
+import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
+import { Tooltip } from "antd";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface CreateuserProps {
   userID: string;
   accessToken: string;
+  teams: any[] | null;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
+  onUserCreated?: (userId: string) => void;
+  isEmbedded?: boolean;
 }
 
-const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
+// Define an interface for the UI settings
+interface UISettings {
+  PROXY_BASE_URL: string | null;
+  PROXY_LOGOUT_URL: string | null;
+  DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
+}
+
+const Createuser: React.FC<CreateuserProps> = ({
+  userID,
+  accessToken,
+  teams,
+  possibleUIRoles,
+  onUserCreated,
+  isEmbedded = false,
+}) => {
+  const queryClient = useQueryClient();
+  const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [apiuser, setApiuser] = useState<string | null>(null);
+  const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
+  const router = useRouter();
+  const isLocal = process.env.NODE_ENV === "development";
 
+  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -23,7 +73,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
         const modelDataResponse = await modelAvailableCall(
           accessToken,
           userID,
-          userRole
+          userRole,
         );
         // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
         const availableModels = [];
@@ -36,6 +86,12 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
 
         // Assuming modelDataResponse.data contains an array of model names
         setUserModels(availableModels);
+
+        // get ui settings
+        const uiSettingsResponse = await getProxyUISettings(accessToken);
+        console.log("uiSettingsResponse:", uiSettingsResponse);
+
+        setUISettings(uiSettingsResponse);
       } catch (error) {
         console.error("Error fetching model data:", error);
       }
@@ -43,6 +99,15 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
 
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
+
+  useEffect(() => {
+    if (!router) {
+      return;
+    }
+
+    const base = new URL("/", window.location.href);
+    setBaseUrl(base.toString());
+  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -50,39 +115,151 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
 
   const handleCancel = () => {
     setIsModalVisible(false);
-    setApiuser(null);
+    setApiuser(false);
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string }) => {
+  const handleCreate = async (formValues: { user_id: string, models?: string[], user_role: string }) => {
     try {
       message.info("Making API Call");
-      setIsModalVisible(true);
+      if (!isEmbedded) {
+        setIsModalVisible(true);
+      }
+      if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
+        console.log("formValues.user_role", formValues.user_role)
+        // If models is empty or undefined, set it to "no-default-models"
+        formValues.models = ["no-default-models"];
+      }
       console.log("formValues in create user:", formValues);
-      const response = await userCreateCall(accessToken, userID, formValues);
+      const response = await userCreateCall(accessToken, null, formValues);
+      await queryClient.invalidateQueries({ queryKey: ['userList'] })
       console.log("user create Response:", response);
-      setApiuser(response["key"]);
+      setApiuser(true);
+      const user_id = response.data?.user_id || response.user_id;
+
+      // Call the callback if provided (for embedded mode)
+      if (onUserCreated && isEmbedded) {
+        onUserCreated(user_id);
+        form.resetFields();
+        return; // Skip the invitation flow when embedded
+      }
+
+      // only do invite link flow if sso is not enabled
+      if (!uiSettings?.SSO_ENABLED) {
+        invitationCreateCall(accessToken, user_id).then((data) => {
+          data.has_user_setup_sso = false;
+          setInvitationLinkData(data);
+          setIsInvitationLinkModalVisible(true);
+        });
+      } else {
+        // create an InvitationLink Object for this user for the SSO flow
+        // for SSO the invite link is the proxy base url since the User just needs to login
+        const invitationLink: InvitationLink = {
+          id: crypto.randomUUID(), // Generate a unique ID
+          user_id: user_id,
+          is_accepted: false,
+          accepted_at: null,
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days from now
+          created_at: new Date(),
+          created_by: userID, // Assuming userID is the current user creating the invitation
+          updated_at: new Date(),
+          updated_by: userID,
+          has_user_setup_sso: true,
+        };
+        setInvitationLinkData(invitationLink);
+        setIsInvitationLinkModalVisible(true);
+      }
+
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
+      message.error(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
 
+  // Modify the return statement to handle embedded mode
+  if (isEmbedded) {
+    return (
+      <Form
+        form={form}
+        onFinish={handleCreate}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+      >
+        <Form.Item label="User Email" name="user_email">
+          <TextInput placeholder="" />
+        </Form.Item>
+        <Form.Item label="User Role" name="user_role">
+          <Select2>
+            {possibleUIRoles &&
+              Object.entries(possibleUIRoles).map(
+                ([role, { ui_label, description }]) => (
+                  <SelectItem key={role} value={role} title={ui_label}>
+                    <div className="flex">
+                      {ui_label}{" "}
+                      <p
+                        className="ml-2"
+                        style={{ color: "gray", fontSize: "12px" }}
+                      >
+                        {description}
+                      </p>
+                    </div>
+                  </SelectItem>
+                ),
+              )}
+          </Select2>
+        </Form.Item>
+        <Form.Item label="Team ID" name="team_id">
+          <Select placeholder="Select Team ID" style={{ width: "100%" }}>
+            {teams ? (
+              teams.map((team: any) => (
+                <Option key={team.team_id} value={team.team_id}>
+                  {team.team_alias}
+                </Option>
+              ))
+            ) : (
+              <Option key="default" value={null}>
+                Default Team
+              </Option>
+            )}
+          </Select>
+        </Form.Item>
+
+        <Form.Item label="Metadata" name="metadata">
+          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        </Form.Item>
+        
+        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Button htmlType="submit">Create User</Button>
+        </div>
+      </Form>
+    );
+  }
+
+  // Original return for standalone mode
   return (
-    <div>
-      <Button2 className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New User
+    <div className="flex gap-2">
+      <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
+        + Invite User
       </Button2>
+      <BulkCreateUsers 
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
       <Modal
-        title="Create User"
+        title="Invite User"
         visible={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
+        <Text className="mb-1">Create a User who can own keys</Text>
         <Form
           form={form}
           onFinish={handleCreate}
@@ -90,66 +267,102 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <Form.Item label="User ID" name="user_id">
-            <Input placeholder="Enter User ID" />
+          <Form.Item label="User Email" name="user_email">
+            <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item label="Team ID" name="team_id">
-            <Input placeholder="ai_team" />
+          <Form.Item label={
+                  <span>
+                    Global Proxy Role{' '}
+                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                      <InfoCircleOutlined/>
+                    </Tooltip>
+                  </span>
+                } 
+              name="user_role">
+            <Select2>
+              {possibleUIRoles &&
+                Object.entries(possibleUIRoles).map(
+                  ([role, { ui_label, description }]) => (
+                    <SelectItem key={role} value={role} title={ui_label}>
+                      <div className="flex">
+                        {ui_label}{" "}
+                        <p
+                          className="ml-2"
+                          style={{ color: "gray", fontSize: "12px" }}
+                        >
+                          {description}
+                        </p>
+                      </div>
+                    </SelectItem>
+                  ),
+                )}
+            </Select2>
           </Form.Item>
-          <Form.Item label="Models" name="models">
-            <Select
-              mode="multiple"
-              placeholder="Select models"
-              style={{ width: "100%" }}
-            >
-              {userModels.map((model) => (
-                <Option key={model} value={model}>
-                  {model}
+          
+          <Form.Item label="Team ID" className="gap-2" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
+            <Select placeholder="Select Team ID" style={{ width: "100%" }}>
+              {teams ? (
+                teams.map((team: any) => (
+                  <Option key={team.team_id} value={team.team_id}>
+                    {team.team_alias}
+                  </Option>
+                ))
+              ) : (
+                <Option key="default" value={null}>
+                  Default Team
                 </Option>
-              ))}
+              )}
             </Select>
           </Form.Item>
 
-          <Form.Item label="Max Budget (USD)" name="max_budget">
-            <InputNumber step={0.01} precision={2} width={200} />
-          </Form.Item>
-          <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Duration (eg: 30s, 30h, 30d)" name="duration">
-            <Input />
-          </Form.Item>
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
+          <Accordion>
+          <AccordionHeader>
+            <Title>Personal Key Creation</Title>
+          </AccordionHeader>
+          <AccordionBody>
+            <Form.Item className="gap-2" label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="Models user has access to, outside of team scope.">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } name="models" help="Models user has access to, outside of team scope.">
+              <Select2
+                mode="multiple"
+                placeholder="Select models"
+                style={{ width: "100%" }}
+              >
+                <Select2.Option
+                  key="all-proxy-models"
+                  value="all-proxy-models"
+                >
+                  All Proxy Models
+                </Select2.Option>
+                {userModels.map((model) => (
+                  <Select2.Option key={model} value={model}>
+                    {getModelDisplayName(model)}
+                  </Select2.Option>
+                ))}
+              </Select2>
+            </Form.Item>
+          </AccordionBody>
+        </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>
         </Form>
       </Modal>
       {apiuser && (
-        <Modal
-          title="Save Your User"
-          visible={isModalVisible}
-          onOk={handleOk}
-          onCancel={handleCancel}
-          footer={null}
-        >
-          <p>
-            Please save this secret user somewhere safe and accessible. For
-            security reasons, <b>you will not be able to view it again</b>{" "}
-            through your LiteLLM account. If you lose this secret user, you will
-            need to generate a new one.
-          </p>
-          <p>
-            {apiuser != null
-              ? `API user: ${apiuser}`
-              : "User being created, this might take 30s"}
-          </p>
-        </Modal>
+        <OnboardingModal
+          isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+          setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+          baseUrl={baseUrl}
+          invitationLinkData={invitationLinkData}
+        />
       )}
     </div>
   );

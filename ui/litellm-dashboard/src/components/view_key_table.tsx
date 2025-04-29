@@ -1,26 +1,59 @@
 "use client";
-import React, { useEffect, useState } from "react";
-import { keyDeleteCall, modelAvailableCall } from "./networking";
-import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall } from "./networking";
+import React, { useEffect, useState, useMemo } from "react";
+import {
+  keyDeleteCall,
+  modelAvailableCall,
+  getGuardrailsList,
+  Organization,
+} from "./networking";
+import { add } from "date-fns";
+import {
+  InformationCircleIcon,
+  StatusOnlineIcon,
+  TrashIcon,
+  PencilAltIcon,
+  RefreshIcon,
+} from "@heroicons/react/outline";
+import {
+  keySpendLogsCall,
+  PredictedSpendLogsCall,
+  keyUpdateCall,
+  modelInfoCall,
+  regenerateKeyCall,
+} from "./networking";
 import {
   Badge,
   Card,
   Table,
+  Grid,
+  Col,
   Button,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  Dialog, 
+  Dialog,
   DialogPanel,
   Text,
   Title,
+  Subtitle,
   Icon,
   BarChart,
+  TextInput,
+  Textarea,
+  Select,
+  SelectItem,
 } from "@tremor/react";
-
+import { InfoCircleOutlined } from "@ant-design/icons";
+import {
+  fetchAvailableModelsForTeamOrKey,
+  getModelDisplayName,
+} from "./key_team_helpers/fetch_available_models_team_key";
+import {
+  MultiSelect,
+  MultiSelectItem,
+} from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -29,13 +62,22 @@ import {
   Select as Select2,
   InputNumber,
   message,
-  Select,
+  Tooltip,
+  DatePicker,
 } from "antd";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import TextArea from "antd/es/input/TextArea";
+import useKeyList from "./key_team_helpers/key_list";
+import { KeyResponse } from "./key_team_helpers/key_list";
+import { AllKeysTable } from "./all_keys_table";
+import { Team } from "./key_team_helpers/key_list";
+import { Setter } from "@/types";
 
-import ViewKeySpendReport from "./view_key_spend_report";
-
-const { Option } = Select;
-
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function () {};
+}
 
 interface EditKeyModalProps {
   visible: boolean;
@@ -44,14 +86,31 @@ interface EditKeyModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
+interface ModelLimitModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  token: KeyResponse;
+  onSubmit: (updatedMetadata: any) => void;
+  accessToken: string;
+}
+
 // Define the props type
 interface ViewKeyTableProps {
   userID: string;
   userRole: string | null;
   accessToken: string;
   selectedTeam: any | null;
+  setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: Team[] | null;
+  premiumUser: boolean;
+  currentOrg: Organization | null;
+  organizations: Organization[] | null;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
+  createClicked: boolean;
 }
 
 interface ItemData {
@@ -67,8 +126,24 @@ interface ItemData {
   id: number;
   team_id: string;
   metadata: any;
+  user_id: string | null;
   expires: any;
+  budget_duration: string | null;
+  budget_reset_at: string | null;
   // Add any other properties that exist in the item data
+}
+
+interface ModelLimits {
+  [key: string]: number;  // Index signature allowing string keys
+}
+
+interface CombinedLimit {
+  tpm: number;
+  rpm: number;
+}
+
+interface CombinedLimits {
+  [key: string]: CombinedLimit;  // Index signature allowing string keys
 }
 
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
@@ -76,266 +151,182 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userRole,
   accessToken,
   selectedTeam,
+  setSelectedTeam,
   data,
   setData,
+  teams,
+  premiumUser,
+  currentOrg,
+  organizations,
+  setCurrentOrg,
+  selectedKeyAlias,
+  setSelectedKeyAlias,
+  createClicked
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
-  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
-  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
-  const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(
-    null
-  );
-  const [predictedSpendString, setPredictedSpendString] = useState("");
+  const [selectedItem, setSelectedItem] = useState<KeyResponse | null>(null);
+  const [spendData, setSpendData] = useState<
+    { day: string; spend: number }[] | null
+  >(null);
+  
+  // NEW: Declare filter states for team and key alias.
+  const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
+
+
+  // Keep the team filter in sync with the incoming prop.
+  useEffect(() => {
+    setTeamFilter(selectedTeam?.team_id || "");
+  }, [selectedTeam]);
+
+  // Build a memoized filters object for the backend call.
+
+  // Pass filters into the hook so the API call includes these query parameters.
+  const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
+    selectedTeam,
+    currentOrg,
+    selectedKeyAlias,
+    accessToken,
+    createClicked,
+  });
+
+
+  const handlePageChange = (newPage: number) => {
+    refresh({ page: newPage });
+  };
 
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
-  const [userModels, setUserModels] = useState([]);
+  const [infoDialogVisible, setInfoDialogVisible] = useState(false);
+  const [selectedToken, setSelectedToken] = useState<KeyResponse | null>(null);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const initialKnownTeamIDs: Set<string> = new Set();
+  const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
+  const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
+  const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
+  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
+  const [regenerateForm] = Form.useForm();
+  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
+
+  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  useEffect(() => {
+    const calculateNewExpiryTime = (duration: string | undefined) => {
+      if (!duration) {
+        return null;
+      }
+
+      try {
+        const now = new Date();
+        let newExpiry: Date;
+
+        if (duration.endsWith("s")) {
+          newExpiry = add(now, { seconds: parseInt(duration) });
+        } else if (duration.endsWith("h")) {
+          newExpiry = add(now, { hours: parseInt(duration) });
+        } else if (duration.endsWith("d")) {
+          newExpiry = add(now, { days: parseInt(duration) });
+        } else {
+          throw new Error("Invalid duration format");
+        }
+
+        return newExpiry.toLocaleString("en-US", {
+          year: "numeric",
+          month: "numeric",
+          day: "numeric",
+          hour: "numeric",
+          minute: "numeric",
+          second: "numeric",
+          hour12: true,
+        });
+      } catch (error) {
+        return null;
+      }
+    };
+
+    console.log("in calculateNewExpiryTime for selectedToken", selectedToken);
+
+    // When a new duration is entered
+    if (regenerateFormData?.duration) {
+      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
+    } else {
+      setNewExpiryTime(null);
+    }
+
+    console.log("calculateNewExpiryTime:", newExpiryTime);
+  }, [selectedToken, regenerateFormData?.duration]);
 
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        if (userID === null) {
+        if (userID === null || userRole === null || accessToken === null) {
           return;
         }
 
-        if (accessToken !== null && userRole !== null) {
-          const model_available = await modelAvailableCall(accessToken, userID, userRole);
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+        const models = await fetchAvailableModelsForTeamOrKey(
+          userID,
+          userRole,
+          accessToken
+        );
+        if (models) {
+          setUserModels(models);
         }
       } catch (error) {
         console.error("Error fetching user models:", error);
       }
     };
-  
+
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const EditKeyModal: React.FC<EditKeyModalProps> = ({ visible, onCancel, token, onSubmit }) => {
-    const [form] = Form.useForm();
-
-    console.log("in edit key modal:", token);
-    console.log("in edit key modal, team:", selectedTeam);
-
-    
-
-    const handleOk = () => {
-      form
-        .validateFields()
-        .then((values) => {
-          // const updatedValues = {...values, team_id: team.team_id};
-          // onSubmit(updatedValues);
-          form.resetFields();
-        })
-        .catch((error) => {
-          console.error("Validation failed:", error);
-        });
-  };
-  
-    return (
-        <Modal
-              title="Edit Key"
-              visible={visible}
-              width={800}
-              footer={null}
-              onOk={handleOk}
-              onCancel={onCancel}
-            >
-        <Form
-          form={form}
-          onFinish={handleEditSubmit}
-          initialValues={token} // Pass initial values here
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-                <>
-                <Form.Item 
-                label="Key Name" 
-                name="key_alias"
-                rules={[{ required: true, message: 'Please input a key name' }]}
-                help="required"
-              >
-                <Input />
-              </Form.Item>
-
-              <Form.Item label="Models" name="models">
-                <Select
-                  mode="multiple"
-                  placeholder="Select models"
-                  style={{ width: "100%" }}
-                >
-                  <Option key="all-team-models" value="all-team-models">
-                    All Team Models
-                  </Option>                
-                  {selectedTeam && selectedTeam.models ? (
-  selectedTeam.models.includes("all-proxy-models") ? (
-    userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  ) : (
-    selectedTeam.models.map((model: string) => (
-      <Option key={model} value={model}>
-        {model}
-      </Option>
-    ))
-  )
-) : (
-  userModels.map((model: string) => (
-    <Option key={model} value={model}>
-      {model}
-    </Option>
-  ))
-)}
-
-
-
-                </Select>
-              </Form.Item>
-              <Form.Item 
-                className="mt-8"
-                label="Max Budget (USD)" 
-                name="max_budget" 
-                help={`Budget cannot exceed team max budget: $${selectedTeam?.max_budget !== null && selectedTeam?.max_budget !== undefined ? selectedTeam?.max_budget : 'unlimited'}`}
-                rules={[
-                  {
-                      validator: async (_, value) => {
-                          if (value && selectedTeam && selectedTeam.max_budget !== null && value > selectedTeam.max_budget) {
-                              throw new Error(`Budget cannot exceed team max budget: $${selectedTeam.max_budget}`);
-                          }
-                      },
-                  },
-              ]}
-              >
-                <InputNumber step={0.01} precision={2} width={200} />
-              </Form.Item>
-              <Form.Item
-                  label="token"
-                  name="token"
-                  hidden={true}
-                ></Form.Item>
-
-            </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Edit Key</Button2>
-          </div>
-        </Form>
-      </Modal>
-    );
-  };
-  
-
-  
-  const handleEditClick = (token: any) => {
-    console.log("handleEditClick:", token);
-
-    // set token.token to token.token_id if token_id is not null
-    if (token.token == null) {
-      if (token.token_id !== null) {
-        token.token = token.token_id;
-      }
-    }
-
+  const handleModelLimitClick = (token: KeyResponse) => {
     setSelectedToken(token);
-    setEditModalVisible(true);
+    setModelLimitModalVisible(true);
   };
 
-const handleEditCancel = () => {
-  setEditModalVisible(false);
-  setSelectedToken(null);
-};
-
-const handleEditSubmit = async (formValues: Record<string, any>) => {
-  // Call API to update team with teamId and values
-  if (accessToken == null) {
-    return;
-  }
-  const currentKey = formValues.token; 
-  formValues.key = currentKey;
-  
-  console.log("handleEditSubmit:", formValues);
-
-  let newKeyValues = await keyUpdateCall(accessToken, formValues);
-  console.log("handleEditSubmit: newKeyValues", newKeyValues);
-
-  // Update the keys with the update key
-  if (data) {
-    const updatedData = data.map((key) =>
-      key.token === currentKey ? newKeyValues : key
-    );
-    setData(updatedData);
-  }
-  message.success("Key updated successfully");
-
-  setEditModalVisible(false);
-  setSelectedToken(null);
-};
-
-
-
-  // call keySpendLogsCall and set the data
-  const fetchData = async (item: ItemData | null) => {
-    try {
-      if (accessToken == null || item == null) {
-        return;
-      }
-      console.log(`accessToken: ${accessToken}; token: ${item.token}`);
-      const response = await keySpendLogsCall(accessToken, item.token);
-
-      console.log("Response:", response);
-      setSpendData(response);
-
-      // predict spend based on response
-      try {
-        const predictedSpend = await PredictedSpendLogsCall(accessToken, response);
-        console.log("Response2:", predictedSpend);
-
-        // append predictedSpend to data
-        const combinedData = [...response, ...predictedSpend.response];
-        setSpendData(combinedData);
-        setPredictedSpendString(predictedSpend.predicted_spend)
-
-        console.log("Combined Data:", combinedData);
-      } catch (error) {
-        console.error("There was an error fetching the predicted data", error);
-      }
-      
-      // setPredictedSpend(predictedSpend);
-      
-    } catch (error) {
-      console.error("There was an error fetching the data", error);
-    }
-  };
-
-  useEffect(() => {
-      fetchData(selectedItem);
-  }, [selectedItem]);
-
-  
-
-  const handleDelete = async (token: any) => {
-    console.log("handleDelete:", token);
-    if (token.token == null) {
-      if (token.token_id !== null) {
-        token.token = token.token_id;
-      }
-    }
-    if (data == null) {
+  const handleModelLimitSubmit = async (updatedMetadata: any) => {
+    if (accessToken == null || selectedToken == null) {
       return;
     }
 
-    // Set the key to delete and open the confirmation modal
-    setKeyToDelete(token.token);
-    localStorage.removeItem("userData" + userID);
-    setIsDeleteModalOpen(true);
+    const formValues = {
+      ...selectedToken,
+      metadata: updatedMetadata,
+      key: selectedToken.token,
+    };
+
+    try {
+      let newKeyValues = await keyUpdateCall(accessToken, formValues);
+      console.log("Model limits updated:", newKeyValues);
+
+      // Update the keys with the updated key
+      if (data) {
+        const updatedData = data.map((key) =>
+          key.token === selectedToken.token ? newKeyValues : key
+        );
+        setData(updatedData);
+      }
+      message.success("Model-specific limits updated successfully");
+    } catch (error) {
+      console.error("Error updating model-specific limits:", error);
+      message.error("Failed to update model-specific limits");
+    }
+
+    setModelLimitModalVisible(false);
+    setSelectedToken(null);
   };
+
+  useEffect(() => {
+    if (teams) {
+      const teamIDSet: Set<string> = new Set();
+      teams.forEach((team: any, index: number) => {
+        const team_obj: string = team.team_id;
+        teamIDSet.add(team_obj);
+      });
+      setKnownTeamIDs(teamIDSet);
+    }
+  }, [teams]);
 
   const confirmDelete = async () => {
     if (keyToDelete == null || data == null) {
@@ -363,277 +354,89 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
     setKeyToDelete(null);
   };
 
-  if (data == null) {
-    return;
-  }
+  const handleRegenerateClick = (token: any) => {
+    setSelectedToken(token);
+    setNewExpiryTime(null);
+    regenerateForm.setFieldsValue({
+      key_alias: token.key_alias,
+      max_budget: token.max_budget,
+      tpm_limit: token.tpm_limit,
+      rpm_limit: token.rpm_limit,
+      duration: token.duration || "",
+    });
+    setRegenerateDialogVisible(true);
+  };
 
-  // useEffect(() => {
-  //   if (openDialogId !== null && selectedItem !== null) {
-  //     fetchData(selectedItem);
-  //   }
-  // }, [openDialogId, selectedItem]);
+  const handleRegenerateFormChange = (field: string, value: any) => {
+    setRegenerateFormData((prev: any) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
 
-  console.log("RERENDER TRIGGERED");
+  const handleRegenerateKey = async () => {
+    if (!premiumUser) {
+      message.error(
+        "Regenerate API Key is an Enterprise feature. Please upgrade to use this feature."
+      );
+      return;
+    }
+
+    if (selectedToken == null) {
+      return;
+    }
+
+    try {
+      const formValues = await regenerateForm.validateFields();
+      const response = await regenerateKeyCall(
+        accessToken,
+        selectedToken.token,
+        formValues
+      );
+      setRegeneratedKey(response.key);
+
+      // Update the data state with the new key_name
+      if (data) {
+        const updatedData = data.map((item) =>
+          item.token === selectedToken?.token ?
+            { ...item, key_name: response.key_name, ...formValues }
+          : item
+        );
+        setData(updatedData);
+      }
+
+      setRegenerateDialogVisible(false);
+      regenerateForm.resetFields();
+      message.success("API Key regenerated successfully");
+    } catch (error) {
+      console.error("Error regenerating key:", error);
+      message.error("Failed to regenerate API Key");
+    }
+  };
+
+
   return (
     <div>
-    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
-      <Table className="mt-5">
-        <TableHead>
-          <TableRow>
-            <TableHeaderCell>Key Alias</TableHeaderCell>
-            <TableHeaderCell>Secret Key</TableHeaderCell>
-            <TableHeaderCell>Spend (USD)</TableHeaderCell>
-            <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            {/* <TableHeaderCell>Spend Report</TableHeaderCell> */}
-            {/* <TableHeaderCell>Team</TableHeaderCell> */}
-            {/* <TableHeaderCell>Metadata</TableHeaderCell> */}
-            <TableHeaderCell>Models</TableHeaderCell>
-            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-            {/* <TableHeaderCell>Expires</TableHeaderCell> */}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {data.map((item) => {
-            console.log(item);
-            // skip item if item.team_id == "litellm-dashboard"
-            if (item.team_id === "litellm-dashboard") {
-              return null;
-            }
-            if (selectedTeam) {
-              if (item.team_id != selectedTeam.team_id) {
-                return null;
-              }
-            }
-            return (
-              <TableRow key={item.token}>
-                <TableCell style={{ maxWidth: "2px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  {item.key_alias != null ? (
-                    <Text>{item.key_alias}</Text>
-                  ) : (
-                    <Text>Not Set</Text>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Text>{item.key_name}</Text>
-                </TableCell>
-                <TableCell>
-                  <Text>
-                    {(() => {
-                      try {
-                        return parseFloat(item.spend).toFixed(4);
-                      } catch (error) {
-                        return item.spend;
-                      }
-                    })()}
+      <AllKeysTable 
+        keys={keys}
+        setKeys={setKeys}
+        isLoading={isLoading}
+        pagination={pagination}
+        onPageChange={handlePageChange}
+        pageSize={100}
+        teams={teams}
+        selectedTeam={selectedTeam}
+        setSelectedTeam={setSelectedTeam}
+        accessToken={accessToken}
+        userID={userID}
+        userRole={userRole}
+        organizations={organizations}
+        setCurrentOrg={setCurrentOrg}
+        refresh={refresh}
+        selectedKeyAlias={selectedKeyAlias}
+        setSelectedKeyAlias={setSelectedKeyAlias}
+      />
 
-                  </Text>
-                </TableCell>
-                <TableCell>
-                  {item.max_budget != null ? (
-                    <Text>{item.max_budget}</Text>
-                  ) : (
-                    <Text>Unlimited</Text>
-                  )}
-                </TableCell>
-                {/* <TableCell style={{ maxWidth: '2px' }}>
-                  <ViewKeySpendReport
-                    token={item.token}
-                    accessToken={accessToken}
-                    keySpend={item.spend}
-                    keyBudget={item.max_budget}
-                    keyName={item.key_name}
-                  />
-                </TableCell> */}
-                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
-                </TableCell> */}
-                {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
-                  
-                </TableCell> */}
-
-<TableCell>
-  {Array.isArray(item.models) ? (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      {item.models.length === 0 ? (
-        <>
-          {selectedTeam && selectedTeam.models && selectedTeam.models.length > 0 ? (
-            selectedTeam.models.map((model: string, index: number) => (
-              model === "all-proxy-models" ? (
-                <Badge key={index} size={"xs"} className="mb-1" color="red">
-                  <Text>All Proxy Models</Text>
-                </Badge>
-              ) : model === "all-team-models" ? (
-                <Badge key={index} size={"xs"} className="mb-1" color="red">
-                  <Text>All Team Models</Text>
-                </Badge>
-              ) : (
-                <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                  <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-                </Badge>
-              )
-            ))
-          ) : (
-            // If selected team is None or selected team's models are empty, show all models
-            <Badge size={"xs"} className="mb-1" color="blue">
-              <Text>all-proxy-models</Text>
-            </Badge>
-          )}
-        </>
-      ) : (
-        item.models.map((model: string, index: number) => (
-          model === "all-proxy-models" ? (
-            <Badge key={index} size={"xs"} className="mb-1" color="red">
-              <Text>All Proxy Models</Text>
-            </Badge>
-          ) : model === "all-team-models" ? (
-            <Badge key={index} size={"xs"} className="mb-1" color="red">
-              <Text>All Team Models</Text>
-            </Badge>
-          ) : (
-            <Badge key={index} size={"xs"} className="mb-1" color="blue">
-              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
-            </Badge>
-          )
-        ))
-      )}
-    </div>
-  ) : null}
-</TableCell>
-
-                <TableCell>
-                  <Text>
-                    TPM: {item.tpm_limit ? item.tpm_limit : "Unlimited"}{" "}
-                    <br></br> RPM:{" "}
-                    {item.rpm_limit ? item.rpm_limit : "Unlimited"}
-                  </Text>
-                </TableCell>
-                <TableCell>
-                    <Icon
-                      onClick={() => {
-                        setSelectedItem(item);
-                        setOpenDialogId(item.id);
-                      }}
-                      icon={InformationCircleIcon}
-                      size="sm"
-                    />
-                
-                <Dialog
-  open={openDialogId !== null}
-  onClose={() => {
-    setOpenDialogId(null);
-    setSelectedItem(null);
-  }}
-
->
-  <DialogPanel>
-    {selectedItem && (
-      <>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          <Card>
-            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-              Spend
-            </p>
-            <div className="mt-2 flex items-baseline space-x-2.5">
-              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-              {(() => {
-                      try {
-                        return parseFloat(selectedItem.spend).toFixed(4);
-                      } catch (error) {
-                        return selectedItem.spend;
-                      }
-                    })()}
-
-              </p>
-            </div>
-          </Card>
-          <Card key={item.name}>
-            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-              Budget
-            </p>
-            <div className="mt-2 flex items-baseline space-x-2.5">
-              <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-              {selectedItem.max_budget != null ? (
-                  <>{selectedItem.max_budget}</>
-                ) : (
-                  <>Unlimited</>
-                )}
-              </p>
-            </div>
-          </Card>
-          <Card key={item.name}>
-            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-              Expires
-            </p>
-            <div className="mt-2 flex items-baseline space-x-2.5">
-              <p className="text-tremor-default font-small text-tremor-content-strong dark:text-dark-tremor-content-strong">
-              {selectedItem.expires != null ? (
-                  <>
-                  {new Date(selectedItem.expires).toLocaleString(undefined, {
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric',
-                    hour: 'numeric',
-                    minute: 'numeric',
-                    second: 'numeric'
-                  })}
-                </>
-                ) : (
-                  <>Never</>
-                )}
-              </p>
-            </div>
-          </Card>
-      </div>
-
-        <Card className="mt-6 mb-6">
-          {spendData && (
-            <BarChart
-              className="mt-6"
-              data={spendData}
-              colors={["blue", "amber"]}
-              index="date"
-              categories={["spend", "predicted_spend"]}
-              yAxisWidth={80}
-            />
-          )}
-        </Card>
-
-        <Title>Metadata</Title>
-
-        <Text>{JSON.stringify(selectedItem.metadata)}</Text>
-
-
-        <Button
-          variant="light"
-          className="mx-auto flex items-center"
-          onClick={() => {
-            setOpenDialogId(null);
-            setSelectedItem(null);
-          }}
-        >
-          Close
-        </Button>
-      </>
-    )}
-</DialogPanel>
-</Dialog>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
-                    onClick={() => handleEditClick(item)}
-                  />
-                  <Icon
-                    onClick={() => handleDelete(item)}
-                    icon={TrashIcon}
-                    size="sm"
-                  />
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
       {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
@@ -678,18 +481,164 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
           </div>
         </div>
       )}
-    </Card>
 
-    {selectedToken && (
-        <EditKeyModal
-          visible={editModalVisible}
-          onCancel={handleEditCancel}
-          token={selectedToken}
-          onSubmit={handleEditSubmit}
-        />
+      {/* Regenerate Key Form Modal */}
+      <Modal
+        title="Regenerate API Key"
+        visible={regenerateDialogVisible}
+        onCancel={() => {
+          setRegenerateDialogVisible(false);
+          regenerateForm.resetFields();
+        }}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={() => {
+              setRegenerateDialogVisible(false);
+              regenerateForm.resetFields();
+            }}
+            className="mr-2"
+          >
+            Cancel
+          </Button>,
+          <Button
+            key="regenerate"
+            onClick={handleRegenerateKey}
+            disabled={!premiumUser}
+          >
+            {premiumUser ? "Regenerate" : "Upgrade to Regenerate"}
+          </Button>,
+        ]}
+      >
+        {premiumUser ?
+          <Form
+            form={regenerateForm}
+            layout="vertical"
+            onValuesChange={(changedValues, allValues) => {
+              if ("duration" in changedValues) {
+                handleRegenerateFormChange("duration", changedValues.duration);
+              }
+            }}
+          >
+            <Form.Item name="key_alias" label="Key Alias">
+              <TextInput disabled={true} />
+            </Form.Item>
+            <Form.Item name="max_budget" label="Max Budget (USD)">
+              <InputNumber
+                step={0.01}
+                precision={2}
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
+            <Form.Item name="tpm_limit" label="TPM Limit">
+              <InputNumber style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item name="rpm_limit" label="RPM Limit">
+              <InputNumber style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item
+              name="duration"
+              label="Expire Key (eg: 30s, 30h, 30d)"
+              className="mt-8"
+            >
+              <TextInput placeholder="" />
+            </Form.Item>
+            <div className="mt-2 text-sm text-gray-500">
+              Current expiry:{" "}
+              {selectedToken?.expires != null ?
+                new Date(selectedToken.expires).toLocaleString()
+              : "Never"}
+            </div>
+            {newExpiryTime && (
+              <div className="mt-2 text-sm text-green-600">
+                New expiry: {newExpiryTime}
+              </div>
+            )}
+          </Form>
+        : <div>
+            <p className="mb-2 text-gray-500 italic text-[12px]">
+              Upgrade to use this feature
+            </p>
+            <Button variant="primary" className="mb-2">
+              <a
+                href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+                target="_blank"
+              >
+                Get Free Trial
+              </a>
+            </Button>
+          </div>
+        }
+      </Modal>
+
+      {/* Regenerated Key Display Modal */}
+      {regeneratedKey && (
+        <Modal
+          visible={!!regeneratedKey}
+          onCancel={() => setRegeneratedKey(null)}
+          footer={[
+            <Button key="close" onClick={() => setRegeneratedKey(null)}>
+              Close
+            </Button>,
+          ]}
+        >
+          <Grid numItems={1} className="gap-2 w-full">
+            <Title>Regenerated Key</Title>
+            <Col numColSpan={1}>
+              <p>
+                Please replace your old key with the new key generated. For
+                security reasons, <b>you will not be able to view it again</b>{" "}
+                through your LiteLLM account. If you lose this secret key, you
+                will need to generate a new one.
+              </p>
+            </Col>
+            <Col numColSpan={1}>
+              <Text className="mt-3">Key Alias:</Text>
+              <div
+                style={{
+                  background: "#f8f8f8",
+                  padding: "10px",
+                  borderRadius: "5px",
+                  marginBottom: "10px",
+                }}
+              >
+                <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                  {selectedToken?.key_alias || "No alias set"}
+                </pre>
+              </div>
+              <Text className="mt-3">New API Key:</Text>
+              <div
+                style={{
+                  background: "#f8f8f8",
+                  padding: "10px",
+                  borderRadius: "5px",
+                  marginBottom: "10px",
+                }}
+              >
+                <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                  {regeneratedKey}
+                </pre>
+              </div>
+              <CopyToClipboard
+                text={regeneratedKey}
+                onCopy={() => message.success("API Key copied to clipboard")}
+              >
+                <Button className="mt-3">Copy API Key</Button>
+              </CopyToClipboard>
+            </Col>
+          </Grid>
+        </Modal>
       )}
     </div>
   );
 };
+
+// Update the type declaration to include the new function
+declare global {
+  interface Window {
+    refreshKeysList?: () => void;
+    addNewKeyToList?: (newKey: any) => void;
+  }
+}
 
 export default ViewKeyTable;

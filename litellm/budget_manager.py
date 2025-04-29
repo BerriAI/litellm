@@ -7,11 +7,20 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import os, json, time
+import json
+import os
+import threading
+import time
+from typing import Literal, Optional
+
 import litellm
+from litellm.constants import (
+    DAYS_IN_A_MONTH,
+    DAYS_IN_A_WEEK,
+    DAYS_IN_A_YEAR,
+    HOURS_IN_A_DAY,
+)
 from litellm.utils import ModelResponse
-import requests, threading
-from typing import Optional, Union, Literal
 
 
 class BudgetManager:
@@ -35,7 +44,7 @@ class BudgetManager:
                 import logging
 
                 logging.info(print_statement)
-        except:
+        except Exception:
             pass
 
     def load_data(self):
@@ -52,9 +61,10 @@ class BudgetManager:
         elif self.client_type == "hosted":
             # Load the user_dict from hosted db
             url = self.api_base + "/get_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             if response["status"] == "error":
                 self.user_dict = (
@@ -77,11 +87,11 @@ class BudgetManager:
         if duration == "daily":
             duration_in_days = 1
         elif duration == "weekly":
-            duration_in_days = 7
+            duration_in_days = DAYS_IN_A_WEEK
         elif duration == "monthly":
-            duration_in_days = 28
+            duration_in_days = DAYS_IN_A_MONTH
         elif duration == "yearly":
-            duration_in_days = 365
+            duration_in_days = DAYS_IN_A_YEAR
         else:
             raise ValueError(
                 """duration needs to be one of ["daily", "weekly", "monthly", "yearly"]"""
@@ -178,7 +188,9 @@ class BudgetManager:
         current_time = time.time()
 
         # Convert duration from days to seconds
-        duration_in_seconds = self.user_dict[user]["duration"] * 24 * 60 * 60
+        duration_in_seconds = (
+            self.user_dict[user]["duration"] * HOURS_IN_A_DAY * 60 * 60
+        )
 
         # Check if duration has elapsed
         if current_time - last_updated_at >= duration_in_seconds:
@@ -210,8 +222,9 @@ class BudgetManager:
             return {"status": "success"}
         elif self.client_type == "hosted":
             url = self.api_base + "/set_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             return response

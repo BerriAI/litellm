@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # OpenAI
-LiteLLM supports OpenAI Chat + Text completion and embedding calls.
+LiteLLM supports OpenAI Chat + Embedding calls.
 
 ### Required API Keys
 
@@ -20,7 +20,7 @@ os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-4o", 
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -163,6 +163,21 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
+| gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
+| gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
+| o4-mini | `response = completion(model="o4-mini", messages=messages)` |
+| o3-mini | `response = completion(model="o3-mini", messages=messages)` |
+| o3 | `response = completion(model="o3", messages=messages)` |
+| o1-mini | `response = completion(model="o1-mini", messages=messages)` |
+| o1-preview | `response = completion(model="o1-preview", messages=messages)` |
+| gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
+| gpt-4o-mini-2024-07-18   | `response = completion(model="gpt-4o-mini-2024-07-18", messages=messages)` |
+| gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
+| gpt-4o-2024-08-06   | `response = completion(model="gpt-4o-2024-08-06", messages=messages)` |
+| gpt-4o-2024-05-13   | `response = completion(model="gpt-4o-2024-05-13", messages=messages)` |
+| gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
+| gpt-4-turbo-preview   | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-0125-preview    | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
 | gpt-4-1106-preview    | `response = completion(model="gpt-4-1106-preview", messages=messages)` |
 | gpt-3.5-turbo-1106    | `response = completion(model="gpt-3.5-turbo-1106", messages=messages)` |
@@ -184,6 +199,8 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
+| gpt-4-turbo    | `response = completion(model="gpt-4-turbo", messages=messages)` |
 | gpt-4-vision-preview    | `response = completion(model="gpt-4-vision-preview", messages=messages)` |
 
 #### Usage
@@ -217,20 +234,270 @@ response = completion(
 
 ```
 
-## OpenAI Text Completion Models / Instruct Models
+## PDF File Parsing
 
-| Model Name          | Function Call                                      |
-|---------------------|----------------------------------------------------|
-| gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
-| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-0914", messages=messages)` |
-| text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
-| ada-001             | `response = completion(model="ada-001", messages=messages)` |
-| curie-001           | `response = completion(model="curie-001", messages=messages)` |
-| babbage-001         | `response = completion(model="babbage-001", messages=messages)` |
-| babbage-002         | `response = completion(model="babbage-002", messages=messages)` |
-| davinci-002         | `response = completion(model="davinci-002", messages=messages)` |
+OpenAI has a new `file` message type that allows you to pass in a PDF file and have it parsed into a structured output. [Read more](https://platform.openai.com/docs/guides/pdf-files?api-mode=chat&lang=python)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import base64
+from litellm import completion
+
+with open("draconomicon.pdf", "rb") as f:
+    data = f.read()
+
+base64_string = base64.b64encode(data).decode("utf-8")
+
+completion = completion(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "draconomicon.pdf",
+                        "file_data": f"data:application/pdf;base64,{base64_string}",
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "What is the first dragon in the book?",
+                }
+            ],
+        },
+    ],
+)
+
+print(completion.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: openai-model
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai-model",
+    "messages": [
+        {"role": "user", "content": [
+            {
+                "type": "file",
+                "file": {
+                    "filename": "draconomicon.pdf",
+                    "file_data": f"data:application/pdf;base64,{base64_string}",
+                }
+            }
+        ]}
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+## OpenAI Fine Tuned Models
+
+| Model Name                | Function Call                                                          |
+|---------------------------|-----------------------------------------------------------------|
+| fine tuned `gpt-4-0613`    | `response = completion(model="ft:gpt-4-0613", messages=messages)`     |
+| fine tuned `gpt-4o-2024-05-13` | `response = completion(model="ft:gpt-4o-2024-05-13", messages=messages)` |
+| fine tuned `gpt-3.5-turbo-0125` | `response = completion(model="ft:gpt-3.5-turbo-0125", messages=messages)` |
+| fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
+| fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
+
+
+## OpenAI Audio Transcription
+
+LiteLLM supports OpenAI Audio Transcription endpoint.
+
+Supported models:
+
+| Model Name                | Function Call                                                          |
+|---------------------------|-----------------------------------------------------------------|
+| `whisper-1`    | `response = completion(model="whisper-1", file=audio_file)`     |
+| `gpt-4o-transcribe` | `response = completion(model="gpt-4o-transcribe", file=audio_file)` |
+| `gpt-4o-mini-transcribe` | `response = completion(model="gpt-4o-mini-transcribe", file=audio_file)` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import transcription
+import os 
+
+# set api keys 
+os.environ["OPENAI_API_KEY"] = ""
+audio_file = open("/path/to/audio.mp3", "rb")
+
+response = transcription(model="gpt-4o-transcribe", file=audio_file)
+
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+- model_name: gpt-4o-transcribe
+  litellm_params:
+    model: gpt-4o-transcribe
+    api_key: os.environ/OPENAI_API_KEY
+  model_info:
+    mode: audio_transcription
+    
+general_settings:
+  master_key: sk-1234
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl --location 'http://0.0.0.0:8000/v1/audio/transcriptions' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
+--form 'model="gpt-4o-transcribe"'
+```
+
+
+
+</TabItem>
+</Tabs>
+
+
 
 ## Advanced
+
+### Getting OpenAI API Response Headers 
+
+Set `litellm.return_response_headers = True` to get raw response headers from OpenAI
+
+You can expect to always get the `_response_headers` field from `litellm.completion()`, `litellm.embedding()` functions
+
+<Tabs>
+<TabItem value="litellm.completion" label="litellm.completion">
+
+```python
+litellm.return_response_headers = True
+
+# /chat/completion
+response = completion(
+    model="gpt-4o-mini",
+    messages=[
+        {
+            "role": "user",
+            "content": "hi",
+        }
+    ],
+)
+print(f"response: {response}")
+print("_response_headers=", response._response_headers)
+```
+</TabItem>
+
+<TabItem value="litellm.completion - streaming" label="litellm.completion + stream">
+
+```python
+litellm.return_response_headers = True
+
+# /chat/completion
+response = completion(
+    model="gpt-4o-mini",
+    stream=True,
+    messages=[
+        {
+            "role": "user",
+            "content": "hi",
+        }
+    ],
+)
+print(f"response: {response}")
+print("response_headers=", response._response_headers)
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+
+<TabItem value="litellm.embedding" label="litellm.embedding">
+
+```python
+litellm.return_response_headers = True
+
+# embedding
+embedding_response = litellm.embedding(
+    model="text-embedding-ada-002",
+    input="hello",
+)
+
+embedding_response_headers = embedding_response._response_headers
+print("embedding_response_headers=", embedding_response_headers)
+```
+
+</TabItem>
+</Tabs>
+Expected Response Headers from OpenAI
+
+```json
+{
+  "date": "Sat, 20 Jul 2024 22:05:23 GMT",
+  "content-type": "application/json",
+  "transfer-encoding": "chunked",
+  "connection": "keep-alive",
+  "access-control-allow-origin": "*",
+  "openai-model": "text-embedding-ada-002",
+  "openai-organization": "*****",
+  "openai-processing-ms": "20",
+  "openai-version": "2020-10-01",
+  "strict-transport-security": "max-age=15552000; includeSubDomains; preload",
+  "x-ratelimit-limit-requests": "5000",
+  "x-ratelimit-limit-tokens": "5000000",
+  "x-ratelimit-remaining-requests": "4999",
+  "x-ratelimit-remaining-tokens": "4999999",
+  "x-ratelimit-reset-requests": "12ms",
+  "x-ratelimit-reset-tokens": "0s",
+  "x-request-id": "req_cc37487bfd336358231a17034bcfb4d9",
+  "cf-cache-status": "DYNAMIC",
+  "set-cookie": "__cf_bm=E_FJY8fdAIMBzBE2RZI2.OkMIO3lf8Hz.ydBQJ9m3q8-1721513123-1.0.1.1-6OK0zXvtd5s9Jgqfz66cU9gzQYpcuh_RLaUZ9dOgxR9Qeq4oJlu.04C09hOTCFn7Hg.k.2tiKLOX24szUE2shw; path=/; expires=Sat, 20-Jul-24 22:35:23 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None, *cfuvid=SDndIImxiO3U0aBcVtoy1TBQqYeQtVDo1L6*Nlpp7EU-1721513123215-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None",
+  "x-content-type-options": "nosniff",
+  "server": "cloudflare",
+  "cf-ray": "8a66409b4f8acee9-SJC",
+  "content-encoding": "br",
+  "alt-svc": "h3=\":443\"; ma=86400"
+}
+```
 
 ### Parallel Function calling
 See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
@@ -342,26 +609,6 @@ response = litellm.acompletion(
 )
 ```
 
-### Using Helicone Proxy with LiteLLM
-```python
-import os 
-import litellm
-from litellm import completion
-
-os.environ["OPENAI_API_KEY"] = ""
-
-# os.environ["OPENAI_API_BASE"] = ""
-litellm.api_base = "https://oai.hconeai.com/v1"
-litellm.headers = {
-    "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",
-    "Helicone-Cache-Enabled": "true",
-}
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
-# openai call
-response = completion("gpt-3.5-turbo", messages)
-```
 
 ### Using OpenAI Proxy with LiteLLM
 ```python
@@ -386,3 +633,48 @@ response = completion("openai/your-model-name", messages)
 If you need to set api_base dynamically, just pass it in completions instead - `completions(...,api_base="your-proxy-api-base")`
 
 For more check out [setting API Base/Keys](../set_keys.md)
+
+### Forwarding Org ID for Proxy requests
+
+Forward openai Org ID's from the client to OpenAI with `forward_openai_org_id` param. 
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "gpt-3.5-turbo"
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+    forward_openai_org_id: true # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```bash
+litellm --config config.yaml --detailed_debug
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Make OpenAI call
+
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234",
+    organization="my-special-org",
+    base_url="http://0.0.0.0:4000"
+)
+
+client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+```
+
+In your logs you should see the forwarded org id
+
+```bash
+LiteLLM:DEBUG: utils.py:255 - Request to litellm:
+LiteLLM:DEBUG: utils.py:255 - litellm.acompletion(... organization='my-special-org',)
+```

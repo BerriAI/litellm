@@ -2,15 +2,26 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Caching 
-Cache LLM Responses
 
-LiteLLM supports:
+:::note 
+
+For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
+:::
+
+Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to save costs and reduce latency. When you make the same request twice, the cached response is returned instead of calling the LLM API again.
+
+
+
+### Supported Caches
+
 - In Memory Cache
 - Redis Cache 
+- Qdrant Semantic Cache
 - Redis Semantic Cache
 - s3 Bucket Cache 
 
-## Quick Start - Redis, s3 Cache, Semantic Cache
+## Quick Start
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
@@ -34,7 +45,7 @@ litellm_settings:
 
 #### [OPTIONAL] Step 1.5: Add redis namespaces, default ttl 
 
-## Namespace
+#### Namespace
 If you want to create some folder for your keys, you can set a namespace, like this:
 
 ```yaml
@@ -42,16 +53,130 @@ litellm_settings:
   cache: true 
   cache_params:        # set cache params for redis
     type: redis
-    namespace: "litellm_caching"
+    namespace: "litellm.caching.caching"
 ```
 
 and keys will be stored like:
 
 ```
-litellm_caching:<hash>
+litellm.caching.caching:<hash>
 ```
 
-## TTL
+#### Redis Cluster 
+
+<Tabs>
+
+<TabItem value="redis-cluster-config" label="Set on config.yaml">
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+```
+
+</TabItem>
+
+<TabItem value="redis-env" label="Set on .env">
+
+You can configure redis cluster in your .env by setting `REDIS_CLUSTER_NODES` in your .env
+
+**Example `REDIS_CLUSTER_NODES`** value
+
+```
+REDIS_CLUSTER_NODES = "[{"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7003"}, {"host": "127.0.0.1", "port": "7004"}, {"host": "127.0.0.1", "port": "7005"}, {"host": "127.0.0.1", "port": "7006"}, {"host": "127.0.0.1", "port": "7007"}]"
+```
+
+:::note
+
+Example python script for setting redis cluster nodes in .env:
+
+```python
+# List of startup nodes
+startup_nodes = [
+    {"host": "127.0.0.1", "port": "7001"},
+    {"host": "127.0.0.1", "port": "7003"},
+    {"host": "127.0.0.1", "port": "7004"},
+    {"host": "127.0.0.1", "port": "7005"},
+    {"host": "127.0.0.1", "port": "7006"},
+    {"host": "127.0.0.1", "port": "7007"},
+]
+
+# set startup nodes in environment variables
+os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
+print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
+```
+
+:::
+
+</TabItem>
+
+</Tabs>
+
+#### Redis Sentinel 
+
+
+<Tabs>
+
+<TabItem value="redis-sentinel-config" label="Set on config.yaml">
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: "redis"
+    service_name: "mymaster"
+    sentinel_nodes: [["localhost", 26379]]
+    sentinel_password: "password" # [OPTIONAL]
+```
+
+</TabItem>
+
+<TabItem value="redis-env" label="Set on .env">
+
+You can configure redis sentinel in your .env by setting `REDIS_SENTINEL_NODES` in your .env
+
+**Example `REDIS_SENTINEL_NODES`** value
+
+```env
+REDIS_SENTINEL_NODES='[["localhost", 26379]]'
+REDIS_SERVICE_NAME = "mymaster"
+REDIS_SENTINEL_PASSWORD = "password"
+```
+
+:::note
+
+Example python script for setting redis cluster nodes in .env:
+
+```python
+# List of startup nodes
+sentinel_nodes = [["localhost", 26379]]
+
+# set startup nodes in environment variables
+os.environ["REDIS_SENTINEL_NODES"] = json.dumps(sentinel_nodes)
+print("REDIS_SENTINEL_NODES", os.environ["REDIS_SENTINEL_NODES"])
+```
+
+:::
+
+</TabItem>
+
+</Tabs>
+
+#### TTL
 
 ```yaml
 litellm_settings:
@@ -59,8 +184,26 @@ litellm_settings:
   cache_params:        # set cache params for redis
     type: redis
     ttl: 600 # will be cached on redis for 600s
+    # default_in_memory_ttl: Optional[float], default is None. time in seconds. 
+    # default_in_redis_ttl: Optional[float], default is None. time in seconds. 
 ```
 
+
+#### SSL
+
+just set `REDIS_SSL="True"` in your .env, and LiteLLM will pick this up. 
+
+```env
+REDIS_SSL="True"
+```
+
+For quick testing, you can also use REDIS_URL, eg.:
+
+```
+REDIS_URL="rediss://.."
+```
+
+but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc. 
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
@@ -83,6 +226,66 @@ REDIS_<redis-kwarg-name> = ""
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+</TabItem>
+
+
+<TabItem value="qdrant-semantic" label="Qdrant Semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: openai-embedding
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: qdrant-semantic
+    qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_collection_name: test_collection
+    qdrant_quantization_config: binary
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+```
+
+#### Step 2: Add Qdrant Credentials to your .env
+
+```shell
+QDRANT_API_KEY = "16rJUMBRx*************"
+QDRANT_API_BASE = "https://5392d382-45*********.cloud.qdrant.io"
+```
+
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+
+#### Step 4. Test it
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+**Expect to see `x-litellm-semantic-similarity` in the response headers when semantic caching is one**
+
 </TabItem>
 
 <TabItem value="s3" label="s3 cache">
@@ -164,10 +367,15 @@ REDIS_<redis-kwarg-name> = ""
 $ litellm --config /path/to/config.yaml
 ```
 </TabItem>
+
+
+
 </Tabs>
 
 
-## Using Caching - /chat/completions
+## Usage
+
+### Basic
 
 <Tabs>
 <TabItem value="chat_completions" label="/chat/completions">
@@ -212,6 +420,255 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 </TabItem>
 </Tabs>
 
+### Dynamic Cache Controls
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `ttl` | *Optional(int)* | Will cache the response for the user-defined amount of time (in seconds) |
+| `s-maxage` | *Optional(int)* | Will only accept cached responses that are within user-defined range (in seconds) |
+| `no-cache` | *Optional(bool)* | Will not store the response in cache. |
+| `no-store` | *Optional(bool)* | Will not cache the response |
+| `namespace` | *Optional(str)* | Will cache the response under a user-defined namespace |
+
+Each cache parameter can be controlled on a per-request basis. Here are examples for each parameter:
+
+### `ttl`
+
+Set how long (in seconds) to cache a response.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "ttl": 300  # Cache response for 5 minutes
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"ttl": 300},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `s-maxage`
+
+Only accept cached responses that are within the specified age (in seconds).
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "s-maxage": 600  # Only use cache if less than 10 minutes old
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"s-maxage": 600},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `no-cache`
+Force a fresh response, bypassing the cache.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "no-cache": True  # Skip cache check, get fresh response
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-cache": true},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `no-store`
+
+Will not store the response in cache.
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "no-store": True  # Don't cache this response
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-store": true},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+### `namespace`
+Store the response under a specific cache namespace.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[{"role": "user", "content": "Hello"}],
+    model="gpt-3.5-turbo",
+    extra_body={
+        "cache": {
+            "namespace": "my-custom-namespace"  # Store in custom namespace
+        }
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"namespace": "my-custom-namespace"},
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+
+
+## Set cache for proxy, but not on the actual llm api call
+
+Use this if you just want to enable features like rate limiting, and loadbalancing across multiple instances.
+
+Set `supported_call_types: []` to disable caching on the actual api call. 
+
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: [] 
+```
+
+
 ## Debugging Caching - `/cache/ping`
 LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working as expected
 
@@ -242,6 +699,21 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 ```
 
 ## Advanced
+
+### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
+
+By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
+
+**Cache will only be on for the call types specified in `supported_call_types`**
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+```
 ### Set Cache Params on config.yaml
 ```yaml
 model_list:
@@ -262,100 +734,8 @@ litellm_settings:
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     
     # Optional configurations
-    supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
-```
-
-### Turn on / off caching per request.  
-
-The proxy support 3 cache-controls:
-
-- `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
-- `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
-- `no-cache`: *Optional(bool)* Will not return a cached response, but instead call the actual endpoint. 
-- `no-store`: *Optional(bool)* Will not cache the response. 
-
-[Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
-
-**Turn off caching**
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "no-cache": True # will not return a cached response 
-      }
-    }
-)
-```
-
-**Turn on caching**
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "ttl": 600 # caches response for 10 minutes 
-      }
-    }
-)
-```
-
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-		base_url="http://0.0.0.0:4000"
-)
-
-chat_completion = client.chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-3.5-turbo",
-    extra_body = {        # OpenAI python accepts extra args in extra_body
-        cache: {
-          "s-maxage": 600 # only get responses cached within last 10 minutes 
-      }
-    }
-)
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 
@@ -413,6 +793,73 @@ x-litellm-cache-key: 586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a
              
 ```
 
+### **Set Caching Default Off - Opt in only **
+
+1. **Set `mode: default_off` for caching**
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+# default off mode
+litellm_settings:
+  set_verbose: True
+  cache: True
+  cache_params:
+    mode: default_off # 👈 Key change cache is default_off
+```
+
+2. **Opting in to cache when cache is default off**
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(api_key=<litellm-api-key>, base_url="http://0.0.0.0:4000")
+
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo",
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        "cache": {"use-cache": True}
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"use-cache": True}
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+
 
 ### Turn on `batch_redis_requests` 
 
@@ -443,21 +890,25 @@ litellm_settings:
 
 ```yaml
 cache_params:
+  # ttl 
+  ttl: Optional[float]
+  default_in_memory_ttl: Optional[float]
+  default_in_redis_ttl: Optional[float]
+
   # Type of cache (options: "local", "redis", "s3")
   type: s3
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types:
-    - completion
-    - acompletion
-    - embedding
-    - aembedding
+  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
   host: localhost  # Redis server hostname or IP address
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
+  namespace: Optional[str] = None,
+  
 
   # S3 cache parameters
   s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket
@@ -471,3 +922,14 @@ cache_params:
   s3_aws_session_token: your_session_token  # AWS Session Token for temporary credentials
 
 ```
+
+## Advanced - user api key cache ttl 
+
+Configure how long the in-memory cache stores the key object (prevents db requests)
+
+```yaml
+general_settings:
+  user_api_key_cache_ttl: <your-number> #time in seconds
+```
+
+By default this value is set to 60s.

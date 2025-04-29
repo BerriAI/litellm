@@ -22,6 +22,16 @@ body:
       description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
     validations:
       required: true
+  - type: dropdown
+    id: ml-ops-team
+    attributes:
+      label: Are you a ML Ops Team?
+      description: This helps us prioritize your requests correctly 
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
   - type: input
     id: contact
     attributes:

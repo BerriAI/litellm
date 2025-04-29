@@ -1,4 +1,6 @@
-import sys, os, traceback
+import os
+import sys
+import traceback
 
 # this file is to test litellm/proxy
 
@@ -6,9 +8,10 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.integrations.custom_logger import CustomLogger
-import litellm
 import inspect
+
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -24,7 +27,7 @@ class MyCustomHandler(CustomLogger):
         reset_color_code = "\033[0m"
         print_verbose(f"{blue_color_code}Initialized LiteLLM custom logger")
         try:
-            print_verbose(f"Logger Initialized with following methods:")
+            print_verbose("Logger Initialized with following methods:")
             methods = [
                 method
                 for method in dir(self)
@@ -35,30 +38,30 @@ class MyCustomHandler(CustomLogger):
             for method in methods:
                 print_verbose(f" - {method}")
             print_verbose(f"{reset_color_code}")
-        except:
+        except Exception:
             pass
 
     def log_pre_api_call(self, model, messages, kwargs):
-        print_verbose(f"Pre-API Call")
+        print_verbose("Pre-API Call")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print_verbose(f"Post-API Call")
+        print_verbose("Post-API Call")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print_verbose(f"On Stream")
+        print_verbose("On Stream")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         print_verbose("On Success!")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print_verbose(f"On Async Success!")
+        print_verbose("On Async Success!")
         response_cost = litellm.completion_cost(completion_response=response_obj)
         assert response_cost > 0.0
         return
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            print_verbose(f"On Async Failure !")
+            print_verbose("On Async Failure !")
         except Exception as e:
             print_verbose(f"Exception: {e}")
 

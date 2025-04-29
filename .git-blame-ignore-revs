@@ -1,0 +1,10 @@
+# Add the commit hash of any commit you want to ignore in `git blame` here.
+# One commit hash per line.
+#
+# The GitHub Blame UI will use this file automatically!
+#
+# Run this command to always ignore formatting commits in `git blame`
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Update pydantic code to fix warnings (GH-3600)
+876840e9957bc7e9f7d6a2b58c4d7c53dad16481
