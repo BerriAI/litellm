@@ -60,9 +60,9 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -176,14 +176,6 @@ class RedisUpdateBuffer:
             "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
         )
 
-        # only store in redis if there are any updates to commit
-        if (
-            self._number_of_transactions_to_store_in_redis(db_spend_update_transactions)
-            == 0
-        ):
-            return
-
-        # Store all transaction types using the helper method
         await self._store_transactions_in_redis(
             transactions=db_spend_update_transactions,
             redis_key=REDIS_UPDATE_BUFFER_KEY,
