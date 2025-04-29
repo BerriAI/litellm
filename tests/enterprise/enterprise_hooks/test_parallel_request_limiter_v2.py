@@ -16,7 +16,7 @@ from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from enterprise.enterprise_hooks.parallel_request_limiter_v2 import _PROXY_MaxParallelRequestsHandler
 
 @pytest.mark.asyncio
-async def test_normal_router_call_v2():
+async def test_normal_router_call_v2(monkeypatch):
     """
     Test normal router call with parallel request limiter v2
     """
@@ -52,9 +52,8 @@ async def test_normal_router_call_v2():
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    pl = ProxyLogging(user_api_key_cache=local_cache)
-    pl._init_litellm_callbacks()
-    parallel_request_handler = pl.max_parallel_request_limiter
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -69,7 +68,7 @@ async def test_normal_router_call_v2():
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
-        )["current_requests"]
+        )
         == 1
     )
 
@@ -85,7 +84,7 @@ async def test_normal_router_call_v2():
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
-        )["current_requests"]
+        )
         == 0
     )
 
@@ -167,7 +166,7 @@ async def test_streaming_router_call_v2(monkeypatch):
     )
 
 @pytest.mark.asyncio
-async def test_bad_router_call_v2():
+async def test_bad_router_call_v2(monkeypatch):
     """
     Test bad router call with parallel request limiter v2
     """
@@ -203,9 +202,9 @@ async def test_bad_router_call_v2():
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    pl = ProxyLogging(user_api_key_cache=local_cache)
-    pl._init_litellm_callbacks()
-    parallel_request_handler = pl.max_parallel_request_limiter
+    
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""

@@ -264,13 +264,26 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 rate_limit_type="key",
                 group=cast(RateLimitGroups, group),
             )
+            
+            # For request_count, check current value before decrementing
+            # if group == "request_count":
+            #     current_value = await self.internal_usage_cache.async_get_cache(
+            #         key=key,
+            #         local_only=True,
+            #         litellm_parent_otel_span=litellm_parent_otel_span,
+            #     )
+            #     if current_value is None or current_value <= 0:
+            #         # Skip decrementing if count is already 0 or negative
+            #         continue
+                    
             increment_list.append((key, increment_value_by_group[group]))
 
         print(f"increment_list: {increment_list}")
-        await self._increment_value_list_in_current_window(
-            increment_list=increment_list,
-            ttl=60,
-        )
+        if increment_list:  # Only call if we have values to increment
+            await self._increment_value_list_in_current_window(
+                increment_list=increment_list,
+                ttl=60,
+            )
 
     async def async_log_success_event(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
@@ -346,23 +359,16 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 )
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
-            from litellm.proxy.common_utils.callback_utils import (
-                get_model_group_from_litellm_kwargs,
-            )
 
-            _metadata = kwargs["litellm_params"].get("metadata", {}) or {}
-            user_api_key = _metadata.get("user_api_key", None)
-            user_api_key_user_id = _metadata.get("user_api_key_user_id", None)
-            user_api_key_team_id = _metadata.get("user_api_key_team_id", None)
-            user_api_key_end_user_id = kwargs.get("user")
-            self.print_verbose(f"user_api_key: {user_api_key}")
-            if user_api_key is None:
-                return
-            
-            model_group = get_model_group_from_litellm_kwargs(kwargs)
+            model_group = request_data.get("model", None)
             current_date = datetime.now().strftime("%Y-%m-%d")
             current_hour = datetime.now().strftime("%H")
             current_minute = datetime.now().strftime("%M")
@@ -370,7 +376,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
 
             ## decrement call count if call failed
             await self._update_usage_in_cache_post_call(
-                user_api_key_dict=UserAPIKeyAuth(api_key=user_api_key, user_id=user_api_key_user_id, team_id=user_api_key_team_id, end_user_id=user_api_key_end_user_id),
+                user_api_key_dict=user_api_key_dict,
                 precise_minute=precise_minute,
                 model=model_group,
                 total_tokens=0,
