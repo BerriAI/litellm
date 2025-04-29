@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------+
 #
-#           Use Bedrock Guardrails for your LLM calls
+#           Add Bedrock Knowledge Base Context to your LLM calls
 #
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
@@ -42,6 +42,8 @@ else:
 
 
 class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
+    CONTENT_PREFIX_STRING = "Context: \n\n"
+
     def __init__(
         self,
         **kwargs,
@@ -267,7 +269,7 @@ class BedrockKnowledgeBaseHook(CustomLogger, BaseAWSLLM):
         retrieval_results: Optional[List[BedrockKBRetrievalResult]] = response.get(
             "retrievalResults", None
         )
-        context_string: str = "Context: \n\n"
+        context_string: str = BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING
         for retrieval_result in retrieval_results:
             retrieval_result_content: Optional[BedrockKBContent] = (
                 retrieval_result.get("content", None) or {}
