@@ -19,6 +19,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
@@ -323,6 +324,30 @@ class RedisUpdateBuffer:
         ]
         return cast(
             Dict[str, DailyTeamSpendTransaction],
+            DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                list_of_daily_spend_update_transactions
+            ),
+        )
+
+    async def get_all_daily_tag_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> Optional[Dict[str, DailyTagSpendTransaction]]:
+        """
+        Gets all the daily tag spend update transactions from Redis
+        """
+        if self.redis_cache is None:
+            return None
+        list_of_transactions = await self.redis_cache.async_lpop(
+            key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+            count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+        )
+        if list_of_transactions is None:
+            return None
+        list_of_daily_spend_update_transactions = [
+            json.loads(transaction) for transaction in list_of_transactions
+        ]
+        return cast(
+            Dict[str, DailyTagSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
