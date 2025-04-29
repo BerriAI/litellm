@@ -119,26 +119,28 @@ class AimGuardrail(CustomGuardrail):
         )
         response.raise_for_status()
         res = response.json()
-        required_action = res.get("required_action") and res["required_action"].get("prompt_policy_action", None)
-        if required_action is None:
+        required_action = res.get("required_action")
+        action_type = required_action and required_action.get("action_type", None)
+        if action_type is None:
             verbose_proxy_logger.warning("Aim: No required action specified")
             return data
-        match required_action:
+        match action_type:
             case "monitor_action":
                 verbose_proxy_logger.info("Aim: monitor action")
             case "block_action":
-                self._handle_block_action(res["analysis_result"])
+                self._handle_block_action(res["analysis_result"], required_action)
             case "anonymize_action":
                 verbose_proxy_logger.info("Aim: anonymize action")
-                return self._handle_anonymize_action(res, data)
+                return self._handle_anonymize_action(res["analysis_result"], required_action, data)
             case "engage_action":
                 verbose_proxy_logger.info("Aim: engage action")
             case _:
                 verbose_proxy_logger.error("Aim: unknown action")
         return data
 
-    def _handle_block_action(self, analysis_result: Any) -> None:
+    def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
         detected = analysis_result["detected"]
+        detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
                 detected=detected,
@@ -146,14 +148,13 @@ class AimGuardrail(CustomGuardrail):
             ),
         )
         if detected:
-            raise HTTPException(status_code=400, detail=analysis_result["detection_message"])
+            raise HTTPException(status_code=400, detail=detection_message)
 
-    def _handle_anonymize_action(self, res: Any, data: dict) -> dict:
+    def _handle_anonymize_action(self, analysis_result: Any, required_action: Any, data: dict) -> dict:
         try:
-            redaction_result = res["redaction_result"]
+            redaction_result = required_action and required_action.get("chat_redaction_result")
             if not redaction_result:
                 return data
-            analysis_result = res["analysis_result"]
             if analysis_result and analysis_result.get("session_entities"):
                 self.dlp_entities = analysis_result.get("session_entities")
             data["messages"] = [
@@ -193,26 +194,27 @@ class AimGuardrail(CustomGuardrail):
         )
         response.raise_for_status()
         res = response.json()
-        required_action = res.get("required_action") and res["required_action"].get("prompt_policy_action", None)
-        if required_action is None:
+        required_action = res.get("required_action")
+        action_type = required_action and required_action.get("action_type", None)
+        if action_type is None:
             verbose_proxy_logger.warning("Aim: No required action specified")
-            return self._deanonymize_output(res, output)
-        match required_action:
+            return self._deanonymize_output(output)
+        match action_type:
             case "monitor_action":
                 verbose_proxy_logger.info("Aim: monitor action")
             case "block_action":
-                return self._handle_block_action_on_output(res["analysis_result"])
+                return self._handle_block_action_on_output(res["analysis_result"], required_action)
             case "anonymize_action":
                 verbose_proxy_logger.info("Aim: anonymize action")
             case "engage_action":
                 verbose_proxy_logger.info("Aim: engage action")
             case _:
                 verbose_proxy_logger.error("Aim: unknown action")
-        return self._deanonymize_output(res, res)
+        return self._deanonymize_output(output)
 
-    def _handle_block_action_on_output(self, analysis_result: Any):
-        analysis_result = analysis_result
+    def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
         detected = analysis_result["detected"]
+        detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
                 detected=detected,
@@ -220,10 +222,10 @@ class AimGuardrail(CustomGuardrail):
             ),
         )
         if detected:
-            return {"detection_message": analysis_result["detection_message"]}
+            return {"detection_message": detection_message}
         return None
 
-    def _deanonymize_output(self, res: Any, output: str) -> dict | None:
+    def _deanonymize_output(self, output: str) -> dict | None:
         try:
             for entity in self.dlp_entities:
                 output = output.replace(f"[{entity["name"]}]", entity["content"])
