@@ -1268,3 +1268,21 @@ class ImageGenerationRequestQuality(str, Enum):
     AUTO = "auto"
     STANDARD = "standard"
     HD = "hd"
+
+
+class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
+    """
+    Response from the OpenAI Moderation API.
+    """
+
+    id: str
+    """The unique identifier for the moderation request."""
+
+    model: str
+    """The model used to generate the moderation results."""
+
+    results: List[Dict]
+    """A list of moderation objects."""
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
