@@ -78,7 +78,7 @@ callback_class_str_to_classType = {
     "gcs_pubsub": GcsPubSubLogger,
     "anthropic_cache_control_hook": AnthropicCacheControlHook,
     "agentops": AgentOps,
-    "bedrock_knowledgebase": BedrockKnowledgeBaseHook,
+    "bedrock_knowledgebase_hook": BedrockKnowledgeBaseHook,
 }
 
 expected_env_vars = {
