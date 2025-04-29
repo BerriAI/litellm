@@ -471,7 +471,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
 
         if self._should_run_prompt_management_hooks_without_prompt_id(
-            non_default_params
+            non_default_params=non_default_params
         ):
             return True
 
@@ -487,7 +487,7 @@ class Logging(LiteLLMLoggingBaseClass):
         eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
         """
         for param in non_default_params:
-            if param in DynamicPromptManagementParamLiteral:
+            if param in DynamicPromptManagementParamLiteral.list_all_params():
                 return True
         return False
 
