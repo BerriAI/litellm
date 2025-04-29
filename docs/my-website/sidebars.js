@@ -271,6 +271,7 @@ const sidebars = {
         "reasoning_content",
         "completion/prompt_caching",
         "completion/predict_outputs",
+        "completion/knowledgebase",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",
