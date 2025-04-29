@@ -10215,6 +10215,55 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-V3": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/mistralai/Mistral-Small-24B-Instruct-2501": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "ollama/codegemma": {
         "max_tokens": 8192, 
         "max_input_tokens": 8192, 
