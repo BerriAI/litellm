@@ -26,15 +26,13 @@ def _check_wildcard_routing(model: str) -> bool:
 
 
 def get_provider_models(
-    provider: str, model:str, litellm_params: Optional[LiteLLM_Params] = None
+    provider: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> Optional[List[str]]:
     """
     Returns the list of known models by provider
     """
-    if model == "*":
-        custom_llm_provider = litellm_params.model.split("/", maxsplit=1)[0] \
-            if litellm_params and litellm_params.model and "/" in litellm_params.model else None
-        return get_valid_models(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
+    if provider == "*":
+        return get_valid_models(litellm_params=litellm_params)
 
     if provider in litellm.models_by_provider:
         provider_models = get_valid_models(
@@ -45,6 +43,10 @@ def get_provider_models(
             if provider not in _model:
                 provider_models[idx] = f"{provider}/{_model}"
         return provider_models
+    else: #deployment under custom prefix foo/*
+        custom_llm_provider = litellm_params.model.split("/", maxsplit=1)[0] \
+            if litellm_params and litellm_params.model and "/" in litellm_params.model else None
+        return get_valid_models(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
     return None
 
 
@@ -171,7 +173,7 @@ def get_known_models_from_wildcard(
         return []
     # get all known provider models
     wildcard_models = get_provider_models(
-        provider=provider, model=model, litellm_params=litellm_params
+        provider=provider, litellm_params=litellm_params
     )
     if wildcard_models is None:
         return []
