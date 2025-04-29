@@ -130,7 +130,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             ttl=60,
         )
 
-        if results[0] >= max_parallel_requests or results[1] >= rpm_limit or results[2] >= tpm_limit:
+        if results[0] > max_parallel_requests or results[1] > rpm_limit or results[2] > tpm_limit:
             raise self.raise_rate_limit_error(
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
             )
@@ -263,10 +263,10 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 model=model,
                 rate_limit_type="key",
                 group=cast(RateLimitGroups, group),
-                litellm_parent_otel_span=litellm_parent_otel_span,
             )
             increment_list.append((key, increment_value_by_group[group]))
 
+        print(f"increment_list: {increment_list}")
         await self._increment_value_list_in_current_window(
             increment_list=increment_list,
             ttl=60,
@@ -275,6 +275,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
     async def async_log_success_event(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
     ):
+        print("INSIDE async_log_success_event")
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -339,7 +340,11 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             )
             
         except Exception as e:
-            self.print_verbose(e)  # noqa
+            print(
+                "Inside Parallel Request Limiter: An exception occurred - {}".format(
+                    str(e)
+                )
+            )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
