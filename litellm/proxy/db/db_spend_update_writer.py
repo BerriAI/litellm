@@ -445,7 +445,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
                 
-
                 daily_tag_spend_update_transactions = (
                     await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
                 )
