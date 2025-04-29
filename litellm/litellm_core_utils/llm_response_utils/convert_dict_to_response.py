@@ -10,7 +10,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.types.llms.databricks import DatabricksTool
-from litellm.types.llms.openai import ChatCompletionThinkingBlock
+from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
+    OpenAIModerationResponse,
+)
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -298,6 +301,12 @@ class LiteLLMResponseObjectHandler:
             return model_response_object
 
     @staticmethod
+    def convert_to_moderation_response(
+        response_object: dict,
+    ) -> OpenAIModerationResponse:
+        return OpenAIModerationResponse(**response_object)
+
+    @staticmethod
     def convert_chat_to_text_completion(
         response: ModelResponse,
         text_completion_response: TextCompletionResponse,
@@ -500,9 +509,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields[
-                            "reasoning_content"
-                        ] = reasoning_content
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
 
                     message = Message(
                         content=content,
