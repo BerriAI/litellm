@@ -52,6 +52,25 @@ from pydantic import BaseModel
 from tiktoken import Encoding
 from tokenizers import Tokenizer
 
+
+try:
+    # this works in python 3.8
+    import pkg_resources
+
+    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+# try:
+#     filename = str(
+#         resources.files().joinpath("llms/tokenizers")  # type: ignore
+#     )  # for python 3.8 and 3.12
+except:
+    # this works in python 3.9+
+    from importlib.resources import path as get_resource_path
+    filename = str(
+      get_resource_path(litellm,"llms/tokenizers"))
+    # for python 3.10+
+os.environ["TIKTOKEN_CACHE_DIR"] = (
+    filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+
 import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
@@ -178,6 +197,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
     all_litellm_params,
+
 )
 
 try:
@@ -3666,6 +3686,225 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "openrouter":
+
+        return [
+            "functions",
+            "function_call",
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "response_format",
+            "seed",
+            "tools",
+            "tool_choice",
+            "max_retries",
+        ]
+    elif custom_llm_provider == "mistral":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "response_format",
+        ]
+    elif custom_llm_provider == "replicate":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "seed",
+        ]
+    elif custom_llm_provider == "huggingface":
+        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+    elif custom_llm_provider == "together_ai":
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "tools",
+            "tool_choice",
+        ]
+    elif custom_llm_provider == "ai21":
+        return [
+            "stream",
+            "n",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
+    elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
+        return ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
+    elif custom_llm_provider == "vertex_ai":
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "n",
+            "stop",
+        ]
+    elif custom_llm_provider == "sagemaker":
+        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+    elif custom_llm_provider == "aleph_alpha":
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "stop",
+        ]
+    elif custom_llm_provider == "cloudflare":
+        return ["max_tokens", "stream"]
+    elif custom_llm_provider == "ollama":
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "frequency_penalty",
+            "stop",
+            "response_format",
+        ]
+    elif custom_llm_provider == "nlp_cloud":
+        return [
+            "max_tokens",
+            "stream",
+            "temperature",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "stop",
+        ]
+    elif custom_llm_provider == "petals":
+        return ["max_tokens", "temperature", "top_p", "stream"]
+    elif custom_llm_provider == "deepinfra":
+        return [
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+        ]
+    elif custom_llm_provider == "perplexity":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+        ]
+    elif custom_llm_provider == "anyscale":
+        return [
+            "temperature",
+            "top_p",
+            "stream",
+            "max_tokens",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+        ]
+
+
+def get_formatted_prompt(
+    data: dict,
+    call_type: Literal[
+        "completion",
+        "embedding",
+        "image_generation",
+        "audio_transcription",
+        "moderation",
+    ],
+) -> str:
+    """
+    Extracts the prompt from the input data based on the call type.
+
+    Returns a string.
+    """
+    prompt = ""
+    if call_type == "completion":
+        for m in data["messages"]:
+            if "content" in m and isinstance(m["content"], str):
+                prompt += m["content"]
+    elif call_type == "embedding" or call_type == "moderation":
+        if isinstance(data["input"], str):
+            prompt = data["input"]
+        elif isinstance(data["input"], list):
+            for m in data["input"]:
+                prompt += m
+    elif call_type == "image_generation":
+        prompt = data["prompt"]
+    elif call_type == "audio_transcription":
+        if "prompt" in data:
+            prompt = data["prompt"]
+    return prompt
+
+
+def _is_non_openai_azure_model(model: str) -> bool:
+    try:
+        model_name = model.split("/", 1)[1]
+        if (
+            model_name in litellm.cohere_chat_models
+            or f"mistral/{model_name}" in litellm.mistral_chat_models
+        ):
+            return True
+    except:
+        return False
+    return False
+
+
+def get_llm_provider(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+):
+    try:
+        dynamic_api_key = None
+        # check if llm provider provided
+        if model == 'spark_ai':
+            custom_llm_provider = "spark_ai"
+            # print(model,custom_llm_provider,dynamic_api_key,api_base)
+            return model, custom_llm_provider, dynamic_api_key, api_base
+        # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
+        # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
+        if model.split("/", 1)[0] == "azure":
+            if _is_non_openai_azure_model(model):
+                custom_llm_provider = "openai"
+                return model, custom_llm_provider, dynamic_api_key, api_base
+
+        if custom_llm_provider:
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         optional_params = litellm.OpenrouterConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3676,6 +3915,7 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+
 
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(

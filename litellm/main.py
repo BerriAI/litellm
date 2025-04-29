@@ -110,9 +110,39 @@ from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
 )
+
+from .llms import (
+    anthropic_text,
+    together_ai,
+    ai21,
+    sagemaker,
+    bedrock,
+    huggingface_restapi,
+    replicate,
+    aleph_alpha,
+    nlp_cloud,
+    baseten,
+    vllm,
+    ollama,
+    ollama_chat,
+    cloudflare,
+    cohere,
+    cohere_chat,
+    petals,
+    oobabooga,
+    openrouter,
+    palm,
+    gemini,
+    vertex_ai,
+    vertex_ai_anthropic,
+    maritalk,
+    #sparkai
+    spark_ai,
+
 from .litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
     update_messages_with_model_file_ids,
+
 )
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
@@ -942,6 +972,15 @@ def completion(  # type: ignore # noqa: PLR0915
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+
+    ###__________________
+    spark_app_id=kwargs.get("spark_app_id",None)
+    spark_api_key=kwargs.get("spark_api_key",None)
+    spark_api_secret=kwargs.get("spark_api_secret",None)
+    sparkai_domain=kwargs.get("sparkai_domain",None)
+    sparkai_url=kwargs.get("sparkai_url",None)
+    ###__________________
+
     ### PROMPT MANAGEMENT ###
     prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
@@ -952,6 +991,7 @@ def completion(  # type: ignore # noqa: PLR0915
         user_continue_message=user_continue_message,
         assistant_continue_message=assistant_continue_message,
     )
+
     ######## end of unpacking kwargs ###########
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
@@ -2175,6 +2215,48 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="maritalk",
                 custom_prompt_dict=custom_prompt_dict,
             )
+
+            if (
+                "stream_tokens" in optional_params
+                and optional_params["stream_tokens"] == True
+            ):
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response,
+                    model,
+                    custom_llm_provider="together_ai",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
+        #改动部分
+        elif custom_llm_provider == "spark_ai":
+            SPARKAI_APP_ID = get_secret('SPARKAI_APP_ID')
+            SPARKAI_API_KEY = get_secret('SPARKAI_API_KEY')
+            SPARKAI_API_SECRET = get_secret('SPARKAI_API_SECRET')
+            SPARKAI_DOMAIN = get_secret('SPARKAI_DOMAIN')
+            SPARKAI_URL = get_secret('SPARKAI_URL')
+            api_key = SPARKAI_APP_ID + '&' + SPARKAI_API_KEY + '&' + SPARKAI_API_SECRET + '&' + SPARKAI_DOMAIN + '&' + SPARKAI_URL
+            if stream == False:
+                model_response = spark_ai.get_sparkai_response(
+                    model=model,
+                    messages=messages,
+                    api_key=api_key,
+                    streaming=stream,
+                )
+                return model_response
+            else:
+                model_response = spark_ai.get_sparkai_stream(
+                    model=model,
+                    messages=messages,
+                    api_key=api_key,
+                    streaming=stream,
+                )
+                return model_response
+
+        elif custom_llm_provider == "palm":
+            palm_api_key = api_key or get_secret("PALM_API_KEY") or litellm.api_key
+
 
             response = model_response
         elif custom_llm_provider == "huggingface":

@@ -14,12 +14,15 @@ files = [
 
 [[package]]
 name = "aiohttp"
+
 version = "3.10.11"
+
 description = "Async http client/server framework (asyncio)"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
+
     {file = "aiohttp-3.10.11-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:5077b1a5f40ffa3ba1f40d537d3bec4383988ee51fbba6b74aa8fb1bc466599e"},
     {file = "aiohttp-3.10.11-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:8d6a14a4d93b5b3c2891fca94fa9d41b2322a68194422bef0dd5ec1e57d7d298"},
     {file = "aiohttp-3.10.11-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:ffbfde2443696345e23a3c597049b1dd43049bb65337837574205e7368472177"},
@@ -111,6 +114,7 @@ files = [
     {file = "aiohttp-3.10.11-cp39-cp39-win32.whl", hash = "sha256:22b7c540c55909140f63ab4f54ec2c20d2635c0289cdd8006da46f3327f971b9"},
     {file = "aiohttp-3.10.11-cp39-cp39-win_amd64.whl", hash = "sha256:7b26b1551e481012575dab8e3727b16fe7dd27eb2711d2e63ced7368756268fb"},
     {file = "aiohttp-3.10.11.tar.gz", hash = "sha256:9dc2b8f3dcab2e39e0fa309c8da50c3b55e6f34ab25f1a71d3288f24924d33a7"},
+
 ]
 
 [package.dependencies]
@@ -124,6 +128,11 @@ yarl = ">=1.12.0,<2.0"
 
 [package.extras]
 speedups = ["Brotli ; platform_python_implementation == \"CPython\"", "aiodns (>=3.2.0) ; sys_platform == \"linux\" or sys_platform == \"darwin\"", "brotlicffi ; platform_python_implementation != \"CPython\""]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "aiosignal"
@@ -140,6 +149,12 @@ files = [
 [package.dependencies]
 frozenlist = ">=1.1.0"
 
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -154,6 +169,7 @@ files = [
 
 [package.dependencies]
 typing-extensions = {version = ">=4.0.0", markers = "python_version < \"3.9\""}
+
 
 [[package]]
 name = "anyio"
@@ -177,6 +193,11 @@ typing-extensions = {version = ">=4.1", markers = "python_version < \"3.11\""}
 doc = ["Sphinx (>=7.4,<8.0)", "packaging", "sphinx-autodoc-typehints (>=1.2.0)", "sphinx-rtd-theme"]
 test = ["anyio[trio]", "coverage[toml] (>=7)", "exceptiongroup (>=1.2.0)", "hypothesis (>=4.0)", "psutil (>=5.9)", "pytest (>=7.0)", "pytest-mock (>=3.6.1)", "trustme", "truststore (>=0.9.1) ; python_version >= \"3.10\"", "uvloop (>=0.21.0b1) ; platform_python_implementation == \"CPython\" and platform_system != \"Windows\""]
 trio = ["trio (>=0.26.1)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "apscheduler"
@@ -208,6 +229,11 @@ tornado = ["tornado (>=4.3)"]
 twisted = ["twisted"]
 zookeeper = ["kazoo"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "async-timeout"
 version = "5.0.1"
@@ -220,6 +246,11 @@ files = [
     {file = "async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c"},
     {file = "async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "attrs"
@@ -240,6 +271,11 @@ dev = ["cloudpickle ; platform_python_implementation == \"CPython\"", "hypothesi
 docs = ["cogapp", "furo", "myst-parser", "sphinx", "sphinx-notfound-page", "sphinxcontrib-towncrier", "towncrier"]
 tests = ["cloudpickle ; platform_python_implementation == \"CPython\"", "hypothesis", "mypy (>=1.11.1) ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\"", "pympler", "pytest (>=4.3.0)", "pytest-mypy-plugins ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\"", "pytest-xdist[psutil]"]
 tests-mypy = ["mypy (>=1.11.1) ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\"", "pytest-mypy-plugins ; platform_python_implementation == \"CPython\" and python_version >= \"3.10\""]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "azure-core"
@@ -263,8 +299,14 @@ typing-extensions = ">=4.6.0"
 aio = ["aiohttp (>=3.0)"]
 tracing = ["opentelemetry-api (>=1.26,<2.0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "azure-identity"
+
 version = "1.21.0"
 description = "Microsoft Azure Identity Library for Python"
 optional = true
@@ -282,6 +324,7 @@ cryptography = ">=2.5"
 msal = ">=1.30.0"
 msal-extensions = ">=1.2.0"
 typing-extensions = ">=4.0.0"
+
 
 [[package]]
 name = "azure-keyvault-secrets"
@@ -301,6 +344,11 @@ azure-core = ">=1.31.0"
 isodate = ">=0.6.1"
 typing-extensions = ">=4.0.1"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "backoff"
 version = "2.2.1"
@@ -313,6 +361,11 @@ files = [
     {file = "backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8"},
     {file = "backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "backports-zoneinfo"
@@ -343,6 +396,11 @@ files = [
 
 [package.extras]
 tzdata = ["tzdata"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "black"
@@ -390,6 +448,11 @@ colorama = ["colorama (>=0.4.3)"]
 d = ["aiohttp (>=3.7.4) ; sys_platform != \"win32\" or implementation_name != \"pypy\"", "aiohttp (>=3.7.4,!=3.9.0) ; sys_platform == \"win32\" and implementation_name == \"pypy\""]
 jupyter = ["ipython (>=7.8.0)", "tokenize-rt (>=3.2.0)"]
 uvloop = ["uvloop (>=0.15.2)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "boto3"
@@ -449,6 +512,11 @@ files = [
     {file = "cachetools-5.5.2.tar.gz", hash = "sha256:1a661caa9175d26759571b2e19580f9d6393969e5dfca11fdb1f947a23e640d4"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "certifi"
 version = "2025.1.31"
@@ -460,6 +528,11 @@ files = [
     {file = "certifi-2025.1.31-py3-none-any.whl", hash = "sha256:ca78db4565a652026a4db2bcdf68f2fb589ea80d0be70e03929ed730746b84fe"},
     {file = "certifi-2025.1.31.tar.gz", hash = "sha256:3d5da6925056f6f18f119200434a4780a94263f10d1c21d032a6f6b2baa20651"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "cffi"
@@ -541,6 +614,11 @@ markers = {main = "(extra == \"proxy\" or extra == \"extra-proxy\") and (platfor
 
 [package.dependencies]
 pycparser = "*"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "charset-normalizer"
@@ -644,6 +722,11 @@ files = [
     {file = "charset_normalizer-3.4.1.tar.gz", hash = "sha256:44251f18cd68a75b56585dd00dae26183e102cd5e0f9f1466e6df5da2ed64ea3"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "click"
 version = "8.1.8"
@@ -658,6 +741,11 @@ files = [
 
 [package.dependencies]
 colorama = {version = "*", markers = "platform_system == \"Windows\""}
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "colorama"
@@ -690,6 +778,11 @@ humanfriendly = ">=9.1"
 
 [package.extras]
 cron = ["capturer (>=2.4)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "cryptography"
@@ -742,6 +835,11 @@ ssh = ["bcrypt (>=3.1.5)"]
 test = ["certifi", "cryptography-vectors (==43.0.3)", "pretend", "pytest (>=6.2.0)", "pytest-benchmark", "pytest-cov", "pytest-xdist"]
 test-randomorder = ["pytest-randomly"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "deprecated"
 version = "1.2.18"
@@ -772,6 +870,11 @@ files = [
     {file = "distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "dnspython"
 version = "2.6.1"
@@ -794,6 +897,11 @@ idna = ["idna (>=3.6)"]
 trio = ["trio (>=0.23)"]
 wmi = ["wmi (>=1.5.1)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "email-validator"
 version = "2.2.0"
@@ -811,6 +919,11 @@ files = [
 dnspython = ">=2.0.0"
 idna = ">=2.0.0"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "exceptiongroup"
 version = "1.2.2"
@@ -826,6 +939,11 @@ files = [
 
 [package.extras]
 test = ["pytest (>=6)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "fastapi"
@@ -849,6 +967,11 @@ typing-extensions = ">=4.8.0"
 all = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>=0.23.0)", "itsdangerous (>=1.1.0)", "jinja2 (>=3.1.5)", "orjson (>=3.2.1)", "pydantic-extra-types (>=2.0.0)", "pydantic-settings (>=2.0.0)", "python-multipart (>=0.0.18)", "pyyaml (>=5.3.1)", "ujson (>=4.0.1,!=4.0.2,!=4.1.0,!=4.2.0,!=4.3.0,!=5.0.0,!=5.1.0)", "uvicorn[standard] (>=0.12.0)"]
 standard = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>=0.23.0)", "jinja2 (>=3.1.5)", "python-multipart (>=0.0.18)", "uvicorn[standard] (>=0.12.0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "fastapi-sso"
 version = "0.16.0"
@@ -869,14 +992,22 @@ oauthlib = ">=3.1.0"
 pydantic = {version = ">=1.8.0", extras = ["email"]}
 typing-extensions = {version = ">=4.12.2,<5.0.0", markers = "python_version < \"3.10\""}
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "filelock"
+
 version = "3.16.1"
+
 description = "A platform independent file lock."
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
+
     {file = "filelock-3.16.1-py3-none-any.whl", hash = "sha256:2082e5703d51fbf98ea75855d9d5527e33d8ff23099bec374a134febee6946b0"},
     {file = "filelock-3.16.1.tar.gz", hash = "sha256:c249fbfcd5db47e5e2d6d62198e565475ee65e4831e2561c8e313fa7eb961435"},
 ]
@@ -885,6 +1016,12 @@ files = [
 docs = ["furo (>=2024.8.6)", "sphinx (>=8.0.2)", "sphinx-autodoc-typehints (>=2.4.1)"]
 testing = ["covdefaults (>=2.3)", "coverage (>=7.6.1)", "diff-cover (>=9.2)", "pytest (>=8.3.3)", "pytest-asyncio (>=0.24)", "pytest-cov (>=5)", "pytest-mock (>=3.14)", "pytest-timeout (>=2.3.1)", "virtualenv (>=20.26.4)"]
 typing = ["typing-extensions (>=4.12.2) ; python_version < \"3.11\""]
+
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "flake8"
@@ -902,6 +1039,11 @@ files = [
 mccabe = ">=0.7.0,<0.8.0"
 pycodestyle = ">=2.11.0,<2.12.0"
 pyflakes = ">=3.1.0,<3.2.0"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "frozenlist"
@@ -1005,6 +1147,11 @@ files = [
     {file = "frozenlist-1.5.0.tar.gz", hash = "sha256:81d5af29e61b9c8348e876d442253723928dce6433e0e76cd925cd83f1b4b817"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "fsspec"
 version = "2025.3.0"
@@ -1045,6 +1192,11 @@ test-downstream = ["aiobotocore (>=2.5.4,<3.0.0)", "dask[dataframe,test]", "moto
 test-full = ["adlfs", "aiohttp (!=4.0.0a0,!=4.0.0a1)", "cloudpickle", "dask", "distributed", "dropbox", "dropboxdrivefs", "fastparquet", "fusepy", "gcsfs", "jinja2", "kerchunk", "libarchive-c", "lz4", "notebook", "numpy", "ocifs", "pandas", "panel", "paramiko", "pyarrow", "pyarrow (>=1)", "pyftpdlib", "pygit2", "pytest", "pytest-asyncio (!=0.22.0)", "pytest-benchmark", "pytest-cov", "pytest-mock", "pytest-recording", "pytest-rerunfailures", "python-snappy", "requests", "smbprotocol", "tqdm", "urllib3", "zarr", "zstandard"]
 tqdm = ["tqdm"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "google-api-core"
 version = "2.24.2"
@@ -1082,6 +1234,11 @@ grpc = ["grpcio (>=1.33.2,<2.0dev)", "grpcio (>=1.49.1,<2.0dev) ; python_version
 grpcgcp = ["grpcio-gcp (>=0.2.2,<1.0.dev0)"]
 grpcio-gcp = ["grpcio-gcp (>=0.2.2,<1.0.dev0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "google-auth"
 version = "2.39.0"
@@ -1110,17 +1267,26 @@ requests = ["requests (>=2.20.0,<3.0.0)"]
 testing = ["aiohttp (<3.10.0)", "aiohttp (>=3.6.2,<4.0.0)", "aioresponses", "cryptography (<39.0.0) ; python_version < \"3.8\"", "cryptography (>=38.0.3)", "flask", "freezegun", "grpcio", "mock", "oauth2client", "packaging", "pyjwt (>=2.0)", "pyopenssl (<24.3.0)", "pyopenssl (>=20.0.0)", "pytest", "pytest-asyncio", "pytest-cov", "pytest-localserver", "pyu2f (>=0.1.5)", "requests (>=2.20.0,<3.0.0)", "responses", "urllib3"]
 urllib3 = ["packaging", "urllib3"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "google-cloud-kms"
+
 version = "2.24.2"
+
 description = "Google Cloud Kms API client library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
 markers = "extra == \"extra-proxy\""
 files = [
+
     {file = "google_cloud_kms-2.24.2-py2.py3-none-any.whl", hash = "sha256:368209b035dfac691a467c1cf50986d8b1b26cac1166bdfbaa25d738df91ff7b"},
     {file = "google_cloud_kms-2.24.2.tar.gz", hash = "sha256:e9e18bbfafd1a4035c76c03fb5ff03f4f57f596d08e1a9ede7e69ec0151b27a1"},
+
 ]
 
 [package.dependencies]
@@ -1129,6 +1295,11 @@ google-auth = ">=2.14.1,<2.24.0 || >2.24.0,<2.25.0 || >2.25.0,<3.0.0dev"
 grpc-google-iam-v1 = ">=0.12.4,<1.0.0dev"
 proto-plus = ">=1.22.3,<2.0.0dev"
 protobuf = ">=3.20.2,<4.21.0 || >4.21.0,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4.21.4 || >4.21.4,<4.21.5 || >4.21.5,<6.0.0dev"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "googleapis-common-protos"
@@ -1150,6 +1321,11 @@ protobuf = ">=3.20.2,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4
 [package.extras]
 grpc = ["grpcio (>=1.44.0,<2.0.0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "grpc-google-iam-v1"
 version = "0.14.2"
@@ -1167,6 +1343,11 @@ files = [
 googleapis-common-protos = {version = ">=1.56.0,<2.0.0", extras = ["grpc"]}
 grpcio = ">=1.44.0,<2.0.0"
 protobuf = ">=3.20.2,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4.21.4 || >4.21.4,<4.21.5 || >4.21.5,<7.0.0"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "grpcio"
@@ -1302,6 +1483,11 @@ markers = {main = "python_version >= \"3.10\" and extra == \"extra-proxy\"", dev
 [package.extras]
 protobuf = ["grpcio-tools (>=1.71.0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "grpcio-status"
 version = "1.62.3"
@@ -1319,6 +1505,11 @@ files = [
 googleapis-common-protos = ">=1.5.5"
 grpcio = ">=1.62.3"
 protobuf = ">=4.21.6"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "gunicorn"
@@ -1343,6 +1534,11 @@ setproctitle = ["setproctitle"]
 testing = ["coverage", "eventlet", "gevent", "pytest", "pytest-cov"]
 tornado = ["tornado (>=0.2)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "h11"
 version = "0.14.0"
@@ -1354,6 +1550,11 @@ files = [
     {file = "h11-0.14.0-py3-none-any.whl", hash = "sha256:e3fe4ac4b851c468cc8363d500db52c2ead036020723024a109d37346efaa761"},
     {file = "h11-0.14.0.tar.gz", hash = "sha256:8f19fbbe99e72420ff35c00b27a34cb9937e902a8b810e2c88300c6f0a3b699d"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "h2"
@@ -1385,14 +1586,18 @@ files = [
 
 [[package]]
 name = "httpcore"
+
 version = "1.0.8"
+
 description = "A minimal low-level HTTP client."
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "dev", "proxy-dev"]
 files = [
+
     {file = "httpcore-1.0.8-py3-none-any.whl", hash = "sha256:5254cf149bcb5f75e9d1b2b9f729ea4a4b883d1ad7379fc632b727cec23674be"},
     {file = "httpcore-1.0.8.tar.gz", hash = "sha256:86e94505ed24ea06514883fd44d2bc02d90e77e7979c8eb71b90f41d364a1bad"},
+
 ]
 
 [package.dependencies]
@@ -1403,7 +1608,14 @@ h11 = ">=0.13,<0.15"
 asyncio = ["anyio (>=4.0,<5.0)"]
 http2 = ["h2 (>=3,<5)"]
 socks = ["socksio (==1.*)"]
+
 trio = ["trio (>=0.22.0,<1.0)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 
 [[package]]
 name = "httpx"
@@ -1443,16 +1655,25 @@ files = [
     {file = "httpx_sse-0.4.0-py3-none-any.whl", hash = "sha256:f329af6eae57eaa2bdfd962b42524764af68075ea87370a2de920af5341e318f"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "huggingface-hub"
+
 version = "0.30.2"
+
 description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
 optional = false
 python-versions = ">=3.8.0"
 groups = ["main"]
 files = [
+
     {file = "huggingface_hub-0.30.2-py3-none-any.whl", hash = "sha256:68ff05969927058cfa41df4f2155d4bb48f5f54f719dd0390103eefa9b191e28"},
     {file = "huggingface_hub-0.30.2.tar.gz", hash = "sha256:9a7897c5b6fd9dad3168a794a8998d6378210f5b9688d0dfc180b1a228dc2466"},
+
 ]
 
 [package.dependencies]
@@ -1465,6 +1686,7 @@ tqdm = ">=4.42.1"
 typing-extensions = ">=3.7.4.3"
 
 [package.extras]
+
 all = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "libcst (==1.4.0)", "mypy (==1.5.1)", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "ruff (>=0.9.0)", "soundfile", "types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)", "urllib3 (<2.0)"]
 cli = ["InquirerPy (==0.3.4)"]
 dev = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "libcst (==1.4.0)", "mypy (==1.5.1)", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "ruff (>=0.9.0)", "soundfile", "types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)", "urllib3 (<2.0)"]
@@ -1477,7 +1699,13 @@ tensorflow = ["graphviz", "pydot", "tensorflow"]
 tensorflow-testing = ["keras (<3.0)", "tensorflow"]
 testing = ["InquirerPy (==0.3.4)", "Jinja2", "Pillow", "aiohttp", "fastapi", "gradio (>=4.0.0)", "jedi", "numpy", "pytest (>=8.1.1,<8.2.2)", "pytest-asyncio", "pytest-cov", "pytest-env", "pytest-mock", "pytest-rerunfailures", "pytest-vcr", "pytest-xdist", "soundfile", "urllib3 (<2.0)"]
 torch = ["safetensors[torch]", "torch"]
+
 typing = ["types-PyYAML", "types-requests", "types-simplejson", "types-toml", "types-tqdm", "types-urllib3", "typing-extensions (>=4.8.0)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "humanfriendly"
@@ -1535,18 +1763,22 @@ files = [
 
 [[package]]
 name = "idna"
+
 version = "3.10"
+
 description = "Internationalized Domain Names in Applications (IDNA)"
 optional = false
 python-versions = ">=3.6"
 groups = ["main", "dev", "proxy-dev"]
 files = [
+
     {file = "idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"},
     {file = "idna-3.10.tar.gz", hash = "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9"},
 ]
 
 [package.extras]
 all = ["flake8 (>=7.1.1)", "mypy (>=1.11.2)", "pytest (>=8.3.2)", "ruff (>=0.6.2)"]
+
 
 [[package]]
 name = "importlib-metadata"
@@ -1592,6 +1824,11 @@ enabler = ["pytest-enabler (>=2.2)"]
 test = ["jaraco.test (>=5.4)", "pytest (>=6,!=8.1.*)", "zipp (>=3.17)"]
 type = ["pytest-mypy"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "iniconfig"
 version = "2.1.0"
@@ -1603,6 +1840,11 @@ files = [
     {file = "iniconfig-2.1.0-py3-none-any.whl", hash = "sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760"},
     {file = "iniconfig-2.1.0.tar.gz", hash = "sha256:3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "isodate"
@@ -1616,6 +1858,14 @@ files = [
     {file = "isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15"},
     {file = "isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6"},
 ]
+
+[package.dependencies]
+six = "*"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "jinja2"
@@ -1634,6 +1884,46 @@ MarkupSafe = ">=2.0"
 
 [package.extras]
 i18n = ["Babel (>=2.7)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "jsonpatch"
+version = "1.33"
+description = "Apply JSON-Patches (RFC 6902) "
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, !=3.6.*"
+files = [
+    {file = "jsonpatch-1.33-py2.py3-none-any.whl", hash = "sha256:0ae28c0cd062bbd8b8ecc26d7d164fbbea9652a1a3693f3b956c1eae5145dade"},
+    {file = "jsonpatch-1.33.tar.gz", hash = "sha256:9fcd4009c41e6d12348b4a0ff2563ba56a2923a7dfee731d004e212e1ee5030c"},
+]
+
+[package.dependencies]
+jsonpointer = ">=1.9"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "jsonpointer"
+version = "2.4"
+description = "Identify specific nodes in a JSON document (RFC 6901) "
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, !=3.6.*"
+files = [
+    {file = "jsonpointer-2.4-py2.py3-none-any.whl", hash = "sha256:15d51bba20eea3165644553647711d150376234112651b4f1811022aecad7d7a"},
+    {file = "jsonpointer-2.4.tar.gz", hash = "sha256:585cee82b70211fa9e6043b7bb89db6e1aa49524340dde8ad6b63206ea689d88"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "jiter"
@@ -1856,6 +2146,11 @@ files = [
     {file = "MarkupSafe-2.1.5.tar.gz", hash = "sha256:d283d37a890ba4c1ae73ffadf8046435c76e7bc2247bbb63c00bd1a709c6544b"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "mccabe"
 version = "0.7.0"
@@ -1867,6 +2162,11 @@ files = [
     {file = "mccabe-0.7.0-py2.py3-none-any.whl", hash = "sha256:6c2d30ab6be0e4a46919781807b4f0d834ebdd6c6e3dca0bda5a15f863427b6e"},
     {file = "mccabe-0.7.0.tar.gz", hash = "sha256:348e0240c33b60bbdf4e523192ef919f28cb2c3d7d5c7794f74009290f236325"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "mcp"
@@ -1956,6 +2256,11 @@ requests = ">=2.0.0,<3"
 [package.extras]
 broker = ["pymsalruntime (>=0.14,<0.18) ; python_version >= \"3.6\" and platform_system == \"Windows\"", "pymsalruntime (>=0.17,<0.18) ; python_version >= \"3.8\" and platform_system == \"Darwin\""]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "msal-extensions"
 version = "1.3.0"
@@ -1974,6 +2279,11 @@ msal = ">=1.29,<2"
 
 [package.extras]
 portalocker = ["portalocker (>=1.4,<4)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "multidict"
@@ -2128,6 +2438,11 @@ files = [
     {file = "mypy-1.14.1.tar.gz", hash = "sha256:7ec88144fe9b510e8475ec2f5f251992690fcf89ccb4500b214b4226abcd32d6"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [package.dependencies]
 mypy_extensions = ">=1.0.0"
 tomli = {version = ">=1.1.0", markers = "python_version < \"3.11\""}
@@ -2140,6 +2455,7 @@ install-types = ["pip"]
 mypyc = ["setuptools (>=50)"]
 reports = ["lxml"]
 
+
 [[package]]
 name = "mypy-extensions"
 version = "1.0.0"
@@ -2151,6 +2467,27 @@ files = [
     {file = "mypy_extensions-1.0.0-py3-none-any.whl", hash = "sha256:4392f6c0eb8a5668a69e23d168ffa70f0be9ccfd32b5cc2d26a34ae5b844552d"},
     {file = "mypy_extensions-1.0.0.tar.gz", hash = "sha256:75dbf8955dc00442a438fc4d0666508a9a97b6bd41aa2f0ffe9d2f2725af0782"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "nest-asyncio"
+version = "1.6.0"
+description = "Patch asyncio to allow nested event loops"
+optional = false
+python-versions = ">=3.5"
+files = [
+    {file = "nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c"},
+    {file = "nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "nodeenv"
@@ -2277,6 +2614,11 @@ files = [
     {file = "numpy-2.2.4.tar.gz", hash = "sha256:9ba03692a45d3eef66559efe1d1096c4b9b75c0986b5dff5530c378fb8331d4f"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "oauthlib"
 version = "3.2.2"
@@ -2295,16 +2637,25 @@ rsa = ["cryptography (>=3.0.0)"]
 signals = ["blinker (>=1.4.0)"]
 signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "openai"
+
 version = "1.74.0"
+
 description = "The official Python library for the openai API"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
+
     {file = "openai-1.74.0-py3-none-any.whl", hash = "sha256:aff3e0f9fb209836382ec112778667027f4fd6ae38bdb2334bc9e173598b092a"},
     {file = "openai-1.74.0.tar.gz", hash = "sha256:592c25b8747a7cad33a841958f5eb859a785caea9ee22b9e4f4a2ec062236526"},
+
 ]
 
 [package.dependencies]
@@ -2322,30 +2673,111 @@ datalib = ["numpy (>=1)", "pandas (>=1.2.3)", "pandas-stubs (>=1.1.0.11)"]
 realtime = ["websockets (>=13,<16)"]
 voice-helpers = ["numpy (>=2.0.2)", "sounddevice (>=0.5.1)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
-name = "opentelemetry-api"
-version = "1.25.0"
-description = "OpenTelemetry Python API"
-optional = false
+
+name = "orjson"
+version = "3.10.1"
+description = "Fast, correct Python JSON library supporting dataclasses, datetimes, and numpy"
+optional = true
+
+
 python-versions = ">=3.8"
 groups = ["dev", "proxy-dev"]
 files = [
-    {file = "opentelemetry_api-1.25.0-py3-none-any.whl", hash = "sha256:757fa1aa020a0f8fa139f8959e53dec2051cc26b832e76fa839a6d76ecefd737"},
-    {file = "opentelemetry_api-1.25.0.tar.gz", hash = "sha256:77c4985f62f2614e42ce77ee4c9da5fa5f0bc1e1821085e9a47533a9323ae869"},
+
+    {file = "orjson-3.10.1-cp310-cp310-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:8ec2fc456d53ea4a47768f622bb709be68acd455b0c6be57e91462259741c4f3"},
+    {file = "orjson-3.10.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2e900863691d327758be14e2a491931605bd0aded3a21beb6ce133889830b659"},
+    {file = "orjson-3.10.1-cp310-cp310-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:ab6ecbd6fe57785ebc86ee49e183f37d45f91b46fc601380c67c5c5e9c0014a2"},
+    {file = "orjson-3.10.1-cp310-cp310-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:8af7c68b01b876335cccfb4eee0beef2b5b6eae1945d46a09a7c24c9faac7a77"},
+    {file = "orjson-3.10.1-cp310-cp310-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:915abfb2e528677b488a06eba173e9d7706a20fdfe9cdb15890b74ef9791b85e"},
+    {file = "orjson-3.10.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fe3fd4a36eff9c63d25503b439531d21828da9def0059c4f472e3845a081aa0b"},
+    {file = "orjson-3.10.1-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:d229564e72cfc062e6481a91977a5165c5a0fdce11ddc19ced8471847a67c517"},
+    {file = "orjson-3.10.1-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:9e00495b18304173ac843b5c5fbea7b6f7968564d0d49bef06bfaeca4b656f4e"},
+    {file = "orjson-3.10.1-cp310-none-win32.whl", hash = "sha256:fd78ec55179545c108174ba19c1795ced548d6cac4d80d014163033c047ca4ea"},
+    {file = "orjson-3.10.1-cp310-none-win_amd64.whl", hash = "sha256:50ca42b40d5a442a9e22eece8cf42ba3d7cd4cd0f2f20184b4d7682894f05eec"},
+    {file = "orjson-3.10.1-cp311-cp311-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:b345a3d6953628df2f42502297f6c1e1b475cfbf6268013c94c5ac80e8abc04c"},
+    {file = "orjson-3.10.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:caa7395ef51af4190d2c70a364e2f42138e0e5fcb4bc08bc9b76997659b27dab"},
+    {file = "orjson-3.10.1-cp311-cp311-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:b01d701decd75ae092e5f36f7b88a1e7a1d3bb7c9b9d7694de850fb155578d5a"},
+    {file = "orjson-3.10.1-cp311-cp311-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:b5028981ba393f443d8fed9049211b979cadc9d0afecf162832f5a5b152c6297"},
+    {file = "orjson-3.10.1-cp311-cp311-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:31ff6a222ea362b87bf21ff619598a4dc1106aaafaea32b1c4876d692891ec27"},
+    {file = "orjson-3.10.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e852a83d7803d3406135fb7a57cf0c1e4a3e73bac80ec621bd32f01c653849c5"},
+    {file = "orjson-3.10.1-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:2567bc928ed3c3fcd90998009e8835de7c7dc59aabcf764b8374d36044864f3b"},
+    {file = "orjson-3.10.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:4ce98cac60b7bb56457bdd2ed7f0d5d7f242d291fdc0ca566c83fa721b52e92d"},
+    {file = "orjson-3.10.1-cp311-none-win32.whl", hash = "sha256:813905e111318acb356bb8029014c77b4c647f8b03f314e7b475bd9ce6d1a8ce"},
+    {file = "orjson-3.10.1-cp311-none-win_amd64.whl", hash = "sha256:03a3ca0b3ed52bed1a869163a4284e8a7b0be6a0359d521e467cdef7e8e8a3ee"},
+    {file = "orjson-3.10.1-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:f02c06cee680b1b3a8727ec26c36f4b3c0c9e2b26339d64471034d16f74f4ef5"},
+    {file = "orjson-3.10.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b1aa2f127ac546e123283e437cc90b5ecce754a22306c7700b11035dad4ccf85"},
+    {file = "orjson-3.10.1-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:2cf29b4b74f585225196944dffdebd549ad2af6da9e80db7115984103fb18a96"},
+    {file = "orjson-3.10.1-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:a1b130c20b116f413caf6059c651ad32215c28500dce9cd029a334a2d84aa66f"},
+    {file = "orjson-3.10.1-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:d31f9a709e6114492136e87c7c6da5e21dfedebefa03af85f3ad72656c493ae9"},
+    {file = "orjson-3.10.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5d1d169461726f271ab31633cf0e7e7353417e16fb69256a4f8ecb3246a78d6e"},
+    {file = "orjson-3.10.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:57c294d73825c6b7f30d11c9e5900cfec9a814893af7f14efbe06b8d0f25fba9"},
+    {file = "orjson-3.10.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:d7f11dbacfa9265ec76b4019efffabaabba7a7ebf14078f6b4df9b51c3c9a8ea"},
+    {file = "orjson-3.10.1-cp312-none-win32.whl", hash = "sha256:d89e5ed68593226c31c76ab4de3e0d35c760bfd3fbf0a74c4b2be1383a1bf123"},
+    {file = "orjson-3.10.1-cp312-none-win_amd64.whl", hash = "sha256:aa76c4fe147fd162107ce1692c39f7189180cfd3a27cfbc2ab5643422812da8e"},
+    {file = "orjson-3.10.1-cp38-cp38-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:a2c6a85c92d0e494c1ae117befc93cf8e7bca2075f7fe52e32698da650b2c6d1"},
+    {file = "orjson-3.10.1-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9813f43da955197d36a7365eb99bed42b83680801729ab2487fef305b9ced866"},
+    {file = "orjson-3.10.1-cp38-cp38-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:ec917b768e2b34b7084cb6c68941f6de5812cc26c6f1a9fecb728e36a3deb9e8"},
+    {file = "orjson-3.10.1-cp38-cp38-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:5252146b3172d75c8a6d27ebca59c9ee066ffc5a277050ccec24821e68742fdf"},
+    {file = "orjson-3.10.1-cp38-cp38-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:536429bb02791a199d976118b95014ad66f74c58b7644d21061c54ad284e00f4"},
+    {file = "orjson-3.10.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7dfed3c3e9b9199fb9c3355b9c7e4649b65f639e50ddf50efdf86b45c6de04b5"},
+    {file = "orjson-3.10.1-cp38-cp38-musllinux_1_2_aarch64.whl", hash = "sha256:2b230ec35f188f003f5b543644ae486b2998f6afa74ee3a98fc8ed2e45960afc"},
+    {file = "orjson-3.10.1-cp38-cp38-musllinux_1_2_x86_64.whl", hash = "sha256:01234249ba19c6ab1eb0b8be89f13ea21218b2d72d496ef085cfd37e1bae9dd8"},
+    {file = "orjson-3.10.1-cp38-none-win32.whl", hash = "sha256:8a884fbf81a3cc22d264ba780920d4885442144e6acaa1411921260416ac9a54"},
+    {file = "orjson-3.10.1-cp38-none-win_amd64.whl", hash = "sha256:dab5f802d52b182163f307d2b1f727d30b1762e1923c64c9c56dd853f9671a49"},
+    {file = "orjson-3.10.1-cp39-cp39-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:a51fd55d4486bc5293b7a400f9acd55a2dc3b5fc8420d5ffe9b1d6bb1a056a5e"},
+    {file = "orjson-3.10.1-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:53521542a6db1411b3bfa1b24ddce18605a3abdc95a28a67b33f9145f26aa8f2"},
+    {file = "orjson-3.10.1-cp39-cp39-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:27d610df96ac18ace4931411d489637d20ab3b8f63562b0531bba16011998db0"},
+    {file = "orjson-3.10.1-cp39-cp39-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:79244b1456e5846d44e9846534bd9e3206712936d026ea8e6a55a7374d2c0694"},
+    {file = "orjson-3.10.1-cp39-cp39-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:d751efaa8a49ae15cbebdda747a62a9ae521126e396fda8143858419f3b03610"},
+    {file = "orjson-3.10.1-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:27ff69c620a4fff33267df70cfd21e0097c2a14216e72943bd5414943e376d77"},
+    {file = "orjson-3.10.1-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:ebc58693464146506fde0c4eb1216ff6d4e40213e61f7d40e2f0dde9b2f21650"},
+    {file = "orjson-3.10.1-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:5be608c3972ed902e0143a5b8776d81ac1059436915d42defe5c6ae97b3137a4"},
+    {file = "orjson-3.10.1-cp39-none-win32.whl", hash = "sha256:4ae10753e7511d359405aadcbf96556c86e9dbf3a948d26c2c9f9a150c52b091"},
+    {file = "orjson-3.10.1-cp39-none-win_amd64.whl", hash = "sha256:fb5bc4caa2c192077fdb02dce4e5ef8639e7f20bec4e3a834346693907362932"},
+    {file = "orjson-3.10.1.tar.gz", hash = "sha256:a883b28d73370df23ed995c466b4f6c708c1f7a9bdc400fe89165c96c7603204"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+]
+
 
 [package.dependencies]
 deprecated = ">=1.2.6"
 importlib-metadata = ">=6.0,<=7.1"
 
 [[package]]
+
+name = "packaging"
+version = "24.0"
+description = "Core utilities for Python packages"
+
 name = "opentelemetry-exporter-otlp"
 version = "1.25.0"
 description = "OpenTelemetry Collector Exporters"
+
 optional = false
 python-versions = ">=3.8"
 groups = ["dev", "proxy-dev"]
 files = [
+
+    {file = "packaging-24.0-py3-none-any.whl", hash = "sha256:2ddfb553fdf02fb784c234c7ba6ccc288296ceabec964ad2eae3777778130bc5"},
+    {file = "packaging-24.0.tar.gz", hash = "sha256:eb82c5e3e56209074766e6885bb04b8c38a0c015d0a30036ebe7ece34c9989e9"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
     {file = "opentelemetry_exporter_otlp-1.25.0-py3-none-any.whl", hash = "sha256:d67a831757014a3bc3174e4cd629ae1493b7ba8d189e8a007003cacb9f1a6b60"},
     {file = "opentelemetry_exporter_otlp-1.25.0.tar.gz", hash = "sha256:ce03199c1680a845f82e12c0a6a8f61036048c07ec7a0bd943142aca8fa6ced0"},
 ]
@@ -2353,6 +2785,7 @@ files = [
 [package.dependencies]
 opentelemetry-exporter-otlp-proto-grpc = "1.25.0"
 opentelemetry-exporter-otlp-proto-http = "1.25.0"
+
 
 [[package]]
 name = "opentelemetry-exporter-otlp-proto-common"
@@ -2572,6 +3005,11 @@ files = [
     {file = "pathspec-0.12.1.tar.gz", hash = "sha256:a482d51503a1ab33b1c67a6c3813a26953dbdc71c31dacaef9a838c4e29f5712"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pkgutil-resolve-name"
 version = "1.3.10"
@@ -2602,6 +3040,11 @@ docs = ["furo (>=2024.8.6)", "proselint (>=0.14)", "sphinx (>=8.0.2)", "sphinx-a
 test = ["appdirs (==1.4.4)", "covdefaults (>=2.3)", "pytest (>=8.3.2)", "pytest-cov (>=5)", "pytest-mock (>=3.14)"]
 type = ["mypy (>=1.11.2)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pluggy"
 version = "1.5.0"
@@ -2618,6 +3061,11 @@ files = [
 dev = ["pre-commit", "tox"]
 testing = ["pytest", "pytest-benchmark"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "priority"
 version = "2.0.0"
@@ -2629,6 +3077,20 @@ files = [
     {file = "priority-2.0.0-py3-none-any.whl", hash = "sha256:6f8eefce5f3ad59baf2c080a664037bb4725cd0a790d53d59ab4059288faf6aa"},
     {file = "priority-2.0.0.tar.gz", hash = "sha256:c965d54f1b8d0d0b19479db3924c7c36cf672dbf2aec92d43fbdaf4492ba18c0"},
 ]
+
+
+[package.dependencies]
+pywin32 = {version = ">=226", markers = "platform_system == \"Windows\""}
+
+[package.extras]
+docs = ["sphinx (>=1.7.1)"]
+redis = ["redis"]
+tests = ["pytest (>=5.4.1)", "pytest-cov (>=2.8.1)", "pytest-mypy (>=0.8.0)", "pytest-timeout (>=2.1.0)", "redis", "sphinx (>=6.0.0)", "types-redis"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "prisma"
@@ -2655,6 +3117,11 @@ typing-extensions = ">=4.0.1"
 [package.extras]
 all = ["nodejs-bin"]
 node = ["nodejs-bin"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "prometheus-client"
@@ -2798,6 +3265,11 @@ protobuf = ">=3.19.0,<7.0.0"
 [package.extras]
 testing = ["google-api-core (>=1.31.5)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "protobuf"
 version = "4.25.6"
@@ -2820,8 +3292,14 @@ files = [
 ]
 markers = {main = "extra == \"extra-proxy\""}
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pyasn1"
+
 version = "0.6.1"
 description = "Pure-Python implementation of ASN.1 types and DER/BER/CER codecs (X.208)"
 optional = true
@@ -2831,10 +3309,17 @@ markers = "extra == \"extra-proxy\""
 files = [
     {file = "pyasn1-0.6.1-py3-none-any.whl", hash = "sha256:0d632f46f2ba09143da3a8afe9e33fb6f92fa2320ab7e886e2d0f7672af84629"},
     {file = "pyasn1-0.6.1.tar.gz", hash = "sha256:6f580d2bdd84365380830acf45550f2511469f673cb4a5ae3857a3170128b034"},
+
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "pyasn1-modules"
+
 version = "0.4.2"
 description = "A collection of ASN.1-based protocols modules"
 optional = true
@@ -2849,6 +3334,7 @@ files = [
 [package.dependencies]
 pyasn1 = ">=0.6.1,<0.7.0"
 
+
 [[package]]
 name = "pycodestyle"
 version = "2.11.1"
@@ -2861,21 +3347,34 @@ files = [
     {file = "pycodestyle-2.11.1.tar.gz", hash = "sha256:41ba0e7afc9752dfb53ced5489e89f8186be00e599e712660695b7a75ff2663f"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pycparser"
 version = "2.22"
 description = "C parser in Python"
+
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "dev"]
+
 files = [
     {file = "pycparser-2.22-py3-none-any.whl", hash = "sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc"},
     {file = "pycparser-2.22.tar.gz", hash = "sha256:491c8be9c040f5390f5bf44a5b07752bd07f56edf992381b05c701439eec10f6"},
 ]
 markers = {main = "(extra == \"proxy\" or extra == \"extra-proxy\") and (platform_python_implementation != \"PyPy\" or extra == \"proxy\")", dev = "platform_python_implementation != \"PyPy\""}
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pydantic"
+
 version = "2.10.6"
 description = "Data validation using Python type hints"
 optional = false
@@ -3009,6 +3508,7 @@ files = [
 [package.dependencies]
 typing-extensions = ">=4.6.0,<4.7.0 || >4.7.0"
 
+
 [[package]]
 name = "pydantic-settings"
 version = "2.8.1"
@@ -3043,6 +3543,11 @@ files = [
     {file = "pyflakes-3.1.0.tar.gz", hash = "sha256:a0aae034c444db0071aa077972ba4768d40c830d9539fd45bf4cd3f8f6992efc"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pyjwt"
 version = "2.9.0"
@@ -3064,6 +3569,11 @@ crypto = ["cryptography (>=3.4.0)"]
 dev = ["coverage[toml] (==5.0.4)", "cryptography (>=3.4.0)", "pre-commit", "pytest (>=6.0.0,<7.0.0)", "sphinx", "sphinx-rtd-theme", "zope.interface"]
 docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
 tests = ["coverage[toml] (==5.0.4)", "pytest (>=6.0.0,<7.0.0)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "pynacl"
@@ -3132,6 +3642,11 @@ tomli = {version = ">=1.0.0", markers = "python_version < \"3.11\""}
 [package.extras]
 testing = ["argcomplete", "attrs (>=19.2.0)", "hypothesis (>=3.56)", "mock", "nose", "pygments (>=2.7.2)", "requests", "setuptools", "xmlschema"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "pytest-asyncio"
 version = "0.21.2"
@@ -3169,6 +3684,11 @@ pytest = ">=6.2.5"
 [package.extras]
 dev = ["pre-commit", "pytest-asyncio", "tox"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
@@ -3200,6 +3720,11 @@ files = [
 [package.extras]
 cli = ["click (>=5.0)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "python-multipart"
 version = "0.0.18"
@@ -3212,6 +3737,14 @@ files = [
     {file = "python_multipart-0.0.18-py3-none-any.whl", hash = "sha256:efe91480f485f6a361427a541db4796f9e1591afc0fb8e7a4ba06bfbc6708996"},
     {file = "python_multipart-0.0.18.tar.gz", hash = "sha256:7a68db60c8bfb82e460637fa4750727b45af1d5e2ed215593f917f64694d34fe"},
 ]
+
+[package.extras]
+dev = ["atomicwrites (==1.4.1)", "attrs (==23.2.0)", "coverage (==7.4.1)", "hatch", "invoke (==2.2.0)", "more-itertools (==10.2.0)", "pbr (==6.0.0)", "pluggy (==1.4.0)", "py (==1.11.0)", "pytest (==8.0.0)", "pytest-cov (==4.1.0)", "pytest-timeout (==2.2.0)", "pyyaml (==6.0.1)", "ruff (==0.2.1)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "python-ulid"
@@ -3226,8 +3759,42 @@ files = [
     {file = "python_ulid-3.0.0.tar.gz", hash = "sha256:e50296a47dc8209d28629a22fc81ca26c00982c78934bd7766377ba37ea49a9f"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "pywin32"
+version = "306"
+description = "Python for Window Extensions"
+optional = true
+python-versions = "*"
+files = [
+    {file = "pywin32-306-cp310-cp310-win32.whl", hash = "sha256:06d3420a5155ba65f0b72f2699b5bacf3109f36acbe8923765c22938a69dfc8d"},
+    {file = "pywin32-306-cp310-cp310-win_amd64.whl", hash = "sha256:84f4471dbca1887ea3803d8848a1616429ac94a4a8d05f4bc9c5dcfd42ca99c8"},
+    {file = "pywin32-306-cp311-cp311-win32.whl", hash = "sha256:e65028133d15b64d2ed8f06dd9fbc268352478d4f9289e69c190ecd6818b6407"},
+    {file = "pywin32-306-cp311-cp311-win_amd64.whl", hash = "sha256:a7639f51c184c0272e93f244eb24dafca9b1855707d94c192d4a0b4c01e1100e"},
+    {file = "pywin32-306-cp311-cp311-win_arm64.whl", hash = "sha256:70dba0c913d19f942a2db25217d9a1b726c278f483a919f1abfed79c9cf64d3a"},
+    {file = "pywin32-306-cp312-cp312-win32.whl", hash = "sha256:383229d515657f4e3ed1343da8be101000562bf514591ff383ae940cad65458b"},
+    {file = "pywin32-306-cp312-cp312-win_amd64.whl", hash = "sha256:37257794c1ad39ee9be652da0462dc2e394c8159dfd913a8a4e8eb6fd346da0e"},
+    {file = "pywin32-306-cp312-cp312-win_arm64.whl", hash = "sha256:5821ec52f6d321aa59e2db7e0a35b997de60c201943557d108af9d4ae1ec7040"},
+    {file = "pywin32-306-cp37-cp37m-win32.whl", hash = "sha256:1c73ea9a0d2283d889001998059f5eaaba3b6238f767c9cf2833b13e6a685f65"},
+    {file = "pywin32-306-cp37-cp37m-win_amd64.whl", hash = "sha256:72c5f621542d7bdd4fdb716227be0dd3f8565c11b280be6315b06ace35487d36"},
+    {file = "pywin32-306-cp38-cp38-win32.whl", hash = "sha256:e4c092e2589b5cf0d365849e73e02c391c1349958c5ac3e9d5ccb9a28e017b3a"},
+    {file = "pywin32-306-cp38-cp38-win_amd64.whl", hash = "sha256:e8ac1ae3601bee6ca9f7cb4b5363bf1c0badb935ef243c4733ff9a393b1690c0"},
+    {file = "pywin32-306-cp39-cp39-win32.whl", hash = "sha256:e25fd5b485b55ac9c057f67d94bc203f3f6595078d1fb3b458c9c28b7153a802"},
+    {file = "pywin32-306-cp39-cp39-win_amd64.whl", hash = "sha256:39b61c15272833b5c329a2989999dcae836b1eed650252ab1b7bfbe1d59f30f4"},
+]
+
 [package.extras]
 pydantic = ["pydantic (>=2.0)"]
+
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "pyyaml"
@@ -3291,6 +3858,11 @@ files = [
     {file = "PyYAML-6.0.2-cp39-cp39-win_amd64.whl", hash = "sha256:39693e1f8320ae4f43943590b49779ffb98acb81f788220ea932a6b6c51004d8"},
     {file = "pyyaml-6.0.2.tar.gz", hash = "sha256:d584d9ec91ad65861cc08d42e834324ef890a082e591037abe114850ff7bbc3e"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "redis"
@@ -3364,14 +3936,22 @@ files = [
 attrs = ">=22.2.0"
 rpds-py = ">=0.7.0"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "regex"
+
 version = "2024.11.6"
+
 description = "Alternative regular expression module, to replace re."
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
+
     {file = "regex-2024.11.6-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:ff590880083d60acc0433f9c3f713c51f7ac6ebb9adf889c79a261ecf541aa91"},
     {file = "regex-2024.11.6-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:658f90550f38270639e83ce492f27d2c8d2cd63805c65a13a14d36ca126753f0"},
     {file = "regex-2024.11.6-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:164d8b7b3b4bcb2068b97428060b2a53be050085ef94eca7f240e7947f1b080e"},
@@ -3468,6 +4048,7 @@ files = [
     {file = "regex-2024.11.6.tar.gz", hash = "sha256:7ab159b063c52a0333c884e4679f8d7a85112ee3078fe3d9004b2dd875585519"},
 ]
 
+
 [[package]]
 name = "requests"
 version = "2.31.0"
@@ -3490,6 +4071,11 @@ urllib3 = ">=1.21.1,<3"
 socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "resend"
 version = "0.8.0"
@@ -3505,6 +4091,11 @@ files = [
 
 [package.dependencies]
 requests = "2.31.0"
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "respx"
@@ -3651,6 +4242,11 @@ files = [
 click = ">=5"
 redis = ">=3.5"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "rsa"
 version = "4.9"
@@ -3667,7 +4263,22 @@ files = [
 [package.dependencies]
 pyasn1 = ">=0.1.3"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
+
+name = "setuptools"
+version = "59.8.0"
+description = "Easily download, build, install, upgrade, and uninstall Python packages"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "setuptools-59.8.0-py3-none-any.whl", hash = "sha256:608a7885b664342ae9fafc43840b29d219c5a578876f6f7e00c4e2612160587f"},
+    {file = "setuptools-59.8.0.tar.gz", hash = "sha256:09980778aa734c3037a47997f28d6db5ab18bdf2af0e49f719bfc53967fd2e82"},
+
 name = "ruff"
 version = "0.1.15"
 description = "An extremely fast Python linter and code formatter, written in Rust."
@@ -3705,13 +4316,24 @@ markers = "extra == \"proxy\""
 files = [
     {file = "s3transfer-0.10.4-py3-none-any.whl", hash = "sha256:244a76a24355363a68164241438de1b72f8781664920260c48465896b712a41e"},
     {file = "s3transfer-0.10.4.tar.gz", hash = "sha256:29edc09801743c21eb5ecbc617a152df41d3c287f67b615f73e5f750583666a7"},
+
 ]
 
 [package.dependencies]
 botocore = ">=1.33.2,<2.0a.0"
 
 [package.extras]
+
+docs = ["furo", "jaraco.packaging (>=8.2)", "jaraco.tidelift (>=1.4)", "pygments-github-lexers (==0.0.5)", "rst.linker (>=1.9)", "sphinx", "sphinx-inline-tabs", "sphinxcontrib-towncrier"]
+testing = ["flake8-2020", "jaraco.envs (>=2.2)", "jaraco.path (>=3.2.0)", "mock", "paver", "pip (>=19.1)", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=1.0.1)", "pytest-flake8", "pytest-mypy", "pytest-virtualenv (>=1.2.7)", "pytest-xdist", "sphinx", "virtualenv (>=13.0.0)", "wheel"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 crt = ["botocore[crt] (>=1.33.2,<2.0a.0)"]
+
 
 [[package]]
 name = "six"
@@ -3726,6 +4348,11 @@ files = [
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "sniffio"
 version = "1.3.1"
@@ -3737,6 +4364,42 @@ files = [
     {file = "sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2"},
     {file = "sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "spark-ai-python"
+version = "0.3.9"
+description = "a sdk for iflytek's spark LLM."
+optional = false
+python-versions = ">=3.8.1,<4.0"
+files = [
+    {file = "spark_ai_python-0.3.9-py3-none-any.whl", hash = "sha256:817ee1cf37c1c5f411eb0d6b330b793e5539c7ebe12d7cfda8dcf18810ce3f38"},
+    {file = "spark_ai_python-0.3.9.tar.gz", hash = "sha256:1c7dd029bc219427c737f43332d046908b5106facc9d1a6967038d3f0bf47f21"},
+]
+
+[package.dependencies]
+aiohttp = ">3.3"
+jsonpatch = "*"
+nest-asyncio = ">=1.6.0,<2.0.0"
+packaging = "*"
+requests = "*"
+tenacity = "*"
+websocket-client = ">=1.7.0,<2.0.0"
+websockets = "*"
+
+[package.extras]
+autogen = ["pyautogen (>=0.2.20)"]
+llama-index = ["llama-index-core (>=0.10.24.post1,<0.11.0)"]
+proxy = ["fastapi[all] (>=0.110.0,<0.111.0)", "uvicorn (>=0.26.0)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "sse-starlette"
@@ -3829,6 +4492,30 @@ files = [
 doc = ["reno", "sphinx"]
 test = ["pytest", "tornado (>=4.5)", "typeguard"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "tenacity"
+version = "8.2.3"
+description = "Retry code until it succeeds"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "tenacity-8.2.3-py3-none-any.whl", hash = "sha256:ce510e327a630c9e1beaf17d42e6ffacc88185044ad85cf74c0a8887c6a0f88c"},
+    {file = "tenacity-8.2.3.tar.gz", hash = "sha256:5398ef0d78e63f40007c1fb4c0bff96e1911394d2fa8d194f77619c05ff6cc8a"},
+]
+
+[package.extras]
+doc = ["reno", "sphinx", "tornado (>=4.5)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "tiktoken"
 version = "0.7.0"
@@ -3882,14 +4569,22 @@ requests = ">=2.26.0"
 [package.extras]
 blobfile = ["blobfile (>=2)"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "tokenizers"
+
 version = "0.21.0"
+
 description = ""
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
+
     {file = "tokenizers-0.21.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:3c4c93eae637e7d2aaae3d376f06085164e1660f89304c0ab2b1d08a406636b2"},
     {file = "tokenizers-0.21.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:f53ea537c925422a2e0e92a24cce96f6bc5046bbef24a1652a5edc8ba975f62e"},
     {file = "tokenizers-0.21.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6b177fb54c4702ef611de0c069d9169f0004233890e0c4c5bd5508ae05abf193"},
@@ -3905,6 +4600,7 @@ files = [
     {file = "tokenizers-0.21.0-cp39-abi3-win32.whl", hash = "sha256:eb1702c2f27d25d9dd5b389cc1f2f51813e99f8ca30d9e25348db6585a97e24a"},
     {file = "tokenizers-0.21.0-cp39-abi3-win_amd64.whl", hash = "sha256:87841da5a25a3a5f70c102de371db120f41873b854ba65e52bccd57df5a3780c"},
     {file = "tokenizers-0.21.0.tar.gz", hash = "sha256:ee0894bf311b75b0c03079f33859ae4b2334d675d4e93f5a4132e1eae2834fe4"},
+
 ]
 
 [package.dependencies]
@@ -3914,6 +4610,13 @@ huggingface-hub = ">=0.16.4,<1.0"
 dev = ["tokenizers[testing]"]
 docs = ["setuptools-rust", "sphinx", "sphinx-rtd-theme"]
 testing = ["black (==22.3)", "datasets", "numpy", "pytest", "requests", "ruff"]
+
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 
 [[package]]
 name = "tomli"
@@ -3958,6 +4661,11 @@ files = [
     {file = "tomli-2.2.1.tar.gz", hash = "sha256:cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff"},
 ]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "tomlkit"
 version = "0.13.2"
@@ -3969,6 +4677,11 @@ files = [
     {file = "tomlkit-0.13.2-py3-none-any.whl", hash = "sha256:7a974427f6e119197f670fbbbeae7bef749a6c14e793db934baefc1b5f03efde"},
     {file = "tomlkit-0.13.2.tar.gz", hash = "sha256:fff5fe59a87295b278abd31bec92c15d9bc4a06885ab12bcea52c71119392e79"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "tqdm"
@@ -3991,6 +4704,11 @@ discord = ["requests"]
 notebook = ["ipywidgets (>=6)"]
 slack = ["slack-sdk"]
 telegram = ["requests"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "types-cffi"
@@ -4111,14 +4829,22 @@ files = [
 [[package]]
 name = "typing-extensions"
 version = "4.13.2"
+
 description = "Backported and Experimental Type Hints for Python 3.8+"
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "dev", "proxy-dev"]
 files = [
+
     {file = "typing_extensions-4.13.2-py3-none-any.whl", hash = "sha256:a439e7c04b49fec3e5d3e2beaa21755cadbbdc391694e28ccdd36ca4a1408f8c"},
     {file = "typing_extensions-4.13.2.tar.gz", hash = "sha256:e6c81219bd689f51865d9e372991c540bda33a0379d5573cddb9a3a23f7caaef"},
+
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "tzdata"
@@ -4132,6 +4858,11 @@ files = [
     {file = "tzdata-2025.2-py2.py3-none-any.whl", hash = "sha256:1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8"},
     {file = "tzdata-2025.2.tar.gz", hash = "sha256:b60a638fcc0daffadf82fe0f57e53d06bdec2f36c4df66280ae79bce6bd6f2b9"},
 ]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "tzlocal"
@@ -4152,6 +4883,11 @@ tzdata = {version = "*", markers = "platform_system == \"Windows\""}
 
 [package.extras]
 devenv = ["check-manifest", "pytest (>=4.3)", "pytest-cov", "pytest-mock (>=3.3)", "zest.releaser"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "urllib3"
@@ -4189,6 +4925,11 @@ brotli = ["brotli (>=1.0.9) ; platform_python_implementation == \"CPython\"", "b
 h2 = ["h2 (>=4,<5)"]
 socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
 
 [[package]]
 name = "uvicorn"
@@ -4465,6 +5206,118 @@ files = [
 [package.dependencies]
 h11 = ">=0.9.0,<1"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "websocket-client"
+version = "1.7.0"
+description = "WebSocket client for Python with low level API options"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "websocket-client-1.7.0.tar.gz", hash = "sha256:10e511ea3a8c744631d3bd77e61eb17ed09304c413ad42cf6ddfa4c7787e8fe6"},
+    {file = "websocket_client-1.7.0-py3-none-any.whl", hash = "sha256:f4c3d22fec12a2461427a29957ff07d35098ee2d976d3ba244e688b8b4057588"},
+]
+
+[package.extras]
+docs = ["Sphinx (>=6.0)", "sphinx-rtd-theme (>=1.1.0)"]
+optional = ["python-socks", "wsaccel"]
+test = ["websockets"]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
+[[package]]
+name = "websockets"
+version = "12.0"
+description = "An implementation of the WebSocket Protocol (RFC 6455 & 7692)"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "websockets-12.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:d554236b2a2006e0ce16315c16eaa0d628dab009c33b63ea03f41c6107958374"},
+    {file = "websockets-12.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:2d225bb6886591b1746b17c0573e29804619c8f755b5598d875bb4235ea639be"},
+    {file = "websockets-12.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:eb809e816916a3b210bed3c82fb88eaf16e8afcf9c115ebb2bacede1797d2547"},
+    {file = "websockets-12.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c588f6abc13f78a67044c6b1273a99e1cf31038ad51815b3b016ce699f0d75c2"},
+    {file = "websockets-12.0-cp310-cp310-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:5aa9348186d79a5f232115ed3fa9020eab66d6c3437d72f9d2c8ac0c6858c558"},
+    {file = "websockets-12.0-cp310-cp310-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6350b14a40c95ddd53e775dbdbbbc59b124a5c8ecd6fbb09c2e52029f7a9f480"},
+    {file = "websockets-12.0-cp310-cp310-musllinux_1_1_aarch64.whl", hash = "sha256:70ec754cc2a769bcd218ed8d7209055667b30860ffecb8633a834dde27d6307c"},
+    {file = "websockets-12.0-cp310-cp310-musllinux_1_1_i686.whl", hash = "sha256:6e96f5ed1b83a8ddb07909b45bd94833b0710f738115751cdaa9da1fb0cb66e8"},
+    {file = "websockets-12.0-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:4d87be612cbef86f994178d5186add3d94e9f31cc3cb499a0482b866ec477603"},
+    {file = "websockets-12.0-cp310-cp310-win32.whl", hash = "sha256:befe90632d66caaf72e8b2ed4d7f02b348913813c8b0a32fae1cc5fe3730902f"},
+    {file = "websockets-12.0-cp310-cp310-win_amd64.whl", hash = "sha256:363f57ca8bc8576195d0540c648aa58ac18cf85b76ad5202b9f976918f4219cf"},
+    {file = "websockets-12.0-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:5d873c7de42dea355d73f170be0f23788cf3fa9f7bed718fd2830eefedce01b4"},
+    {file = "websockets-12.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:3f61726cae9f65b872502ff3c1496abc93ffbe31b278455c418492016e2afc8f"},
+    {file = "websockets-12.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:ed2fcf7a07334c77fc8a230755c2209223a7cc44fc27597729b8ef5425aa61a3"},
+    {file = "websockets-12.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8e332c210b14b57904869ca9f9bf4ca32f5427a03eeb625da9b616c85a3a506c"},
+    {file = "websockets-12.0-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:5693ef74233122f8ebab026817b1b37fe25c411ecfca084b29bc7d6efc548f45"},
+    {file = "websockets-12.0-cp311-cp311-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e9e7db18b4539a29cc5ad8c8b252738a30e2b13f033c2d6e9d0549b45841c04"},
+    {file = "websockets-12.0-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:6e2df67b8014767d0f785baa98393725739287684b9f8d8a1001eb2839031447"},
+    {file = "websockets-12.0-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:bea88d71630c5900690fcb03161ab18f8f244805c59e2e0dc4ffadae0a7ee0ca"},
+    {file = "websockets-12.0-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:dff6cdf35e31d1315790149fee351f9e52978130cef6c87c4b6c9b3baf78bc53"},
+    {file = "websockets-12.0-cp311-cp311-win32.whl", hash = "sha256:3e3aa8c468af01d70332a382350ee95f6986db479ce7af14d5e81ec52aa2b402"},
+    {file = "websockets-12.0-cp311-cp311-win_amd64.whl", hash = "sha256:25eb766c8ad27da0f79420b2af4b85d29914ba0edf69f547cc4f06ca6f1d403b"},
+    {file = "websockets-12.0-cp312-cp312-macosx_10_9_universal2.whl", hash = "sha256:0e6e2711d5a8e6e482cacb927a49a3d432345dfe7dea8ace7b5790df5932e4df"},
+    {file = "websockets-12.0-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:dbcf72a37f0b3316e993e13ecf32f10c0e1259c28ffd0a85cee26e8549595fbc"},
+    {file = "websockets-12.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:12743ab88ab2af1d17dd4acb4645677cb7063ef4db93abffbf164218a5d54c6b"},
+    {file = "websockets-12.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b645f491f3c48d3f8a00d1fce07445fab7347fec54a3e65f0725d730d5b99cb"},
+    {file = "websockets-12.0-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:9893d1aa45a7f8b3bc4510f6ccf8db8c3b62120917af15e3de247f0780294b92"},
+    {file = "websockets-12.0-cp312-cp312-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1f38a7b376117ef7aff996e737583172bdf535932c9ca021746573bce40165ed"},
+    {file = "websockets-12.0-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:f764ba54e33daf20e167915edc443b6f88956f37fb606449b4a5b10ba42235a5"},
+    {file = "websockets-12.0-cp312-cp312-musllinux_1_1_i686.whl", hash = "sha256:1e4b3f8ea6a9cfa8be8484c9221ec0257508e3a1ec43c36acdefb2a9c3b00aa2"},
+    {file = "websockets-12.0-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:9fdf06fd06c32205a07e47328ab49c40fc1407cdec801d698a7c41167ea45113"},
+    {file = "websockets-12.0-cp312-cp312-win32.whl", hash = "sha256:baa386875b70cbd81798fa9f71be689c1bf484f65fd6fb08d051a0ee4e79924d"},
+    {file = "websockets-12.0-cp312-cp312-win_amd64.whl", hash = "sha256:ae0a5da8f35a5be197f328d4727dbcfafa53d1824fac3d96cdd3a642fe09394f"},
+    {file = "websockets-12.0-cp38-cp38-macosx_10_9_universal2.whl", hash = "sha256:5f6ffe2c6598f7f7207eef9a1228b6f5c818f9f4d53ee920aacd35cec8110438"},
+    {file = "websockets-12.0-cp38-cp38-macosx_10_9_x86_64.whl", hash = "sha256:9edf3fc590cc2ec20dc9d7a45108b5bbaf21c0d89f9fd3fd1685e223771dc0b2"},
+    {file = "websockets-12.0-cp38-cp38-macosx_11_0_arm64.whl", hash = "sha256:8572132c7be52632201a35f5e08348137f658e5ffd21f51f94572ca6c05ea81d"},
+    {file = "websockets-12.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:604428d1b87edbf02b233e2c207d7d528460fa978f9e391bd8aaf9c8311de137"},
+    {file = "websockets-12.0-cp38-cp38-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:1a9d160fd080c6285e202327aba140fc9a0d910b09e423afff4ae5cbbf1c7205"},
+    {file = "websockets-12.0-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:87b4aafed34653e465eb77b7c93ef058516cb5acf3eb21e42f33928616172def"},
+    {file = "websockets-12.0-cp38-cp38-musllinux_1_1_aarch64.whl", hash = "sha256:b2ee7288b85959797970114deae81ab41b731f19ebcd3bd499ae9ca0e3f1d2c8"},
+    {file = "websockets-12.0-cp38-cp38-musllinux_1_1_i686.whl", hash = "sha256:7fa3d25e81bfe6a89718e9791128398a50dec6d57faf23770787ff441d851967"},
+    {file = "websockets-12.0-cp38-cp38-musllinux_1_1_x86_64.whl", hash = "sha256:a571f035a47212288e3b3519944f6bf4ac7bc7553243e41eac50dd48552b6df7"},
+    {file = "websockets-12.0-cp38-cp38-win32.whl", hash = "sha256:3c6cc1360c10c17463aadd29dd3af332d4a1adaa8796f6b0e9f9df1fdb0bad62"},
+    {file = "websockets-12.0-cp38-cp38-win_amd64.whl", hash = "sha256:1bf386089178ea69d720f8db6199a0504a406209a0fc23e603b27b300fdd6892"},
+    {file = "websockets-12.0-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:ab3d732ad50a4fbd04a4490ef08acd0517b6ae6b77eb967251f4c263011a990d"},
+    {file = "websockets-12.0-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:a1d9697f3337a89691e3bd8dc56dea45a6f6d975f92e7d5f773bc715c15dde28"},
+    {file = "websockets-12.0-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:1df2fbd2c8a98d38a66f5238484405b8d1d16f929bb7a33ed73e4801222a6f53"},
+    {file = "websockets-12.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:23509452b3bc38e3a057382c2e941d5ac2e01e251acce7adc74011d7d8de434c"},
+    {file = "websockets-12.0-cp39-cp39-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:2e5fc14ec6ea568200ea4ef46545073da81900a2b67b3e666f04adf53ad452ec"},
+    {file = "websockets-12.0-cp39-cp39-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:46e71dbbd12850224243f5d2aeec90f0aaa0f2dde5aeeb8fc8df21e04d99eff9"},
+    {file = "websockets-12.0-cp39-cp39-musllinux_1_1_aarch64.whl", hash = "sha256:b81f90dcc6c85a9b7f29873beb56c94c85d6f0dac2ea8b60d995bd18bf3e2aae"},
+    {file = "websockets-12.0-cp39-cp39-musllinux_1_1_i686.whl", hash = "sha256:a02413bc474feda2849c59ed2dfb2cddb4cd3d2f03a2fedec51d6e959d9b608b"},
+    {file = "websockets-12.0-cp39-cp39-musllinux_1_1_x86_64.whl", hash = "sha256:bbe6013f9f791944ed31ca08b077e26249309639313fff132bfbf3ba105673b9"},
+    {file = "websockets-12.0-cp39-cp39-win32.whl", hash = "sha256:cbe83a6bbdf207ff0541de01e11904827540aa069293696dd528a6640bd6a5f6"},
+    {file = "websockets-12.0-cp39-cp39-win_amd64.whl", hash = "sha256:fc4e7fa5414512b481a2483775a8e8be7803a35b30ca805afa4998a84f9fd9e8"},
+    {file = "websockets-12.0-pp310-pypy310_pp73-macosx_10_9_x86_64.whl", hash = "sha256:248d8e2446e13c1d4326e0a6a4e9629cb13a11195051a73acf414812700badbd"},
+    {file = "websockets-12.0-pp310-pypy310_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f44069528d45a933997a6fef143030d8ca8042f0dfaad753e2906398290e2870"},
+    {file = "websockets-12.0-pp310-pypy310_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:c4e37d36f0d19f0a4413d3e18c0d03d0c268ada2061868c1e6f5ab1a6d575077"},
+    {file = "websockets-12.0-pp310-pypy310_pp73-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3d829f975fc2e527a3ef2f9c8f25e553eb7bc779c6665e8e1d52aa22800bb38b"},
+    {file = "websockets-12.0-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:2c71bd45a777433dd9113847af751aae36e448bc6b8c361a566cb043eda6ec30"},
+    {file = "websockets-12.0-pp38-pypy38_pp73-macosx_10_9_x86_64.whl", hash = "sha256:0bee75f400895aef54157b36ed6d3b308fcab62e5260703add87f44cee9c82a6"},
+    {file = "websockets-12.0-pp38-pypy38_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:423fc1ed29f7512fceb727e2d2aecb952c46aa34895e9ed96071821309951123"},
+    {file = "websockets-12.0-pp38-pypy38_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:27a5e9964ef509016759f2ef3f2c1e13f403725a5e6a1775555994966a66e931"},
+    {file = "websockets-12.0-pp38-pypy38_pp73-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c3181df4583c4d3994d31fb235dc681d2aaad744fbdbf94c4802485ececdecf2"},
+    {file = "websockets-12.0-pp38-pypy38_pp73-win_amd64.whl", hash = "sha256:b067cb952ce8bf40115f6c19f478dc71c5e719b7fbaa511359795dfd9d1a6468"},
+    {file = "websockets-12.0-pp39-pypy39_pp73-macosx_10_9_x86_64.whl", hash = "sha256:00700340c6c7ab788f176d118775202aadea7602c5cc6be6ae127761c16d6b0b"},
+    {file = "websockets-12.0-pp39-pypy39_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e469d01137942849cff40517c97a30a93ae79917752b34029f0ec72df6b46399"},
+    {file = "websockets-12.0-pp39-pypy39_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:ffefa1374cd508d633646d51a8e9277763a9b78ae71324183693959cf94635a7"},
+    {file = "websockets-12.0-pp39-pypy39_pp73-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ba0cab91b3956dfa9f512147860783a1829a8d905ee218a9837c18f683239611"},
+    {file = "websockets-12.0-pp39-pypy39_pp73-win_amd64.whl", hash = "sha256:2cb388a5bfb56df4d9a406783b7f9dbefb888c09b71629351cc6b036e9259370"},
+    {file = "websockets-12.0-py3-none-any.whl", hash = "sha256:dc284bbc8d7c78a6c69e0c7325ab46ee5e40bb4d50e494d8131a07ef47500e9e"},
+    {file = "websockets-12.0.tar.gz", hash = "sha256:81df9cbcbb6c260de1e007e58c011bfebe2dafc8435107b0537f393dd38c8b1b"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "yarl"
 version = "1.15.2"
@@ -4578,6 +5431,11 @@ idna = ">=2.0"
 multidict = ">=4.0"
 propcache = ">=0.2.0"
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [[package]]
 name = "zipp"
 version = "3.20.2"
@@ -4598,11 +5456,20 @@ enabler = ["pytest-enabler (>=2.2)"]
 test = ["big-O", "importlib-resources ; python_version < \"3.9\"", "jaraco.functools", "jaraco.itertools", "jaraco.test", "more-itertools", "pytest (>=6,!=8.1.*)", "pytest-ignore-flaky"]
 type = ["pytest-mypy"]
 
+[package.source]
+type = "legacy"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+reference = "tsinghua"
+
 [extras]
+
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-kms", "prisma", "redisvl", "resend"]
 proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-proxy-extras", "mcp", "orjson", "pynacl", "python-multipart", "pyyaml", "rq", "uvicorn", "uvloop", "websockets"]
+
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
+
 content-hash = "541574d0a1ec192c57c615843e344193881718902bc4db0bb43d5530d07f2add"
+

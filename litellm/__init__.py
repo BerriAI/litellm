@@ -618,6 +618,10 @@ ollama_models = ["llama2"]
 maritalk_models = ["maritalk"]
 
 
+spark_models = ["spark_ai"]
+
+
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -641,6 +645,48 @@ model_list = (
     + perplexity_models
     + maritalk_models
     + vertex_language_models
+    +spark_models
+)
+
+provider_list: List = [
+    "openai",
+    "custom_openai",
+    "text-completion-openai",
+    "cohere",
+    "cohere_chat",
+    "anthropic",
+    "replicate",
+    "huggingface",
+    "together_ai",
+    "openrouter",
+    "vertex_ai",
+    "palm",
+    "gemini",
+    "ai21",
+    "baseten",
+    "azure",
+    "azure_text",
+    "sagemaker",
+    "bedrock",
+    "vllm",
+    "nlp_cloud",
+    "petals",
+    "oobabooga",
+    "ollama",
+    "ollama_chat",
+    "deepinfra",
+    "perplexity",
+    "anyscale",
+    "mistral",
+    "groq",
+    "maritalk",
+    "voyage",
+    "cloudflare",
+    "xinference",
+    "fireworks_ai",
+    "custom",  # custom apis
+    "spark_ai",
+]
     + watsonx_models
     + gemini_models
     + text_completion_codestral_models
@@ -671,6 +717,7 @@ model_list_set = set(model_list)
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
 
+
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "text-completion-openai": open_ai_text_completion_models,
@@ -694,6 +741,9 @@ models_by_provider: dict = {
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
+
+    "spark_ai": spark_models,
+
     "watsonx": watsonx_models,
     "gemini": gemini_models,
     "fireworks_ai": fireworks_ai_models + fireworks_ai_embedding_models,
@@ -721,6 +771,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+
 }
 
 # mapping for those models which have larger equivalents
