@@ -11,7 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import litellm
 
@@ -341,4 +341,81 @@ async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openro
     # Verify the response
     assert response is not None
     assert response.choices[0].message.content == "Hello from mocked response!"
-    
+
+
+class Test_Chat:
+    @pytest.fixture
+    def mock_completion(self, mocker) -> MagicMock:
+        return mocker.patch.object(litellm.main, "completion")
+
+    def test_calls_completion_without_side_effect_to_params(self, mock_completion):
+        params = {}
+        chatobj = litellm.main.Chat(params, router_obj=None)
+        chatobj.completions.create(
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        chatobj.completions.create(
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            bar="foo",
+        )
+        assert mock_completion.call_args_list == [
+            call(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "hello"}], foo="bar"),
+            call(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "hello"}], bar="foo"),
+        ]
+        assert params == {}
+
+    @pytest.fixture
+    def mock_acompletion(self, mocker) -> MagicMock:
+        return mocker.patch.object(litellm.main, "acompletion")
+
+    @pytest.mark.asyncio
+    async def test_calls_acompletion_without_side_effect_to_params(self, mock_acompletion):
+        params = {"acompletion": True}
+        chatobj = litellm.main.Chat(params, router_obj=None)
+        await chatobj.completions.create(  # type: ignore
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        await chatobj.completions.create(  # type: ignore
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            bar="foo",
+        )
+        assert mock_acompletion.call_args_list == [
+            call(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "hello"}], foo="bar"),
+            call(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "hello"}], bar="foo"),
+        ]
+        assert params == {"acompletion": True}
+
+    def test_calls_completion_with_router_obj(self, mocker):
+        router_obj = mocker.MagicMock()
+        chatobj = litellm.main.Chat({}, router_obj=router_obj)
+        chatobj.completions.create(
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        router_obj.completion.assert_called_once_with(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            foo="bar"
+        )
+
+    @pytest.mark.asyncio
+    async def test_calls_acompletion_with_router_obj(self, mocker):
+        router_obj = mocker.AsyncMock()
+        chatobj = litellm.main.Chat({"acompletion": True}, router_obj=router_obj)
+        await chatobj.completions.create(  # type: ignore
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        router_obj.acompletion.assert_called_once_with(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            foo="bar"
+        )
