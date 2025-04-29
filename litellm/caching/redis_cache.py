@@ -24,6 +24,15 @@ from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
 
+
+# Helper function to serialize datetime.timedelta objects for JSON
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, timedelta):
+        return obj.total_seconds()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis, RedisCluster
@@ -159,7 +168,9 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
-            self.redis_client.set(name=key, value=str(value), ex=ttl)
+            # Use json.dumps with the custom serializer
+            serialized_value = json.dumps(value, default=json_serial)
+            self.redis_client.set(name=key, value=serialized_value, ex=ttl)
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -310,9 +321,11 @@ class RedisCache(BaseCache):
         try:
             if not hasattr(_redis_client, "set"):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
+            # Use json.dumps with the custom serializer
+            serialized_value = json.dumps(value, default=json_serial)
             result = await _redis_client.set(
                 name=key,
-                value=json.dumps(value),
+                value=serialized_value,
                 nx=nx,
                 ex=ttl,
             )
@@ -370,7 +383,8 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
             )
-            json_cache_value = json.dumps(cache_value)
+            # Use json.dumps with the custom serializer
+            json_cache_value = json.dumps(cache_value, default=json_serial)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
             if ttl is not None:
@@ -621,6 +635,16 @@ class RedisCache(BaseCache):
             )  # Convert string to dictionary
         except Exception:
             cached_response = ast.literal_eval(cached_response)
+
+        # Deserialize timedelta objects stored as seconds
+        if isinstance(cached_response, dict):
+            for k, v in cached_response.items():
+                if isinstance(v, dict) and 'latency' in v and isinstance(v['latency'], list):
+                    try:
+                        v['latency'] = [timedelta(seconds=ts) for ts in v['latency'] if isinstance(ts, (int, float))]
+                    except (TypeError, ValueError) as e:
+                        # Log error if conversion fails, but don't block
+                        verbose_logger.error(f"Error deserializing timedelta from cache for key {k}: {e}")
         return cached_response
 
     def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):

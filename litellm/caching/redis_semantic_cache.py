@@ -13,6 +13,7 @@ import ast
 import asyncio
 import json
 import os
+from datetime import timedelta  # Import timedelta
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import litellm
@@ -23,6 +24,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.types.utils import EmbeddingResponse
 
 from .base_cache import BaseCache
+
+
+# Helper function to serialize datetime.timedelta objects for JSON
+# (Copied from redis_cache.py for consistency)
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, timedelta):
+        return obj.total_seconds()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 class RedisSemanticCache(BaseCache):
@@ -181,6 +191,20 @@ class RedisSemanticCache(BaseCache):
                 print_verbose(f"Error parsing cached response: {str(e)}")
                 return None
 
+        # Deserialize timedelta objects stored as seconds
+        # (Copied from redis_cache.py for consistency)
+        if isinstance(cached_response, dict):
+            for k, v in cached_response.items():
+                # Check if the value is a dictionary and contains 'latency' list
+                if isinstance(v, dict) and 'latency' in v and isinstance(v['latency'], list):
+                    try:
+                        # Convert seconds back to timedelta
+                        v['latency'] = [timedelta(seconds=ts) for ts in v['latency'] if isinstance(ts, (int, float))]
+                    except (TypeError, ValueError) as e:
+                        # Log error if conversion fails, but don't block
+                        print_verbose(f"Error deserializing timedelta from semantic cache for key {k}: {e}")
+                # Add checks for other potential structures containing timedelta if necessary
+
         return cached_response
 
     def set_cache(self, key: str, value: Any, **kwargs) -> None:
@@ -204,7 +228,8 @@ class RedisSemanticCache(BaseCache):
                 return
 
             prompt = get_str_from_messages(messages)
-            value_str = str(value)
+            # Serialize value using json.dumps with custom serializer
+            value_str = json.dumps(value, default=json_serial)
 
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
@@ -336,7 +361,8 @@ class RedisSemanticCache(BaseCache):
                 return
 
             prompt = get_str_from_messages(messages)
-            value_str = str(value)
+            # Serialize value using json.dumps with custom serializer
+            value_str = json.dumps(value, default=json_serial)
 
             # Generate embedding for the value (response) to cache
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
