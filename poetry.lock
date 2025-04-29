@@ -2685,10 +2685,6 @@ version = "3.10.1"
 description = "Fast, correct Python JSON library supporting dataclasses, datetimes, and numpy"
 optional = true
 
-name = "opentelemetry-api"
-version = "1.25.0"
-description = "OpenTelemetry Python API"
-optional = false
 
 python-versions = ">=3.8"
 groups = ["dev", "proxy-dev"]
