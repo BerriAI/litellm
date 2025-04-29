@@ -188,7 +188,7 @@ try:
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
-        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+        "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json", encoding="utf-8"
     ) as f:
         json_data = json.load(f)
 
