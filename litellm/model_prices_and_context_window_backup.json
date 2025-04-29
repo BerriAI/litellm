@@ -11083,12 +11083,17 @@
         "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks-ai-up-to-16b": {
+    "fireworks-ai-up-to-4b": {
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000002,
         "litellm_provider": "fireworks_ai"
     },
-    "fireworks-ai-16.1b-to-80b": {
+    "fireworks-ai-4.1b-to-16b": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-above-16b": {
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "fireworks_ai"
