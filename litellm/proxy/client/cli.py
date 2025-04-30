@@ -13,15 +13,29 @@ def create_client(ctx: click.Context) -> Client:
     return Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
 
 
-def format_timestamp(timestamp: Optional[int]) -> str:
-    """Format a Unix timestamp into a human-readable date."""
-    if not timestamp:
+def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
+    """Format an ISO format datetime string to human-readable date with minute resolution."""
+    if not iso_datetime_str:
         return ""
     try:
-        dt = datetime.fromtimestamp(timestamp)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Parse ISO format datetime string
+        dt = datetime.fromisoformat(iso_datetime_str.replace('Z', '+00:00'))
+        return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
-        return str(timestamp)
+        return str(iso_datetime_str)
+
+
+def format_cost_per_1k_tokens(cost: Optional[float]) -> str:
+    """Format a per-token cost to cost per 1000 tokens."""
+    if cost is None:
+        return ""
+    try:
+        # Convert string to float if needed
+        cost_float = float(cost)
+        # Multiply by 1000 and format to 4 decimal places
+        return f"${cost_float * 1000:.4f}"
+    except (TypeError, ValueError):
+        return str(cost)
 
 
 @click.group()
@@ -85,7 +99,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
-                format_timestamp(model.get("created")),
+                format_iso_datetime_str(model.get("created")),
                 str(model.get("owned_by", ""))
             )
 
@@ -147,12 +161,55 @@ def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[
 
 
 @models.command("info")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format (table or json)",
+)
 @click.pass_context
-def get_models_info(ctx: click.Context) -> None:
+def get_models_info(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
     """Get detailed information about all models"""
     client = create_client(ctx)
-    result = client.models.info()
-    click.echo(json.dumps(result, indent=2))
+    models_info = client.models.info()
+    console = ctx.obj["console"]
+
+    if output_format == "json":
+        # Create syntax highlighted JSON without line numbers
+        json_str = json.dumps(models_info, indent=2)
+        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
+        console.print(syntax)
+    else:  # table format
+        table = Table(title="Models Information")
+        
+        # Add columns based on the data structure
+        table.add_column("Public Model", style="cyan")
+        table.add_column("Upstream Model", style="green")
+        table.add_column("Credential Name", style="yellow")
+        table.add_column("Created At", style="magenta")
+        table.add_column("Updated At", style="magenta")
+        table.add_column("ID", style="blue")
+        table.add_column("Input Cost", style="green", justify="right")
+        table.add_column("Output Cost", style="green", justify="right")
+
+        # Add rows
+        for model in models_info:
+            input_cost = model.get("model_info", {}).get("input_cost_per_token")
+            output_cost = model.get("model_info", {}).get("output_cost_per_token")
+            
+            table.add_row(
+                str(model.get("model_name", "")),
+                str(model.get("litellm_params", {}).get("model", "")),
+                str(model.get("litellm_params", {}).get("litellm_credential_name", "")),
+                format_iso_datetime_str(model.get("model_info", {}).get("created_at")),
+                format_iso_datetime_str(model.get("model_info", {}).get("updated_at")),
+                str(model.get("model_info", {}).get("id", "")),
+                format_cost_per_1k_tokens(input_cost),
+                format_cost_per_1k_tokens(output_cost)
+            )
+
+        console.print(table)
 
 
 @models.command("update")

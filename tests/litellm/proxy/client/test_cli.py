@@ -62,12 +62,15 @@ def test_models_list_table_format():
     """Test the models list command with table output format"""
     runner = CliRunner()
     
+    # Use ISO format datetime string
+    test_datetime = "2025-04-29T21:31:43.843000+00:00"
+    
     # Mock data that would be returned by the API
     mock_models = [
         {
             "id": "model-123",
             "object": "model",
-            "created": 1699848889,
+            "created": test_datetime,
             "owned_by": "organization-123"
         }
     ]
@@ -92,6 +95,12 @@ def test_models_list_table_format():
         assert "Owned By" in result.output
         assert "model-123" in result.output
         assert "organization-123" in result.output
+        
+        # Verify timestamp format (should show "2025-04-29 21:31" for test_datetime)
+        assert "2025-04-29 21:31" in result.output
+        # Verify seconds and microseconds are not shown
+        assert "21:31:43" not in result.output
+        assert "843000" not in result.output
         
         # Verify the client was called correctly with env var values
         MockClient.assert_called_once_with(
@@ -188,4 +197,136 @@ def test_models_list_error_handling():
         MockClient.assert_called_once_with(
             base_url="http://localhost:4000",
             api_key="sk-test"
-        ) 
+        )
+
+
+@patch.dict(os.environ, {
+    "LITELLM_PROXY_URL": "http://localhost:4000",
+    "LITELLM_PROXY_API_KEY": "sk-test"
+})
+def test_models_info_json_format():
+    """Test the models info command with JSON output format"""
+    runner = CliRunner()
+    
+    # Use ISO format datetime strings
+    test_datetime = "2025-04-29T21:31:43.843000+00:00"
+    
+    # Mock data that would be returned by the API
+    mock_info = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "gpt-4-0613",
+                "litellm_credential_name": "azure-1"
+            },
+            "model_info": {
+                "created_at": test_datetime,
+                "updated_at": test_datetime,
+                "id": "model-123",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02
+            }
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo-0613",
+                "litellm_credential_name": "azure-2"
+            },
+            "model_info": {
+                "created_at": test_datetime,
+                "updated_at": test_datetime,
+                "id": "model-456",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002
+            }
+        }
+    ]
+    
+    # Mock the Client class and its models.info() method
+    with patch("litellm.proxy.client.cli.Client") as MockClient:
+        # Configure the mock
+        mock_client_instance = MagicMock()
+        mock_client_instance.models.info.return_value = mock_info
+        MockClient.return_value = mock_client_instance
+        
+        # Run the command
+        result = runner.invoke(cli, ["models", "info", "--format", "json"])
+        
+        # Check that the command succeeded
+        assert result.exit_code == 0
+        
+        # Parse the output and verify it matches our mock data
+        output_data = json.loads(result.output)
+        assert output_data == mock_info
+        
+        # Verify the client was called correctly
+        MockClient.assert_called_once_with(
+            base_url="http://localhost:4000",
+            api_key="sk-test"
+        )
+        mock_client_instance.models.info.assert_called_once()
+
+
+@patch.dict(os.environ, {
+    "LITELLM_PROXY_URL": "http://localhost:4000",
+    "LITELLM_PROXY_API_KEY": "sk-test"
+})
+def test_models_info_table_format():
+    """Test the models info command with table output format"""
+    runner = CliRunner()
+    
+    # Use ISO format datetime strings
+    test_datetime = "2025-04-29T21:31:43.843000+00:00"
+    
+    # Mock data that would be returned by the API
+    mock_info = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "gpt-4-0613",
+                "litellm_credential_name": "azure-1"
+            },
+            "model_info": {
+                "created_at": test_datetime,
+                "updated_at": test_datetime,
+                "id": "model-123",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02
+            }
+        }
+    ]
+    
+    # Mock the Client class and its models.info() method
+    with patch("litellm.proxy.client.cli.Client") as MockClient:
+        # Configure the mock
+        mock_client_instance = MagicMock()
+        mock_client_instance.models.info.return_value = mock_info
+        MockClient.return_value = mock_client_instance
+        
+        # Run the command
+        result = runner.invoke(cli, ["models", "info"])
+        
+        # Check that the command succeeded
+        assert result.exit_code == 0
+        
+        # Verify the output contains expected table elements
+        # assert "gpt-4" in result.output
+        # assert "gpt-4-0613" in result.output
+        # assert "azure-1" in result.output
+        # assert "model-123" in result.output
+        # assert "$10.0000" in result.output  # 0.01 * 1000
+        # assert "$20.0000" in result.output  # 0.02 * 1000
+        
+        # # Verify timestamp format (should show "2025-04-29 21:31" for test_datetime)
+        # assert "2025-04-29 21:31" in result.output
+        # # Verify seconds and microseconds are not shown
+        # assert "21:31:43" not in result.output
+        # assert "843000" not in result.output
+        
+        # Verify the client was called correctly
+        MockClient.assert_called_once_with(
+            base_url="http://localhost:4000",
+            api_key="sk-test"
+        )
+        mock_client_instance.models.info.assert_called_once() 
