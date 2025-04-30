@@ -6,6 +6,15 @@ model_list:
       api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
       api_base: os.environ/AZURE_RESPONSES_OPENAI_ENDPOINT
       api_version: os.environ/AZURE_RESPONSES_OPENAI_API_VERSION
-general_settings:
-  store_prompts_in_spend_logs: true
-  block_robots: true
+
+vector_stores:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      custom_llm_provider: "bedrock"
+      id: "T37J8R4WTM"
+      api_key: os.environ/BEDROCK_API_KEY
+      api_base: os.environ/BEDROCK_API_BASE
+      api_version: os.environ/BEDROCK_API_VERSION
+
+
+
