@@ -68,7 +68,7 @@ def test_list_request_filters(client):
         organization_id="org789",
         key_hash="hash123",
         key_alias="alias123",
-        return_request=True
+        return_request=True,
     )
 
     assert request.params == {
@@ -76,22 +76,15 @@ def test_list_request_filters(client):
         "team_id": "team456",
         "organization_id": "org789",
         "key_hash": "hash123",
-        "key_alias": "alias123"
+        "key_alias": "alias123",
     }
 
 
 def test_list_request_flags(client):
     """Test list request with boolean flag parameters"""
-    request = client.list(
-        return_full_object=True,
-        include_team_keys=False,
-        return_request=True
-    )
+    request = client.list(return_full_object=True, include_team_keys=False, return_request=True)
 
-    assert request.params == {
-        "return_full_object": "true",
-        "include_team_keys": "false"
-    }
+    assert request.params == {"return_full_object": "true", "include_team_keys": "false"}
 
 
 def test_list_request_all_parameters(client):
@@ -106,7 +99,7 @@ def test_list_request_all_parameters(client):
         key_alias="alias123",
         return_full_object=True,
         include_team_keys=False,
-        return_request=True
+        return_request=True,
     )
 
     assert request.params == {
@@ -118,7 +111,7 @@ def test_list_request_all_parameters(client):
         "key_hash": "hash123",
         "key_alias": "alias123",
         "return_full_object": "true",
-        "include_team_keys": "false"
+        "include_team_keys": "false",
     }
 
 
@@ -140,18 +133,18 @@ def test_list_mock_response_pagination(client, requests_mock):
                     "models": ["gpt-3.5-turbo"],
                     "aliases": {},
                     "spend": None,
-                }
+                },
             ],
             "total": 5,
             "page": 1,
-            "size": 2
+            "size": 2,
         }
     }
 
     requests_mock.get(
         f"{client._base_url}/key/list",
         json=mock_response,
-        additional_matcher=lambda r: r.qs == {"page": ["1"], "size": ["2"]}
+        additional_matcher=lambda r: r.qs == {"page": ["1"], "size": ["2"]},
     )
 
     response = client.list(page=1, size=2)
@@ -177,10 +170,7 @@ def test_list_mock_response_filtered(client, requests_mock):
     requests_mock.get(
         f"{client._base_url}/key/list",
         json=mock_response,
-        additional_matcher=lambda r: (
-            r.qs.get("user_id") == ["user123"] and
-            r.qs.get("team_id") == ["team456"]
-        )
+        additional_matcher=lambda r: (r.qs.get("user_id") == ["user123"] and r.qs.get("team_id") == ["team456"]),
     )
 
     response = client.list(user_id="user123", team_id="team456")
@@ -217,7 +207,7 @@ def test_generate_request_full(client):
         user_id="user456",
         budget_id="budget789",
         config={"max_parallel_requests": 5},
-        return_request=True
+        return_request=True,
     )
 
     assert request.json == {
@@ -229,7 +219,7 @@ def test_generate_request_full(client):
         "team_id": "team123",
         "user_id": "user456",
         "budget_id": "budget789",
-        "config": {"max_parallel_requests": 5}
+        "config": {"max_parallel_requests": 5},
     }
 
 
@@ -245,7 +235,7 @@ def test_generate_mock_response(client, requests_mock):
         "team_id": "team123",
         "user_id": "user456",
         "budget_id": "budget789",
-        "config": {"max_parallel_requests": 5}
+        "config": {"max_parallel_requests": 5},
     }
 
     requests_mock.post(f"{client._base_url}/key/generate", json=mock_response)
@@ -255,7 +245,7 @@ def test_generate_mock_response(client, requests_mock):
         team_id="team123",
         user_id="user456",
         budget_id="budget789",
-        config={"max_parallel_requests": 5}
+        config={"max_parallel_requests": 5},
     )
     assert response == mock_response
 
@@ -299,31 +289,17 @@ def test_delete_request_with_keys_and_aliases(client):
     """Test delete request with both keys and aliases"""
     keys_to_delete = ["key1", "key2"]
     aliases_to_delete = ["alias1", "alias2"]
-    request = client.delete(
-        keys=keys_to_delete,
-        key_aliases=aliases_to_delete,
-        return_request=True
-    )
+    request = client.delete(keys=keys_to_delete, key_aliases=aliases_to_delete, return_request=True)
 
-    assert request.json == {
-        "keys": keys_to_delete,
-        "key_aliases": aliases_to_delete
-    }
+    assert request.json == {"keys": keys_to_delete, "key_aliases": aliases_to_delete}
 
 
 def test_delete_mock_response(client, requests_mock):
     """Test delete with a mocked successful response"""
-    mock_response = {
-        "status": "success",
-        "deleted_keys": ["key1", "key2"],
-        "deleted_aliases": ["alias1"]
-    }
+    mock_response = {"status": "success", "deleted_keys": ["key1", "key2"], "deleted_aliases": ["alias1"]}
     requests_mock.post(f"{client._base_url}/key/delete", json=mock_response)
 
-    response = client.delete(
-        keys=["key1", "key2"],
-        key_aliases=["alias1"]
-    )
+    response = client.delete(keys=["key1", "key2"], key_aliases=["alias1"])
     assert response == mock_response
 
 
@@ -332,4 +308,4 @@ def test_delete_unauthorized_error(client, requests_mock):
     requests_mock.post(f"{client._base_url}/key/delete", status_code=401, json={"error": "Unauthorized"})
 
     with pytest.raises(UnauthorizedError):
-        client.delete(keys=["key-to-delete"]) 
+        client.delete(keys=["key-to-delete"])

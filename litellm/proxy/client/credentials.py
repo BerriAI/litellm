@@ -182,4 +182,4 @@ class CredentialsManagementClient:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
-            raise 
+            raise
