@@ -59,7 +59,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def add_model(
+    def new(
         self,
         model_name: str,
         model_params: Dict[str, Any],

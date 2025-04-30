@@ -184,8 +184,8 @@ def test_client_without_api_key(base_url):
     assert client.api_key is None
     assert client.models.api_key is None
 
-def test_add_model_request_creation(client, base_url, api_key):
-    """Test that add_model creates a request with correct URL, headers, and body when return_request=True"""
+def test_new_request_creation(client, base_url, api_key):
+    """Test that new creates a request with correct URL, headers, and body when return_request=True"""
     model_name = "gpt-4"
     model_params = {
         "model": "openai/gpt-4",
@@ -196,7 +196,7 @@ def test_add_model_request_creation(client, base_url, api_key):
         "metadata": {"version": "1.0"}
     }
     
-    request = client.add_model(
+    request = client.new(
         model_name=model_name,
         model_params=model_params,
         model_info=model_info,
@@ -218,15 +218,15 @@ def test_add_model_request_creation(client, base_url, api_key):
         "model_info": model_info
     }
 
-def test_add_model_without_model_info(client):
-    """Test that add_model works correctly without optional model_info"""
+def test_new_without_model_info(client):
+    """Test that new works correctly without optional model_info"""
     model_name = "gpt-4"
     model_params = {
         "model": "openai/gpt-4",
         "api_base": "https://api.openai.com/v1"
     }
     
-    request = client.add_model(
+    request = client.new(
         model_name=model_name,
         model_params=model_params,
         return_request=True
@@ -238,8 +238,8 @@ def test_add_model_without_model_info(client):
         "litellm_params": model_params
     }
 
-def test_add_model_mock_response(client, requests_mock):
-    """Test add_model with a mocked successful response"""
+def test_new_mock_response(client, requests_mock):
+    """Test new with a mocked successful response"""
     model_name = "gpt-4"
     model_params = {"model": "openai/gpt-4"}
     mock_response = {
@@ -253,15 +253,15 @@ def test_add_model_mock_response(client, requests_mock):
         json=mock_response
     )
     
-    response = client.add_model(
+    response = client.new(
         model_name=model_name,
         model_params=model_params
     )
     
     assert response == mock_response
 
-def test_add_model_unauthorized_error(client, requests_mock):
-    """Test that add_model raises UnauthorizedError for 401 responses"""
+def test_new_unauthorized_error(client, requests_mock):
+    """Test that new raises UnauthorizedError for 401 responses"""
     model_name = "gpt-4"
     model_params = {"model": "openai/gpt-4"}
     
@@ -273,7 +273,7 @@ def test_add_model_unauthorized_error(client, requests_mock):
     )
     
     with pytest.raises(UnauthorizedError):
-        client.add_model(
+        client.new(
             model_name=model_name,
             model_params=model_params
         )
