@@ -373,6 +373,80 @@ def test_delete_model_other_errors(client, requests_mock):
         client.delete_model(model_id=model_id)
     assert exc_info.value.response.status_code == 500
 
+def test_info_request_creation(client, base_url, api_key):
+    """Test that info creates a correct request"""
+    request = client.info(return_request=True)
+    
+    # Check request method and URL
+    assert request.method == 'GET'
+    assert request.url == f"{base_url}/v1/model/info"
+    
+    # Check headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+
+def test_info_success(client, requests_mock):
+    """Test info with a successful response"""
+    mock_response = {
+        "data": [
+            {
+                "model_name": "gpt-4",
+                "model_info": {
+                    "id": "model-123",
+                    "description": "GPT-4 model"
+                },
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_base": "https://api.openai.com/v1"
+                }
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "model_info": {
+                    "id": "model-456",
+                    "description": "GPT-3.5 Turbo model"
+                },
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo"
+                }
+            }
+        ]
+    }
+    
+    requests_mock.get(
+        f"{client.base_url}/v1/model/info",
+        json=mock_response
+    )
+    
+    response = client.info()
+    assert response == mock_response["data"]
+    assert len(response) == 2
+    assert response[0]["model_name"] == "gpt-4"
+    assert response[1]["model_name"] == "gpt-3.5-turbo"
+
+def test_info_unauthorized(client, requests_mock):
+    """Test that info raises UnauthorizedError for unauthorized requests"""
+    requests_mock.get(
+        f"{client.base_url}/v1/model/info",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError) as exc_info:
+        client.info()
+    assert exc_info.value.orig_exception.response.status_code == 401
+
+def test_info_server_error(client, requests_mock):
+    """Test that info raises HTTPError for server errors"""
+    requests_mock.get(
+        f"{client.base_url}/v1/model/info",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.info()
+    assert exc_info.value.response.status_code == 500
+
 def test_get_model_by_id_request_creation(client, base_url, api_key):
     """Test that get_model creates a correct request when using model_id"""
     model_id = "model-123"
@@ -514,80 +588,6 @@ def test_get_model_server_error(client, requests_mock):
     
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.get_model(model_id=model_id)
-    assert exc_info.value.response.status_code == 500
-
-def test_get_all_model_info_request_creation(client, base_url, api_key):
-    """Test that get_all_model_info creates a correct request"""
-    request = client.get_all_model_info(return_request=True)
-    
-    # Check request method and URL
-    assert request.method == 'GET'
-    assert request.url == f"{base_url}/v1/model/info"
-    
-    # Check headers
-    assert request.headers['Authorization'] == f"Bearer {api_key}"
-
-def test_get_all_model_info_success(client, requests_mock):
-    """Test get_all_model_info with a successful response"""
-    mock_response = {
-        "data": [
-            {
-                "model_name": "gpt-4",
-                "model_info": {
-                    "id": "model-123",
-                    "description": "GPT-4 model"
-                },
-                "litellm_params": {
-                    "model": "openai/gpt-4",
-                    "api_base": "https://api.openai.com/v1"
-                }
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "model_info": {
-                    "id": "model-456",
-                    "description": "GPT-3.5 Turbo model"
-                },
-                "litellm_params": {
-                    "model": "openai/gpt-3.5-turbo"
-                }
-            }
-        ]
-    }
-    
-    requests_mock.get(
-        f"{client.base_url}/v1/model/info",
-        json=mock_response
-    )
-    
-    response = client.get_all_model_info()
-    assert response == mock_response["data"]
-    assert len(response) == 2
-    assert response[0]["model_name"] == "gpt-4"
-    assert response[1]["model_name"] == "gpt-3.5-turbo"
-
-def test_get_all_model_info_unauthorized(client, requests_mock):
-    """Test that get_all_model_info raises UnauthorizedError for unauthorized requests"""
-    requests_mock.get(
-        f"{client.base_url}/v1/model/info",
-        status_code=401,
-        json={"error": "Unauthorized"}
-    )
-    
-    with pytest.raises(UnauthorizedError) as exc_info:
-        client.get_all_model_info()
-    assert exc_info.value.orig_exception.response.status_code == 401
-
-def test_get_all_model_info_server_error(client, requests_mock):
-    """Test that get_all_model_info raises HTTPError for server errors"""
-    requests_mock.get(
-        f"{client.base_url}/v1/model/info",
-        status_code=500,
-        json={"error": "Internal Server Error"}
-    )
-    
-    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
-        client.get_all_model_info()
     assert exc_info.value.response.status_code == 500
 
 def test_get_all_model_group_info_request_creation(client, base_url, api_key):

@@ -178,12 +178,12 @@ class ModelsManagementClient:
         if (model_id is None and model_name is None) or (model_id is not None and model_name is not None):
             raise ValueError("Exactly one of model_id or model_name must be provided")
             
-        # If return_request is True, delegate to get_all_model_info
+        # If return_request is True, delegate to info
         if return_request:
-            return self.get_all_model_info(return_request=True)
+            return self.info(return_request=True)
             
         # Get all models and filter
-        models = self.get_all_model_info()
+        models = self.info()
         
         # Find the matching model
         for model in models:
@@ -197,7 +197,7 @@ class ModelsManagementClient:
             response=requests.Response()  # Empty response since we didn't make a direct request
         ))
 
-    def get_all_model_info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+    def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
         """
         Get detailed information about all models from the server.
         
