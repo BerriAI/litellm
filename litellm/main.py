@@ -1925,10 +1925,11 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "anthropic_text":
             api_key = (
-                api_key
+                os.environ.get("ANTHROPIC_API_KEY")
+                or api_key
                 or litellm.anthropic_key
                 or litellm.api_key
-                or os.environ.get("ANTHROPIC_API_KEY")
+                
             )
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             api_base = (
