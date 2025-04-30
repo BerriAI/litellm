@@ -90,7 +90,6 @@ Manage virtual API keys:
 ```python
 # Generate a new API key
 key = client.keys.generate(
-    api_key="sk-my-generated-key",
     models=["gpt-4", "gpt-3.5-turbo"],
     aliases={"gpt4": "gpt-4"},
     duration="24h",
