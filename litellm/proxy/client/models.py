@@ -108,7 +108,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete_model(
+    def delete(
         self,
         model_id: str,
         return_request: bool = False

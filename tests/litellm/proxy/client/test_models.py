@@ -278,11 +278,11 @@ def test_new_unauthorized_error(client, requests_mock):
             model_params=model_params
         )
 
-def test_delete_model_request_creation(client, base_url, api_key):
-    """Test that delete_model creates a request with correct URL, headers, and body when return_request=True"""
+def test_delete_request_creation(client, base_url, api_key):
+    """Test that delete creates a request with correct URL, headers, and body when return_request=True"""
     model_id = "model-123"
     
-    request = client.delete_model(
+    request = client.delete(
         model_id=model_id,
         return_request=True
     )
@@ -298,8 +298,8 @@ def test_delete_model_request_creation(client, base_url, api_key):
     # Check request body
     assert request.json == {"id": model_id}
 
-def test_delete_model_mock_response(client, requests_mock):
-    """Test delete_model with a mocked successful response"""
+def test_delete_mock_response(client, requests_mock):
+    """Test delete with a mocked successful response"""
     model_id = "model-123"
     mock_response = {
         "message": "Model: model-123 deleted successfully"
@@ -311,11 +311,11 @@ def test_delete_model_mock_response(client, requests_mock):
         json=mock_response
     )
     
-    response = client.delete_model(model_id=model_id)
+    response = client.delete(model_id=model_id)
     assert response == mock_response
 
-def test_delete_model_unauthorized_error(client, requests_mock):
-    """Test that delete_model raises UnauthorizedError for 401 responses"""
+def test_delete_unauthorized_error(client, requests_mock):
+    """Test that delete raises UnauthorizedError for 401 responses"""
     model_id = "model-123"
     
     # Mock a 401 response
@@ -326,10 +326,10 @@ def test_delete_model_unauthorized_error(client, requests_mock):
     )
     
     with pytest.raises(UnauthorizedError):
-        client.delete_model(model_id=model_id)
+        client.delete(model_id=model_id)
 
-def test_delete_model_404_error(client, requests_mock):
-    """Test that delete_model raises NotFoundError for 404 responses"""
+def test_delete_404_error(client, requests_mock):
+    """Test that delete raises NotFoundError for 404 responses"""
     model_id = "model-123"
     
     # Mock a 404 response
@@ -340,11 +340,11 @@ def test_delete_model_404_error(client, requests_mock):
     )
     
     with pytest.raises(NotFoundError) as exc_info:
-        client.delete_model(model_id=model_id)
+        client.delete(model_id=model_id)
     assert exc_info.value.orig_exception.response.status_code == 404
 
-def test_delete_model_not_found_in_text(client, requests_mock):
-    """Test that delete_model raises NotFoundError when response contains 'not found'"""
+def test_delete_not_found_in_text(client, requests_mock):
+    """Test that delete raises NotFoundError when response contains 'not found'"""
     model_id = "model-123"
     
     # Mock a response with "not found" in text but different status code
@@ -355,11 +355,11 @@ def test_delete_model_not_found_in_text(client, requests_mock):
     )
     
     with pytest.raises(NotFoundError) as exc_info:
-        client.delete_model(model_id=model_id)
+        client.delete(model_id=model_id)
     assert "not found" in exc_info.value.orig_exception.response.text.lower()
 
-def test_delete_model_other_errors(client, requests_mock):
-    """Test that delete_model raises normal HTTPError for other error responses"""
+def test_delete_other_errors(client, requests_mock):
+    """Test that delete raises normal HTTPError for other error responses"""
     model_id = "model-123"
     
     # Mock a 500 response
@@ -370,7 +370,7 @@ def test_delete_model_other_errors(client, requests_mock):
     )
     
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
-        client.delete_model(model_id=model_id)
+        client.delete(model_id=model_id)
     assert exc_info.value.response.status_code == 500
 
 def test_info_request_creation(client, base_url, api_key):
