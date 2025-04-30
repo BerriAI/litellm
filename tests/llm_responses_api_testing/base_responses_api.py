@@ -314,4 +314,24 @@ class BaseResponsesAPITest(ABC):
             else:
                 raise ValueError("response is not a ResponsesAPIResponse")
     
+    @pytest.mark.asyncio
+    async def test_multiturn_responses_api(self):
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        response_1 = await litellm.aresponses(
+            input="Basic ping", max_output_tokens=20, **base_completion_call_args
+        )
 
+        # follow up with a second request
+        response_1_id = response_1.id
+        response_2 = await litellm.aresponses(
+            input="Basic ping", 
+            max_output_tokens=20, 
+            previous_response_id=response_1_id,
+            **base_completion_call_args
+        )
+
+        # assert the response is not None
+        assert response_1 is not None
+        assert response_2 is not None
