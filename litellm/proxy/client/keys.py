@@ -104,7 +104,6 @@ class KeysManagementClient:
 
     def generate(
         self,
-        api_key: str,
         models: Optional[List[str]] = None,
         aliases: Optional[Dict[str, str]] = None,
         spend: Optional[float] = None,
@@ -122,7 +121,6 @@ class KeysManagementClient:
         Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
 
         Args:
-            api_key (str): The API key to create
             models (Optional[List[str]]): List of allowed models for this key
             aliases (Optional[Dict[str, str]]): Model alias mappings
             spend (Optional[float]): Maximum spend limit for this key
@@ -144,7 +142,7 @@ class KeysManagementClient:
         """
         url = f"{self._base_url}/key/generate"
 
-        data = {"api_key": api_key}
+        data = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:

@@ -197,20 +197,17 @@ def test_list_unauthorized_error(client, requests_mock):
 
 def test_generate_request_minimal(client, base_url, api_key):
     """Test generate with minimal parameters"""
-    new_key = "new-test-key"
-    request = client.generate(api_key=new_key, return_request=True)
+    request = client.generate(return_request=True)
 
     assert request.method == "POST"
     assert request.url == f"{base_url}/key/generate"
     assert request.headers["Content-Type"] == "application/json"
     assert request.headers["Authorization"] == f"Bearer {api_key}"
-    assert request.json == {"api_key": new_key}
 
 
 def test_generate_request_full(client):
     """Test generate with all parameters"""
     request = client.generate(
-        api_key="new-test-key",
         models=["gpt-4", "gpt-3.5-turbo"],
         aliases={"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
         spend=100.0,
@@ -224,7 +221,6 @@ def test_generate_request_full(client):
     )
 
     assert request.json == {
-        "api_key": "new-test-key",
         "models": ["gpt-4", "gpt-3.5-turbo"],
         "aliases": {"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
         "spend": 100.0,
@@ -255,7 +251,6 @@ def test_generate_mock_response(client, requests_mock):
     requests_mock.post(f"{client._base_url}/key/generate", json=mock_response)
 
     response = client.generate(
-        api_key="new-test-key",
         key_alias="test-key-alias",
         team_id="team123",
         user_id="user456",
@@ -270,7 +265,7 @@ def test_generate_unauthorized_error(client, requests_mock):
     requests_mock.post(f"{client._base_url}/key/generate", status_code=401, json={"error": "Unauthorized"})
 
     with pytest.raises(UnauthorizedError):
-        client.generate(api_key="new-test-key")
+        client.generate()
 
 
 def test_delete_request_minimal(client, base_url, api_key):
