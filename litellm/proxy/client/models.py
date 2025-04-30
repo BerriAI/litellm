@@ -117,7 +117,7 @@ class ModelsManagementClient:
         Delete a model from the proxy.
         
         Args:
-            model_id (str): ID of the model to delete
+            model_id (str): ID of the model to delete (e.g., "2f23364f-4579-4d79-a43a-2d48dd551c2e")
             return_request (bool): If True, returns the prepared request object instead of executing it
         
         Returns:
