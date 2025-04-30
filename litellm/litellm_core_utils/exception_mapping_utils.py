@@ -1097,7 +1097,6 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             elif (
                 custom_llm_provider == "vertex_ai"
                 or custom_llm_provider == "vertex_ai_beta"
-                or custom_llm_provider == "gemini"
             ):
                 if (
                     "Vertex AI API has not been used in project" in error_str
@@ -1295,7 +1294,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     raise BadRequestError(
                         message="GeminiException - Invalid api key",
                         model=model,
-                        llm_provider="palm",
+                        llm_provider=custom_llm_provider,
                         response=getattr(original_exception, "response", None),
                     )
                 if (
@@ -1306,14 +1305,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     raise Timeout(
                         message=f"GeminiException - {original_exception.message}",
                         model=model,
-                        llm_provider="palm",
+                        llm_provider=custom_llm_provider,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"GeminiException - {error_str}",
                         model=model,
-                        llm_provider="palm",
+                        llm_provider=custom_llm_provider,
                         response=getattr(original_exception, "response", None),
                     )
                 if (
@@ -1324,7 +1323,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     raise APIError(
                         status_code=getattr(original_exception, "status_code", 500),
                         message=f"GeminiException - {original_exception.message}",
-                        llm_provider="palm",
+                        llm_provider=custom_llm_provider,
                         model=model,
                         request=httpx.Response(
                             status_code=429,
@@ -1340,7 +1339,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         raise BadRequestError(
                             message=f"GeminiException - {error_str}",
                             model=model,
-                            llm_provider="palm",
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"GeminiException - {error_str}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                         )
                 # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
