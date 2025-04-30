@@ -1,6 +1,6 @@
 import requests
 from typing import List, Dict, Any, Optional, Union
-from .exceptions import UnauthorizedError
+from .exceptions import UnauthorizedError, NotFoundError
 
 class ModelsManagementClient:
     def __init__(self, base_url: str, api_key: Optional[str] = None):
@@ -126,6 +126,7 @@ class ModelsManagementClient:
             
         Raises:
             UnauthorizedError: If the request fails with a 401 status code
+            NotFoundError: If the request fails with a 404 status code or indicates the model was not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
         url = f"{self.base_url}/model/delete"
@@ -145,4 +146,6 @@ class ModelsManagementClient:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
+            if e.response.status_code == 404 or "not found" in e.response.text.lower():
+                raise NotFoundError(e)
             raise 

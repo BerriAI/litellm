@@ -1,7 +1,7 @@
 import pytest
 import requests
 from litellm.proxy.client import Client, ModelsManagementClient
-from litellm.proxy.client.exceptions import UnauthorizedError
+from litellm.proxy.client.exceptions import UnauthorizedError, NotFoundError
 
 @pytest.fixture
 def base_url():
@@ -277,4 +277,49 @@ def test_delete_model_unauthorized_error(client, requests_mock):
     )
     
     with pytest.raises(UnauthorizedError):
-        client.delete_model(model_id=model_id) 
+        client.delete_model(model_id=model_id)
+
+def test_delete_model_404_error(client, requests_mock):
+    """Test that delete_model raises NotFoundError for 404 responses"""
+    model_id = "model-123"
+    
+    # Mock a 404 response
+    requests_mock.post(
+        f"{client.base_url}/model/delete",
+        status_code=404,
+        json={"error": "Model not found"}
+    )
+    
+    with pytest.raises(NotFoundError) as exc_info:
+        client.delete_model(model_id=model_id)
+    assert exc_info.value.orig_exception.response.status_code == 404
+
+def test_delete_model_not_found_in_text(client, requests_mock):
+    """Test that delete_model raises NotFoundError when response contains 'not found'"""
+    model_id = "model-123"
+    
+    # Mock a response with "not found" in text but different status code
+    requests_mock.post(
+        f"{client.base_url}/model/delete",
+        status_code=400,  # Different status code
+        json={"error": "The specified model was not found in the system"}
+    )
+    
+    with pytest.raises(NotFoundError) as exc_info:
+        client.delete_model(model_id=model_id)
+    assert "not found" in exc_info.value.orig_exception.response.text.lower()
+
+def test_delete_model_other_errors(client, requests_mock):
+    """Test that delete_model raises normal HTTPError for other error responses"""
+    model_id = "model-123"
+    
+    # Mock a 500 response
+    requests_mock.post(
+        f"{client.base_url}/model/delete",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.delete_model(model_id=model_id)
+    assert exc_info.value.response.status_code == 500 
