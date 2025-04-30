@@ -67,14 +67,14 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     console = ctx.obj["console"]
 
     if output_format == "json":
-        # Create syntax highlighted JSON
+        # Create syntax highlighted JSON without line numbers
         json_str = json.dumps(models, indent=2)
-        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
+        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
         console.print(syntax)
     else:  # table format
         table = Table(title="Available Models")
         
-        # Add columns in OpenAI-style format
+        # Add columns based on the data structure
         table.add_column("ID", style="cyan")
         table.add_column("Object", style="green")
         table.add_column("Created", style="magenta")
@@ -84,7 +84,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
         for model in models:
             table.add_row(
                 str(model.get("id", "")),
-                str(model.get("object", "model")),  # Default to "model" if not specified
+                str(model.get("object", "model")),
                 format_timestamp(model.get("created")),
                 str(model.get("owned_by", ""))
             )
