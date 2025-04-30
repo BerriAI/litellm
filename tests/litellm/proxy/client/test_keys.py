@@ -195,10 +195,10 @@ def test_list_unauthorized_error(client, requests_mock):
         client.list()
 
 
-def test_create_request_minimal(client, base_url, api_key):
-    """Test create with minimal parameters"""
+def test_generate_request_minimal(client, base_url, api_key):
+    """Test generate with minimal parameters"""
     new_key = "new-test-key"
-    request = client.create(api_key=new_key, return_request=True)
+    request = client.generate(api_key=new_key, return_request=True)
 
     assert request.method == "POST"
     assert request.url == f"{base_url}/key/generate"
@@ -207,46 +207,46 @@ def test_create_request_minimal(client, base_url, api_key):
     assert request.json == {"api_key": new_key}
 
 
-def test_create_request_full(client):
-    """Test create with all optional parameters"""
-    request = client.create(
+def test_generate_request_full(client):
+    """Test generate with all parameters"""
+    request = client.generate(
         api_key="new-test-key",
         models=["gpt-4", "gpt-3.5-turbo"],
-        aliases={"gpt4": "gpt-4"},
+        aliases={"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
         spend=100.0,
-        return_request=True,
+        return_request=True
     )
 
     assert request.json == {
         "api_key": "new-test-key",
         "models": ["gpt-4", "gpt-3.5-turbo"],
-        "aliases": {"gpt4": "gpt-4"},
-        "spend": 100.0,
+        "aliases": {"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
+        "spend": 100.0
     }
 
 
-def test_create_mock_response(client, requests_mock):
-    """Test create with a mocked successful response"""
+def test_generate_mock_response(client, requests_mock):
+    """Test generate with a mocked successful response"""
     mock_response = {
         "key": "new-test-key",
         "expires": "2024-12-31T23:59:59Z",
         "models": ["gpt-4"],
         "aliases": {"gpt4": "gpt-4"},
-        "spend": 100.0,
+        "spend": 100.0
     }
 
     requests_mock.post(f"{client._base_url}/key/generate", json=mock_response)
 
-    response = client.create(api_key="new-test-key", models=["gpt-4"])
+    response = client.generate(api_key="new-test-key")
     assert response == mock_response
 
 
-def test_create_unauthorized_error(client, requests_mock):
-    """Test that create raises UnauthorizedError for 401 responses"""
+def test_generate_unauthorized_error(client, requests_mock):
+    """Test that generate raises UnauthorizedError for 401 responses"""
     requests_mock.post(f"{client._base_url}/key/generate", status_code=401, json={"error": "Unauthorized"})
 
     with pytest.raises(UnauthorizedError):
-        client.create(api_key="new-test-key")
+        client.generate(api_key="new-test-key")
 
 
 def test_delete_request_minimal(client, base_url, api_key):

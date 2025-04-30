@@ -102,7 +102,7 @@ class KeysManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def create(
+    def generate(
         self,
         api_key: str,
         models: Optional[List[str]] = None,
@@ -111,7 +111,9 @@ class KeysManagementClient:
         return_request: bool = False,
     ) -> Union[Dict[str, Any], requests.Request]:
         """
-        Create a new API key with optional restrictions.
+        Generate an API key based on the provided data.
+
+        Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
 
         Args:
             api_key (str): The API key to create
