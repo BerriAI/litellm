@@ -122,11 +122,14 @@ async def list_vector_stores(
         in_memory_vector_stores: List[LiteLLM_ManagedVectorStore] = copy.deepcopy(global_vector_store_manager.vector_stores)
 
         # Get vector stores from database
-        vector_stores_from_db = await prisma_client.db.litellm_managedvectorstorestable.find_many(
-            orderBy={
+        vector_stores_from_db: List[LiteLLM_ManagedVectorStore] = []
+        _vector_stores_from_db = await prisma_client.db.litellm_managedvectorstorestable.find_many(
+            order={
                 "created_at": "desc"
             },
         )
+        for vector_store in _vector_stores_from_db:
+            vector_stores_from_db.append(dict(vector_store))
         
         # Combine in-memory and database vector stores
         combined_vector_stores: List[LiteLLM_ManagedVectorStore] = in_memory_vector_stores + vector_stores_from_db

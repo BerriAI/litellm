@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict, Union
 
@@ -26,8 +27,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     vector_store_name: Optional[str]
     vector_store_description: Optional[str]
     vector_store_metadata: Optional[Dict[str, Any]]
-    created_at: Optional[int]
-    updated_at: Optional[int]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
     # credential fields
     litellm_credential_name: Optional[str]
