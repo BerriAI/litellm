@@ -462,6 +462,7 @@ router_settings:
 | NO_DOCS | Flag to disable documentation generation
 | NO_PROXY | List of addresses to bypass proxy
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
+| OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API
 | OPENAI_API_KEY | API key for OpenAI services
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI

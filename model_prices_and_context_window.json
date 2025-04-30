@@ -602,6 +602,26 @@
         "supports_vision": true,
         "supports_prompt_caching": true
     },
+    "computer-use-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 12e-6,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supported_endpoints": ["/v1/responses"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
     "o3": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
@@ -1551,8 +1571,8 @@
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000012,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 12e-6,
         "litellm_provider": "azure",
         "mode": "chat",
         "supported_endpoints": ["/v1/responses"],
@@ -10215,6 +10235,55 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-V3": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/mistralai/Mistral-Small-24B-Instruct-2501": {
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "ollama/codegemma": {
         "max_tokens": 8192, 
         "max_input_tokens": 8192, 
@@ -11015,7 +11084,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": {
         "max_tokens": 65536,
         "max_input_tokens": 65536,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 65536,
         "input_cost_per_token": 0.0000012, 
         "output_cost_per_token": 0.0000012,
         "litellm_provider": "fireworks_ai", 
@@ -11037,7 +11106,66 @@
         "source": "https://fireworks.ai/pricing",
         "supports_tool_choice": true
     },
-
+    "fireworks_ai/accounts/fireworks/models/deepseek-r1": {
+        "max_tokens": 20480,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 20480,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 8e-6,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": {
+        "max_tokens": 20480,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 20480,
+        "input_cost_per_token": 0.55e-6,
+        "output_cost_per_token": 2.19e-6,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 3e-6,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.22e-6,
+        "output_cost_per_token": 0.88e-6,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
+    "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.15e-6,
+        "output_cost_per_token": 0.60e-6,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -11083,12 +11211,17 @@
         "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks-ai-up-to-16b": {
+    "fireworks-ai-up-to-4b": {
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000002,
         "litellm_provider": "fireworks_ai"
     },
-    "fireworks-ai-16.1b-to-80b": {
+    "fireworks-ai-4.1b-to-16b": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-above-16b": {
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "fireworks_ai"

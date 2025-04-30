@@ -2661,11 +2661,10 @@ def test_re_use_openaiClient():
 
 def test_completion_azure():
     try:
-        print("azure chatgpt-v-3 test\n\n")
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             api_key="os.environ/AZURE_API_KEY",
         )
@@ -2863,7 +2862,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="chatgpt-v-3",
+            deployment_id="gpt-4o-new-test",
             model="gpt-3.5-turbo",
             messages=messages,
         )
