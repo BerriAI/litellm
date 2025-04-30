@@ -397,6 +397,13 @@ class LLMCachingHandler:
             return final_embedding_cached_response, embedding_all_elements_cache_hit
         return final_embedding_cached_response, embedding_all_elements_cache_hit
 
+    def combine_usage(self, usage1: Usage, usage2: Usage) -> Usage:
+        return Usage(
+            prompt_tokens=usage1.prompt_tokens + usage2.prompt_tokens,
+            completion_tokens=usage1.completion_tokens + usage2.completion_tokens,
+            total_tokens=usage1.total_tokens + usage2.total_tokens,
+        )
+
     def _combine_cached_embedding_response_with_api_result(
         self,
         _caching_handler_response: CachingHandlerResponse,
@@ -436,6 +443,17 @@ class LLMCachingHandler:
         _caching_handler_response.final_embedding_cached_response._response_ms = (
             end_time - start_time
         ).total_seconds() * 1000
+
+        ## USAGE
+        if (
+            _caching_handler_response.final_embedding_cached_response.usage is not None
+            and embedding_response.usage is not None
+        ):
+            _caching_handler_response.final_embedding_cached_response.usage = self.combine_usage(
+                usage1=_caching_handler_response.final_embedding_cached_response.usage,
+                usage2=embedding_response.usage,
+            )
+
         return _caching_handler_response.final_embedding_cached_response
 
     def _async_log_cache_hit_on_callbacks(

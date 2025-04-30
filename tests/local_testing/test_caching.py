@@ -475,6 +475,14 @@ async def test_embedding_caching_individual_items_and_then_list():
     assert embedding3._hidden_params["cache_hit"] == True
     assert embedding3.usage.prompt_tokens != 0 
 
+    ## with new input, check that prompt tokens increase
+    additional_text = "this is a new text"
+    text_to_embed.append(additional_text)
+    embedding4 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+    assert embedding4.usage.prompt_tokens > embedding3.usage.prompt_tokens
+
 
 
 def test_embedding_caching_azure():
