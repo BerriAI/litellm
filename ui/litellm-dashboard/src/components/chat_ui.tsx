@@ -22,10 +22,12 @@ import {
   Button,
   Divider,
 } from "@tremor/react";
+import { v4 as uuidv4 } from 'uuid';
 
 import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -81,6 +83,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -137,20 +140,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
+    console.log("updateTextUI called with:", role, chunk, model);
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // if the last message is already from this same role, append
+      if (last && last.role === role && !last.isImage) {
+        // build a new object, but only set `model` if it wasn't there already
+        const updated: MessageType = {
+          ...last,
+          content: last.content + chunk,
+          model: last.model ?? model,      // ← only use the passed‐in model on the first chunk
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // otherwise start a brand new assistant bubble
         return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          { 
-            ...lastMessage,
-            content: lastMessage.content + chunk, 
-            model 
+          ...prev,
+          {
+            role,
+            content: chunk,
+            model,                          // model set exactly once here
           },
         ];
-      } else {
-        return [...prevHistory, { role, content: chunk, model }];
       }
     });
   };
@@ -291,13 +302,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
     
+    // Generate new trace ID for a new conversation or use existing one
+    const traceId = messageTraceId || uuidv4();
+    if (!messageTraceId) {
+      setMessageTraceId(traceId);
+    }
+    
     // Update UI with full message object
     setChatHistory([...chatHistory, newUserMessage]);
     setIsLoading(true);
 
     try {
       if (selectedModel) {
-        // Use EndpointType enum for comparison
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -311,7 +327,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             signal,
             updateReasoningContent,
             updateTimingData,
-            updateUsageData
+            updateUsageData,
+            traceId
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -322,6 +339,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal
+          );
+        } else if (endpointType === EndpointType.RESPONSES) {
+          // Create chat history for API call - strip out model field and isImage field
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          
+          await makeOpenAIResponsesRequest(
+            apiChatHistory,
+            (role, delta, model) => updateTextUI(role, delta, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData,
+            traceId
           );
         }
       }
@@ -342,6 +375,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const clearChatHistory = () => {
     setChatHistory([]);
+    setMessageTraceId(null);
     message.success("Chat history cleared.");
   };
 
@@ -417,11 +451,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
-                    ...modelInfo.map((option) => ({
-                      value: option.model_group,
-                      label: option.model_group
-                    })),
-                    { value: 'custom', label: 'Enter custom model' }
+                    ...Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index
+                      })),
+                    { value: 'custom', label: 'Enter custom model', key: 'custom' }
                   ]}
                   style={{ width: "100%" }}
                   showSearch={true}
@@ -592,7 +628,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT 
+                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
                     ? "Type your message... (Shift+Enter for new line)" 
                     : "Describe the image you want to generate..."
                 }

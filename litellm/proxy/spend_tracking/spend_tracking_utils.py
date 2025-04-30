@@ -137,9 +137,6 @@ def get_logging_payload(  # noqa: PLR0915
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = get_litellm_metadata_from_kwargs(kwargs)
-    metadata = _add_proxy_server_request_to_metadata(
-        metadata=metadata, litellm_params=litellm_params
-    )
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
@@ -290,6 +287,13 @@ def get_logging_payload(  # noqa: PLR0915
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
             response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
+                metadata=metadata, litellm_params=litellm_params
+            ),
+            session_id=_get_session_id_for_spend_log(
+                kwargs=kwargs,
+                standard_logging_payload=standard_logging_payload,
+            ),
         )
 
         verbose_proxy_logger.debug(
@@ -303,6 +307,32 @@ def get_logging_payload(  # noqa: PLR0915
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+def _get_session_id_for_spend_log(
+    kwargs: dict,
+    standard_logging_payload: Optional[StandardLoggingPayload],
+) -> str:
+    """
+    Get the session id for the spend log.
+
+    This ensures each spend log is associated with a unique session id.
+
+    """
+    import uuid
+
+    if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("trace_id") is not None
+    ):
+        return str(standard_logging_payload.get("trace_id"))
+
+    # Users can dynamically set the trace_id for each request by passing `litellm_trace_id` in kwargs
+    if kwargs.get("litellm_trace_id") is not None:
+        return str(kwargs.get("litellm_trace_id"))
+
+    # Ensure we always have a session id, if none is provided
+    return str(uuid.uuid4())
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
@@ -427,10 +457,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
-def _add_proxy_server_request_to_metadata(
+def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
-) -> dict:
+) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
     """
@@ -442,8 +472,8 @@ def _add_proxy_server_request_to_metadata(
             _request_body = _proxy_server_request.get("body", {}) or {}
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
-            metadata["proxy_server_request"] = _request_body_json_str
-    return metadata
+            return _request_body_json_str
+    return "{}"
 
 
 def _get_response_for_spend_logs_payload(

@@ -61,7 +61,7 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 
 ## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
-If you decide to use Redis, DO NOT use 'redis_url'. We recommend usig redis port, host, and password params. 
+If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
 `redis_url`is 80 RPS slower
 
@@ -169,7 +169,7 @@ If you plan on using the DB, set a salt key for encrypting/decrypting variables 
 
 Do not change this after adding a model. It is used to encrypt / decrypt your LLM API Key credentials
 
-We recommned - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
+We recommend - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
 
 ```bash
 export LITELLM_SALT_KEY="sk-1234"

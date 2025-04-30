@@ -98,6 +98,9 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
+    ResponsesApiDeploymentCheck,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -339,9 +342,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal[
-            "local", "redis", "redis-semantic", "s3", "disk"
-        ] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
+            "local"  # default to an in-memory cache
+        )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -562,9 +565,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
-        ] = model_group_retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -736,6 +739,12 @@ class Router:
             litellm.afile_content, call_type="afile_content"
         )
         self.responses = self.factory_function(litellm.responses, call_type="responses")
+        self.aget_responses = self.factory_function(
+            litellm.aget_responses, call_type="aget_responses"
+        )
+        self.adelete_responses = self.factory_function(
+            litellm.adelete_responses, call_type="adelete_responses"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -765,6 +774,8 @@ class Router:
                         provider_budget_config=self.provider_budget_config,
                         model_list=self.model_list,
                     )
+                elif pre_call_check == "responses_api_deployment_check":
+                    _callback = ResponsesApiDeploymentCheck()
                 if _callback is not None:
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
@@ -1104,17 +1115,21 @@ class Router:
     ) -> None:
         """
         Adds default litellm params to kwargs, if set.
+
+        Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
         """
-        self.default_litellm_params[
-            metadata_variable_name
-        ] = self.default_litellm_params.pop("metadata", {})
-        for k, v in self.default_litellm_params.items():
-            if (
-                k not in kwargs and v is not None
-            ):  # prioritize model-specific params > default router params
-                kwargs[k] = v
-            elif k == metadata_variable_name:
-                kwargs[metadata_variable_name].update(v)
+        # 1) copy your defaults and pull out metadata
+        defaults = self.default_litellm_params.copy()
+        metadata_defaults = defaults.pop("metadata", {}) or {}
+
+        # 2) add any non-metadata defaults that aren't already in kwargs
+        for key, value in defaults.items():
+            if value is None:
+                continue
+            kwargs.setdefault(key, value)
+
+        # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
+        kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict
@@ -3072,6 +3087,8 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "responses",
+            "aget_responses",
+            "adelete_responses",
             "afile_delete",
             "afile_content",
         ] = "assistants",
@@ -3126,6 +3143,11 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+            elif call_type in ("aget_responses", "adelete_responses"):
+                return await self._init_responses_api_endpoints(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in ("afile_delete", "afile_content"):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -3135,6 +3157,28 @@ class Router:
                 )
 
         return async_wrapper
+
+    async def _init_responses_api_endpoints(
+        self,
+        original_function: Callable,
+        **kwargs,
+    ):
+        """
+        Initialize the Responses API endpoints on the router.
+
+        GET, DELETE Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        """
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(
+            kwargs.get("response_id")
+        )
+        if model_id is not None:
+            kwargs["model"] = model_id
+        return await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            **kwargs,
+        )
 
     async def _pass_through_assistants_endpoint_factory(
         self,
@@ -3243,11 +3287,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=context_window_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3279,11 +3323,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[
-                            List[str]
-                        ] = self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
+                        fallback_model_group: Optional[List[str]] = (
+                            self._get_fallback_model_group_from_fallbacks(
+                                fallbacks=content_policy_fallbacks,
+                                model_group=model_group,
+                            )
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -4979,8 +5023,12 @@ class Router:
                 )
 
             if model_group_info is None:
-                model_group_info = ModelGroupInfo(
-                    model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
+                model_group_info = ModelGroupInfo(  # type: ignore
+                    **{
+                        "model_group": user_facing_model_group_name,
+                        "providers": [llm_provider],
+                        **model_info,
+                    }
                 )
             else:
                 # if max_input_tokens > curr

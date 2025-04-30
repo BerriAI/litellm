@@ -577,11 +577,15 @@ async def generate_key_fn(  # noqa: PLR0915
             request_type="key", **data_json, table_name="key"
         )
 
-        response["soft_budget"] = (
-            data.soft_budget
-        )  # include the user-input soft budget in the response
+        response[
+            "soft_budget"
+        ] = data.soft_budget  # include the user-input soft budget in the response
 
         response = GenerateKeyResponse(**response)
+
+        response.token = (
+            response.token_id
+        )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
@@ -659,8 +663,8 @@ def prepare_key_update_data(
             and (isinstance(budget_duration, str))
             and len(budget_duration) > 0
         ):
-            duration_s = duration_in_seconds(duration=budget_duration)
-            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
@@ -1169,6 +1173,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    sso_user_id: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1247,6 +1252,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "budget_duration": budget_duration,
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
+            "sso_user_id": sso_user_id,
         }
         if teams is not None:
             user_data["teams"] = teams
@@ -1343,10 +1349,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             create_key_response = await prisma_client.insert_data(
                 data=key_data, table_name="key"
             )
+
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
             )
+            key_data["created_at"] = getattr(create_key_response, "created_at", None)
+            key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
@@ -1470,10 +1479,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
-                await prisma_client.db.litellm_verificationtoken.find_many(
-                    where={"token": {"in": tokens}}
-                )
+            _keys_being_deleted: List[
+                LiteLLM_VerificationToken
+            ] = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": tokens}}
             )
 
             # Assuming 'db' is your Prisma Client instance
@@ -1575,9 +1584,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[List] = (
-            await prisma_client.db.litellm_proxymodeltable.find_many()
-        )
+        models: Optional[
+            List
+        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
     except Exception:
         models = None
     # 2. process model table
@@ -1852,6 +1861,7 @@ async def validate_key_list_check(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     prisma_client: PrismaClient,
 ) -> Optional[LiteLLM_UserTable]:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1864,11 +1874,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[BaseModel] = (
-        await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_api_key_dict.user_id},
-            include={"organization_memberships": True},
-        )
+    complete_user_info_db_obj: Optional[
+        BaseModel
+    ] = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
     )
 
     if complete_user_info_db_obj is None:
@@ -1915,6 +1925,31 @@ async def validate_key_list_check(
                 param="organization_id",
                 code=status.HTTP_403_FORBIDDEN,
             )
+
+    if key_hash:
+        try:
+            key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": key_hash},
+            )
+        except Exception:
+            raise ProxyException(
+                message="Key Hash not found.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_hash",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        can_user_query_key_info = await _can_user_query_key_info(
+            user_api_key_dict=user_api_key_dict,
+            key=key_hash,
+            key_info=key_info,
+        )
+        if not can_user_query_key_info:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
     return complete_user_info
 
 
@@ -1929,10 +1964,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[List[BaseModel]] = (
-        await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"in": complete_user_info.teams}}
-        )
+    teams: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": complete_user_info.teams}}
     )
     if teams is None:
         return []
@@ -1963,6 +1998,7 @@ async def list_keys(
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
+    key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
@@ -1995,6 +2031,7 @@ async def list_keys(
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             prisma_client=prisma_client,
         )
 
@@ -2020,6 +2057,7 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
@@ -2056,6 +2094,7 @@ async def _list_key_helper(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
     admin_team_ids: Optional[
@@ -2102,6 +2141,8 @@ async def _list_key_helper(
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
         user_condition["organization_id"] = organization_id
+    if key_hash and isinstance(key_hash, str):
+        user_condition["token"] = key_hash
 
     if user_condition:
         or_conditions.append(user_condition)

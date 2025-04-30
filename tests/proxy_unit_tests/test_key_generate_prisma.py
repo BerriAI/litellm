@@ -1361,8 +1361,19 @@ def test_generate_and_update_key(prisma_client):
             )
             current_time = datetime.now(timezone.utc)
 
-            # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 27
+            # Calculate days until end of current month
+            if current_time.month == 12:
+                end_of_month = datetime(current_time.year + 1, 1, 1, tzinfo=timezone.utc)
+            else:
+                end_of_month = datetime(current_time.year, current_time.month + 1, 1, tzinfo=timezone.utc)
+            days_until_end_of_month = (end_of_month - current_time).days - 1
+
+            # assert budget_reset_at is at the end of the current month
+            # assert days_until_end_of_month >= (budget_reset_at - current_time).days >= days_until_end_of_month - 2 # handle time zone differences
+            # Check that budget_reset_at is on the first day of next month
+            next_month_first_day = end_of_month 
+            # Assert that the reset date is the 1st of next month (0 or 1 day difference)
+            assert abs((budget_reset_at - next_month_first_day).days) <= 1
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1546,7 +1557,7 @@ def test_call_with_key_over_budget(prisma_client):
             )
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1578,10 +1589,10 @@ def test_call_with_key_over_budget(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
@@ -1669,7 +1680,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             proxy_db_logger = _ProxyDBLogger()
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1702,10 +1713,10 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
@@ -1757,7 +1768,7 @@ async def test_call_with_key_over_model_budget(
 
     try:
 
-        # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
+        # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
         model_max_budget = {
             "gpt-4o-mini": {
                 "budget_limit": "0.000001",
@@ -1898,7 +1909,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         )
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
-                "model": "chatgpt-v-2",
+                "model": "chatgpt-v-3",
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
@@ -1924,7 +1935,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         pytest.fail(f"This should have not failed!. They key uses max_budget=None. {e}")
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -1987,7 +1998,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "call_type": "acompletion",
-                "model": "sagemaker-chatgpt-v-2",
+                "model": "sagemaker-chatgpt-v-3",
                 "stream": True,
                 "complete_streaming_response": resp,
                 "litellm_params": {
@@ -2431,7 +2442,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     await proxy_db_logger._PROXY_track_cost_callback(
         kwargs={
             "call_type": "acompletion",
-            "model": "sagemaker-chatgpt-v-2",
+            "model": "sagemaker-chatgpt-v-3",
             "stream": True,
             "complete_streaming_response": resp,
             "litellm_params": {
@@ -2729,10 +2740,14 @@ async def test_create_update_team(prisma_client):
     budget_reset_at = _updated_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.datetime.now(timezone.utc)
 
-    # assert budget_reset_at is 2 days from now
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 2 * 24 * 60 * 60) <= 10
-    )
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+
+    # Calculate days difference - should be close to 2 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 1 <= days_diff <= 2
 
     # now hit team_info
     try:
@@ -2859,12 +2874,18 @@ async def test_update_user_unit_test(prisma_client):
     assert _user_info["rpm_limit"] == 100
     assert _user_info["metadata"] == {"very-new-metadata": "something"}
 
-    # budget reset at should be 10 days from now
+    # budget_reset_at should be at midnight 10 days from now
     budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.now(timezone.utc)
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 10 * 24 * 60 * 60) <= 10
-    )
+    
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+    
+    # Calculate days difference - should be close to 10 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 9 <= days_diff <= 10
 
 
 @pytest.mark.asyncio()

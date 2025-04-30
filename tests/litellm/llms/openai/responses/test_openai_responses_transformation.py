@@ -203,9 +203,6 @@ class TestOpenAIResponsesAPIConfig:
 
         result = self.config.get_complete_url(
             api_base=api_base,
-            model=self.model,
-            api_key="test_api_key",
-            optional_params={},
             litellm_params={},
         )
 
@@ -215,9 +212,6 @@ class TestOpenAIResponsesAPIConfig:
         with patch("litellm.api_base", "https://litellm-api-base.example.com/v1"):
             result = self.config.get_complete_url(
                 api_base=None,
-                model=self.model,
-                api_key="test_api_key",
-                optional_params={},
                 litellm_params={},
             )
 
@@ -231,9 +225,6 @@ class TestOpenAIResponsesAPIConfig:
             ):
                 result = self.config.get_complete_url(
                     api_base=None,
-                    model=self.model,
-                    api_key="test_api_key",
-                    optional_params={},
                     litellm_params={},
                 )
 
@@ -247,9 +238,6 @@ class TestOpenAIResponsesAPIConfig:
             ):
                 result = self.config.get_complete_url(
                     api_base=None,
-                    model=self.model,
-                    api_key="test_api_key",
-                    optional_params={},
                     litellm_params={},
                 )
 
@@ -260,10 +248,26 @@ class TestOpenAIResponsesAPIConfig:
 
         result = self.config.get_complete_url(
             api_base=api_base,
-            model=self.model,
-            api_key="test_api_key",
-            optional_params={},
             litellm_params={},
         )
 
         assert result == "https://custom-openai.example.com/v1/responses"
+
+    def test_get_event_model_class_generic_event(self):
+        """Test that get_event_model_class returns the correct event model class"""
+        from litellm.types.llms.openai import GenericEvent
+
+        event_type = "test"
+        result = self.config.get_event_model_class(event_type)
+        assert result == GenericEvent
+
+    def test_transform_streaming_response_generic_event(self):
+        """Test that transform_streaming_response returns the correct event model class"""
+        from litellm.types.llms.openai import GenericEvent
+
+        chunk = {"type": "test", "test": "test"}
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+        assert isinstance(result, GenericEvent)
+        assert result.type == "test"

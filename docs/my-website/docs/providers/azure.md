@@ -483,7 +483,7 @@ response.stream_to_file(speech_file_path)
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
 Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
 ```shell
 brew update && brew install azure-cli
 ```
@@ -1011,8 +1011,7 @@ Expected Response:
 | Supported Operations | `/v1/responses`|
 | Azure OpenAI Responses API | [Azure OpenAI Responses API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/responses?tabs=python-secure) |
 | Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Responses API Requests |
-
-
+| Supported OpenAI Params | ✅ All OpenAI params are supported, [See here](https://github.com/BerriAI/litellm/blob/0717369ae6969882d149933da48eeb8ab0e691bd/litellm/llms/openai/responses/transformation.py#L23) |
 
 ## Usage
 

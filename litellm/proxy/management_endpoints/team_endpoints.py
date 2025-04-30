@@ -13,8 +13,8 @@ import asyncio
 import json
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, Union, cast
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -56,11 +56,13 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _user_has_admin_view,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -83,6 +85,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
+    TeamListResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -195,7 +198,6 @@ async def new_team(  # noqa: PLR0915
     try:
         from litellm.proxy.proxy_server import (
             create_audit_log_for_update,
-            duration_in_seconds,
             litellm_proxy_admin_name,
             prisma_client,
         )
@@ -310,11 +312,10 @@ async def new_team(  # noqa: PLR0915
 
         # If budget_duration is set, set `budget_reset_at`
         if complete_team_data.budget_duration is not None:
-            duration_s = duration_in_seconds(
-                duration=complete_team_data.budget_duration
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            complete_team_data.budget_reset_at = get_budget_reset_time(
+                budget_duration=complete_team_data.budget_duration, 
             )
-            reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            complete_team_data.budget_reset_at = reset_at
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
         complete_team_data_dict = prisma_client.jsonify_team_object(
@@ -465,7 +466,6 @@ async def update_team(
     from litellm.proxy.auth.auth_checks import _cache_team_object
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
@@ -493,9 +493,9 @@ async def update_team(
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
-        duration_s = duration_in_seconds(duration=data.budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
@@ -535,6 +535,7 @@ async def update_team(
             detail={"error": "Team doesn't exist. Got={}".format(team_row)},
         )
 
+    verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
     await _cache_team_object(
         team_id=team_row.team_id,
         team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
@@ -1552,6 +1553,150 @@ async def list_available_teams(
 
 
 @router.get(
+    "/v2/team/list",
+    tags=["team management"],
+    response_model=TeamListResponse,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_team_v2(
+    http_request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="Only return teams which this 'user_id' belongs to"
+    ),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Only return teams which this 'organization_id' belongs to",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None, description="Only return teams which this 'team_id' belongs to"
+    ),
+    team_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Only return teams which this 'team_alias' belongs to. Supports partial matching.",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=10, description="Number of teams per page", ge=1, le=100
+    ),
+    sort_by: Optional[str] = fastapi.Query(
+        default=None,
+        description="Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')",
+    ),
+    sort_order: str = fastapi.Query(
+        default="asc", description="Sort order ('asc' or 'desc')"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get a paginated list of teams with filtering and sorting options.
+
+    Parameters:
+        user_id: Optional[str]
+            Only return teams which this user belongs to
+        organization_id: Optional[str]
+            Only return teams which belong to this organization
+        team_id: Optional[str]
+            Filter teams by exact team_id match
+        team_alias: Optional[str]
+            Filter teams by partial team_alias match
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
+        sort_by: Optional[str]
+            Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')
+        sort_order: str
+            Sort order ('asc' or 'desc')
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"No db connected. prisma client={prisma_client}"},
+        )
+
+    if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        user_id = user_api_key_dict.user_id
+
+    # Calculate skip and take for pagination
+    skip = (page - 1) * page_size
+
+    # Build where conditions based on provided parameters
+    where_conditions: Dict[str, Any] = {}
+
+    if team_id:
+        where_conditions["team_id"] = team_id
+
+    if team_alias:
+        where_conditions["team_alias"] = {
+            "contains": team_alias,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if organization_id:
+        where_conditions["organization_id"] = organization_id
+
+    if user_id:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        if user_object is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        # Find teams where this user is a member by checking members_with_roles array
+        if team_id is None:
+            where_conditions["team_id"] = {"in": user_object_correct_type.teams}
+        elif team_id in user_object_correct_type.teams:
+            where_conditions["team_id"] = team_id
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User is not a member of team_id={team_id}"},
+            )
+
+    # Build order_by conditions
+    valid_sort_columns = ["team_id", "team_alias", "created_at"]
+    order_by = None
+    if sort_by and sort_by in valid_sort_columns:
+        if sort_order.lower() not in ["asc", "desc"]:
+            sort_order = "asc"
+        order_by = {sort_by: sort_order.lower()}
+
+    # Get teams with pagination
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        where=where_conditions,
+        skip=skip,
+        take=page_size,
+        order=order_by if order_by else {"created_at": "desc"},  # Default sort
+    )
+    # Get total count for pagination
+    total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
+
+    # Calculate total pages
+    total_pages = -(-total_count // page_size)  # Ceiling division
+
+    return {
+        "teams": [team.model_dump() for team in teams] if teams else [],
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+@router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
@@ -2091,7 +2236,6 @@ async def update_team_member_permissions(
     "/team/daily/activity",
     response_model=SpendAnalyticsPaginatedResponse,
     tags=["team management"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_team_daily_activity(
     team_ids: Optional[str] = None,
@@ -2101,6 +2245,8 @@ async def get_team_daily_activity(
     api_key: Optional[str] = None,
     page: int = 1,
     page_size: int = 10,
+    exclude_team_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific teams or all teams.
@@ -2113,20 +2259,82 @@ async def get_team_daily_activity(
         api_key (Optional[str]): Filter by API key.
         page (int): Page number for pagination.
         page_size (int): Number of items per page.
-
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
+    exclude_team_ids_list: Optional[List[str]] = None
+
+    if exclude_team_ids:
+        exclude_team_ids_list = (
+            exclude_team_ids.split(",") if exclude_team_ids else None
+        )
+
+    if not _user_has_admin_view(user_api_key_dict):
+        user_info = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_id_upsert=False,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
+        )
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "User= {} not found".format(user_api_key_dict.user_id)
+                },
+            )
+
+        if team_ids_list is None:
+            team_ids_list = user_info.teams
+        else:
+            # check if all team_ids are in user_info.teams
+            for team_id in team_ids_list:
+                if team_id not in user_info.teams:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "error": "User does not belong to Team= {}. Call `/user/info` to see user's teams".format(
+                                team_id
+                            )
+                        },
+                    )
+
+    ## Fetch team aliases
+    where_condition = {}
+    if team_ids_list:
+        where_condition["team_id"] = {"in": list(team_ids_list)}
+    team_aliases = await prisma_client.db.litellm_teamtable.find_many(
+        where=where_condition
+    )
+    team_alias_metadata = {
+        t.team_id: {"team_alias": t.team_alias} for t in team_aliases
+    }
 
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=team_ids_list,
+        entity_metadata_field=team_alias_metadata,
+        exclude_entity_ids=exclude_team_ids_list,
         start_date=start_date,
         end_date=end_date,
         model=model,

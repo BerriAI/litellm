@@ -110,6 +110,7 @@ interface ViewKeyTableProps {
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   selectedKeyAlias: string | null;
   setSelectedKeyAlias: Setter<string | null>;
+  createClicked: boolean;
 }
 
 interface ItemData {
@@ -159,7 +160,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   organizations,
   setCurrentOrg,
   selectedKeyAlias,
-  setSelectedKeyAlias
+  setSelectedKeyAlias,
+  createClicked
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -171,7 +173,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
   // NEW: Declare filter states for team and key alias.
   const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
-  const [keyAliasFilter, setKeyAliasFilter] = useState<string>("");
+
 
   // Keep the team filter in sync with the incoming prop.
   useEffect(() => {
@@ -186,16 +188,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     currentOrg,
     selectedKeyAlias,
     accessToken,
+    createClicked,
   });
 
-  // Make both refresh and addKey functions available globally
-  if (typeof window !== 'undefined') {
-    window.refreshKeysList = refresh;
-    window.addNewKeyToList = (newKey) => {
-      // Add the new key to the keys list without making an API call
-      setKeys((prevKeys) => [newKey, ...prevKeys]);
-    };
-  }
 
   const handlePageChange = (newPage: number) => {
     refresh({ page: newPage });

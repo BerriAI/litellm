@@ -1,6 +1,11 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: computer-user-agent
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: azure/computer-use-preview
+      truncation: auto
+      api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
+      api_base: os.environ/AZURE_RESPONSES_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_RESPONSES_OPENAI_API_VERSION
+general_settings:
+  store_prompts_in_spend_logs: true
+  block_robots: true
