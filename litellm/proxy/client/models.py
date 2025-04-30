@@ -178,7 +178,41 @@ class ModelsManagementClient:
         if (model_id is None and model_name is None) or (model_id is not None and model_name is not None):
             raise ValueError("Exactly one of model_id or model_name must be provided")
             
-        url = f"{self.base_url}/model/info"
+        # If return_request is True, delegate to get_all_model_info
+        if return_request:
+            return self.get_all_model_info(return_request=True)
+            
+        # Get all models and filter
+        models = self.get_all_model_info()
+        
+        # Find the matching model
+        for model in models:
+            if (model_id and model.get("model_info", {}).get("id") == model_id) or \
+               (model_name and model.get("model_name") == model_name):
+                return model
+                
+        # If we get here, no model was found
+        raise NotFoundError(requests.exceptions.HTTPError(
+            f"Model {'id=' + model_id if model_id else 'model_name=' + model_name} not found",
+            response=requests.Response()  # Empty response since we didn't make a direct request
+        ))
+
+    def get_all_model_info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+        """
+        Get detailed information about all models from the server.
+        
+        Args:
+            return_request (bool): If True, returns the prepared request object instead of executing it
+        
+        Returns:
+            Union[List[Dict[str, Any]], requests.Request]: Either a list of model information dictionaries
+            or a prepared request object if return_request is True
+            
+        Raises:
+            UnauthorizedError: If the request fails with a 401 status code
+            requests.exceptions.RequestException: If the request fails with any other error
+        """
+        url = f"{self.base_url}/v1/model/info"
         request = requests.Request('GET', url, headers=self._get_headers())
         
         if return_request:
@@ -189,20 +223,7 @@ class ModelsManagementClient:
         try:
             response = session.send(request.prepare())
             response.raise_for_status()
-            models = response.json()["data"]
-            
-            # Find the matching model
-            for model in models:
-                if (model_id and model.get("model_info", {}).get("id") == model_id) or \
-                   (model_name and model.get("model_name") == model_name):
-                    return model
-                    
-            # If we get here, no model was found
-            raise NotFoundError(requests.exceptions.HTTPError(
-                f"Model {'id=' + model_id if model_id else 'model_name=' + model_name} not found",
-                response=response
-            ))
-            
+            return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
