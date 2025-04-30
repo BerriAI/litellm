@@ -57,4 +57,53 @@ class ModelsManagementClient:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
+            raise
+
+    def add_model(
+        self,
+        model_name: str,
+        model_params: Dict[str, Any],
+        model_info: Optional[Dict[str, Any]] = None,
+        return_request: bool = False
+    ) -> Union[Dict[str, Any], requests.Request]:
+        """
+        Add a new model to the proxy.
+        
+        Args:
+            model_name (str): Name of the model to add
+            model_params (Dict[str, Any]): Parameters for the model (e.g., model type, api_base, api_key)
+            model_info (Optional[Dict[str, Any]]): Additional information about the model
+            return_request (bool): If True, returns the prepared request object instead of executing it
+        
+        Returns:
+            Union[Dict[str, Any], requests.Request]: Either the response from the server or
+            a prepared request object if return_request is True
+            
+        Raises:
+            UnauthorizedError: If the request fails with a 401 status code
+            requests.exceptions.RequestException: If the request fails with any other error
+        """
+        url = f"{self.base_url}/model/new"
+        
+        data = {
+            "model_name": model_name,
+            "litellm_params": model_params,
+        }
+        if model_info:
+            data["model_info"] = model_info
+            
+        request = requests.Request('POST', url, headers=self._get_headers(), json=data)
+        
+        if return_request:
+            return request
+            
+        # Prepare and send the request
+        session = requests.Session()
+        try:
+            response = session.send(request.prepare())
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise UnauthorizedError(e)
             raise 

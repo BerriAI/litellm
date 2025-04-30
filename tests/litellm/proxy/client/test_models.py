@@ -1,6 +1,6 @@
 import pytest
 import requests
-from litellm.proxy.client.models import ModelsManagementClient
+from litellm.proxy.client import Client, ModelsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
 
 @pytest.fixture
@@ -106,3 +106,125 @@ def test_list_models_invalid_api_keys(base_url, api_key):
     client = ModelsManagementClient(base_url=base_url, api_key=api_key)
     request = client.list_models(return_request=True)
     assert 'Authorization' not in request.headers 
+
+def test_client_initialization(base_url, api_key):
+    """Test that the Client is properly initialized with all resource clients"""
+    client = Client(base_url=base_url, api_key=api_key)
+    
+    # Check base properties
+    assert client.base_url == base_url
+    assert client.api_key == api_key
+    
+    # Check resource clients
+    assert isinstance(client.models, ModelsManagementClient)
+    assert client.models.base_url == base_url
+    assert client.models.api_key == api_key
+
+def test_client_initialization_strips_trailing_slash():
+    """Test that the client properly strips trailing slashes from base_url during initialization"""
+    base_url = "http://localhost:8000/////"
+    client = Client(base_url=base_url)
+    
+    assert client.base_url == "http://localhost:8000"
+    assert client.models.base_url == "http://localhost:8000"
+
+def test_client_without_api_key(base_url):
+    """Test that the client works without an API key"""
+    client = Client(base_url=base_url)
+    
+    assert client.api_key is None
+    assert client.models.api_key is None
+
+def test_add_model_request_creation(client, base_url, api_key):
+    """Test that add_model creates a request with correct URL, headers, and body when return_request=True"""
+    model_name = "gpt-4"
+    model_params = {
+        "model": "openai/gpt-4",
+        "api_base": "https://api.openai.com/v1"
+    }
+    model_info = {
+        "description": "GPT-4 model",
+        "metadata": {"version": "1.0"}
+    }
+    
+    request = client.add_model(
+        model_name=model_name,
+        model_params=model_params,
+        model_info=model_info,
+        return_request=True
+    )
+    
+    # Check request method and URL
+    assert request.method == 'POST'
+    assert request.url == f"{base_url}/model/new"
+    
+    # Check headers
+    assert 'Authorization' in request.headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+    
+    # Check request body
+    assert request.json == {
+        "model_name": model_name,
+        "litellm_params": model_params,
+        "model_info": model_info
+    }
+
+def test_add_model_without_model_info(client):
+    """Test that add_model works correctly without optional model_info"""
+    model_name = "gpt-4"
+    model_params = {
+        "model": "openai/gpt-4",
+        "api_base": "https://api.openai.com/v1"
+    }
+    
+    request = client.add_model(
+        model_name=model_name,
+        model_params=model_params,
+        return_request=True
+    )
+    
+    # Check request body doesn't include model_info
+    assert request.json == {
+        "model_name": model_name,
+        "litellm_params": model_params
+    }
+
+def test_add_model_mock_response(client, requests_mock):
+    """Test add_model with a mocked successful response"""
+    model_name = "gpt-4"
+    model_params = {"model": "openai/gpt-4"}
+    mock_response = {
+        "model_id": "123",
+        "status": "success"
+    }
+    
+    # Mock the POST request
+    requests_mock.post(
+        f"{client.base_url}/model/new",
+        json=mock_response
+    )
+    
+    response = client.add_model(
+        model_name=model_name,
+        model_params=model_params
+    )
+    
+    assert response == mock_response
+
+def test_add_model_unauthorized_error(client, requests_mock):
+    """Test that add_model raises UnauthorizedError for 401 responses"""
+    model_name = "gpt-4"
+    model_params = {"model": "openai/gpt-4"}
+    
+    # Mock a 401 response
+    requests_mock.post(
+        f"{client.base_url}/model/new",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError):
+        client.add_model(
+            model_name=model_name,
+            model_params=model_params
+        ) 
