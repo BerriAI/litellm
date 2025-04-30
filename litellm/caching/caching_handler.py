@@ -689,7 +689,6 @@ class LLMCachingHandler:
             ):
                 if (
                     isinstance(result, EmbeddingResponse)
-                    and isinstance(new_kwargs["input"], list)
                     and litellm.cache is not None
                     and not isinstance(
                         litellm.cache.cache, S3Cache
