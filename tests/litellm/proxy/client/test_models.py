@@ -15,9 +15,9 @@ def api_key():
 def client(base_url, api_key):
     return ModelsManagementClient(base_url=base_url, api_key=api_key)
 
-def test_list_models_request_creation(client, base_url, api_key):
-    """Test that list_models creates a request with correct URL and headers when return_request=True"""
-    request = client.list_models(return_request=True)
+def test_list_request_creation(client, base_url, api_key):
+    """Test that list creates a request with correct URL and headers when return_request=True"""
+    request = client.list(return_request=True)
     
     # Check request method
     assert request.method == 'GET'
@@ -30,10 +30,10 @@ def test_list_models_request_creation(client, base_url, api_key):
     assert 'Authorization' in request.headers
     assert request.headers['Authorization'] == f"Bearer {api_key}"
 
-def test_list_models_request_no_auth(base_url):
-    """Test that list_models creates a request without auth header when no api_key is provided"""
+def test_list_request_no_auth(base_url):
+    """Test that list creates a request without auth header when no api_key is provided"""
     client = ModelsManagementClient(base_url=base_url)  # No API key
-    request = client.list_models(return_request=True)
+    request = client.list(return_request=True)
     
     # Check URL is still correct
     assert request.url == f"{base_url}/models"
@@ -47,19 +47,14 @@ def test_list_models_request_no_auth(base_url):
     ("https://api.example.com", "https://api.example.com/models"),
     ("http://127.0.0.1:3000", "http://127.0.0.1:3000/models"),
 ])
-def test_list_models_url_variants(base_url, expected):
-    """Test that list_models handles different base URL formats correctly"""
+def test_list_url_variants(base_url, expected):
+    """Test that list handles different base URL formats correctly"""
     client = ModelsManagementClient(base_url=base_url)
-    request = client.list_models(return_request=True)
+    request = client.list(return_request=True)
     assert request.url == expected
 
-def test_client_initialization_strips_trailing_slash():
-    """Test that the client properly strips trailing slashes from base_url during initialization"""
-    client = ModelsManagementClient(base_url="http://localhost:8000/////")
-    assert client.base_url == "http://localhost:8000"
-    
-def test_list_models_with_mock_response(client, requests_mock):
-    """Test the full list_models execution with a mocked response"""
+def test_list_with_mock_response(client, requests_mock):
+    """Test the full list execution with a mocked response"""
     mock_data = {
         "data": [
             {"id": "gpt-4", "type": "model"},
@@ -68,13 +63,13 @@ def test_list_models_with_mock_response(client, requests_mock):
     }
     requests_mock.get("http://localhost:8000/models", json=mock_data)
     
-    response = client.list_models()
+    response = client.list()
     assert response == mock_data["data"]
     assert len(response) == 2
     assert response[0]["id"] == "gpt-4"
 
-def test_list_models_unauthorized_error(client, requests_mock):
-    """Test that list_models raises UnauthorizedError for 401 responses"""
+def test_list_unauthorized_error(client, requests_mock):
+    """Test that list raises UnauthorizedError for 401 responses"""
     requests_mock.get(
         "http://localhost:8000/models",
         status_code=401,
@@ -82,11 +77,11 @@ def test_list_models_unauthorized_error(client, requests_mock):
     )
     
     with pytest.raises(UnauthorizedError) as exc_info:
-        client.list_models()
+        client.list()
     assert exc_info.value.orig_exception.response.status_code == 401
 
-def test_list_models_other_errors(client, requests_mock):
-    """Test that list_models raises normal HTTPError for non-401 errors"""
+def test_list_other_errors(client, requests_mock):
+    """Test that list raises normal HTTPError for non-401 errors"""
     requests_mock.get(
         "http://localhost:8000/models",
         status_code=500,
@@ -94,18 +89,72 @@ def test_list_models_other_errors(client, requests_mock):
     )
     
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
-        client.list_models()
+        client.list()
     assert exc_info.value.response.status_code == 500
 
 @pytest.mark.parametrize("api_key", [
     "",  # Empty string
     None,  # None value
 ])
-def test_list_models_invalid_api_keys(base_url, api_key):
+def test_list_invalid_api_keys(base_url, api_key):
     """Test that the client handles invalid API keys appropriately"""
     client = ModelsManagementClient(base_url=base_url, api_key=api_key)
-    request = client.list_models(return_request=True)
-    assert 'Authorization' not in request.headers 
+    request = client.list(return_request=True)
+    assert 'Authorization' not in request.headers
+
+def test_client_initialization_strips_trailing_slash():
+    """Test that the client properly strips trailing slashes from base_url during initialization"""
+    client = ModelsManagementClient(base_url="http://localhost:8000/////")
+    assert client.base_url == "http://localhost:8000"
+    
+def test_list_with_mock_response(client, requests_mock):
+    """Test the full list execution with a mocked response"""
+    mock_data = {
+        "data": [
+            {"id": "gpt-4", "type": "model"},
+            {"id": "gpt-3.5-turbo", "type": "model"}
+        ]
+    }
+    requests_mock.get("http://localhost:8000/models", json=mock_data)
+    
+    response = client.list()
+    assert response == mock_data["data"]
+    assert len(response) == 2
+    assert response[0]["id"] == "gpt-4"
+
+def test_list_unauthorized_error(client, requests_mock):
+    """Test that list raises UnauthorizedError for 401 responses"""
+    requests_mock.get(
+        "http://localhost:8000/models",
+        status_code=401,
+        json={"error": "Invalid API key"}
+    )
+    
+    with pytest.raises(UnauthorizedError) as exc_info:
+        client.list()
+    assert exc_info.value.orig_exception.response.status_code == 401
+
+def test_list_other_errors(client, requests_mock):
+    """Test that list raises normal HTTPError for non-401 errors"""
+    requests_mock.get(
+        "http://localhost:8000/models",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.list()
+    assert exc_info.value.response.status_code == 500
+
+@pytest.mark.parametrize("api_key", [
+    "",  # Empty string
+    None,  # None value
+])
+def test_list_invalid_api_keys(base_url, api_key):
+    """Test that the client handles invalid API keys appropriately"""
+    client = ModelsManagementClient(base_url=base_url, api_key=api_key)
+    request = client.list(return_request=True)
+    assert 'Authorization' not in request.headers
 
 def test_client_initialization(base_url, api_key):
     """Test that the Client is properly initialized with all resource clients"""
@@ -539,4 +588,75 @@ def test_get_all_model_info_server_error(client, requests_mock):
     
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.get_all_model_info()
+    assert exc_info.value.response.status_code == 500
+
+def test_get_all_model_group_info_request_creation(client, base_url, api_key):
+    """Test that get_all_model_group_info creates a correct request"""
+    request = client.get_all_model_group_info(return_request=True)
+    
+    # Check request method and URL
+    assert request.method == 'GET'
+    assert request.url == f"{base_url}/model_group/info"
+    
+    # Check headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+
+def test_get_all_model_group_info_success(client, requests_mock):
+    """Test get_all_model_group_info with a successful response"""
+    mock_response = {
+        "data": [
+            {
+                "model_group_name": "gpt4-group",
+                "models": ["gpt-4", "gpt-4-32k"],
+                "litellm_params": {
+                    "timeout": 30,
+                    "max_retries": 3
+                }
+            },
+            {
+                "model_group_name": "azure-group",
+                "models": ["azure-gpt-4", "azure-gpt-35"],
+                "litellm_params": {
+                    "api_base": "https://azure-endpoint.com",
+                    "api_version": "2023-05-15"
+                }
+            }
+        ]
+    }
+    
+    requests_mock.get(
+        f"{client.base_url}/model_group/info",
+        json=mock_response
+    )
+    
+    response = client.get_all_model_group_info()
+    assert response == mock_response["data"]
+    assert len(response) == 2
+    assert response[0]["model_group_name"] == "gpt4-group"
+    assert response[1]["model_group_name"] == "azure-group"
+    assert "models" in response[0]
+    assert "litellm_params" in response[1]
+
+def test_get_all_model_group_info_unauthorized(client, requests_mock):
+    """Test that get_all_model_group_info raises UnauthorizedError for unauthorized requests"""
+    requests_mock.get(
+        f"{client.base_url}/model_group/info",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError) as exc_info:
+        client.get_all_model_group_info()
+    assert exc_info.value.orig_exception.response.status_code == 401
+
+def test_get_all_model_group_info_server_error(client, requests_mock):
+    """Test that get_all_model_group_info raises HTTPError for server errors"""
+    requests_mock.get(
+        f"{client.base_url}/model_group/info",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.get_all_model_group_info()
     assert exc_info.value.response.status_code == 500 
