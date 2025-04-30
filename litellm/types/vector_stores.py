@@ -30,7 +30,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     updated_at: Optional[int]
 
     # credential fields
-    credential_params: Optional[CredentialLiteLLMParams]
+    litellm_credential_name: Optional[str]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):

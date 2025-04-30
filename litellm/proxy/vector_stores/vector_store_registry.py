@@ -8,15 +8,7 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_VectorStoreConfig,
-    SupportedVectorStoreIntegrations,
 )
-
-from .vector_store_initializers import initialize_bedrock_vector_store
-
-# mapping of the vector store custom_llm_provider to the vector store initializer
-VECTOR_STORE_REGISTRY = {
-    SupportedVectorStoreIntegrations.BEDROCK.value: initialize_bedrock_vector_store,
-}
 
 
 class VectorStoreManager:
@@ -59,8 +51,6 @@ class VectorStoreManager:
                 or int(time.time()),
                 updated_at=vector_store_litellm_params.get("updated_at")
                 or int(time.time()),
-                # store any extra / additional litellm params
-                litellm_params=vector_store_litellm_params,
             )
             self.vector_stores.append(litellm_managed_vector_store)
 

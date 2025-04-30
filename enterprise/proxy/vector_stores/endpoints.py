@@ -80,13 +80,7 @@ async def new_vector_store(
         
         if vector_store.get("vector_store_metadata") is not None:
             vector_store["vector_store_metadata"] = safe_dumps(vector_store.get("vector_store_metadata"))
-        
-        # Encrypt credential_params if user provided credentials to use for vector stores
-        if vector_store.get("credential_params") is not None:
-            for key, value in vector_store.get("credential_params").items():
-                if isinstance(value, str):
-                    vector_store["credential_params"][key] = encrypt_value(value)
-        
+                
         new_vector_store = await prisma_client.db.litellm_managedvectorstorestable.create(
             data=vector_store
         )

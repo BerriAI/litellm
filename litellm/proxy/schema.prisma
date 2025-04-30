@@ -434,5 +434,5 @@ model LiteLLM_ManagedVectorStoresTable {
   vector_store_metadata Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
-  credential_params Json?
+  litellm_credential_name String?
 }
