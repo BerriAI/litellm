@@ -227,4 +227,54 @@ def test_add_model_unauthorized_error(client, requests_mock):
         client.add_model(
             model_name=model_name,
             model_params=model_params
-        ) 
+        )
+
+def test_delete_model_request_creation(client, base_url, api_key):
+    """Test that delete_model creates a request with correct URL, headers, and body when return_request=True"""
+    model_id = "model-123"
+    
+    request = client.delete_model(
+        model_id=model_id,
+        return_request=True
+    )
+    
+    # Check request method and URL
+    assert request.method == 'POST'
+    assert request.url == f"{base_url}/model/delete"
+    
+    # Check headers
+    assert 'Authorization' in request.headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+    
+    # Check request body
+    assert request.json == {"id": model_id}
+
+def test_delete_model_mock_response(client, requests_mock):
+    """Test delete_model with a mocked successful response"""
+    model_id = "model-123"
+    mock_response = {
+        "message": "Model: model-123 deleted successfully"
+    }
+    
+    # Mock the POST request
+    requests_mock.post(
+        f"{client.base_url}/model/delete",
+        json=mock_response
+    )
+    
+    response = client.delete_model(model_id=model_id)
+    assert response == mock_response
+
+def test_delete_model_unauthorized_error(client, requests_mock):
+    """Test that delete_model raises UnauthorizedError for 401 responses"""
+    model_id = "model-123"
+    
+    # Mock a 401 response
+    requests_mock.post(
+        f"{client.base_url}/model/delete",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError):
+        client.delete_model(model_id=model_id) 
