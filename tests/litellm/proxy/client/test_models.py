@@ -1,0 +1,108 @@
+import pytest
+import requests
+from litellm.proxy.client.models import ModelsManagementClient
+from litellm.proxy.client.exceptions import UnauthorizedError
+
+@pytest.fixture
+def base_url():
+    return "http://localhost:8000"
+
+@pytest.fixture
+def api_key():
+    return "test-api-key"
+
+@pytest.fixture
+def client(base_url, api_key):
+    return ModelsManagementClient(base_url=base_url, api_key=api_key)
+
+def test_list_models_request_creation(client, base_url, api_key):
+    """Test that list_models creates a request with correct URL and headers when return_request=True"""
+    request = client.list_models(return_request=True)
+    
+    # Check request method
+    assert request.method == 'GET'
+    
+    # Check URL construction
+    expected_url = f"{base_url}/models"
+    assert request.url == expected_url
+    
+    # Check authorization header
+    assert 'Authorization' in request.headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+
+def test_list_models_request_no_auth(base_url):
+    """Test that list_models creates a request without auth header when no api_key is provided"""
+    client = ModelsManagementClient(base_url=base_url)  # No API key
+    request = client.list_models(return_request=True)
+    
+    # Check URL is still correct
+    assert request.url == f"{base_url}/models"
+    
+    # Check that there's no authorization header
+    assert 'Authorization' not in request.headers
+
+@pytest.mark.parametrize("base_url,expected", [
+    ("http://localhost:8000", "http://localhost:8000/models"),
+    ("http://localhost:8000/", "http://localhost:8000/models"),  # With trailing slash
+    ("https://api.example.com", "https://api.example.com/models"),
+    ("http://127.0.0.1:3000", "http://127.0.0.1:3000/models"),
+])
+def test_list_models_url_variants(base_url, expected):
+    """Test that list_models handles different base URL formats correctly"""
+    client = ModelsManagementClient(base_url=base_url)
+    request = client.list_models(return_request=True)
+    assert request.url == expected
+
+def test_client_initialization_strips_trailing_slash():
+    """Test that the client properly strips trailing slashes from base_url during initialization"""
+    client = ModelsManagementClient(base_url="http://localhost:8000/////")
+    assert client.base_url == "http://localhost:8000"
+    
+def test_list_models_with_mock_response(client, requests_mock):
+    """Test the full list_models execution with a mocked response"""
+    mock_data = {
+        "data": [
+            {"id": "gpt-4", "type": "model"},
+            {"id": "gpt-3.5-turbo", "type": "model"}
+        ]
+    }
+    requests_mock.get("http://localhost:8000/models", json=mock_data)
+    
+    response = client.list_models()
+    assert response == mock_data["data"]
+    assert len(response) == 2
+    assert response[0]["id"] == "gpt-4"
+
+def test_list_models_unauthorized_error(client, requests_mock):
+    """Test that list_models raises UnauthorizedError for 401 responses"""
+    requests_mock.get(
+        "http://localhost:8000/models",
+        status_code=401,
+        json={"error": "Invalid API key"}
+    )
+    
+    with pytest.raises(UnauthorizedError) as exc_info:
+        client.list_models()
+    assert exc_info.value.orig_exception.response.status_code == 401
+
+def test_list_models_other_errors(client, requests_mock):
+    """Test that list_models raises normal HTTPError for non-401 errors"""
+    requests_mock.get(
+        "http://localhost:8000/models",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.list_models()
+    assert exc_info.value.response.status_code == 500
+
+@pytest.mark.parametrize("api_key", [
+    "",  # Empty string
+    None,  # None value
+])
+def test_list_models_invalid_api_keys(base_url, api_key):
+    """Test that the client handles invalid API keys appropriately"""
+    client = ModelsManagementClient(base_url=base_url, api_key=api_key)
+    request = client.list_models(return_request=True)
+    assert 'Authorization' not in request.headers 
