@@ -669,7 +669,11 @@ class Cache:
     async def delete_cache_keys(self, keys):
         cache_delete_cache_keys = getattr(self.cache, "delete_cache_keys")
         if cache_delete_cache_keys:
-            return await cache_delete_cache_keys(keys)
+            if self.type == LiteLLMCacheType.LOCAL:
+                cache_delete_cache_keys(keys)
+            else:
+                await cache_delete_cache_keys(keys)
+
         return None
 
     async def disconnect(self):

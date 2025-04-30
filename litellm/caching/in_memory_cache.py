@@ -192,9 +192,11 @@ class InMemoryCache(BaseCache):
     async def disconnect(self):
         pass
 
-    def delete_cache(self, key):
-        self.cache_dict.pop(key, None)
-        self.ttl_dict.pop(key, None)
+    def delete_cache_keys(self, keys: List[str]):
+        for key in keys:
+            self.cache_dict.pop(key, None)
+            self.ttl_dict.pop(key, None)
+        
 
     async def async_get_ttl(self, key: str) -> Optional[int]:
         """
