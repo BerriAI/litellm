@@ -12,11 +12,12 @@ import {
   Select as Select2,
   message,
   Tooltip,
+  Button as AntButton,
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { vectorStoreInfoCall } from "../networking";
+import { vectorStoreInfoCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
-import { Providers } from "../provider_info_helpers";
+import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -37,6 +38,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
   const [metadataString, setMetadataString] = useState<string>("{}");
+  const [credentials, setCredentials] = useState<CredentialItem[]>([]);
 
   const fetchVectorStoreDetails = async () => {
     if (!accessToken) return;
@@ -68,8 +70,20 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     }
   };
 
+  const fetchCredentials = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await credentialListCall(accessToken);
+      console.log("List credentials response:", response);
+      setCredentials(response.credentials || []);
+    } catch (error) {
+      console.error("Error fetching credentials:", error);
+    }
+  };
+
   useEffect(() => {
     fetchVectorStoreDetails();
+    fetchCredentials();
   }, [vectorStoreId, accessToken]);
 
   const handleSave = async (values: any) => {
@@ -163,11 +177,72 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
               rules={[{ required: true, message: "Please select a provider" }]}
             >
               <Select2>
-                <Select2.Option value="bedrock">
-                  {Providers.Bedrock}
-                </Select2.Option>
+                {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
+                  // Currently only showing Bedrock since it's the only supported provider
+                  if (providerEnum === 'Bedrock') {
+                    return (
+                      <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
+                        <div className="flex items-center space-x-2">
+                          <img
+                            src={providerLogoMap[providerDisplayName]}
+                            alt={`${providerEnum} logo`}
+                            className="w-5 h-5"
+                            onError={(e) => {
+                              // Create a div with provider initial as fallback
+                              const target = e.target as HTMLImageElement;
+                              const parent = target.parentElement;
+                              if (parent) {
+                                const fallbackDiv = document.createElement('div');
+                                fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                fallbackDiv.textContent = providerDisplayName.charAt(0);
+                                parent.replaceChild(fallbackDiv, target);
+                              }
+                            }}
+                          />
+                          <span>{providerDisplayName}</span>
+                        </div>
+                      </Select2.Option>
+                    );
+                  }
+                  return null;
+                })}
               </Select2>
             </Form.Item>
+
+            {/* Credentials */}
+            <div className="mb-4">
+              <Text className="text-sm text-gray-500 mb-2">
+                Either select existing credentials OR enter provider credentials below
+              </Text>
+            </div>
+
+            <Form.Item
+              label="Existing Credentials"
+              name="litellm_credential_name"
+            >
+              <Select2
+                showSearch
+                placeholder="Select or search for existing credentials"
+                optionFilterProp="children"
+                filterOption={(input, option) =>
+                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={[
+                  { value: null, label: 'None' },
+                  ...credentials.map((credential) => ({
+                    value: credential.credential_name,
+                    label: credential.credential_name
+                  }))
+                ]}
+                allowClear
+              />
+            </Form.Item>
+
+            <div className="flex items-center my-4">
+              <div className="flex-grow border-t border-gray-200"></div>
+              <span className="px-4 text-gray-500 text-sm">OR</span>
+              <div className="flex-grow border-t border-gray-200"></div>
+            </div>
 
             <Form.Item
               label={
@@ -179,11 +254,17 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                 </span>
               }
             >
+              <Input.TextArea 
+                rows={4} 
+                value={metadataString}
+                onChange={(e) => setMetadataString(e.target.value)}
+                placeholder='{"key": "value"}'
+              />
             </Form.Item>
 
             <div className="flex justify-end space-x-2">
-              <Button onClick={() => setIsEditing(false)}>Cancel</Button>
-              <Button type="submit">Save Changes</Button>
+              <AntButton onClick={() => setIsEditing(false)}>Cancel</AntButton>
+              <AntButton type="primary" htmlType="submit">Save Changes</AntButton>
             </div>
           </Form>
         </Card>
@@ -206,11 +287,50 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
               </div>
               <div>
                 <Text className="font-medium">Provider</Text>
-                <Badge color="blue">
-                  {vectorStoreDetails.custom_llm_provider === "bedrock" 
-                    ? Providers.Bedrock 
-                    : vectorStoreDetails.custom_llm_provider}
-                </Badge>
+                <div className="flex items-center space-x-2 mt-1">
+                  {(() => {
+                    const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
+                    const { displayName, logo } = (() => {
+                      // Find the enum key by matching provider_map values
+                      const enumKey = Object.keys(provider_map).find(
+                        key => provider_map[key].toLowerCase() === provider.toLowerCase()
+                      );
+                      
+                      if (!enumKey) {
+                        return { displayName: provider, logo: "" };
+                      }
+                      
+                      // Get the display name from Providers enum and logo from map
+                      const displayName = Providers[enumKey as keyof typeof Providers];
+                      const logo = providerLogoMap[displayName];
+                      
+                      return { displayName, logo };
+                    })();
+                    
+                    return (
+                      <>
+                        {logo && (
+                          <img 
+                            src={logo} 
+                            alt={`${displayName} logo`} 
+                            className="w-5 h-5"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              const parent = target.parentElement;
+                              if (parent) {
+                                const fallbackDiv = document.createElement('div');
+                                fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                fallbackDiv.textContent = displayName.charAt(0);
+                                parent.replaceChild(fallbackDiv, target);
+                              }
+                            }}
+                          />
+                        )}
+                        <Badge color="blue">{displayName}</Badge>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
               <div>
                 <Text className="font-medium">Metadata</Text>

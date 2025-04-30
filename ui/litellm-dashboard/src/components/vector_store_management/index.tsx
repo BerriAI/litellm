@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   Card,
   Icon,
-  Button,
+  Button as TremorButton,
   Col,
   Text,
   Grid,
@@ -18,14 +18,15 @@ import {
   Select as Select2,
   message,
   Tooltip,
-  Input
+  Input,
+  Button
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import VectorStoreInfoView from "./vector_store_info";
-import { vectorStoreCreateCall, vectorStoreListCall, vectorStoreDeleteCall } from "../networking";
+import { vectorStoreCreateCall, vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
-import { Providers } from "../provider_info_helpers";
+import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
 interface VectorStoreProps {
   accessToken: string | null;
   userID: string | null;
@@ -46,6 +47,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [form] = Form.useForm();
   const [metadataJson, setMetadataJson] = useState("{}");
+  const [credentials, setCredentials] = useState<CredentialItem[]>([]);
 
   const fetchVectorStores = async () => {
     if (!accessToken) return;
@@ -59,8 +61,21 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     }
   };
 
+  const fetchCredentials = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await credentialListCall(accessToken);
+      console.log("List credentials response:", response);
+      setCredentials(response.credentials || []);
+    } catch (error) {
+      console.error("Error fetching credentials:", error);
+      message.error("Error fetching credentials: " + error);
+    }
+  };
+
   const handleRefreshClick = () => {
     fetchVectorStores();
+    fetchCredentials();
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
   };
@@ -116,6 +131,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
 
   useEffect(() => {
     fetchVectorStores();
+    fetchCredentials();
   }, [accessToken]);
 
   return (
@@ -154,12 +170,12 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
             <p>You can use vector stores to store and retrieve LLM embeddings. Currently, we support Amazon Bedrock vector stores.</p>
           </Text>
 
-          <Button
+          <TremorButton
             className="mb-4"
             onClick={() => setIsCreateModalVisible(true)}
           >
             + Create Vector Store
-          </Button>
+          </TremorButton>
 
           <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
             <Col numColSpan={1}>
@@ -230,11 +246,72 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
                 initialValue="bedrock"
               >
                 <Select2>
-                  <Select2.Option value="bedrock">
-                    {Providers.Bedrock}
-                  </Select2.Option>
+                  {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
+                    // Currently only showing Bedrock since it's the only supported provider
+                    if (providerEnum === 'Bedrock') {
+                      return (
+                        <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
+                          <div className="flex items-center space-x-2">
+                            <img
+                              src={providerLogoMap[providerDisplayName]}
+                              alt={`${providerEnum} logo`}
+                              className="w-5 h-5"
+                              onError={(e) => {
+                                // Create a div with provider initial as fallback
+                                const target = e.target as HTMLImageElement;
+                                const parent = target.parentElement;
+                                if (parent) {
+                                  const fallbackDiv = document.createElement('div');
+                                  fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                  fallbackDiv.textContent = providerDisplayName.charAt(0);
+                                  parent.replaceChild(fallbackDiv, target);
+                                }
+                              }}
+                            />
+                            <span>{providerDisplayName}</span>
+                          </div>
+                        </Select2.Option>
+                      );
+                    }
+                    return null;
+                  })}
                 </Select2>
               </Form.Item>
+
+              {/* Credentials dropdown */}
+              <div className="mb-4">
+                <Text className="text-sm text-gray-500 mb-2">
+                  Either select existing credentials OR enter provider credentials below
+                </Text>
+              </div>
+
+              <Form.Item
+                label="Existing Credentials"
+                name="litellm_credential_name"
+              >
+                <Select2
+                  showSearch
+                  placeholder="Select or search for existing credentials"
+                  optionFilterProp="children"
+                  filterOption={(input, option) =>
+                    (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={[
+                    { value: null, label: 'None' },
+                    ...credentials.map((credential) => ({
+                      value: credential.credential_name,
+                      label: credential.credential_name
+                    }))
+                  ]}
+                  allowClear
+                />
+              </Form.Item>
+
+              <div className="flex items-center my-4">
+                <div className="flex-grow border-t border-gray-200"></div>
+                <span className="px-4 text-gray-500 text-sm">OR</span>
+                <div className="flex-grow border-t border-gray-200"></div>
+              </div>
 
               <Form.Item
                 label={
@@ -246,26 +323,33 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
                   </span>
                 }
               >
+                <Input.TextArea
+                  rows={4}
+                  value={metadataJson}
+                  onChange={(e) => setMetadataJson(e.target.value)}
+                  placeholder='{"key": "value"}'
+                />
               </Form.Item>
 
-              <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
-                <Button type="submit">Create Vector Store</Button>
-              </Form.Item>
+              <div className="flex justify-end space-x-3">
+                <Button onClick={() => setIsCreateModalVisible(false)}>
+                  Cancel
+                </Button>
+                <Button type="primary" htmlType="submit">
+                  Create
+                </Button>
+              </div>
             </Form>
           </Modal>
 
           {/* Delete Confirmation Modal */}
           <Modal
-            title="Confirm Delete"
+            title="Delete Vector Store"
             visible={isDeleteModalOpen}
             onOk={confirmDelete}
-            onCancel={() => {
-              setIsDeleteModalOpen(false);
-              setVectorStoreToDelete(null);
-            }}
+            onCancel={() => setIsDeleteModalOpen(false)}
           >
-            <p>Are you sure you want to delete the vector store "{vectorStoreToDelete}"?</p>
-            <p>This action cannot be undone.</p>
+            <p>Are you sure you want to delete this vector store? This action cannot be undone.</p>
           </Modal>
         </div>
       )}
