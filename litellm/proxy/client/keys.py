@@ -65,7 +65,7 @@ class KeysManagementClient:
             requests.exceptions.RequestException: If the request fails with any other error
         """
         url = f"{self._base_url}/key/list"
-        params = {}
+        params: Dict[str, Any] = {}
 
         # Add optional query parameters
         if page is not None:
@@ -142,7 +142,7 @@ class KeysManagementClient:
         """
         url = f"{self._base_url}/key/generate"
 
-        data = {}
+        data: Dict[str, Any] = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:

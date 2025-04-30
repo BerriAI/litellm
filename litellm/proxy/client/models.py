@@ -173,10 +173,13 @@ class ModelsManagementClient:
 
         # If return_request is True, delegate to info
         if return_request:
-            return self.info(return_request=True)
+            result = self.info(return_request=True)
+            assert isinstance(result, requests.Request)
+            return result
 
         # Get all models and filter
         models = self.info()
+        assert isinstance(models, List)
 
         # Find the matching model
         for model in models:
@@ -186,9 +189,15 @@ class ModelsManagementClient:
                 return model
 
         # If we get here, no model was found
+        if model_id:
+            msg = f"Model with id={model_id} not found"
+        elif model_name:
+            msg = f"Model with model_name={model_name} not found"
+        else:
+            msg = "Unknown error trying to find model"
         raise NotFoundError(
             requests.exceptions.HTTPError(
-                f"Model {'id=' + model_id if model_id else 'model_name=' + model_name} not found",
+                msg,
                 response=requests.Response(),  # Empty response since we didn't make a direct request
             )
         )

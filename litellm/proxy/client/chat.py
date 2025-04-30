@@ -66,7 +66,7 @@ class ChatClient:
         url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data = {"model": model, "messages": messages}
+        data: Dict[str, Any] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
