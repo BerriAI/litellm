@@ -1548,6 +1548,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = (
                 api_base
                 or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -1704,6 +1705,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -1757,6 +1759,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -3543,6 +3546,7 @@ def embedding(  # noqa: PLR0915
             api_base = (
                 api_base
                 or litellm.api_base
+                or get_secret_str("OPENAI_BASE_URL")
                 or get_secret_str("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -5251,6 +5255,7 @@ def transcription(
         api_base = (
             api_base
             or litellm.api_base
+            or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )  # type: ignore
@@ -5421,6 +5426,7 @@ def speech(  # noqa: PLR0915
         api_base = (
             api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )  # type: ignore
