@@ -214,6 +214,12 @@ def test_generate_request_full(client):
         models=["gpt-4", "gpt-3.5-turbo"],
         aliases={"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
         spend=100.0,
+        duration="24h",
+        key_alias="test-key-alias",
+        team_id="team123",
+        user_id="user456",
+        budget_id="budget789",
+        config={"max_parallel_requests": 5},
         return_request=True
     )
 
@@ -221,7 +227,13 @@ def test_generate_request_full(client):
         "api_key": "new-test-key",
         "models": ["gpt-4", "gpt-3.5-turbo"],
         "aliases": {"gpt4": "gpt-4", "turbo": "gpt-3.5-turbo"},
-        "spend": 100.0
+        "spend": 100.0,
+        "duration": "24h",
+        "key_alias": "test-key-alias",
+        "team_id": "team123",
+        "user_id": "user456",
+        "budget_id": "budget789",
+        "config": {"max_parallel_requests": 5}
     }
 
 
@@ -232,12 +244,24 @@ def test_generate_mock_response(client, requests_mock):
         "expires": "2024-12-31T23:59:59Z",
         "models": ["gpt-4"],
         "aliases": {"gpt4": "gpt-4"},
-        "spend": 100.0
+        "spend": 100.0,
+        "key_alias": "test-key-alias",
+        "team_id": "team123",
+        "user_id": "user456",
+        "budget_id": "budget789",
+        "config": {"max_parallel_requests": 5}
     }
 
     requests_mock.post(f"{client._base_url}/key/generate", json=mock_response)
 
-    response = client.generate(api_key="new-test-key")
+    response = client.generate(
+        api_key="new-test-key",
+        key_alias="test-key-alias",
+        team_id="team123",
+        user_id="user456",
+        budget_id="budget789",
+        config={"max_parallel_requests": 5}
+    )
     assert response == mock_response
 
 

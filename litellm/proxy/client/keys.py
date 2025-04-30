@@ -108,6 +108,12 @@ class KeysManagementClient:
         models: Optional[List[str]] = None,
         aliases: Optional[Dict[str, str]] = None,
         spend: Optional[float] = None,
+        duration: Optional[str] = None,
+        key_alias: Optional[str] = None,
+        team_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        budget_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
         return_request: bool = False,
     ) -> Union[Dict[str, Any], requests.Request]:
         """
@@ -120,6 +126,12 @@ class KeysManagementClient:
             models (Optional[List[str]]): List of allowed models for this key
             aliases (Optional[Dict[str, str]]): Model alias mappings
             spend (Optional[float]): Maximum spend limit for this key
+            duration (Optional[str]): Duration for which the key is valid (e.g. "24h", "7d")
+            key_alias (Optional[str]): Alias/name for the key for easier identification
+            team_id (Optional[str]): Team ID to associate the key with
+            user_id (Optional[str]): User ID to associate the key with
+            budget_id (Optional[str]): Budget ID to associate the key with
+            config (Optional[Dict[str, Any]]): Additional configuration parameters
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
@@ -139,6 +151,18 @@ class KeysManagementClient:
             data["aliases"] = aliases
         if spend is not None:
             data["spend"] = spend
+        if duration is not None:
+            data["duration"] = duration
+        if key_alias is not None:
+            data["key_alias"] = key_alias
+        if team_id is not None:
+            data["team_id"] = team_id
+        if user_id is not None:
+            data["user_id"] = user_id
+        if budget_id is not None:
+            data["budget_id"] = budget_id
+        if config is not None:
+            data["config"] = config
 
         request = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
