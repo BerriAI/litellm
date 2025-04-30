@@ -150,7 +150,7 @@ class ModelsManagementClient:
                 raise NotFoundError(e)
             raise
 
-    def get_model(
+    def get(
         self,
         model_id: Optional[str] = None,
         model_name: Optional[str] = None,
@@ -158,7 +158,6 @@ class ModelsManagementClient:
     ) -> Union[Dict[str, Any], requests.Request]:
         """
         Get information about a specific model by its ID or name.
-        Fetches all models and filters for the matching model.
         
         Args:
             model_id (Optional[str]): ID of the model to retrieve
