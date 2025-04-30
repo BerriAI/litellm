@@ -47,6 +47,7 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
     TranscriptionResponse,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ class LLMCachingHandler:
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
-                verbose_logger.debug("Checking Cache")
+                verbose_logger.debug("Checking Async Cache")
                 cached_result = await self._retrieve_from_cache(
                     call_type=call_type,
                     kwargs=kwargs,
@@ -237,7 +238,7 @@ class LLMCachingHandler:
         if litellm.cache is not None and self._is_call_type_supported_by_cache(
             original_function=original_function
         ):
-            print_verbose("Checking Cache")
+            print_verbose("Checking Sync Cache")
             cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
                 if "detail" in cached_result:
@@ -339,6 +340,7 @@ class LLMCachingHandler:
             )
             final_embedding_cached_response._hidden_params["cache_hit"] = True
 
+            prompt_tokens = 0
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
                 if cr is not None:
@@ -347,6 +349,19 @@ class LLMCachingHandler:
                         index=idx,
                         object="embedding",
                     )
+                    if isinstance(original_kwargs_input[idx], str):
+                        from litellm.utils import token_counter
+
+                        prompt_tokens += token_counter(
+                            text=original_kwargs_input[idx], count_response_tokens=True
+                        )
+            ## USAGE
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                total_tokens=prompt_tokens,
+            )
+            final_embedding_cached_response.usage = usage
         if len(remaining_list) == 0:
             # LOG SUCCESS
             cache_hit = True
