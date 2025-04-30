@@ -18,18 +18,12 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import BaseModel
-
 import litellm
 from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
-    get_key_model_rpm_limit,
-    get_key_model_tpm_limit,
-)
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 if TYPE_CHECKING:
@@ -185,18 +179,9 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
         if rpm_limit is None:
             rpm_limit = sys.maxsize
-
-        values_to_update_in_cache: List[
-            Tuple[Any, Any]
-        ] = (
-            []
-        )  # values that need to get updated in cache, will run a batch_set_cache after this function
-
         # ------------
         # Setup values
         # ------------
-        new_val: Optional[dict] = None
-
         if global_max_parallel_requests is not None:
             # get value from cache
             _key = "global_max_parallel_requests"
@@ -278,7 +263,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     
             increment_list.append((key, increment_value_by_group[group]))
 
-        print(f"increment_list: {increment_list}")
+
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,
@@ -288,7 +273,6 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
     async def async_log_success_event(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
     ):
-        print("INSIDE async_log_success_event")
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -353,7 +337,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             )
             
         except Exception as e:
-            print(
+            verbose_proxy_logger.exception(
                 "Inside Parallel Request Limiter: An exception occurred - {}".format(
                     str(e)
                 )
