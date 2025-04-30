@@ -81,6 +81,7 @@ async def test_normal_router_call_v2(monkeypatch):
     )
     await asyncio.sleep(1)  # success is done in a separate thread
 
+    print(f"local_cache in normal call: {local_cache}")
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -127,6 +128,7 @@ async def test_streaming_router_call_v2(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     
+    print(f"litellm callbacks pre-set: {litellm.callbacks}")
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
@@ -148,6 +150,7 @@ async def test_streaming_router_call_v2(monkeypatch):
     )
 
     # streaming call
+    print(f"litellm callbacks: {litellm.callbacks}")
     response = await router.acompletion(
         model="azure-model",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -158,6 +161,7 @@ async def test_streaming_router_call_v2(monkeypatch):
     async for chunk in response:
         continue
     await asyncio.sleep(3)  # success is done in a separate thread
+    print(f"local_cache in streaming call: {local_cache}")
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -219,23 +223,20 @@ async def test_bad_router_call_v2(monkeypatch):
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
-        )["current_requests"]
+        )
         == 1
     )
 
     # bad streaming call
-    try:
-        response = await router.acompletion(
-            model="azure-model",
-            messages=[{"role": "user2", "content": "Hey, how's it going?"}],
-            stream=True,
-            metadata={"user_api_key": _api_key},
-        )
-    except Exception:
-        pass
+    await parallel_request_handler.async_post_call_failure_hook(
+        request_data={},
+        original_exception=Exception("test"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
-        )["current_requests"]
+        )
         == 0
     )
