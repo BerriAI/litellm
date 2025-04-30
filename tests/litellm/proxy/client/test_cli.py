@@ -297,6 +297,25 @@ def test_models_info_table_format():
         }
     ]
     
+    # Test cases for different column combinations
+    test_cases = [
+        {
+            "columns": None,  # Default columns
+            "expected_present": ["Public Model", "Upstream Model", "Updated At", "gpt-4", "gpt-4-0613", "2025-04-29 21:31"],
+            "expected_absent": ["Credential Name", "Created At", "ID", "Input Cost", "Output Cost", "azure-1", "model-123", "$10.0000"]
+        },
+        {
+            "columns": "public_model,input_cost,output_cost",
+            "expected_present": ["Public Model", "Input Cost", "Output Cost", "gpt-4", "$10.0000", "$20.0000"],
+            "expected_absent": ["Upstream Model", "Updated At", "gpt-4-0613", "2025-04-29 21:31"]
+        },
+        {
+            "columns": "credential_name,id",
+            "expected_present": ["Credential Name", "ID", "azure-1", "model-123"],
+            "expected_absent": ["Public Model", "Input Cost", "gpt-4", "$10.0000"]
+        }
+    ]
+    
     # Mock the Client class and its models.info() method
     with patch("litellm.proxy.client.cli.Client") as MockClient:
         # Configure the mock
@@ -304,29 +323,30 @@ def test_models_info_table_format():
         mock_client_instance.models.info.return_value = mock_info
         MockClient.return_value = mock_client_instance
         
-        # Run the command
-        result = runner.invoke(cli, ["models", "info"])
-        
-        # Check that the command succeeded
-        assert result.exit_code == 0
-        
-        # Verify the output contains expected table elements
-        # assert "gpt-4" in result.output
-        # assert "gpt-4-0613" in result.output
-        # assert "azure-1" in result.output
-        # assert "model-123" in result.output
-        # assert "$10.0000" in result.output  # 0.01 * 1000
-        # assert "$20.0000" in result.output  # 0.02 * 1000
-        
-        # # Verify timestamp format (should show "2025-04-29 21:31" for test_datetime)
-        # assert "2025-04-29 21:31" in result.output
-        # # Verify seconds and microseconds are not shown
-        # assert "21:31:43" not in result.output
-        # assert "843000" not in result.output
+        # Test each column combination
+        for test_case in test_cases:
+            # Prepare command arguments
+            args = ["models", "info"]
+            if test_case["columns"]:
+                args.extend(["--columns", test_case["columns"]])
+            
+            # Run the command
+            result = runner.invoke(cli, args)
+            
+            # Check that the command succeeded
+            assert result.exit_code == 0
+            
+            # Check for expected content
+            for expected in test_case["expected_present"]:
+                assert expected in result.output, f"Expected '{expected}' to be present in output"
+            
+            # Check for absent content
+            for unexpected in test_case["expected_absent"]:
+                assert unexpected not in result.output, f"Expected '{unexpected}' to be absent from output"
         
         # Verify the client was called correctly
-        MockClient.assert_called_once_with(
+        MockClient.assert_called_with(
             base_url="http://localhost:4000",
             api_key="sk-test"
         )
-        mock_client_instance.models.info.assert_called_once() 
+        assert mock_client_instance.models.info.call_count == len(test_cases) 

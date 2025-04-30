@@ -168,8 +168,14 @@ def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[
     default="table",
     help="Output format (table or json)",
 )
+@click.option(
+    "--columns",
+    "columns",
+    default="public_model,upstream_model,updated_at",
+    help="Comma-separated list of columns to display. Valid columns: public_model, upstream_model, credential_name, created_at, updated_at, id, input_cost, output_cost. Default: public_model,upstream_model,updated_at",
+)
 @click.pass_context
-def get_models_info(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
+def get_models_info(ctx: click.Context, output_format: Literal["table", "json"], columns: str) -> None:
     """Get detailed information about all models"""
     client = create_client(ctx)
     models_info = client.models.info()
@@ -183,31 +189,39 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"])
     else:  # table format
         table = Table(title="Models Information")
         
-        # Add columns based on the data structure
-        table.add_column("Public Model", style="cyan")
-        table.add_column("Upstream Model", style="green")
-        table.add_column("Credential Name", style="yellow")
-        table.add_column("Created At", style="magenta")
-        table.add_column("Updated At", style="magenta")
-        table.add_column("ID", style="blue")
-        table.add_column("Input Cost", style="green", justify="right")
-        table.add_column("Output Cost", style="green", justify="right")
+        # Define all possible columns with their configurations
+        column_configs = {
+            "public_model": {"header": "Public Model", "style": "cyan", "get_value": lambda m: str(m.get("model_name", ""))},
+            "upstream_model": {"header": "Upstream Model", "style": "green", "get_value": lambda m: str(m.get("litellm_params", {}).get("model", ""))},
+            "credential_name": {"header": "Credential Name", "style": "yellow", "get_value": lambda m: str(m.get("litellm_params", {}).get("litellm_credential_name", ""))},
+            "created_at": {"header": "Created At", "style": "magenta", "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("created_at"))},
+            "updated_at": {"header": "Updated At", "style": "magenta", "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("updated_at"))},
+            "id": {"header": "ID", "style": "blue", "get_value": lambda m: str(m.get("model_info", {}).get("id", ""))},
+            "input_cost": {"header": "Input Cost", "style": "green", "justify": "right", "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("input_cost_per_token"))},
+            "output_cost": {"header": "Output Cost", "style": "green", "justify": "right", "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("output_cost_per_token"))}
+        }
 
-        # Add rows
+        # Add requested columns
+        requested_columns = [col.strip() for col in columns.split(",")]
+        for col_name in requested_columns:
+            if col_name in column_configs:
+                config = column_configs[col_name]
+                table.add_column(
+                    config["header"],
+                    style=config["style"],
+                    justify=config.get("justify", "left")
+                )
+            else:
+                click.echo(f"Warning: Unknown column '{col_name}'", err=True)
+
+        # Add rows with only the requested columns
         for model in models_info:
-            input_cost = model.get("model_info", {}).get("input_cost_per_token")
-            output_cost = model.get("model_info", {}).get("output_cost_per_token")
-            
-            table.add_row(
-                str(model.get("model_name", "")),
-                str(model.get("litellm_params", {}).get("model", "")),
-                str(model.get("litellm_params", {}).get("litellm_credential_name", "")),
-                format_iso_datetime_str(model.get("model_info", {}).get("created_at")),
-                format_iso_datetime_str(model.get("model_info", {}).get("updated_at")),
-                str(model.get("model_info", {}).get("id", "")),
-                format_cost_per_1k_tokens(input_cost),
-                format_cost_per_1k_tokens(output_cost)
-            )
+            row_values = []
+            for col_name in requested_columns:
+                if col_name in column_configs:
+                    row_values.append(column_configs[col_name]["get_value"](model))
+            if row_values:
+                table.add_row(*row_values)
 
         console.print(table)
 
