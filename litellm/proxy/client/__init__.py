@@ -4,4 +4,4 @@ from .models import ModelsManagementClient
 from .model_groups import ModelGroupsManagementClient
 from .exceptions import UnauthorizedError
 
-__all__ = ["Client", "ChatClient", "ModelsManagementClient", "ModelGroupsManagementClient", "UnauthorizedError"] 
+__all__ = ["Client", "ChatClient", "ModelsManagementClient", "ModelGroupsManagementClient", "UnauthorizedError"]
