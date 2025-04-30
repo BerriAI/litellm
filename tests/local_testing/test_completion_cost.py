@@ -949,7 +949,7 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
+@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
