@@ -46,6 +46,8 @@ def get_supported_openai_params(  # noqa: PLR0915
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "meta-llama":
+        return litellm.LlamaAPIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama_chat":
