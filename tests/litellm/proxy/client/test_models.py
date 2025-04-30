@@ -589,3 +589,155 @@ def test_get_server_error(client, requests_mock):
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.get(model_id=model_id)
     assert exc_info.value.response.status_code == 500
+
+def test_update_request_creation(client, base_url, api_key):
+    """Test that update creates a request with correct URL, headers, and body when return_request=True"""
+    model_id = "model-123"
+    model_params = {
+        "model": "openai/gpt-4",
+        "api_base": "https://api.openai.com/v1"
+    }
+    model_info = {
+        "description": "Updated GPT-4 model",
+        "metadata": {"version": "2.0"}
+    }
+    
+    request = client.update(
+        model_id=model_id,
+        model_params=model_params,
+        model_info=model_info,
+        return_request=True
+    )
+    
+    # Check request method and URL
+    assert request.method == 'POST'
+    assert request.url == f"{base_url}/model/update"
+    
+    # Check headers
+    assert 'Authorization' in request.headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+    
+    # Check request body
+    assert request.json == {
+        "id": model_id,
+        "litellm_params": model_params,
+        "model_info": model_info
+    }
+
+def test_update_without_model_info(client):
+    """Test that update works correctly without optional model_info"""
+    model_id = "model-123"
+    model_params = {
+        "model": "openai/gpt-4",
+        "api_base": "https://api.openai.com/v1"
+    }
+    
+    request = client.update(
+        model_id=model_id,
+        model_params=model_params,
+        return_request=True
+    )
+    
+    # Check request body doesn't include model_info
+    assert request.json == {
+        "id": model_id,
+        "litellm_params": model_params
+    }
+
+def test_update_mock_response(client, requests_mock):
+    """Test update with a mocked successful response"""
+    model_id = "model-123"
+    model_params = {"model": "openai/gpt-4"}
+    mock_response = {
+        "id": model_id,
+        "status": "success",
+        "message": "Model updated successfully"
+    }
+    
+    # Mock the POST request
+    requests_mock.post(
+        f"{client._base_url}/model/update",
+        json=mock_response
+    )
+    
+    response = client.update(
+        model_id=model_id,
+        model_params=model_params
+    )
+    
+    assert response == mock_response
+
+def test_update_unauthorized_error(client, requests_mock):
+    """Test that update raises UnauthorizedError for 401 responses"""
+    model_id = "model-123"
+    model_params = {"model": "openai/gpt-4"}
+    
+    # Mock a 401 response
+    requests_mock.post(
+        f"{client._base_url}/model/update",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError):
+        client.update(
+            model_id=model_id,
+            model_params=model_params
+        )
+
+def test_update_404_error(client, requests_mock):
+    """Test that update raises NotFoundError for 404 responses"""
+    model_id = "model-123"
+    model_params = {"model": "openai/gpt-4"}
+    
+    # Mock a 404 response
+    requests_mock.post(
+        f"{client._base_url}/model/update",
+        status_code=404,
+        json={"error": "Model not found"}
+    )
+    
+    with pytest.raises(NotFoundError) as exc_info:
+        client.update(
+            model_id=model_id,
+            model_params=model_params
+        )
+    assert exc_info.value.orig_exception.response.status_code == 404
+
+def test_update_not_found_in_text(client, requests_mock):
+    """Test that update raises NotFoundError when response contains 'not found'"""
+    model_id = "model-123"
+    model_params = {"model": "openai/gpt-4"}
+    
+    # Mock a response with "not found" in text but different status code
+    requests_mock.post(
+        f"{client._base_url}/model/update",
+        status_code=400,  # Different status code
+        json={"error": "The specified model was not found in the system"}
+    )
+    
+    with pytest.raises(NotFoundError) as exc_info:
+        client.update(
+            model_id=model_id,
+            model_params=model_params
+        )
+    assert "not found" in exc_info.value.orig_exception.response.text.lower()
+
+def test_update_other_errors(client, requests_mock):
+    """Test that update raises normal HTTPError for other error responses"""
+    model_id = "model-123"
+    model_params = {"model": "openai/gpt-4"}
+    
+    # Mock a 500 response
+    requests_mock.post(
+        f"{client._base_url}/model/update",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.update(
+            model_id=model_id,
+            model_params=model_params
+        )
+    assert exc_info.value.response.status_code == 500
