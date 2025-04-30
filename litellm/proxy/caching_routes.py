@@ -9,7 +9,12 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.caching import (
+    CachePingResponse,
+    HealthCheckCacheParams,
+    LiteLLMCacheType,
+)
 
 masker = SensitiveDataMasker()
 
@@ -17,7 +22,6 @@ router = APIRouter(
     prefix="/cache",
     tags=["caching"],
 )
-
 
 def _extract_cache_params() -> Dict[str, Any]:
     """
@@ -48,7 +52,6 @@ def _extract_cache_params() -> Dict[str, Any]:
         verbose_proxy_logger.debug(f"Error extracting cache params: {str(e)}")
         return {}
 
-
 @router.get(
     "/ping",
     response_model=CachePingResponse,
@@ -70,7 +73,7 @@ async def cache_ping():
         litellm_cache_params.pop("cache", None)
         cleaned_cache_params = _extract_cache_params()
 
-        if litellm.cache.type == "redis":
+        if litellm.cache.type == LiteLLMCacheType.REDIS:
             ping_response = await litellm.cache.ping()
             verbose_proxy_logger.debug(
                 "/cache/ping: ping_response: " + str(ping_response)
@@ -139,10 +142,15 @@ async def cache_delete(request: Request):
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
 
-        request_data = await request.json()
+        request_data = await _read_request_body(request=request)
         keys = request_data.get("keys", None)
-
-        if litellm.cache.type == "redis":
+        
+        if litellm.cache.type == LiteLLMCacheType.REDIS:
+            await litellm.cache.delete_cache_keys(keys=keys)
+            return {
+                "status": "success",
+            }
+        elif litellm.cache.type == LiteLLMCacheType.LOCAL:
             await litellm.cache.delete_cache_keys(keys=keys)
             return {
                 "status": "success",
@@ -172,7 +180,7 @@ async def cache_redis_info():
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        if litellm.cache.type == "redis" and isinstance(
+        if litellm.cache.type == LiteLLMCacheType.REDIS and isinstance(
             litellm.cache.cache, RedisCache
         ):
             client_list = litellm.cache.cache.client_list()
@@ -216,7 +224,7 @@ async def cache_flushall():
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        if litellm.cache.type == "redis" and isinstance(
+        if litellm.cache.type == LiteLLMCacheType.REDIS and isinstance(
             litellm.cache.cache, RedisCache
         ):
             litellm.cache.cache.flushall()
