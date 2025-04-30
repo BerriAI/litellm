@@ -646,6 +646,7 @@ async def get_user_object(
     sso_user_id: Optional[str] = None,
     user_email: Optional[str] = None,
     check_db_only: Optional[bool] = None,
+    default_user_role: Optional[LitellmUserRoles] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -692,8 +693,19 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                # Create a new user with the specified role
+                create_data = {"user_id": user_id}
+                
+                # Add default role if provided
+                if default_user_role is not None:
+                    create_data["user_role"] = default_user_role
+                
+                # Add email if provided
+                if user_email is not None:
+                    create_data["user_email"] = user_email
+                
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id},
+                    data=create_data,
                     include={"organization_memberships": True},
                 )
             else:

@@ -819,6 +819,7 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                     user_email=user_email,
                     sso_user_id=user_id,
+                    default_user_role=jwt_handler.litellm_jwtauth.default_user_role if jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email) else None,
                 )
                 if user_id
                 else None

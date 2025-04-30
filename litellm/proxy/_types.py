@@ -2653,6 +2653,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
     - custom_validate: A custom function to validates the JWT token.
+    - default_user_role: The default role to assign when creating new users with JWT auth. Default is INTERNAL_USER.
 
     See `auth_checks.py` for the specific routes
     """
@@ -2684,6 +2685,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: Optional[List[str]] = None
     user_id_upsert: bool = Field(
         default=False, description="If user doesn't exist, upsert them into the db."
+    )
+    default_user_role: LitellmUserRoles = Field(
+        default=LitellmUserRoles.INTERNAL_USER, 
+        description="Default role to assign when creating new users with JWT auth. Default is INTERNAL_USER."
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
