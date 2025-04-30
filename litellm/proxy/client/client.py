@@ -1,5 +1,6 @@
 from typing import Optional
 from .models import ModelsManagementClient
+from .model_groups import ModelGroupsManagementClient
 
 class Client:
     """Main client for interacting with the LiteLLM proxy API."""
@@ -16,4 +17,5 @@ class Client:
         self.api_key = api_key
         
         # Initialize resource clients
-        self.models = ModelsManagementClient(base_url=self.base_url, api_key=self.api_key) 
+        self.models = ModelsManagementClient(base_url=self.base_url, api_key=self.api_key)
+        self.model_groups = ModelGroupsManagementClient(base_url=self.base_url, api_key=self.api_key) 
