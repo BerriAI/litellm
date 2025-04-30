@@ -8,7 +8,6 @@ from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
     FIREWORKS_AI_56_B_MOE,
-    FIREWORKS_AI_80_B,
     FIREWORKS_AI_176_B_MOE,
 )
 from litellm.types.utils import Usage
