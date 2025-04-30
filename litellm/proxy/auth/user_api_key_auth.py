@@ -57,7 +57,11 @@ from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
-
+custom_litellm_key_header = APIKeyHeader(
+    name=SpecialHeaders.custom_litellm_api_key.value,
+    auto_error=False,
+    description="Bearer token",
+)
 api_key_header = APIKeyHeader(
     name=SpecialHeaders.openai_authorization.value,
     auto_error=False,
@@ -228,6 +232,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     google_ai_studio_api_key_header: Optional[str],
     azure_apim_header: Optional[str],
     request_data: dict,
+    custom_litellm_key_header: Optional[str] = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -261,7 +266,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             "pass_through_endpoints", None
         )
         passed_in_key: Optional[str] = None
-        if isinstance(api_key, str):
+        ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
+        if isinstance(custom_litellm_key_header, str):
+            api_key = custom_litellm_key_header
+        elif isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
         elif isinstance(azure_api_key_header, str):
@@ -867,11 +875,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            await _virtual_key_max_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
+            if route in LiteLLMRoutes.llm_api_routes.value:
+                await _virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
+                )
 
             # Check 5. Soft Budget Check
             await _virtual_key_soft_budget_check(
@@ -1025,6 +1034,9 @@ async def user_api_key_auth(
         google_ai_studio_api_key_header
     ),
     azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
+    custom_litellm_key_header: Optional[str] = fastapi.Security(
+        custom_litellm_key_header
+    ),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
@@ -1041,6 +1053,7 @@ async def user_api_key_auth(
         google_ai_studio_api_key_header=google_ai_studio_api_key_header,
         azure_apim_header=azure_apim_header,
         request_data=request_data,
+        custom_litellm_key_header=custom_litellm_key_header,
     )
 
     end_user_id = get_end_user_id_from_request_body(request_data)
