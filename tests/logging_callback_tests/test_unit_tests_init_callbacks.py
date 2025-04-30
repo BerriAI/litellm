@@ -34,6 +34,7 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.rag_hooks.bedrock_knowledgebase import BedrockKnowledgeBaseHook
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
@@ -77,6 +78,7 @@ callback_class_str_to_classType = {
     "gcs_pubsub": GcsPubSubLogger,
     "anthropic_cache_control_hook": AnthropicCacheControlHook,
     "agentops": AgentOps,
+    "bedrock_knowledgebase_hook": BedrockKnowledgeBaseHook,
 }
 
 expected_env_vars = {
