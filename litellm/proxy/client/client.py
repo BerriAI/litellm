@@ -13,9 +13,9 @@ class Client:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
         """
-        self.base_url = base_url.rstrip('/')  # Remove trailing slash if present
-        self.api_key = api_key
+        self._base_url = base_url.rstrip('/')  # Remove trailing slash if present
+        self._api_key = api_key
         
         # Initialize resource clients
-        self.models = ModelsManagementClient(base_url=self.base_url, api_key=self.api_key)
-        self.model_groups = ModelGroupsManagementClient(base_url=self.base_url, api_key=self.api_key) 
+        self.models = ModelsManagementClient(base_url=self._base_url, api_key=self._api_key)
+        self.model_groups = ModelGroupsManagementClient(base_url=self._base_url, api_key=self._api_key) 

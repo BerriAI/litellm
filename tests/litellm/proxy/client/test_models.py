@@ -105,8 +105,8 @@ def test_list_invalid_api_keys(base_url, api_key):
 def test_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelsManagementClient(base_url="http://localhost:8000/////")
-    assert client.base_url == "http://localhost:8000"
-    
+    assert client._base_url == "http://localhost:8000"
+
 def test_list_with_mock_response(client, requests_mock):
     """Test the full list execution with a mocked response"""
     mock_data = {
@@ -161,28 +161,28 @@ def test_client_initialization(base_url, api_key):
     client = Client(base_url=base_url, api_key=api_key)
     
     # Check base properties
-    assert client.base_url == base_url
-    assert client.api_key == api_key
+    assert client._base_url == base_url
+    assert client._api_key == api_key
     
     # Check resource clients
     assert isinstance(client.models, ModelsManagementClient)
-    assert client.models.base_url == base_url
-    assert client.models.api_key == api_key
+    assert client.models._base_url == base_url
+    assert client.models._api_key == api_key
 
 def test_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     base_url = "http://localhost:8000/////"
     client = Client(base_url=base_url)
     
-    assert client.base_url == "http://localhost:8000"
-    assert client.models.base_url == "http://localhost:8000"
+    assert client._base_url == "http://localhost:8000"
+    assert client.models._base_url == "http://localhost:8000"
 
 def test_client_without_api_key(base_url):
     """Test that the client works without an API key"""
     client = Client(base_url=base_url)
     
-    assert client.api_key is None
-    assert client.models.api_key is None
+    assert client._api_key is None
+    assert client.models._api_key is None
 
 def test_new_request_creation(client, base_url, api_key):
     """Test that new creates a request with correct URL, headers, and body when return_request=True"""
@@ -249,7 +249,7 @@ def test_new_mock_response(client, requests_mock):
     
     # Mock the POST request
     requests_mock.post(
-        f"{client.base_url}/model/new",
+        f"{client._base_url}/model/new",
         json=mock_response
     )
     
@@ -267,7 +267,7 @@ def test_new_unauthorized_error(client, requests_mock):
     
     # Mock a 401 response
     requests_mock.post(
-        f"{client.base_url}/model/new",
+        f"{client._base_url}/model/new",
         status_code=401,
         json={"error": "Unauthorized"}
     )
@@ -307,7 +307,7 @@ def test_delete_mock_response(client, requests_mock):
     
     # Mock the POST request
     requests_mock.post(
-        f"{client.base_url}/model/delete",
+        f"{client._base_url}/model/delete",
         json=mock_response
     )
     
@@ -320,7 +320,7 @@ def test_delete_unauthorized_error(client, requests_mock):
     
     # Mock a 401 response
     requests_mock.post(
-        f"{client.base_url}/model/delete",
+        f"{client._base_url}/model/delete",
         status_code=401,
         json={"error": "Unauthorized"}
     )
@@ -334,7 +334,7 @@ def test_delete_404_error(client, requests_mock):
     
     # Mock a 404 response
     requests_mock.post(
-        f"{client.base_url}/model/delete",
+        f"{client._base_url}/model/delete",
         status_code=404,
         json={"error": "Model not found"}
     )
@@ -349,7 +349,7 @@ def test_delete_not_found_in_text(client, requests_mock):
     
     # Mock a response with "not found" in text but different status code
     requests_mock.post(
-        f"{client.base_url}/model/delete",
+        f"{client._base_url}/model/delete",
         status_code=400,  # Different status code
         json={"error": "The specified model was not found in the system"}
     )
@@ -364,7 +364,7 @@ def test_delete_other_errors(client, requests_mock):
     
     # Mock a 500 response
     requests_mock.post(
-        f"{client.base_url}/model/delete",
+        f"{client._base_url}/model/delete",
         status_code=500,
         json={"error": "Internal Server Error"}
     )
@@ -413,7 +413,7 @@ def test_info_success(client, requests_mock):
     }
     
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         json=mock_response
     )
     
@@ -426,7 +426,7 @@ def test_info_success(client, requests_mock):
 def test_info_unauthorized(client, requests_mock):
     """Test that info raises UnauthorizedError for unauthorized requests"""
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         status_code=401,
         json={"error": "Unauthorized"}
     )
@@ -438,7 +438,7 @@ def test_info_unauthorized(client, requests_mock):
 def test_info_server_error(client, requests_mock):
     """Test that info raises HTTPError for server errors"""
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         status_code=500,
         json={"error": "Internal Server Error"}
     )
@@ -507,7 +507,7 @@ def test_get_success_by_id(client, requests_mock):
     }
     
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         json=mock_models
     )
     
@@ -533,7 +533,7 @@ def test_get_success_by_name(client, requests_mock):
     }
     
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         json=mock_models
     )
     
@@ -546,7 +546,7 @@ def test_get_not_found(client, requests_mock):
     
     # Mock successful response but with no matching model
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         json={"data": [
             {
                 "model_name": "gpt-3.5-turbo",
@@ -567,7 +567,7 @@ def test_get_unauthorized(client, requests_mock):
     model_id = "model-123"
     
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         status_code=401,
         json={"error": "Unauthorized"}
     )
@@ -581,7 +581,7 @@ def test_get_server_error(client, requests_mock):
     model_id = "model-123"
     
     requests_mock.get(
-        f"{client.base_url}/v1/model/info",
+        f"{client._base_url}/v1/model/info",
         status_code=500,
         json={"error": "Internal Server Error"}
     )

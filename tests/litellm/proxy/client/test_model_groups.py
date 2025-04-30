@@ -75,7 +75,7 @@ def test_info_with_mock_response(client, requests_mock):
             }
         ]
     }
-    requests_mock.get("http://localhost:8000/model_group/info", json=mock_data)
+    requests_mock.get(f"{client._base_url}/model_group/info", json=mock_data)
     
     response = client.info()
     assert response == mock_data["data"]
@@ -86,7 +86,7 @@ def test_info_with_mock_response(client, requests_mock):
 def test_info_unauthorized_error(client, requests_mock):
     """Test that info raises UnauthorizedError for 401 responses"""
     requests_mock.get(
-        "http://localhost:8000/model_group/info",
+        f"{client._base_url}/model_group/info",
         status_code=401,
         json={"error": "Invalid API key"}
     )
@@ -98,7 +98,7 @@ def test_info_unauthorized_error(client, requests_mock):
 def test_info_other_errors(client, requests_mock):
     """Test that info raises normal HTTPError for non-401 errors"""
     requests_mock.get(
-        "http://localhost:8000/model_group/info",
+        f"{client._base_url}/model_group/info",
         status_code=500,
         json={"error": "Internal Server Error"}
     )
@@ -120,7 +120,7 @@ def test_info_invalid_api_keys(base_url, api_key):
 def test_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelGroupsManagementClient(base_url="http://localhost:8000/////")
-    assert client.base_url == "http://localhost:8000"
+    assert client._base_url == "http://localhost:8000"
 
 def test_client_initialization(base_url, api_key):
     """Test that the Client properly initializes the model_groups client"""
@@ -128,12 +128,12 @@ def test_client_initialization(base_url, api_key):
     
     # Check that model_groups client is properly initialized
     assert isinstance(client.model_groups, ModelGroupsManagementClient)
-    assert client.model_groups.base_url == base_url
-    assert client.model_groups.api_key == api_key
+    assert client.model_groups._base_url == base_url
+    assert client.model_groups._api_key == api_key
 
 def test_client_initialization_without_api_key(base_url):
     """Test that the client works without an API key"""
     client = Client(base_url=base_url)
     
-    assert client.api_key is None
-    assert client.model_groups.api_key is None 
+    assert client._api_key is None
+    assert client.model_groups._api_key is None 

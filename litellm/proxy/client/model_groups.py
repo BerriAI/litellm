@@ -11,8 +11,8 @@ class ModelGroupsManagementClient:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
         """
-        self.base_url = base_url.rstrip('/')  # Remove trailing slash if present
-        self.api_key = api_key
+        self._base_url = base_url.rstrip('/')  # Remove trailing slash if present
+        self._api_key = api_key
         
     def _get_headers(self) -> Dict[str, str]:
         """
@@ -22,8 +22,8 @@ class ModelGroupsManagementClient:
             Dict[str, str]: Headers to use for API requests
         """
         headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
     def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
@@ -41,7 +41,7 @@ class ModelGroupsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self.base_url}/model_group/info"
+        url = f"{self._base_url}/model_group/info"
         request = requests.Request('GET', url, headers=self._get_headers())
         
         if return_request:

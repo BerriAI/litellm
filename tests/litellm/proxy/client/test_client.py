@@ -14,25 +14,25 @@ def test_client_initialization(base_url, api_key):
     client = Client(base_url=base_url, api_key=api_key)
     
     # Check base properties
-    assert client.base_url == base_url
-    assert client.api_key == api_key
+    assert client._base_url == base_url
+    assert client._api_key == api_key
     
     # Check resource clients
     assert isinstance(client.models, ModelsManagementClient)
-    assert client.models.base_url == base_url
-    assert client.models.api_key == api_key
+    assert client.models._base_url == base_url
+    assert client.models._api_key == api_key
 
 def test_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     base_url = "http://localhost:8000/////"
     client = Client(base_url=base_url)
     
-    assert client.base_url == "http://localhost:8000"
-    assert client.models.base_url == "http://localhost:8000"
+    assert client._base_url == "http://localhost:8000"
+    assert client.models._base_url == "http://localhost:8000"
 
 def test_client_without_api_key(base_url):
     """Test that the client works without an API key"""
     client = Client(base_url=base_url)
     
-    assert client.api_key is None
-    assert client.models.api_key is None 
+    assert client._api_key is None
+    assert client.models._api_key is None 

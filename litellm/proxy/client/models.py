@@ -11,8 +11,8 @@ class ModelsManagementClient:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
         """
-        self.base_url = base_url.rstrip('/')  # Remove trailing slash if present
-        self.api_key = api_key
+        self._base_url = base_url.rstrip('/')  # Remove trailing slash if present
+        self._api_key = api_key
         
     def _get_headers(self) -> Dict[str, str]:
         """
@@ -22,8 +22,8 @@ class ModelsManagementClient:
             Dict[str, str]: Headers to use for API requests
         """
         headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
         
     def list(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
@@ -42,7 +42,7 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self.base_url}/models"
+        url = f"{self._base_url}/models"
         request = requests.Request('GET', url, headers=self._get_headers())
         
         if return_request:
@@ -83,7 +83,7 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self.base_url}/model/new"
+        url = f"{self._base_url}/model/new"
         
         data = {
             "model_name": model_name,
@@ -129,7 +129,7 @@ class ModelsManagementClient:
             NotFoundError: If the request fails with a 404 status code or indicates the model was not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self.base_url}/model/delete"
+        url = f"{self._base_url}/model/delete"
         data = {"id": model_id}
             
         request = requests.Request('POST', url, headers=self._get_headers(), json=data)
@@ -211,7 +211,7 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self.base_url}/v1/model/info"
+        url = f"{self._base_url}/v1/model/info"
         request = requests.Request('GET', url, headers=self._get_headers())
         
         if return_request:
