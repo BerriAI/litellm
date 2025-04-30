@@ -27,6 +27,7 @@ tiktoken = ">=0.7.0"
 importlib-metadata = ">=6.8.0"
 tokenizers = "*"
 click = "*"
+rich = ">=13.0.0"
 jinja2 = "^3.1.2"
 aiohttp = "*"
 pydantic = "^2.0.0"
@@ -93,6 +94,7 @@ profile = "black"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
+litellm-proxy = 'litellm.proxy.client.cli:cli'
 
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.1.0"
