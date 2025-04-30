@@ -322,4 +322,147 @@ def test_delete_model_other_errors(client, requests_mock):
     
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.delete_model(model_id=model_id)
+    assert exc_info.value.response.status_code == 500
+
+def test_get_model_by_id_request_creation(client, base_url, api_key):
+    """Test that get_model creates a correct request when using model_id"""
+    model_id = "model-123"
+    request = client.get_model(model_id=model_id, return_request=True)
+    
+    # Check request method and URL
+    assert request.method == 'GET'
+    assert request.url == f"{base_url}/model/info"
+    
+    # Check headers
+    assert request.headers['Authorization'] == f"Bearer {api_key}"
+    
+def test_get_model_by_name_request_creation(client, base_url):
+    """Test that get_model creates a correct request when using model_name"""
+    model_name = "gpt-4"
+    request = client.get_model(model_name=model_name, return_request=True)
+    
+    # Check it's a GET request to /model/info
+    assert request.method == 'GET'
+    assert request.url == f"{base_url}/model/info"
+    
+def test_get_model_invalid_params():
+    """Test that get_model raises ValueError for invalid parameter combinations"""
+    client = ModelsManagementClient(base_url="http://localhost:8000")
+    
+    # Test with no parameters
+    with pytest.raises(ValueError) as exc_info:
+        client.get_model()
+    assert "Exactly one of model_id or model_name must be provided" in str(exc_info.value)
+    
+    # Test with both parameters
+    with pytest.raises(ValueError) as exc_info:
+        client.get_model(model_id="123", model_name="gpt-4")
+    assert "Exactly one of model_id or model_name must be provided" in str(exc_info.value)
+
+def test_get_model_success_by_id(client, requests_mock):
+    """Test get_model successfully finding a model by ID"""
+    model_id = "model-123"
+    mock_models = {
+        "data": [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "model_info": {
+                    "id": "other-model"
+                }
+            },
+            {
+                "model_name": "gpt-4",
+                "model_info": {
+                    "id": model_id
+                },
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "api_base": "https://api.openai.com/v1"
+                }
+            }
+        ]
+    }
+    
+    requests_mock.get(
+        f"{client.base_url}/model/info",
+        json=mock_models
+    )
+    
+    response = client.get_model(model_id=model_id)
+    assert response["model_info"]["id"] == model_id
+    assert response["model_name"] == "gpt-4"
+
+def test_get_model_success_by_name(client, requests_mock):
+    """Test get_model successfully finding a model by name"""
+    model_name = "gpt-4"
+    mock_models = {
+        "data": [
+            {
+                "model_name": model_name,
+                "model_info": {
+                    "id": "model-123"
+                },
+                "litellm_params": {
+                    "model": "openai/gpt-4"
+                }
+            }
+        ]
+    }
+    
+    requests_mock.get(
+        f"{client.base_url}/model/info",
+        json=mock_models
+    )
+    
+    response = client.get_model(model_name=model_name)
+    assert response["model_name"] == model_name
+
+def test_get_model_not_found(client, requests_mock):
+    """Test that get_model raises NotFoundError when model is not found"""
+    model_name = "nonexistent-model"
+    
+    # Mock successful response but with no matching model
+    requests_mock.get(
+        f"{client.base_url}/model/info",
+        json={"data": [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "model_info": {
+                    "id": "other-model"
+                }
+            }
+        ]}
+    )
+    
+    with pytest.raises(NotFoundError) as exc_info:
+        client.get_model(model_name=model_name)
+    assert "not found" in str(exc_info.value).lower()
+    assert "model_name=" + model_name in str(exc_info.value)
+
+def test_get_model_unauthorized(client, requests_mock):
+    """Test that get_model raises UnauthorizedError for unauthorized requests"""
+    model_id = "model-123"
+    
+    requests_mock.get(
+        f"{client.base_url}/model/info",
+        status_code=401,
+        json={"error": "Unauthorized"}
+    )
+    
+    with pytest.raises(UnauthorizedError) as exc_info:
+        client.get_model(model_id=model_id)
+    assert exc_info.value.orig_exception.response.status_code == 401
+
+def test_get_model_server_error(client, requests_mock):
+    """Test that get_model raises HTTPError for server errors"""
+    model_id = "model-123"
+    
+    requests_mock.get(
+        f"{client.base_url}/model/info",
+        status_code=500,
+        json={"error": "Internal Server Error"}
+    )
+    
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        client.get_model(model_id=model_id)
     assert exc_info.value.response.status_code == 500 
