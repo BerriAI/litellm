@@ -1,5 +1,5 @@
 """
-Support for Llama API's `/v1/chat/completions` endpoint.
+Support for Llama API's `https://api.llama.com/compat/v1` endpoint.
 
 Calls done in OpenAI/openai.py as Llama API is openai-compatible.
 
