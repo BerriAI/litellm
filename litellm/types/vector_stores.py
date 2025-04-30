@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict, Union
 
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -29,8 +29,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     created_at: Optional[int]
     updated_at: Optional[int]
 
-    # litellm fields
-    litellm_params: Optional[Dict[str, Any]]
+    # credential fields
+    credential_params: Optional[CredentialLiteLLMParams]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
