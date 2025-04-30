@@ -13,7 +13,7 @@ import asyncio
 import json
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import fastapi
@@ -198,7 +198,6 @@ async def new_team(  # noqa: PLR0915
     try:
         from litellm.proxy.proxy_server import (
             create_audit_log_for_update,
-            duration_in_seconds,
             litellm_proxy_admin_name,
             prisma_client,
         )
@@ -313,11 +312,10 @@ async def new_team(  # noqa: PLR0915
 
         # If budget_duration is set, set `budget_reset_at`
         if complete_team_data.budget_duration is not None:
-            duration_s = duration_in_seconds(
-                duration=complete_team_data.budget_duration
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            complete_team_data.budget_reset_at = get_budget_reset_time(
+                budget_duration=complete_team_data.budget_duration, 
             )
-            reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            complete_team_data.budget_reset_at = reset_at
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
         complete_team_data_dict = prisma_client.jsonify_team_object(
@@ -468,7 +466,6 @@ async def update_team(
     from litellm.proxy.auth.auth_checks import _cache_team_object
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
@@ -496,9 +493,9 @@ async def update_team(
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
-        duration_s = duration_in_seconds(duration=data.budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
