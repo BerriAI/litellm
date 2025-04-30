@@ -663,8 +663,8 @@ def prepare_key_update_data(
             and (isinstance(budget_duration, str))
             and len(budget_duration) > 0
         ):
-            duration_s = duration_in_seconds(duration=budget_duration)
-            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 

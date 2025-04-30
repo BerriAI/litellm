@@ -14,7 +14,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
@@ -22,7 +22,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -651,9 +650,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
-        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = user_reset_at
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        non_default_values["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=non_default_values["budget_duration"]
+        )
 
     if "max_budget" not in non_default_values:
         if (
@@ -668,11 +668,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
             non_default_values[
                 "budget_duration"
             ] = litellm.internal_user_budget_duration
-            duration_s = duration_in_seconds(
-                duration=non_default_values["budget_duration"]
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            non_default_values["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=non_default_values["budget_duration"]
             )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
 
     return non_default_values
 
