@@ -145,12 +145,7 @@ async def cache_delete(request: Request):
         request_data = await _read_request_body(request=request)
         keys = request_data.get("keys", None)
         
-        if litellm.cache.type == LiteLLMCacheType.REDIS:
-            await litellm.cache.delete_cache_keys(keys=keys)
-            return {
-                "status": "success",
-            }
-        elif litellm.cache.type == LiteLLMCacheType.LOCAL:
+        if litellm.cache.type == LiteLLMCacheType.REDIS or litellm.cache.type == LiteLLMCacheType.LOCAL:
             await litellm.cache.delete_cache_keys(keys=keys)
             return {
                 "status": "success",
