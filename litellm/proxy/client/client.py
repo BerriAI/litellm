@@ -3,6 +3,7 @@ from .models import ModelsManagementClient
 from .model_groups import ModelGroupsManagementClient
 from .chat import ChatClient
 from .keys import KeysManagementClient
+from .credentials import CredentialsManagementClient
 
 
 class Client:
@@ -24,3 +25,4 @@ class Client:
         self.model_groups = ModelGroupsManagementClient(base_url=self._base_url, api_key=self._api_key)
         self.chat = ChatClient(base_url=self._base_url, api_key=self._api_key)
         self.keys = KeysManagementClient(base_url=self._base_url, api_key=self._api_key)
+        self.credentials = CredentialsManagementClient(base_url=self._base_url, api_key=self._api_key)
