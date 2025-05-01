@@ -293,6 +293,9 @@ def calculate_img_tokens(
         return total_tokens
 
 class _MessageCountParams:
+    """
+    A class to hold the parameters for counting tokens in messages.
+    """
     def __init__(
         self,
         model: str,
@@ -335,6 +338,10 @@ def token_counter(
     custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
     messages (Optional[List[AllMessageValues]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
+    count_response_tokens (Optional[bool]): set to True to indicate we are processing a stream response.
+    tools (Optional[List[ChatCompletionToolParam]]): The available tools. Default is None.
+    tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice. Default is None.
+    use_default_image_token_count (Optional[bool]): When True, will NOT make a GET request to the image URL and instead return the default image dimensions. Default is False.
     default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs. Default is None.
 
     Returns:
@@ -380,6 +387,15 @@ def _count_messages(
     use_default_image_token_count: bool,
     default_token_count: Optional[int],
 ) -> int:
+    """
+    Count the number of tokens in a list of messages.
+    
+    Args:
+        params (_MessageCountParams): The parameters for counting tokens.
+        messages (List[AllMessageValues]): The list of messages to count tokens in.
+        use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
+        default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs.
+    """
     num_tokens = 0
     for message in messages:
         num_tokens += params.tokens_per_message
@@ -426,6 +442,13 @@ def _count_extra(
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam],
     includes_system_message: bool,
 ) -> int:
+    """Count extra tokens for function definitions and tool choices.
+    Args:
+        count_function (Callable[[str], int]): The function to count tokens.
+        tools (Optional[List[ChatCompletionToolParam]]): The available tools.
+        tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
+        includes_system_message (bool): Whether the messages include a system message.
+    """
 
     num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
@@ -451,6 +474,8 @@ def _get_count_function(
     model: Optional[str],
     custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
 ) -> Callable[[str], int]:
+    """
+    Get the function to count tokens based on the model and custom tokenizer."""
     from litellm.utils import _select_tokenizer, print_verbose
 
     if model is not None or custom_tokenizer is not None:
@@ -486,6 +511,7 @@ def _get_count_function(
 
 
 def _fix_model_name(model: str) -> str:
+    """We normalize some model names to others"""
     if model in litellm.azure_llms:
         # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
         return model.replace("-35", "-3.5")
