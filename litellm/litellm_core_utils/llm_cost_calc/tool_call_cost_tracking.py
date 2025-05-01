@@ -2,12 +2,13 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
+    Message,
     ModelInfo,
     ModelResponse,
     SearchContextCostPerQuery,
@@ -36,38 +37,52 @@ class StandardBuiltInToolCostTracking:
         - Web Search
 
         """
-        if standard_built_in_tools_params is not None:
-            if (
-                standard_built_in_tools_params.get("web_search_options", None)
-                is not None
-            ):
-                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
+        standard_built_in_tools_params = standard_built_in_tools_params or {}
+        if not isinstance(response_object, ModelResponse):
+            return 0.0
 
-                return StandardBuiltInToolCostTracking.get_cost_for_web_search(
-                    web_search_options=standard_built_in_tools_params.get(
-                        "web_search_options", None
-                    ),
-                    model_info=model_info,
-                )
+        #########################################################
+        # Web Search
+        #########################################################
+        if StandardBuiltInToolCostTracking.response_includes_annotation_type(
+            response_object, "url_citation"
+        ):
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+                web_search_options=standard_built_in_tools_params.get(
+                    "web_search_options", None
+                ),
+                model_info=model_info,
+            )
 
-            if standard_built_in_tools_params.get("file_search", None) is not None:
-                return StandardBuiltInToolCostTracking.get_cost_for_file_search(
-                    file_search=standard_built_in_tools_params.get("file_search", None),
-                )
+        #########################################################
+        # File Search
+        #########################################################
+        elif StandardBuiltInToolCostTracking.response_includes_annotation_type(
+            response_object, "file_citation"
+        ):
+            return StandardBuiltInToolCostTracking.get_cost_for_file_search(
+                file_search=standard_built_in_tools_params.get("file_search", None),
+            )
 
-        if isinstance(response_object, ModelResponse):
-            if StandardBuiltInToolCostTracking.chat_completion_response_includes_annotations(
-                response_object
-            ):
-                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
-                return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
-                    model_info
-                )
         return 0.0
+
+    @staticmethod
+    def response_includes_annotation_type(
+        response_object: Any, annotation_type: Literal["url_citation", "file_citation"]
+    ) -> bool:
+        if isinstance(response_object, ModelResponse):
+            for choice in response_object.choices:
+                message: Optional[Message] = getattr(choice, "message", None)
+                if message is None:
+                    continue
+                if message.annotations is not None and len(message.annotations) > 0:
+                    for annotation in message.annotations:
+                        if annotation.get("type", None) == annotation_type:
+                            return True
+        return False
 
     @staticmethod
     def _safe_get_model_info(
