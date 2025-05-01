@@ -1373,7 +1373,7 @@ def test_generate_and_update_key(prisma_client):
             # Check that budget_reset_at is on the first day of next month
             next_month_first_day = end_of_month 
             # Assert that the reset date is the 1st of next month (0 or 1 day difference)
-            assert abs((budget_reset_at - next_month_first_day).days) <= 1
+            assert abs((next_month_first_day - budget_reset_at).days) <= 1
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
