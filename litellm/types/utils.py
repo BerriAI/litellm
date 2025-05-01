@@ -2272,6 +2272,7 @@ class DynamicPromptManagementParamLiteral(str, Enum):
 
     CACHE_CONTROL_INJECTION_POINTS = "cache_control_injection_points"
     KNOWLEDGE_BASES = "knowledge_bases"
+    VECTOR_STORE_IDS = "vector_store_ids"
 
     @classmethod
     def list_all_params(cls):

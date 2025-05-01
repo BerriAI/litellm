@@ -62,11 +62,11 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
         """
-        knowledge_bases = non_default_params.pop("knowledge_bases", None)
-        if knowledge_bases:
-            for knowledge_base in knowledge_bases:
+        vector_store_ids = non_default_params.pop("vector_store_ids", None)
+        if vector_store_ids:
+            for vector_store_id in vector_store_ids:
                 response = await self.make_bedrock_kb_retrieve_request(
-                    knowledge_base_id=knowledge_base,
+                    knowledge_base_id=vector_store_id,
                     query=self._get_kb_query_from_messages(messages),
                 )
                 verbose_logger.debug(f"Bedrock Knowledge Base Response: {response}")
@@ -231,7 +231,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
 
     @staticmethod
     def should_use_prompt_management_hook(non_default_params: Dict) -> bool:
-        if non_default_params.get("knowledge_bases", None):
+        if non_default_params.get("vector_store_ids", None):
             return True
         return False
 
