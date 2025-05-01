@@ -157,6 +157,55 @@ groups = client.model_groups.list()
 client.model_groups.delete(name="gpt4-group")
 ```
 
+## Low-Level HTTP Client
+
+The client provides access to a low-level HTTP client for making direct requests
+to the LiteLLM proxy server. This is useful when you need more control or when
+working with endpoints that don't yet have a high-level interface.
+
+```python
+# Access the HTTP client
+client = Client(
+    base_url="http://localhost:4000",
+    api_key="sk-api-key"
+)
+
+# Make a custom request
+response = client.http.request(
+    method="POST",
+    uri="/health/test_connection",
+    json={
+        "litellm_params": {
+            "model": "gpt-4",
+            "api_key": "your-api-key",
+            "api_base": "https://api.openai.com/v1"
+        },
+        "mode": "chat"
+    }
+)
+
+# The response is automatically parsed from JSON
+print(response)
+```
+
+### HTTP Client Features
+
+- Automatic URL handling (handles trailing/leading slashes)
+- Built-in authentication (adds Bearer token if `api_key` is provided)
+- JSON request/response handling
+- Configurable timeout (default: 30 seconds)
+- Comprehensive error handling
+- Support for custom headers and request parameters
+
+### HTTP Client `request` method parameters
+
+- `method`: HTTP method (GET, POST, PUT, DELETE, etc.)
+- `uri`: URI path (will be appended to base_url)
+- `data`: (optional) Data to send in the request body
+- `json`: (optional) JSON data to send in the request body
+- `headers`: (optional) Custom HTTP headers
+- Additional keyword arguments are passed to the underlying requests library
+
 ## Error Handling
 
 The client provides clear error handling with custom exceptions:
