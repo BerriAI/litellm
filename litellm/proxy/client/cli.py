@@ -1,11 +1,13 @@
 import click
+from datetime import datetime
 import json
 from typing import Optional, Literal
-from .client import Client
+
+from rich import print_json
 from rich.console import Console
 from rich.table import Table
-from rich.syntax import Syntax
-from datetime import datetime
+
+from .client import Client
 
 
 def create_client(ctx: click.Context) -> Client:
@@ -92,10 +94,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     console = ctx.obj["console"]
 
     if output_format == "json":
-        # Create syntax highlighted JSON without line numbers
-        json_str = json.dumps(models, indent=2)
-        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
-        console.print(syntax)
+        print_json(data=models)
     else:  # table format
         table = Table(title="Available Models")
 
@@ -173,7 +172,7 @@ def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[
 
     client = create_client(ctx)
     result = client.models.get(model_id=model_id, model_name=model_name)
-    click.echo(json.dumps(result, indent=2))
+    print_json(data=result)
 
 
 @models.command("info")
@@ -198,10 +197,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     console = ctx.obj["console"]
 
     if output_format == "json":
-        # Create syntax highlighted JSON without line numbers
-        json_str = json.dumps(models_info, indent=2)
-        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=False)
-        console.print(syntax)
+        print_json(data=models_info)
     else:  # table format
         table = Table(title="Models Information")
 
