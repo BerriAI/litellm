@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -29,7 +29,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     vector_store_name: Optional[str]
     vector_store_description: Optional[str]
-    vector_store_metadata: Optional[Dict[str, Any]]
+    vector_store_metadata: Optional[Union[Dict[str, Any], str]]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
