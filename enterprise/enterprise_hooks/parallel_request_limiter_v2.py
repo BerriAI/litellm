@@ -14,6 +14,7 @@ from typing import (
     Tuple,
     TypedDict,
     Union,
+    Set,
     cast,
 )
 
@@ -71,6 +72,10 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         except Exception:
             pass
 
+    @property
+    def prefix(self) -> str:
+        return "parallel_request_limiter_v2"
+
     def _get_current_usage_key(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -80,17 +85,20 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         group: RateLimitGroups,
     ) -> str:
         if rate_limit_type == "key":
-            return f"{user_api_key_dict.api_key}::{precise_minute}::{group}"
+            return f"{self.prefix}::{user_api_key_dict.api_key}::{precise_minute}::{group}"
         elif rate_limit_type == "model_per_key" and model is not None:
-            return f"{user_api_key_dict.api_key}::{model}::{precise_minute}::{group}"
+            return f"{self.prefix}::{user_api_key_dict.api_key}::{model}::{precise_minute}::{group}"
         elif rate_limit_type == "user":
-            return f"{user_api_key_dict.user_id}::{precise_minute}::{group}"
+            return f"{self.prefix}::{user_api_key_dict.user_id}::{precise_minute}::{group}"
         elif rate_limit_type == "customer":
-            return f"{user_api_key_dict.end_user_id}::{precise_minute}::{group}"
+            return f"{self.prefix}::{user_api_key_dict.end_user_id}::{precise_minute}::{group}"
         elif rate_limit_type == "team":
-            return f"{user_api_key_dict.team_id}::{precise_minute}::{group}"
+            return f"{self.prefix}::{user_api_key_dict.team_id}::{precise_minute}::{group}"
         else:
             raise ValueError(f"Invalid rate limit type: {rate_limit_type}")
+
+    def get_key_pattern_to_sync(self) -> Optional[str]:
+        return self.prefix + "::"
 
     async def check_key_in_limits_v2(
         self,

@@ -130,10 +130,8 @@ class BaseRoutingStrategy(ABC):
                 self.redis_increment_operation_queue,
             )
             if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=self.redis_increment_operation_queue,
                 )
 
             self.redis_increment_operation_queue = []
@@ -146,6 +144,12 @@ class BaseRoutingStrategy(ABC):
 
     def add_to_in_memory_keys_to_update(self, key: str):
         self.in_memory_keys_to_update.add(key)
+
+    def get_key_pattern_to_sync(self) -> Optional[str]:
+        """
+        Get the key pattern to sync
+        """
+        return None
 
     def get_in_memory_keys_to_update(self) -> Set[str]:
         return self.in_memory_keys_to_update
@@ -175,9 +179,22 @@ class BaseRoutingStrategy(ABC):
             await self._push_in_memory_increments_to_redis()
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = self.get_in_memory_keys_to_update()
+            pattern = self.get_key_pattern_to_sync()
+            cache_keys: Optional[Union[Set[str], List[str]]] = None
+            if pattern:
+                cache_keys = await self.dual_cache.redis_cache.async_scan_iter(
+                    pattern=pattern
+                )
 
-            cache_keys_list = list(cache_keys)
+            if cache_keys is None:
+                cache_keys = (
+                    self.get_in_memory_keys_to_update()
+                )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
+
+            if isinstance(cache_keys, set):
+                cache_keys_list = list(cache_keys)
+            else:
+                cache_keys_list = cache_keys
 
             # Batch fetch current spend values from Redis
             redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
