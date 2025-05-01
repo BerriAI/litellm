@@ -1,5 +1,5 @@
 # stdlib imports
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 from datetime import datetime
 
 # third party imports
@@ -70,6 +70,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     """List all available models"""
     client = create_client(ctx)
     models_list = client.models.list()
+    assert isinstance(models_list, list)
 
     if output_format == "json":
         rich.print_json(data=models_list)
@@ -172,6 +173,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     """Get detailed information about all models"""
     client = create_client(ctx)
     models_info = client.models.info()
+    assert isinstance(models_info, list)
 
     if output_format == "json":
         rich.print_json(data=models_info)
@@ -179,7 +181,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         table = rich.table.Table(title="Models Information")
 
         # Define all possible columns with their configurations
-        column_configs = {
+        column_configs: dict[str, dict[str, Any]] = {
             "public_model": {
                 "header": "Public Model",
                 "style": "cyan",
