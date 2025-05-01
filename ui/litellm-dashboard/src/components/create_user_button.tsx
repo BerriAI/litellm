@@ -35,6 +35,12 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { useQueryClient } from "@tanstack/react-query";
 
+interface Role {
+  label: string;
+  value: string;
+  description: string;
+}
+
 interface CreateuserProps {
   userID: string;
   accessToken: string;
@@ -42,6 +48,8 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
+  teamMemberRoles?: Role[];
+  defaultTeamMemberRole?: string;
 }
 
 // Define an interface for the UI settings
@@ -59,6 +67,20 @@ const Createuser: React.FC<CreateuserProps> = ({
   possibleUIRoles,
   onUserCreated,
   isEmbedded = false,
+  teamMemberRoles = [
+    {
+      label: "admin",
+      value: "admin",
+      description:
+        "Admin role. Can create team keys, add members, and manage settings.",
+    },
+    {
+      label: "user",
+      value: "user",
+      description: "User role. Can view team info, but not manage it.",
+    },
+  ],
+  defaultTeamMemberRole = "user",
 }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
@@ -285,6 +307,9 @@ const Createuser: React.FC<CreateuserProps> = ({
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
+          initialValues={{
+            role: defaultTeamMemberRole,
+          }}
         >
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
@@ -343,8 +368,19 @@ const Createuser: React.FC<CreateuserProps> = ({
 
           <Form.Item label="Team Role" className="gap-2" name="team_role">
             <Select placeholder="Select Team Role" style={{ width: "100%" }}>
-              <Option>Admin</Option>
-              <Option>User</Option>
+              {teamMemberRoles.map((teamMemberRole) => (
+                <Select.Option
+                  key={teamMemberRole.value}
+                  value={teamMemberRole.value}
+                >
+                  <Tooltip title={teamMemberRole.description}>
+                    <span className="font-medium">{teamMemberRole.label}</span>
+                    <span className="ml-2 text-gray-500 text-sm">
+                      - {teamMemberRole.description}
+                    </span>
+                  </Tooltip>
+                </Select.Option>
+              ))}
             </Select>
           </Form.Item>
 
