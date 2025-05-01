@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai import APIError
 
@@ -636,29 +636,15 @@ class SlackAlerting(CustomBatchLogger):
         # percent of max_budget left to spend
         if user_info.max_budget is None and user_info.soft_budget is None:
             return
-        percent_left: float = 0
-        if user_info.max_budget is not None:
-            if user_info.max_budget > 0:
-                percent_left = (
-                    user_info.max_budget - user_info.spend
-                ) / user_info.max_budget
 
         # check if crossed budget
-        if user_info.max_budget is not None:
-            if user_info.spend >= user_info.max_budget:
-                event = "budget_crossed"
-                event_message += (
-                    f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
-                )
-            elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
-                event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
-            elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
-                event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
-        elif user_info.soft_budget is not None:
-            if user_info.spend >= user_info.soft_budget:
-                event = "soft_budget_crossed"
+        event, event_message = self._get_event_and_event_message(
+            event=event,
+            user_info=user_info,
+            event_message=event_message,
+        )
+
+        # send alert
         if event is not None and event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
             result = await _cache.async_get_cache(key=_cache_key)
@@ -684,6 +670,84 @@ class SlackAlerting(CustomBatchLogger):
 
             return
         return
+
+    def _get_event_and_event_message(
+        self,
+        user_info: CallInfo,
+        event: Optional[
+            Literal[
+                "budget_crossed",
+                "threshold_crossed",
+                "soft_budget_crossed",
+                "projected_limit_exceeded",
+            ]
+        ],
+        event_message: str,
+    ) -> Tuple[
+        Optional[
+            Literal[
+                "budget_crossed",
+                "threshold_crossed",
+                "soft_budget_crossed",
+                "projected_limit_exceeded",
+            ]
+        ],
+        str,
+    ]:
+        """
+        Get the event and event message for a budget alert
+
+        This will append any new information to the event_message
+
+        Handles Max Budget and Soft Budget Alerts
+        """
+        percent_left: float = self._get_percent_of_max_budget_left(user_info=user_info)
+
+        #####################################################################
+        # SOFT BUDGET CHECK
+        # Check if the key/team/user has a soft budget set and they have crossed it
+        #####################################################################
+        if user_info.soft_budget is not None:
+            if user_info.spend >= user_info.soft_budget:
+                event = "soft_budget_crossed"
+                event_message += (
+                    f"Soft Budget Crossed\n Total Soft Budget:`{user_info.soft_budget}`"
+                )
+
+        #####################################################################
+        # MAX BUDGET CHECK
+        # Check if the key/team/user has a max budget set and they have either
+        ## a. Crossed their max budget
+        ## b. Either 5% or 15% of their max budget is left
+        #####################################################################
+        if user_info.max_budget is not None:
+            if user_info.spend >= user_info.max_budget:
+                event = "budget_crossed"
+                event_message += (
+                    f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+                )
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
+                event = "threshold_crossed"
+                event_message += "5% Threshold Crossed "
+            elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
+                event = "threshold_crossed"
+                event_message += "15% Threshold Crossed"
+
+        return event, event_message
+
+    def _get_percent_of_max_budget_left(self, user_info: CallInfo) -> float:
+        """
+        Get the percent of the max budget that is left
+        """
+        percent_left: float = 0.0
+        current_spend: float = user_info.spend
+        max_budget: Optional[float] = user_info.max_budget
+        if max_budget is None:
+            return percent_left
+        if max_budget <= 0:
+            return percent_left
+        percent_left = (max_budget - current_spend) / max_budget
+        return percent_left
 
     def _get_user_info_str(self, user_info: CallInfo) -> str:
         """
@@ -823,9 +887,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[
-            ProviderRegionOutageModel
-        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
+        outage_value: Optional[ProviderRegionOutageModel] = (
+            await self.internal_usage_cache.async_get_cache(key=cache_key)
+        )
 
         if (
             getattr(exception, "status_code", None) is None
@@ -1406,9 +1470,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[
-                Union[str, List[str]]
-            ] = self.alert_to_webhook_url[alert_type]
+            slack_webhook_url: Optional[Union[str, List[str]]] = (
+                self.alert_to_webhook_url[alert_type]
+            )
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
