@@ -292,6 +292,12 @@ def calculate_img_tokens(
         total_tokens = base_tokens + tile_tokens
         return total_tokens
 
+
+TokenCounterFunction = Callable[[str], int]
+"""
+Type for a function that counts tokens in a string.
+"""
+
 class _MessageCountParams:
     """
     A class to hold the parameters for counting tokens in messages.
@@ -439,14 +445,14 @@ def _count_messages(
 
 
 def _count_extra(
-    count_function: Callable[[str], int],
+    count_function: TokenCounterFunction,
     tools: Optional[List[ChatCompletionToolParam]],
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam],
     includes_system_message: bool,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
-        count_function (Callable[[str], int]): The function to count tokens.
+        count_function (TokenCounterFunction): The function to count tokens.
         tools (Optional[List[ChatCompletionToolParam]]): The available tools.
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
@@ -475,7 +481,7 @@ def _count_extra(
 def _get_count_function(
     model: Optional[str],
     custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
-) -> Callable[[str], int]:
+) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
     from litellm.utils import _select_tokenizer, print_verbose
@@ -524,7 +530,7 @@ def _fix_model_name(model: str) -> str:
 
 
 def _count_content_list(
-    count_function: Callable[[str], int],
+    count_function: TokenCounterFunction,
     content_list: OpenAIMessageContent,
     use_default_image_token_count: bool,
     default_token_count: Optional[int],
