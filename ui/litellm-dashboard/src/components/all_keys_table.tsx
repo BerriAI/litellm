@@ -397,14 +397,14 @@ export function AllKeysTable({
 
   ];
   
-  
+  console.log(`keys: ${JSON.stringify(keys)}`)
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
         <KeyInfoView 
           keyId={selectedKeyId} 
           onClose={() => setSelectedKeyId(null)}
-          keyData={keys.find(k => k.token === selectedKeyId)}
+          keyData={filteredKeys.find(k => k.token === selectedKeyId)}
           onKeyDataUpdate={(updatedKeyData) => {
             setKeys(keys => keys.map(key => {
               if (key.token === updatedKeyData.token) {
