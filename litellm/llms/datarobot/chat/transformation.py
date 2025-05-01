@@ -33,15 +33,20 @@ class DataRobotConfig(OpenAIGPTConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """
-        Ensure - /v1/chat/completions is at the end of the url
+        Ensure that the url references a deployment or the DataRobot LLM Gateway
 
         """
         if api_base is None:
             api_base = "https://app.datarobot.com"
 
-        if not api_base.endswith("/chat/completions/"):
-            if api_base.endswith("/chat/completions"):
-                api_base += "/"
-            else:
-                api_base += "/api/v2/genai/llmgw/chat/completions/"
+        # If the api_base is a deployment URL, we do not append the chat completions path
+        if "api/v2/deployments" not in api_base:
+            # If the api_base is not a deployment URL, we need to append the chat completions path
+            if "api/v2/genai/llmgw/chat/completions" not in api_base:
+                api_base += "/api/v2/genai/llmgw/chat/completions"
+
+        # Ensure the url ends with a trailing slash
+        if not api_base.endswith("/"):
+            api_base += "/"
+
         return str(api_base)

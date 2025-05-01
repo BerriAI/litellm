@@ -19,6 +19,8 @@ class TestDataRobotConfig:
             ("https://app.datarobot.com/api/v2/genai/llmgw/chat/completions", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("https://staging.datarobot.com", "https://staging.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
+            ("https://app.datarobot.com/api/v2/deployments/deployment_id", "https://app.datarobot.com/api/v2/deployments/deployment_id/"),
+            ("https://app.datarobot.com/api/v2/deployments/deployment_id/", "https://app.datarobot.com/api/v2/deployments/deployment_id/"),
         ]
     )
     def test_get_complete_url(self, api_base, expected_url):
