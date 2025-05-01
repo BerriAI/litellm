@@ -301,6 +301,7 @@ class _MessageCountParams:
         model: str,
         custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]],
     ):
+        from litellm.utils import print_verbose
         actual_model = _fix_model_name(model)
         if actual_model == "gpt-3.5-turbo-0301":
             self.tokens_per_message = (
@@ -313,7 +314,8 @@ class _MessageCountParams:
         elif actual_model in litellm.azure_llms:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
-        else:
+        else:                
+            print_verbose(f"Warning: unknown model {model}. Using default token params.")
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
