@@ -1,12 +1,12 @@
-import click
-import json
+# stdlib imports
 from typing import Optional, Literal
 from datetime import datetime
 
-from rich import print_json
-from rich.console import Console
-from rich.table import Table
+# third party imports
+import click
+import rich
 
+# local imports
 from ... import Client
 
 
@@ -70,13 +70,12 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     """List all available models"""
     client = create_client(ctx)
     models_list = client.models.list()
-    console = ctx.obj["console"]
 
     if output_format == "json":
-        print_json(data=models_list)
+        rich.print_json(data=models_list)
     else:  # table format
-        table = Table(title="Available Models")
-        
+        table = rich.table.Table(title="Available Models")
+
         # Add columns based on the data structure
         table.add_column("ID", style="cyan")
         table.add_column("Object", style="green")
@@ -89,7 +88,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():
                 created = int(created)
-            
+
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
@@ -97,7 +96,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
                 str(model.get("owned_by", "")),
             )
 
-        console.print(table)
+        rich.print(table)
 
 
 @models.command("add")
@@ -127,7 +126,7 @@ def add_model(ctx: click.Context, model_name: str, param: tuple[str, ...], info:
         model_params=model_params,
         model_info=model_info,
     )
-    print_json(data=result)
+    rich.print_json(data=result)
 
 
 @models.command("delete")
@@ -137,7 +136,7 @@ def delete_model(ctx: click.Context, model_id: str) -> None:
     """Delete a model from the proxy"""
     client = create_client(ctx)
     result = client.models.delete(model_id=model_id)
-    print_json(data=result)
+    rich.print_json(data=result)
 
 
 @models.command("get")
@@ -151,7 +150,7 @@ def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[
 
     client = create_client(ctx)
     result = client.models.get(model_id=model_id, model_name=model_name)
-    print_json(data=result)
+    rich.print_json(data=result)
 
 
 @models.command("info")
@@ -173,13 +172,12 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     """Get detailed information about all models"""
     client = create_client(ctx)
     models_info = client.models.info()
-    console = ctx.obj["console"]
 
     if output_format == "json":
-        print_json(data=models_info)
+        rich.print_json(data=models_info)
     else:  # table format
-        table = Table(title="Models Information")
-        
+        table = rich.table.Table(title="Models Information")
+
         # Define all possible columns with their configurations
         column_configs = {
             "public_model": {
@@ -244,7 +242,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
             if row_values:
                 table.add_row(*row_values)
 
-        console.print(table)
+        rich.print(table)
 
 
 @models.command("update")
@@ -274,4 +272,4 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
         model_params=model_params,
         model_info=model_info,
     )
-    print_json(data=result) 
+    rich.print_json(data=result)
