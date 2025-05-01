@@ -15,6 +15,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -807,22 +808,71 @@ class JWTAuthManager:
 
         user_object: Optional[LiteLLM_UserTable] = None
         if user_id:
-            user_object = (
-                await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=jwt_handler.is_upsert_user_id(
-                        valid_user_email=valid_user_email
-                    ),
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_email=user_email,
-                    sso_user_id=user_id,
+            # Check if we need to upsert the user
+            upsert_user = jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email)
+            
+            try:
+                user_object = (
+                    await get_user_object(
+                        user_id=user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=upsert_user,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_email=user_email,
+                        sso_user_id=user_id,
+                    )
+                    if user_id
+                    else None
                 )
-                if user_id
-                else None
-            )
+                
+                # Apply default internal user params if user was just created
+                # We can check this by seeing if the user was just added to the cache
+                if user_object and upsert_user and litellm.default_internal_user_params:
+                    verbose_proxy_logger.debug(f"Applying default_internal_user_params to JWT user: {user_id}")
+                    
+                    # Update the user with default internal user params
+                    user_data = {}
+                    
+                    # Apply default params for internal users only
+                    if user_object.user_role and user_object.user_role.startswith("internal_user"):
+                        for key, value in litellm.default_internal_user_params.items():
+                            if key == "available_teams":
+                                continue
+                            elif getattr(user_object, key, None) is None:
+                                user_data[key] = value
+                            elif key == "models" and isinstance(getattr(user_object, key, None), list) and len(getattr(user_object, key, None)) == 0:
+                                user_data[key] = value
+                    
+                    # Set budget based on defaults if not already set
+                    if user_object.max_budget is None and litellm.max_internal_user_budget is not None:
+                        user_data["max_budget"] = litellm.max_internal_user_budget
+                        
+                    if user_object.budget_duration is None and litellm.internal_user_budget_duration is not None:
+                        user_data["budget_duration"] = litellm.internal_user_budget_duration
+                    
+                    # Only update if there are changes to make
+                    if user_data and prisma_client:
+                        await prisma_client.db.litellm_usertable.update(
+                            where={"user_id": user_id},
+                            data=user_data,
+                        )
+                        
+                        # Refresh the user object after update
+                        user_object = await get_user_object(
+                            user_id=user_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            user_id_upsert=False,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                            check_db_only=True,
+                        )
+                
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error getting/creating JWT user: {str(e)}")
+                user_object = None
 
         end_user_object: Optional[LiteLLM_EndUserTable] = None
         if end_user_id:
