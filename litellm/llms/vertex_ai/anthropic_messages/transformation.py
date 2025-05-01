@@ -10,14 +10,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
-DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
-
-class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
+class VertexAIAnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         """
-        Return the supported parameters for Anthropic Messages API
+        Return the supported parameters for Vertex AI Anthropic Messages API
         """
         return [
             "messages",
@@ -30,14 +27,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "top_k",
             "tools",
             "tool_choice",
-            "thinking",
-            # TODO: Add Anthropic `metadata` support
-            # "metadata",
         ]
     
     def map_openai_params(self, model: str, optional_params: dict) -> dict:
         """
-        Maps OpenAI-style parameters to Anthropic parameters
+        Maps OpenAI-style parameters to Vertex AI Anthropic parameters
         """
         mapped_params = {}
         
@@ -59,12 +53,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         """
-        Get the complete URL for the Anthropic Messages API
+        Get the complete URL for the Vertex AI API
+        For Vertex AI, this will be handled differently in the main handler
         """
-        api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+        return api_base or ""
 
     def validate_environment(
         self,
@@ -74,11 +66,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> dict:
         """
         Validate and return the environment for the API call
+        Vertex AI uses GCP authentication, not API keys
         """
-        if "x-api-key" not in headers:
-            headers["x-api-key"] = api_key
-        if "anthropic-version" not in headers:
-            headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
+        # For Vertex AI, auth is handled through Google service account
+        # Make sure proper content-type is set
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
         return headers
@@ -92,7 +83,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the request to match Anthropic's API format
+        Transform the request to match Vertex AI Anthropic format
         """
         # Map OpenAI style parameters to Anthropic parameters
         mapped_params = self.map_openai_params(model, optional_params.copy())
@@ -103,7 +94,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             if k in self.get_supported_anthropic_messages_params(model)
         }
         
-        # Combine the request data
+        # Vertex AI already uses Anthropic's /v1/messages format, so minimal transformation needed
         data = {
             "model": model,
             "messages": messages,
@@ -128,13 +119,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         json_mode: bool = False,
     ) -> AnthropicMessagesResponse:
         """
-        Transform the raw response to match the expected format
+        Transform the raw Vertex AI response to match the expected Anthropic format
+        Vertex AI already returns data in Anthropic format, so minimal transformation needed
         """
-        # For Anthropic Messages, the response is already in the correct format
-        # Just parse the JSON response
+        # For Vertex AI, the response should already be in the Anthropic format
         response_json = raw_response.json()
         
-        # Return the parsed response
+        # TODO: Add any specific transformations if needed
+        
         return response_json
     
     def transform_streaming_response(
@@ -145,8 +137,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         request_body: Dict[str, Any]
     ) -> Any:
         """
-        Transform a streaming response from Anthropic
+        Transform a streaming response from Vertex AI Anthropic
         """
-        # The streaming response processing is handled in the handler.py file
-        # This function is a placeholder for completeness
-        return streaming_response
+        # TODO: Implement the streaming response transformation for Vertex AI
+        return streaming_response 
