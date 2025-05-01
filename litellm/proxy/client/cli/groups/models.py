@@ -7,7 +7,7 @@ from rich import print_json
 from rich.console import Console
 from rich.table import Table
 
-from ..client import Client
+from ... import Client
 
 
 def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
