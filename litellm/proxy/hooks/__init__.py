@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Union
 
 from . import *
@@ -6,11 +7,19 @@ from .managed_files import _PROXY_LiteLLMManagedFiles
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 
 try:
-    from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
-        _PROXY_MaxParallelRequestsHandler,
-    )
+    if (
+        os.getenv("EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING", "false").lower()
+        == "true"
+    ):  # FEATURE FLAG as it's still in development
+        from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
 
-    max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+        max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+    else:
+        from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
+
+        max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
 except ImportError:
     from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 
