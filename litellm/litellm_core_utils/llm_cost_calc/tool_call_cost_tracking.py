@@ -175,8 +175,7 @@ class StandardBuiltInToolCostTracking:
         """
         If request includes `web_search_options`, calculate the cost of the web search.
         """
-        if web_search_options is None:
-            return 0.0
+        web_search_options = web_search_options or {}
         if model_info is None:
             return 0.0
 
