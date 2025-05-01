@@ -2,7 +2,6 @@ import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { message } from "antd";
 import { TokenUsage } from "../ResponseMetrics";
-import { createVectorStoreTools } from "../../vector_store_management/vectorStoreTools";
 
 export async function makeOpenAIChatCompletionRequest(
     chatHistory: { role: string; content: string }[],
@@ -49,9 +48,6 @@ export async function makeOpenAIChatCompletionRequest(
       let fullResponseContent = "";
       let fullReasoningContent = "";
       
-      // Create tools configuration if vector_store_ids are provided
-      const tools = createVectorStoreTools(vector_store_ids);
-      
       // @ts-ignore
       const response = await client.chat.completions.create({
         model: selectedModel,
@@ -61,7 +57,7 @@ export async function makeOpenAIChatCompletionRequest(
         },
         litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
-        ...(tools ? { tools } : {}),
+        ...(vector_store_ids ? { vector_store_ids } : {}),
       }, { signal });
   
       for await (const chunk of response) {

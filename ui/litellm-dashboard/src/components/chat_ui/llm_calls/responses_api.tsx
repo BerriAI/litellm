@@ -2,7 +2,6 @@ import openai from "openai";
 import { message } from "antd";
 import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
-import { createVectorStoreTools } from "../../vector_store_management/vectorStoreTools";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -55,9 +54,6 @@ export async function makeOpenAIResponsesRequest(
       type: "message"
     }));
 
-    // Create tools configuration if vector_store_ids are provided
-    const tools = createVectorStoreTools(vector_store_ids);
-
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
     const response = await (client as any).responses.create({
@@ -65,7 +61,7 @@ export async function makeOpenAIResponsesRequest(
       input: formattedInput,
       stream: true,
       litellm_trace_id: traceId,
-      ...(tools ? { tools } : {}),
+      ...(vector_store_ids ? { vector_store_ids } : {}),
     }, { signal });
 
     for await (const event of response) {
