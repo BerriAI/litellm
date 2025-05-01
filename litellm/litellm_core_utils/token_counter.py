@@ -430,7 +430,7 @@ def _count_messages(
                 num_tokens += params.count_function(value)
                 if key == "name":
                     num_tokens += params.tokens_per_name
-            elif isinstance(value, List):
+            elif key == 'content' and isinstance(value, List):
                 num_tokens += _count_content_list(
                     params.count_function,
                     value,
