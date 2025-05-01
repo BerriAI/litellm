@@ -2632,14 +2632,14 @@ files = [
 
 [[package]]
 name = "prisma"
-version = "0.11.0"
+version = "0.15.0"
 description = "Prisma Client Python is an auto-generated and fully type-safe database client"
 optional = false
-python-versions = ">=3.7.0"
+python-versions = ">=3.8.0"
 groups = ["main", "proxy-dev"]
 files = [
-    {file = "prisma-0.11.0-py3-none-any.whl", hash = "sha256:22bb869e59a2968b99f3483bb417717273ffbc569fd1e9ceed95e5614cbaf53a"},
-    {file = "prisma-0.11.0.tar.gz", hash = "sha256:3f2f2fd2361e1ec5ff655f2a04c7860c2f2a5bc4c91f78ca9c5c6349735bf693"},
+    {file = "prisma-0.15.0-py3-none-any.whl", hash = "sha256:de949cc94d3d91243615f22ff64490aa6e2d7cb81aabffce53d92bd3977c09a4"},
+    {file = "prisma-0.15.0.tar.gz", hash = "sha256:5cd6402aa8322625db3fc1152040404e7fc471fe7f8fa3a314fa8a99529ca107"},
 ]
 
 [package.dependencies]
@@ -2647,10 +2647,11 @@ click = ">=7.1.2"
 httpx = ">=0.19.0"
 jinja2 = ">=2.11.2"
 nodeenv = "*"
-pydantic = ">=1.8.0,<3"
+pydantic = ">=1.10.0,<3"
 python-dotenv = ">=0.12.0"
+StrEnum = {version = "*", markers = "python_version < \"3.11\""}
 tomlkit = "*"
-typing-extensions = ">=4.0.1"
+typing-extensions = ">=4.5.0"
 
 [package.extras]
 all = ["nodejs-bin"]
@@ -3798,6 +3799,24 @@ typing-extensions = {version = ">=3.10.0", markers = "python_version < \"3.10\""
 full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
 
 [[package]]
+name = "strenum"
+version = "0.4.15"
+description = "An Enum that inherits from str."
+optional = false
+python-versions = "*"
+groups = ["main", "proxy-dev"]
+markers = "python_version <= \"3.10\""
+files = [
+    {file = "StrEnum-0.4.15-py3-none-any.whl", hash = "sha256:a30cda4af7cc6b5bf52c8055bc4bf4b2b6b14a93b574626da33df53cf7740659"},
+    {file = "StrEnum-0.4.15.tar.gz", hash = "sha256:878fb5ab705442070e4dd1929bb5e2249511c0bcf2b0eeacf3bcd80875c82eff"},
+]
+
+[package.extras]
+docs = ["myst-parser[linkify]", "sphinx", "sphinx-rtd-theme"]
+release = ["twine"]
+test = ["pylint", "pytest", "pytest-black", "pytest-cov", "pytest-pylint"]
+
+[[package]]
 name = "tabulate"
 version = "0.9.0"
 description = "Pretty-print tabular data"
@@ -4623,4 +4642,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "ba7691ffdf305d212bf661fbe0f2a6919043852d993721189c6b7b92d4a127c0"
+content-hash = "dc16cabb4229d4d982d48ce67840091cb15886f26d2853bbb295fb044f9ca93f"
