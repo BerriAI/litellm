@@ -2535,7 +2535,7 @@ def get_optional_params_image_gen(
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"Setting `response_format` is not supported by Azure gpt-image-1. To drop it from the call, set `litellm.drop_params = True` or pass drop_params=True.",
+                    message="Setting `response_format` is not supported by Azure gpt-image-1. To drop it from the call, set `litellm.drop_params = True` or pass drop_params=True.",
                 )
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
