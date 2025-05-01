@@ -842,8 +842,10 @@ class JWTAuthManager:
                                 continue
                             elif getattr(user_object, key, None) is None:
                                 user_data[key] = value
-                            elif key == "models" and isinstance(getattr(user_object, key, None), list) and len(getattr(user_object, key, None)) == 0:
-                                user_data[key] = value
+                            elif key == "models":
+                                models = getattr(user_object, key, None)
+                                if isinstance(models, list) and len(models) == 0:
+                                    user_data[key] = value
                     
                     # Set budget based on defaults if not already set
                     if user_object.max_budget is None and litellm.max_internal_user_budget is not None:
