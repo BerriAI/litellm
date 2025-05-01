@@ -2263,3 +2263,17 @@ class SpecialEnums(Enum):
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
 ]
+
+
+class DynamicPromptManagementParamLiteral(str, Enum):
+    """
+    If any of these params are passed, the user is trying to use dynamic prompt management
+    """
+
+    CACHE_CONTROL_INJECTION_POINTS = "cache_control_injection_points"
+    KNOWLEDGE_BASES = "knowledge_bases"
+    VECTOR_STORE_IDS = "vector_store_ids"
+
+    @classmethod
+    def list_all_params(cls):
+        return [param.value for param in cls]

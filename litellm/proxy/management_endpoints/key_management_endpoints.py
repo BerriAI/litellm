@@ -663,8 +663,9 @@ def prepare_key_update_data(
             and (isinstance(budget_duration, str))
             and len(budget_duration) > 0
         ):
-            duration_s = duration_in_seconds(duration=budget_duration)
-            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
@@ -2004,6 +2005,11 @@ async def list_keys(
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
     ),
+    sort_by: Optional[str] = Query(
+        default=None,
+        description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
+    ),
+    sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -2061,6 +2067,8 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -2086,6 +2094,42 @@ async def list_keys(
         )
 
 
+def _validate_sort_params(
+    sort_by: Optional[str], sort_order: str
+) -> Optional[Dict[str, str]]:
+    order_by: Dict[str, str] = {}
+
+    if sort_by is None:
+        return None
+    # Validate sort_by is a valid column
+    valid_columns = [
+        "spend",
+        "max_budget",
+        "created_at",
+        "updated_at",
+        "token",
+        "key_alias",
+    ]
+    if sort_by not in valid_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort column. Must be one of: {', '.join(valid_columns)}"
+            },
+        )
+
+    # Validate sort_order
+    if sort_order.lower() not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
+        )
+
+    order_by[sort_by] = sort_order.lower()
+
+    return order_by
+
+
 async def _list_key_helper(
     prisma_client: PrismaClient,
     page: int,
@@ -2100,6 +2144,8 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -2164,12 +2210,20 @@ async def _list_key_helper(
 
     verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
 
+    order_by: Optional[Dict[str, str]] = (
+        _validate_sort_params(sort_by, sort_order)
+        if sort_by is not None and isinstance(sort_by, str)
+        else None
+    )
+
     # Fetch keys with pagination
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
-        order=[
+        order=order_by
+        if order_by
+        else [
             {"created_at": "desc"},
             {"token": "desc"},  # fallback sort
         ],

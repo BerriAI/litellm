@@ -2701,6 +2701,8 @@ export const keyListCall = async (
   keyHash: string | null,
   page: number,
   pageSize: number,
+  sortBy: string | null = null,
+  sortOrder: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -2738,6 +2740,13 @@ export const keyListCall = async (
       queryParams.append('size', pageSize.toString());
     }
 
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
+    }
     queryParams.append('return_full_object', 'true');
     queryParams.append('include_team_keys', 'true');
     
@@ -4789,6 +4798,127 @@ export const sessionSpendLogsCall = async (
     return data;
   } catch (error) {
     console.error("Failed to fetch session logs:", error);
+    throw error;
+  }
+};
+
+export const vectorStoreCreateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/new`
+      : `/vector_store/new`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify(formValues)
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to create vector store');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error creating vector store:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreListCall = async (
+  accessToken: string,
+  page: number = 1,
+  page_size: number = 100
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/list`
+      : `/vector_store/list`;
+
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to list vector stores');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error listing vector stores:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreDeleteCall = async (
+  accessToken: string,
+  vectorStoreId: string
+): Promise<void> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/delete`
+      : `/vector_store/delete`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ vector_store_id: vectorStoreId })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to delete vector store');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting vector store:', error);
+    throw error;
+  }
+};
+
+export const vectorStoreInfoCall = async (
+  accessToken: string,
+  vectorStoreId: string
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/info`
+      : `/vector_store/info`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ vector_store_id: vectorStoreId })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to get vector store info');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error getting vector store info:', error);
     throw error;
   }
 };

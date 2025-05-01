@@ -842,3 +842,26 @@ async def test_key_user_not_in_db():
             await chat_completion(session=session, key=key)
         except Exception as e:
             pytest.fail(f"Expected this call to work - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_key_over_budget():
+    """
+    Test if key over budget is handled as expected.
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0, budget=0.0000001)
+        key = key_gen["key"]
+        try:
+            await chat_completion(session=session, key=key)
+        except Exception as e:
+            pytest.fail(f"Expected this call to work - {str(e)}")
+
+        ## CALL `/models` - expect to work
+        model_list = await get_key_info(session=session, get_key=key, call_key=key)
+        ## CALL `/chat/completions` - expect to fail    
+        try:
+            await chat_completion(session=session, key=key)
+            pytest.fail("Expected this call to fail")
+        except Exception as e:
+            assert "Budget has been exceeded!" in str(e)

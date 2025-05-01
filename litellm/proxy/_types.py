@@ -324,8 +324,13 @@ class LiteLLMRoutes(enum.Enum):
 
     anthropic_routes = [
         "/v1/messages",
+        # MCP routes
+        "/mcp/tools",
+        "/mcp/tools/list",
+        "/mcp/tools/call",
     ]
 
+    llm_api_routes = openai_routes + anthropic_routes + mapped_pass_through_routes
     info_routes = [
         "/key/info",
         "/key/health",
@@ -2451,6 +2456,7 @@ class SpecialHeaders(enum.Enum):
     anthropic_authorization = "x-api-key"
     google_ai_studio_authorization = "x-goog-api-key"
     azure_apim_authorization = "Ocp-Apim-Subscription-Key"
+    custom_litellm_api_key = "x-litellm-api-key"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):

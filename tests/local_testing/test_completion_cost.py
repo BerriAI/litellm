@@ -949,7 +949,7 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
+@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1283,7 +1283,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-default"),
+        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-above-16b"),
         ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
     ],
 )
