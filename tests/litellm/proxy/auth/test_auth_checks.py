@@ -8,7 +8,14 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+
+if sys.version_info >= (3, 11):
+    from datetime import UTC
+else:
+    from datetime import timezone
+
+    UTC = timezone.utc
 
 import pytest
 

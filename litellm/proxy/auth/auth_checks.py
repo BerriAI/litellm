@@ -10,6 +10,7 @@ Run checks for:
 """
 import asyncio
 import re
+import sys
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
@@ -956,7 +957,14 @@ async def get_team_object(
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
-        from datetime import UTC, datetime, timedelta
+        from datetime import datetime, timedelta
+
+        if sys.version_info >= (3, 11):
+            from datetime import UTC
+        else:
+            from datetime import timezone
+
+            UTC = timezone.utc
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             encrypt_value_helper,
