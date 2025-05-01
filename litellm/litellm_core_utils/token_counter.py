@@ -21,8 +21,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
+    OpenAIMessageContent,
 )
 from litellm.types.utils import SelectTokenizerResponse
 
@@ -30,7 +32,7 @@ from litellm.types.utils import SelectTokenizerResponse
 def get_modified_max_tokens(
     model: str,
     base_model: str,
-    messages: Optional[list],
+    messages: Optional[List[AllMessageValues]],
     user_max_tokens: Optional[int],
     buffer_perc: Optional[float],
     buffer_num: Optional[float],
@@ -318,7 +320,7 @@ def token_counter(
     model="",
     custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
     text: Optional[Union[str, List[str]]] = None,
-    messages: Optional[List] = None,
+    messages: Optional[List[AllMessageValues]] = None,
     count_response_tokens: Optional[bool] = False,
     tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
@@ -332,7 +334,7 @@ def token_counter(
     model (str): The name of the model to use for tokenization. Default is an empty string.
     custom_tokenizer (Optional[dict]): A custom tokenizer created with the `create_pretrained_tokenizer` or `create_tokenizer` method. Must be a dictionary with a string value for `type` and Tokenizer for `tokenizer`. Default is None.
     text (str): The raw text string to be passed to the model. Default is None.
-    messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
+    messages (Optional[List[AllMessageValues]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
     default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs. Default is None.
 
     Returns:
@@ -374,7 +376,7 @@ def token_counter(
 
 def _count_messages(
     params: _MessageCountParams,
-    messages: List[Dict[str, Any]],
+    messages: List[AllMessageValues],
     use_default_image_token_count: bool,
     default_token_count: Optional[int],
 ) -> int:
@@ -495,7 +497,7 @@ def _fix_model_name(model: str) -> str:
 
 def _count_content_list(
     count_function: Callable[[str], int],
-    content_list: List[Dict[str, Any]],
+    content_list: OpenAIMessageContent,
     use_default_image_token_count: bool,
     default_token_count: Optional[int],
 ) -> int:
