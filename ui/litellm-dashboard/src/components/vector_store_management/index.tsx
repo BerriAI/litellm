@@ -6,26 +6,18 @@ import {
   Col,
   Text,
   Grid,
-  TextInput,
 } from "@tremor/react";
 import {
   InformationCircleIcon,
   RefreshIcon,
 } from "@heroicons/react/outline";
-import {
-  Modal,
-  Form,
-  Select as Select2,
-  message,
-  Tooltip,
-  Input,
-  Button
-} from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { vectorStoreCreateCall, vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
+import { message } from "antd";
+import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
-import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
+import VectorStoreForm from "./VectorStoreForm";
+import DeleteModal from "./DeleteModal";
+
 interface VectorStoreProps {
   accessToken: string | null;
   userID: string | null;
@@ -42,8 +34,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-  const [form] = Form.useForm();
-  const [metadataJson, setMetadataJson] = useState("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
 
   const fetchVectorStores = async () => {
@@ -77,36 +67,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     setLastRefreshed(currentDate.toLocaleString());
   };
 
-  const handleCreate = async (formValues: any) => {
-    if (!accessToken) return;
-    try {
-      // Parse metadata JSON
-      let metadata = {};
-      try {
-        metadata = metadataJson.trim() ? JSON.parse(metadataJson) : {};
-      } catch (e) {
-        message.error("Invalid JSON in metadata field");
-        return;
-      }
-
-      await vectorStoreCreateCall(accessToken, {
-        vector_store_id: formValues.vector_store_id,
-        custom_llm_provider: formValues.custom_llm_provider,
-        vector_store_name: formValues.vector_store_name,
-        vector_store_description: formValues.vector_store_description,
-        vector_store_metadata: metadata,
-      });
-      message.success("Vector store created successfully");
-      setIsCreateModalVisible(false);
-      form.resetFields();
-      setMetadataJson("{}");
-      fetchVectorStores();
-    } catch (error) {
-      console.error("Error creating vector store:", error);
-      message.error("Error creating vector store: " + error);
-    }
-  };
-
   const handleDelete = async (vectorStoreId: string) => {
     setVectorStoreToDelete(vectorStoreId);
     setIsDeleteModalOpen(true);
@@ -124,6 +84,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     }
     setIsDeleteModalOpen(false);
     setVectorStoreToDelete(null);
+  };
+
+  const handleCreateSuccess = () => {
+    setIsCreateModalVisible(false);
+    fetchVectorStores();
   };
 
   useEffect(() => {
@@ -148,7 +113,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
           </div>
         </div>
         
-        
         <Text className="mb-4">
           <p>You can use vector stores to store and retrieve LLM embeddings. Currently, we support Amazon Bedrock vector stores.</p>
         </Text>
@@ -170,187 +134,20 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
         </Grid>
 
         {/* Create Vector Store Modal */}
-        <Modal
-          title="Create New Vector Store"
-          visible={isCreateModalVisible}
-          width={800}
-          footer={null}
-          onCancel={() => {
-            setIsCreateModalVisible(false);
-            form.resetFields();
-            setMetadataJson("{}");
-          }}
-        >
-          <Form
-            form={form}
-            onFinish={handleCreate}
-            labelCol={{ span: 8 }}
-            wrapperCol={{ span: 16 }}
-            labelAlign="left"
-          >
-          <Form.Item
-              label={
-                <span>
-                  Provider{' '}
-                  <Tooltip title="Select the provider for this vector store">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="custom_llm_provider"
-              rules={[{ required: true, message: "Please select a provider" }]}
-              initialValue="bedrock"
-            >
-              <Select2>
-                {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
-                  // Currently only showing Bedrock since it's the only supported provider
-                  if (providerEnum === 'Bedrock') {
-                    return (
-                      <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
-                        <div className="flex items-center space-x-2">
-                          <img
-                            src={providerLogoMap[providerDisplayName]}
-                            alt={`${providerEnum} logo`}
-                            className="w-5 h-5"
-                            onError={(e) => {
-                              // Create a div with provider initial as fallback
-                              const target = e.target as HTMLImageElement;
-                              const parent = target.parentElement;
-                              if (parent) {
-                                const fallbackDiv = document.createElement('div');
-                                fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                parent.replaceChild(fallbackDiv, target);
-                              }
-                            }}
-                          />
-                          <span>{providerDisplayName}</span>
-                        </div>
-                      </Select2.Option>
-                    );
-                  }
-                  return null;
-                })}
-              </Select2>
-            </Form.Item>
-            <Form.Item
-              label={
-                  <span>
-                    Vector Store ID{' '}
-                    <Tooltip title="Enter the vector store ID from your api provider">
-                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                    </Tooltip>
-                  </span>
-              }
-              name="vector_store_id"
-              rules={[{ required: true, message: "Please input the vector store ID from your api provider" }]}
-            >
-              <TextInput />
-            </Form.Item>
-
-            <Form.Item
-              label={
-                  <span>
-                      Vector Store Name{' '}
-                      <Tooltip title="Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                  </span>
-              }
-              name="vector_store_name"
-            >
-              <TextInput />
-            </Form.Item>
-
-            <Form.Item
-              label="Description"
-              name="vector_store_description"
-            >
-              <Input.TextArea rows={4} />
-            </Form.Item>
-
-            
-
-            {/* Credentials dropdown */}
-
-            <Form.Item
-              label={
-                  <span>
-                      Existing Credentials{' '}
-                      <Tooltip title="Optionally select API provider credentials for this vector store eg. Bedrock API KEY">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                  </span>
-              }
-              name="litellm_credential_name"
-            >
-              <Select2
-                showSearch
-                placeholder="Select or search for existing credentials"
-                optionFilterProp="children"
-                filterOption={(input, option) =>
-                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                }
-                options={[
-                  { value: null, label: 'None' },
-                  ...credentials.map((credential) => ({
-                    value: credential.credential_name,
-                    label: credential.credential_name
-                  }))
-                ]}
-                allowClear
-              />
-            </Form.Item>
-
-
-            <Form.Item
-              label={
-                <span>
-                  Metadata{' '}
-                  <Tooltip title="JSON metadata for the vector store (optional)">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-            >
-              <Input.TextArea
-                rows={4}
-                value={metadataJson}
-                onChange={(e) => setMetadataJson(e.target.value)}
-                placeholder='{"key": "value"}'
-              />
-            </Form.Item>
-
-            <div className="flex justify-end space-x-3">
-              <TremorButton onClick={() => setIsCreateModalVisible(false)} variant="secondary">
-                Cancel
-              </TremorButton>
-              <TremorButton variant="primary" type="submit">
-                Create
-              </TremorButton>
-            </div>
-          </Form>
-        </Modal>
+        <VectorStoreForm 
+          isVisible={isCreateModalVisible}
+          onCancel={() => setIsCreateModalVisible(false)}
+          onSuccess={handleCreateSuccess}
+          accessToken={accessToken}
+          credentials={credentials}
+        />
 
         {/* Delete Confirmation Modal */}
-        <Modal
-          title="Delete Vector Store"
-          visible={isDeleteModalOpen}
-          footer={null}
+        <DeleteModal 
+          isVisible={isDeleteModalOpen}
           onCancel={() => setIsDeleteModalOpen(false)}
-        >
-          <p>Are you sure you want to delete this vector store? This action cannot be undone.</p>
-            <div className="px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-            <TremorButton
-                onClick={confirmDelete}
-                color="red"
-                className="ml-2"
-                >
-                Delete
-                </TremorButton>
-                <TremorButton onClick={() => setIsDeleteModalOpen(false)} variant="primary">Cancel</TremorButton>
-            </div>
-        </Modal>
+          onConfirm={confirmDelete}
+        />
       </div>
     </div>
   );
