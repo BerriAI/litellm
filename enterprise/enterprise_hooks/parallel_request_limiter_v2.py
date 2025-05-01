@@ -14,11 +14,11 @@ from typing import (
     Tuple,
     TypedDict,
     Union,
-    Set,
     cast,
 )
 
 from fastapi import HTTPException
+
 import litellm
 from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
@@ -85,15 +85,21 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         group: RateLimitGroups,
     ) -> str:
         if rate_limit_type == "key":
-            return f"{self.prefix}::{user_api_key_dict.api_key}::{precise_minute}::{group}"
+            return (
+                f"{self.prefix}::{user_api_key_dict.api_key}::{precise_minute}::{group}"
+            )
         elif rate_limit_type == "model_per_key" and model is not None:
             return f"{self.prefix}::{user_api_key_dict.api_key}::{model}::{precise_minute}::{group}"
         elif rate_limit_type == "user":
-            return f"{self.prefix}::{user_api_key_dict.user_id}::{precise_minute}::{group}"
+            return (
+                f"{self.prefix}::{user_api_key_dict.user_id}::{precise_minute}::{group}"
+            )
         elif rate_limit_type == "customer":
             return f"{self.prefix}::{user_api_key_dict.end_user_id}::{precise_minute}::{group}"
         elif rate_limit_type == "team":
-            return f"{self.prefix}::{user_api_key_dict.team_id}::{precise_minute}::{group}"
+            return (
+                f"{self.prefix}::{user_api_key_dict.team_id}::{precise_minute}::{group}"
+            )
         else:
             raise ValueError(f"Invalid rate limit type: {rate_limit_type}")
 
@@ -132,7 +138,11 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             ttl=60,
         )
 
-        if results[0] > max_parallel_requests or results[1] > rpm_limit or results[2] > tpm_limit:
+        if (
+            results[0] > max_parallel_requests
+            or results[1] > rpm_limit
+            or results[2] > tpm_limit
+        ):
             raise self.raise_rate_limit_error(
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
             )
@@ -249,7 +259,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             "tpm": total_tokens,
             "rpm": 0,
         }
-        print(f"increment_value_by_group: {increment_value_by_group}")
+
         for group in ["request_count", "rpm", "tpm"]:
             key = self._get_current_usage_key(
                 user_api_key_dict=user_api_key_dict,
@@ -258,21 +268,9 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 rate_limit_type="key",
                 group=cast(RateLimitGroups, group),
             )
-            print(f"key: {key}")
-            # For request_count, check current value before decrementing
-            # if group == "request_count":
-            #     current_value = await self.internal_usage_cache.async_get_cache(
-            #         key=key,
-            #         local_only=True,
-            #         litellm_parent_otel_span=litellm_parent_otel_span,
-            #     )
-            #     if current_value is None or current_value <= 0:
-            #         # Skip decrementing if count is already 0 or negative
-            #         continue
-                    
+
             increment_list.append((key, increment_value_by_group[group]))
 
-        print(f"increment_list: {increment_list}")
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,
@@ -308,7 +306,6 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             )
             user_api_key_end_user_id = kwargs.get("user")
 
-
             # ------------
             # Setup values
             # ------------
@@ -339,12 +336,17 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             # ------------
 
             await self._update_usage_in_cache_post_call(
-                user_api_key_dict=UserAPIKeyAuth(api_key=user_api_key, user_id=user_api_key_user_id, team_id=user_api_key_team_id, end_user_id=user_api_key_end_user_id),
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key=user_api_key,
+                    user_id=user_api_key_user_id,
+                    team_id=user_api_key_team_id,
+                    end_user_id=user_api_key_end_user_id,
+                ),
                 precise_minute=precise_minute,
                 model=model_group,
                 total_tokens=total_tokens,
             )
-            
+
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Inside Parallel Request Limiter: An exception occurred - {}".format(
