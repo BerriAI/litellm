@@ -227,6 +227,7 @@ integer_enum = {
     ],
     "tool_choice": "none",
     "count": 54,
+    "count-tolerate": 56,  # over by 2
 }
 
 
@@ -255,6 +256,7 @@ integer_enum_tool_choice_name = {
         "function": {"name": "data_demonstration"},
     },  # 4 tokens for "data_demonstration"
     "count": 64,
+    "count-tolerate": 66,  # over by 2
 }
 
 no_parameters = {
@@ -316,6 +318,7 @@ no_parameter_description_or_required = {
     ],
     "tool_choice": "auto",
     "count": 49,
+    "count-tolerate": 50,  # over by 1
 }
 
 no_parameter_description = {
@@ -339,6 +342,7 @@ no_parameter_description = {
     ],
     "tool_choice": "auto",
     "count": 49,
+    "count-tolerate": 50,  # over by 1
 }
 
 string_enum = {
@@ -406,7 +410,8 @@ inner_object = {
         }
     ],
     "tool_choice": "none",
-    "count": 65,  # counted 67, over by 2
+    "count": 65, 
+    "count-tolerate" : 67 #over by 2
 }
 """
 namespace functions {
@@ -453,7 +458,8 @@ inner_object_with_enum_only = {
         }
     ],
     "tool_choice": "none",
-    "count": 73,  # counted 74, over by 1
+    "count": 73,
+    "count-tolerate" : 74 #over by 1
 }
 """
 namespace functions {
@@ -504,7 +510,8 @@ inner_object_with_enum = {
         }
     ],
     "tool_choice": "none",
-    "count": 89,  # counted 92, over by 3
+    "count": 89,
+    "count-tolerate" : 92, #over by 3
 }
 """
 namespace functions {
@@ -561,7 +568,8 @@ inner_object_and_string = {
         }
     ],
     "tool_choice": "none",
-    "count": 103,  # counted 106, over by 3
+    "count": 103,  
+    "count-tolerate" : 106, #over by 3
 }
 """
 namespace functions {
@@ -606,7 +614,7 @@ boolean = {
         }
     ],
     "tool_choice": "none",
-    "count": 89,  # over by 3
+    "count": 89,
 }
 
 array = {
