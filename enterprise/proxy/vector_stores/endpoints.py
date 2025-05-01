@@ -8,11 +8,9 @@ All /vector_store management endpoints
 /vector_store/list
 """
 import copy
-from typing import Dict, List, Optional
+from typing import List
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -20,25 +18,10 @@ from litellm.proxy.vector_stores.vector_store_registry import global_vector_stor
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_ManagedVectorStore,
+    VectorStoreDeleteRequest,
 )
 
 router = APIRouter()
-
-
-class VectorStoreUpdateRequest(BaseModel):
-    vector_store_id: str
-    custom_llm_provider: Optional[str] = None
-    vector_store_name: Optional[str] = None
-    vector_store_description: Optional[str] = None
-    vector_store_metadata: Optional[Dict] = None
-
-
-class VectorStoreDeleteRequest(BaseModel):
-    vector_store_id: str
-
-
-class VectorStoreInfoRequest(BaseModel):
-    vector_store_id: str
 
 
 @router.post(

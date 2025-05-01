@@ -1,6 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from litellm.types.router import CredentialLiteLLMParams
 
@@ -42,3 +45,19 @@ class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     total_count: Optional[int]
     current_page: Optional[int]
     total_pages: Optional[int]
+
+
+class VectorStoreUpdateRequest(BaseModel):
+    vector_store_id: str
+    custom_llm_provider: Optional[str] = None
+    vector_store_name: Optional[str] = None
+    vector_store_description: Optional[str] = None
+    vector_store_metadata: Optional[Dict] = None
+
+
+class VectorStoreDeleteRequest(BaseModel):
+    vector_store_id: str
+
+
+class VectorStoreInfoRequest(BaseModel):
+    vector_store_id: str
