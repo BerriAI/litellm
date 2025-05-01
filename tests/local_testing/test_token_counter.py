@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.utils import token_counter
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -21,13 +20,29 @@ from litellm import (
     decode,
     encode,
     get_modified_max_tokens,
+    token_counter as token_counter_old,
 )
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from large_text import text
 from messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
 )
+
+
+def token_counter_both_assert_same(**args):
+    new = token_counter_new(**args)
+    old = token_counter_old(**args)
+    assert new == old, f"New token counter {new} does not match old token counter {old}"
+    return new
+
+## Choose which token_counter the test will use.
+
+#token_counter = token_counter_new
+#token_counter = token_counter_old
+token_counter = token_counter_both_assert_same
+
 
 def test_token_counter_normal_plus_function_calling():
     messages = [
