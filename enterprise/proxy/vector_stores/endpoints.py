@@ -7,7 +7,6 @@ All /vector_store management endpoints
 /vector_store/delete
 /vector_store/list
 """
-
 import copy
 from typing import Dict, List, Optional
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -22,7 +21,6 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_ManagedVectorStore,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value, decrypt_value
 
 router = APIRouter()
 

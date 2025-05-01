@@ -1,6 +1,6 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
-import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from litellm._logging import verbose_logger
@@ -47,10 +47,8 @@ class VectorStoreManager:
                 vector_store_metadata=vector_store_litellm_params.get(
                     "vector_store_metadata"
                 ),
-                created_at=vector_store_litellm_params.get("created_at")
-                or int(time.time()),
-                updated_at=vector_store_litellm_params.get("updated_at")
-                or int(time.time()),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
             )
             self.vector_stores.append(litellm_managed_vector_store)
 
