@@ -1,8 +1,10 @@
 from fastapi import APIRouter
 from fastapi.responses import Response
 from .utils import _should_block_robots
+from .vector_stores.endpoints import router as vector_stores_router
 
 router = APIRouter()
+router.include_router(vector_stores_router)
 
 
 @router.get("/robots.txt")

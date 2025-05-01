@@ -327,7 +327,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
-  }]
+  }],
+  [Providers.Triton]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: false
+  },
+  {
+    key: "api_base",
+    label: "API Base",
+    placeholder: "http://localhost:8000/generate",
+    required: false
+  }
+]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({

@@ -29,49 +29,6 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-## Command Line Interface
-
-The package includes a command-line interface for managing your LiteLLM proxy server:
-
-```bash
-# Set environment variables (optional)
-export LITELLM_PROXY_URL="http://localhost:4000"
-export LITELLM_PROXY_API_KEY="your-api-key"
-
-# List all models
-litellm-proxy models list
-
-# Add a new model
-litellm-proxy models add gpt-4 \
-    -p api_key=your-openai-key \
-    -p api_base=https://api.openai.com/v1 \
-    -i tier=premium
-
-# Get model information
-litellm-proxy models get --name gpt-4
-litellm-proxy models get --id model-123
-
-# Update a model
-litellm-proxy models update model-123 \
-    -p api_key=new-key \
-    -i tier=standard
-
-# Delete a model
-litellm-proxy models delete model-123
-
-# Get detailed info about all models
-litellm-proxy models info
-
-# Show help
-litellm-proxy --help
-litellm-proxy models --help
-litellm-proxy models add --help
-```
-
-The CLI supports setting the base URL and API key through environment variables:
-- `LITELLM_PROXY_URL`: The base URL of your LiteLLM proxy server
-- `LITELLM_PROXY_API_KEY`: API key for authentication
-
 ## Features
 
 The client is organized into several resource clients for different functionality:
@@ -199,6 +156,55 @@ groups = client.model_groups.list()
 # Delete a model group
 client.model_groups.delete(name="gpt4-group")
 ```
+
+## Low-Level HTTP Client
+
+The client provides access to a low-level HTTP client for making direct requests
+to the LiteLLM proxy server. This is useful when you need more control or when
+working with endpoints that don't yet have a high-level interface.
+
+```python
+# Access the HTTP client
+client = Client(
+    base_url="http://localhost:4000",
+    api_key="sk-api-key"
+)
+
+# Make a custom request
+response = client.http.request(
+    method="POST",
+    uri="/health/test_connection",
+    json={
+        "litellm_params": {
+            "model": "gpt-4",
+            "api_key": "your-api-key",
+            "api_base": "https://api.openai.com/v1"
+        },
+        "mode": "chat"
+    }
+)
+
+# The response is automatically parsed from JSON
+print(response)
+```
+
+### HTTP Client Features
+
+- Automatic URL handling (handles trailing/leading slashes)
+- Built-in authentication (adds Bearer token if `api_key` is provided)
+- JSON request/response handling
+- Configurable timeout (default: 30 seconds)
+- Comprehensive error handling
+- Support for custom headers and request parameters
+
+### HTTP Client `request` method parameters
+
+- `method`: HTTP method (GET, POST, PUT, DELETE, etc.)
+- `uri`: URI path (will be appended to base_url)
+- `data`: (optional) Data to send in the request body
+- `json`: (optional) JSON data to send in the request body
+- `headers`: (optional) Custom HTTP headers
+- Additional keyword arguments are passed to the underlying requests library
 
 ## Error Handling
 
