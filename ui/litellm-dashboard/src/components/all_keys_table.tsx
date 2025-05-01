@@ -19,6 +19,23 @@ import { debounce } from "lodash";
 import { defaultPageSize } from "./constants";
 import { fetchAllTeams } from "./key_team_helpers/filter_helpers";
 import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+
 interface AllKeysTableProps {
   keys: KeyResponse[];
   setKeys: Setter<KeyResponse[]>;
@@ -41,6 +58,11 @@ interface AllKeysTableProps {
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   refresh?: () => void;
+  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  currentSort?: {
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+  };
 }
 
 // Define columns similar to our logs table
@@ -113,9 +135,18 @@ export function AllKeysTable({
   organizations,
   setCurrentOrg,
   refresh,
+  onSortChange,
+  currentSort,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
+  const [sorting, setSorting] = React.useState<SortingState>([
+    { 
+      id: currentSort?.sortBy || "created_at", 
+      desc: currentSort?.sortOrder === "desc" 
+    }
+  ]);
+
   // Use the filter logic hook
 
   const {
@@ -398,6 +429,37 @@ export function AllKeysTable({
   ];
   
   console.log(`keys: ${JSON.stringify(keys)}`)
+
+  const table = useReactTable({
+    data: filteredKeys,
+    columns: columns.filter(col => col.id !== 'expander'),
+    state: {
+      sorting,
+    },
+    onSortingChange: (newSorting: any) => {
+      setSorting(newSorting);
+      if (newSorting.length > 0) {
+        const sortState = newSorting[0];
+        const sortBy = sortState.id;
+        const sortOrder = sortState.desc ? 'desc' : 'asc';
+        onSortChange?.(sortBy, sortOrder);
+      }
+    },
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableSorting: true,
+  });
+
+  // Update local sorting state when currentSort prop changes
+  React.useEffect(() => {
+    if (currentSort) {
+      setSorting([{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }]);
+    }
+  }, [currentSort]);
+
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
@@ -461,16 +523,88 @@ export function AllKeysTable({
             </div>
           </div>
           <div className="h-[75vh] overflow-auto">
-            
-            <DataTable
-              columns={columns.filter(col => col.id !== 'expander') as any}
-              data={filteredKeys as any}
-              isLoading={isLoading}
-              loadingMessage="🚅 Loading keys..."
-              noDataMessage="No keys found"
-              getRowCanExpand={() => false}
-              renderSubComponent={() => <></>}
-            />
+            <div className="rounded-lg custom-border relative">
+              <div className="overflow-x-auto">
+                <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                  <TableHead>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <TableRow key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => (
+                          <TableHeaderCell 
+                            key={header.id} 
+                            className={`py-1 h-8 ${
+                              header.id === 'actions' 
+                                ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]' 
+                                : ''
+                            }`}
+                            onClick={header.column.getToggleSortingHandler()}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center">
+                                {header.isPlaceholder ? null : (
+                                  flexRender(
+                                    header.column.columnDef.header,
+                                    header.getContext()
+                                  )
+                                )}
+                              </div>
+                              {header.id !== 'actions' && (
+                                <div className="w-4">
+                                  {header.column.getIsSorted() ? (
+                                    {
+                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                                    }[header.column.getIsSorted() as string]
+                                  ) : (
+                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableHead>
+                  <TableBody>
+                    {isLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>🚅 Loading keys...</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : filteredKeys.length > 0 ? (
+                      table.getRowModel().rows.map((row) => (
+                        <TableRow key={row.id} className="h-8">
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell
+                              key={cell.id}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
+                                cell.column.id === 'actions'
+                                  ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
+                                  : ''
+                              }`}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>No keys found</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           </div>
         </div>
       )}
