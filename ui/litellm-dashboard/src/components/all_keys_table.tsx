@@ -140,12 +140,18 @@ export function AllKeysTable({
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { 
-      id: currentSort?.sortBy || "created_at", 
-      desc: currentSort?.sortOrder === "desc" 
+  const [sorting, setSorting] = React.useState<SortingState>(() => {
+    if (currentSort) {
+      return [{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }];
     }
-  ]);
+    return [{
+      id: "created_at",
+      desc: true
+    }];
+  });
 
   // Use the filter logic hook
 
@@ -208,8 +214,9 @@ export function AllKeysTable({
         ) : null,
     },
     {
-      header: "Key ID",
+      id: "token",
       accessorKey: "token",
+      header: "Key ID",
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
@@ -226,21 +233,24 @@ export function AllKeysTable({
       ),
     },
     {
-      header: "Key Alias",
+      id: "key_alias",
       accessorKey: "key_alias",
+      header: "Key Alias",
       cell: (info) => {
         const value = info.getValue() as string;
         return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
       }
     },
     {
-      header: "Secret Key",
+      id: "key_name",
       accessorKey: "key_name",
+      header: "Secret Key",
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
+      id: "team_alias",
+      accessorKey: "team_id",
       header: "Team Alias",
-      accessorKey: "team_id", // Change to access the team_id
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
         const team = teams?.find(t => t.team_id === teamId);
@@ -248,18 +258,21 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Team ID",
+      id: "team_id",
       accessorKey: "team_id",
+      header: "Team ID",
       cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
     {
-      header: "Organization ID",
+      id: "organization_id",
       accessorKey: "organization_id",
+      header: "Organization ID",
       cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
-      header: "User Email",
+      id: "user_email",
       accessorKey: "user_id",
+      header: "User Email",
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
@@ -267,8 +280,9 @@ export function AllKeysTable({
       },
     },
     {
-      header: "User ID",
+      id: "user_id",
       accessorKey: "user_id",
+      header: "User ID",
       cell: (info) => {
         const userId = info.getValue() as string;
         return userId ? (
@@ -279,53 +293,60 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Created At",
+      id: "created_at",
       accessorKey: "created_at",
+      header: "Created At",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
       },
     },
     {
-      header: "Created By",
+      id: "created_by",
       accessorKey: "created_by",
+      header: "Created By",
       cell: (info) => {
         const value = info.getValue();
         return value ? value : "Unknown";
       },
     },
     {
-      header: "Expires",
+      id: "expires",
       accessorKey: "expires",
+      header: "Expires",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
-      header: "Spend (USD)",
+      id: "spend",
       accessorKey: "spend",
+      header: "Spend (USD)",
       cell: (info) => Number(info.getValue()).toFixed(4),
     },
     {
-      header: "Budget (USD)",
+      id: "max_budget",
       accessorKey: "max_budget",
+      header: "Budget (USD)",
       cell: (info) =>
         info.getValue() !== null && info.getValue() !== undefined
           ? info.getValue()
           : "Unlimited",
     },
     {
-      header: "Budget Reset",
+      id: "budget_reset_at",
       accessorKey: "budget_reset_at",
+      header: "Budget Reset",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleString() : "Never";
       },
     },
     {
-      header: "Models",
+      id: "models",
       accessorKey: "models",
+      header: "Models",
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
@@ -347,6 +368,7 @@ export function AllKeysTable({
       },
     },
     {
+      id: "rate_limits",
       header: "Rate Limits",
       cell: ({ row }) => {
         const key = row.original;
@@ -436,18 +458,29 @@ export function AllKeysTable({
     state: {
       sorting,
     },
-    onSortingChange: (newSorting: any) => {
+    onSortingChange: (updaterOrValue) => {
+      const newSorting = typeof updaterOrValue === 'function' 
+        ? updaterOrValue(sorting)
+        : updaterOrValue;
+      console.log(`newSorting: ${JSON.stringify(newSorting)}`)
       setSorting(newSorting);
-      if (newSorting.length > 0) {
+      if (newSorting && newSorting.length > 0) {
         const sortState = newSorting[0];
         const sortBy = sortState.id;
         const sortOrder = sortState.desc ? 'desc' : 'asc';
+        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`)
+        handleFilterChange({
+          ...filters,
+          'Sort By': sortBy,
+          'Sort Order': sortOrder
+        });
         onSortChange?.(sortBy, sortOrder);
       }
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
+    manualSorting: false,
   });
 
   // Update local sorting state when currentSort prop changes
@@ -470,14 +503,8 @@ export function AllKeysTable({
           onKeyDataUpdate={(updatedKeyData) => {
             setKeys(keys => keys.map(key => {
               if (key.token === updatedKeyData.token) {
-                // The shape of key is different from that of
-                // updatedKeyData(received from keyUpdateCall in networking.tsx).
-                // Hence, we can't replace key with updatedKeys since it might lead
-                // to unintended bugs/behaviors.
-                // So instead, we only update fields that are present in both.
                 return updateExistingKeys(key, updatedKeyData)
               }
-              
               return key
             }))
           }}
@@ -608,7 +635,6 @@ export function AllKeysTable({
           </div>
         </div>
       )}
-      
     </div>
   );
 }

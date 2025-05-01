@@ -2701,6 +2701,8 @@ export const keyListCall = async (
   keyHash: string | null,
   page: number,
   pageSize: number,
+  sortBy: string | null = null,
+  sortOrder: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -2738,6 +2740,13 @@ export const keyListCall = async (
       queryParams.append('size', pageSize.toString());
     }
 
+    if (sortBy) {
+      queryParams.append('sort_by', sortBy);
+    }
+
+    if (sortOrder) {
+      queryParams.append('sort_order', sortOrder);
+    }
     queryParams.append('return_full_object', 'true');
     queryParams.append('include_team_keys', 'true');
     
