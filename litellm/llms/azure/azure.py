@@ -125,22 +125,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, azure_ad_token, azure_ad_token_provider):
-        headers = {
-            "content-type": "application/json",
-        }
-        if api_key is not None:
-            headers["api-key"] = api_key
-        elif azure_ad_token is not None:
-            if azure_ad_token.startswith("oidc/"):
-                azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
-        elif azure_ad_token_provider is not None:
-            azure_ad_token = azure_ad_token_provider()
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
-
-        return headers
-
     def make_sync_azure_openai_chat_completion_request(
         self,
         azure_client: AzureOpenAI,
@@ -242,6 +226,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     azure_ad_token_provider=azure_ad_token_provider,
                     acompletion=acompletion,
                     client=client,
+                    litellm_params=litellm_params,
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
