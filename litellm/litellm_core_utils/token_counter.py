@@ -549,10 +549,14 @@ def _count_content_list(
                 if isinstance(c["image_url"], dict):
                     image_url_dict = c["image_url"]
                     detail = image_url_dict.get("detail", "auto")
+                    if detail not in ["low", "high", "auto"]:
+                        raise ValueError(
+                            f"Invalid detail value: {detail}. Expected 'low', 'high', or 'auto'."
+                        )
                     url = image_url_dict.get("url")
                     num_tokens += calculate_img_tokens(
                         data=url,
-                        mode=detail,
+                        mode=detail, # type: ignore
                         use_default_image_token_count=use_default_image_token_count,
                     )
                 elif isinstance(c["image_url"], str):
