@@ -49,7 +49,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion():
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                knowledge_bases = [
+                vector_store_ids = [
                     "T37J8R4WTM"
                 ],
                 client=client
@@ -90,7 +90,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call():
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
-        knowledge_bases = [
+        vector_store_ids = [
             "T37J8R4WTM"
         ],
         client=async_client
@@ -116,7 +116,7 @@ async def test_openai_with_knowledge_base_mock_openai():
             await litellm.acompletion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                knowledge_bases = [
+                vector_store_ids = [
                     "T37J8R4WTM"
                 ],
                 client=client,
