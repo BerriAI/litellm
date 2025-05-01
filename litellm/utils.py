@@ -181,7 +181,7 @@ from litellm.types.utils import (
 )
 
 try:
-    # Python 3.9+
+    # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
         "anthropic_tokenizer.json"
     ).open("r") as f:
@@ -2528,6 +2528,15 @@ def get_optional_params_image_gen(
         or custom_llm_provider == "azure"
         or custom_llm_provider in litellm.openai_compatible_providers
     ):
+        # remove response_format for azure and openai
+        if "response_format" in non_default_params:
+            if litellm.drop_params is True:
+                non_default_params.pop("response_format", None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"Setting `response_format` is not supported by Azure gpt-image-1. To drop it from the call, set `litellm.drop_params = True` or pass drop_params=True.",
+                )
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
         # use stability3 config class if model is a stability3 model
