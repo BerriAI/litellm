@@ -19,7 +19,7 @@ def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
         return ""
     try:
         # Parse ISO format datetime string
-        dt = datetime.fromisoformat(iso_datetime_str.replace('Z', '+00:00'))
+        dt = datetime.fromisoformat(iso_datetime_str.replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
         return str(iso_datetime_str)
@@ -98,7 +98,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
         console.print(syntax)
     else:  # table format
         table = Table(title="Available Models")
-        
+
         # Add columns based on the data structure
         table.add_column("ID", style="cyan")
         table.add_column("Object", style="green")
@@ -111,12 +111,12 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():
                 created = int(created)
-            
+
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
                 format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created),
-                str(model.get("owned_by", ""))
+                str(model.get("owned_by", "")),
             )
 
         console.print(table)
@@ -204,17 +204,47 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         console.print(syntax)
     else:  # table format
         table = Table(title="Models Information")
-        
+
         # Define all possible columns with their configurations
         column_configs = {
-            "public_model": {"header": "Public Model", "style": "cyan", "get_value": lambda m: str(m.get("model_name", ""))},
-            "upstream_model": {"header": "Upstream Model", "style": "green", "get_value": lambda m: str(m.get("litellm_params", {}).get("model", ""))},
-            "credential_name": {"header": "Credential Name", "style": "yellow", "get_value": lambda m: str(m.get("litellm_params", {}).get("litellm_credential_name", ""))},
-            "created_at": {"header": "Created At", "style": "magenta", "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("created_at"))},
-            "updated_at": {"header": "Updated At", "style": "magenta", "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("updated_at"))},
+            "public_model": {
+                "header": "Public Model",
+                "style": "cyan",
+                "get_value": lambda m: str(m.get("model_name", "")),
+            },
+            "upstream_model": {
+                "header": "Upstream Model",
+                "style": "green",
+                "get_value": lambda m: str(m.get("litellm_params", {}).get("model", "")),
+            },
+            "credential_name": {
+                "header": "Credential Name",
+                "style": "yellow",
+                "get_value": lambda m: str(m.get("litellm_params", {}).get("litellm_credential_name", "")),
+            },
+            "created_at": {
+                "header": "Created At",
+                "style": "magenta",
+                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("created_at")),
+            },
+            "updated_at": {
+                "header": "Updated At",
+                "style": "magenta",
+                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("updated_at")),
+            },
             "id": {"header": "ID", "style": "blue", "get_value": lambda m: str(m.get("model_info", {}).get("id", ""))},
-            "input_cost": {"header": "Input Cost", "style": "green", "justify": "right", "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("input_cost_per_token"))},
-            "output_cost": {"header": "Output Cost", "style": "green", "justify": "right", "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("output_cost_per_token"))}
+            "input_cost": {
+                "header": "Input Cost",
+                "style": "green",
+                "justify": "right",
+                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("input_cost_per_token")),
+            },
+            "output_cost": {
+                "header": "Output Cost",
+                "style": "green",
+                "justify": "right",
+                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("output_cost_per_token")),
+            },
         }
 
         # Add requested columns
@@ -222,11 +252,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         for col_name in requested_columns:
             if col_name in column_configs:
                 config = column_configs[col_name]
-                table.add_column(
-                    config["header"],
-                    style=config["style"],
-                    justify=config.get("justify", "left")
-                )
+                table.add_column(config["header"], style=config["style"], justify=config.get("justify", "left"))
             else:
                 click.echo(f"Warning: Unknown column '{col_name}'", err=True)
 
@@ -273,4 +299,4 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
 
 
 if __name__ == "__main__":
-    cli() 
+    cli()
