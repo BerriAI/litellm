@@ -1998,6 +1998,19 @@ class ProxyConfig:
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
 
+        ## CREDENTIALS
+        credential_list_dict = self.load_credential_list(config=config)
+        litellm.credential_list = credential_list_dict
+
+        ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
+        self._init_non_llm_configs(config=config)
+
+        return router, router.get_model_list(), general_settings
+
+    def _init_non_llm_configs(self, config: dict):
+        """
+        Initialize non-LLM configs eg. MCP tools, vector stores, etc.
+        """
         ## MCP TOOLS
         mcp_tools_config = config.get("mcp_tools", None)
         if mcp_tools_config:
@@ -2011,10 +2024,17 @@ class ProxyConfig:
 
             global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
 
-        ## CREDENTIALS
-        credential_list_dict = self.load_credential_list(config=config)
-        litellm.credential_list = credential_list_dict
-        return router, router.get_model_list(), general_settings
+        ## VECTOR STORES
+        vector_stores_config = config.get("vector_stores", None)
+        if vector_stores_config:
+            from litellm.proxy.vector_stores.vector_store_registry import (
+                global_vector_store_manager,
+            )
+
+            global_vector_store_manager.load_vector_stores_from_config(
+                vector_stores_config
+            )
+        pass
 
     def _load_alerting_settings(self, general_settings: dict):
         """
