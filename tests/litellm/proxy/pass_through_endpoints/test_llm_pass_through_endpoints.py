@@ -192,7 +192,7 @@ class TestVertexAIPassThroughHandler:
     """
 
     @pytest.mark.asyncio
-    async def test_vertex_passthrough_with_credentials(self, monkeypatch):
+    async def test_vertex_passthrough_with_credentials(self, monkeypatch, reload_litellm):
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
@@ -464,7 +464,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
     """
 
     @pytest.mark.asyncio
-    async def test_vertex_discovery_passthrough_with_credentials(self, monkeypatch):
+    async def test_vertex_discovery_passthrough_with_credentials(self, monkeypatch, reload_litellm):
         """
         Test that when passthrough credentials are set, they are correctly used in the request
         """
