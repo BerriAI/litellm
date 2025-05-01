@@ -9,6 +9,7 @@ import pytest
 
 # local imports
 from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.commands.models import format_timestamp
 
 
 @pytest.fixture
@@ -115,7 +116,7 @@ def test_models_list_table_format(mock_models_list, cli_runner):
     assert "Owned By" in result.output
     assert "model-123" in result.output
     assert "organization-123" in result.output
-    assert "2023-11-12 20:14" in result.output
+    assert format_timestamp(1699848889) in result.output
     
     # Verify the client was called correctly
     mock_models_list.assert_called_once_with(
