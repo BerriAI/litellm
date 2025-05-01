@@ -41,15 +41,6 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-        <Tooltip title={
-          <span>
-            Select vector store(s) (knowledge bases) to use for this LLM API call. You can set up your Vector Store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
-          </span>
-        }>
-          <InfoCircleOutlined />
-        </Tooltip>
-      </div>
       <Select
         mode="multiple"
         placeholder="Select vector stores"

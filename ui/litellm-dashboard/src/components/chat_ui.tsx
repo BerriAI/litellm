@@ -513,11 +513,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <DatabaseOutlined className="mr-2" /> Vector Store
-                  <Tooltip title={
-                      <span>
-                        Select vector store(s) (knowledge bases) to use for this LLM API call. You can set up your Vector Store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
-                      </span>
-                    }>
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select vector store(s) to use for this LLM API call. You can set up your vector store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
                       <InfoCircleOutlined />
                     </Tooltip>
                 </Text>
