@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.litellm_core_utils.token_counter import token_counter
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -23,13 +22,26 @@ from litellm import (
     get_modified_max_tokens,
     token_counter as token_counter_old,
 )
-from litellm.litellm_core_utils.token_counter import token_counter
-from large_text import text
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from tests.large_text import text
 from messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
 )
+
+
+def token_counter_both_assert_same(**args):
+    new = token_counter_new(**args)
+    old = token_counter_old(**args)
+    assert new == old, f"New token counter {new} does not match old token counter {old}"
+    return new
+
+## Choose which token_counter the test will use.
+
+#token_counter = token_counter_new
+#token_counter = token_counter_old
+token_counter = token_counter_both_assert_same
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -408,6 +420,35 @@ def test_img_url_token_counter(img_url):
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
 
+def test_token_counter():
+    try:
+        messages = [{"role": "user", "content": "hi how are you what time is it"}]
+        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+        print("gpt-35-turbo")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="claude-2", messages=messages)
+        print("claude-2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="gemini/chat-bison", messages=messages)
+        print("gemini/chat-bison")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="ollama/llama2", messages=messages)
+        print("ollama/llama2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
+        print("anthropic.claude-instant-v1")
+        print(tokens)
+        assert tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 import unittest
 from unittest.mock import patch, MagicMock

@@ -9,7 +9,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.token_counter import token_counter
+#Use the same token_counter as the main test. 
+from test_token_counter import token_counter
 
 from test_token_counter_tool_data import *
 

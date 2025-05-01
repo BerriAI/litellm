@@ -33,7 +33,6 @@ from litellm.utils import (
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
-    token_counter,
     trim_messages,
     validate_environment,
 )
@@ -444,68 +443,6 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
-
-
-def test_token_counter():
-    try:
-        messages = [{"role": "user", "content": "hi how are you what time is it"}]
-        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-        print("gpt-35-turbo")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="claude-2", messages=messages)
-        print("claude-2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="gemini/chat-bison", messages=messages)
-        print("gemini/chat-bison")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="ollama/llama2", messages=messages)
-        print("ollama/llama2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
-        print("anthropic.claude-instant-v1")
-        print(tokens)
-        assert tokens > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_token_counter_list_tool_call():
-
-    usermessage = {
-            'content': [
-                {
-                    'type': 'text',
-                    'text': "2025-04-25 (UTC)",
-                }
-            ],
-            'role': 'user',
-        }
-    tool_call =   {
-            'role': 'assistant',
-            'tool_calls': [
-                {
-                    'id': 'toolu_01NZjJ3e6fzhhbYYcb5k1k4d',
-                    'type': 'function'
-                }
-            ],
-        }
-    
-    tokens_usermessage = token_counter(model="anthropic.claude-instant-v1", messages=[usermessage])
-    assert tokens_usermessage > 0
-    tokens_tool_call = token_counter(model="anthropic.claude-instant-v1", messages=[tool_call])
-    assert tokens_tool_call > 0
-    tokens_both = token_counter(model="anthropic.claude-instant-v1", messages=[usermessage, tool_call])
-    assert tokens_both > tokens_usermessage
-    assert tokens_both > tokens_tool_call
-
 
 @pytest.mark.parametrize(
     "model, expected_bool",
