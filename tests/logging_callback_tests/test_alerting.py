@@ -33,7 +33,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
-from litellm.proxy._types import CallInfo
+from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
 from litellm.utils import get_api_base
@@ -204,7 +204,10 @@ async def test_budget_alerts_crossed(slack_alerting):
         await slack_alerting.budget_alerts(
             "user_budget",
             user_info=CallInfo(
-                token="", spend=user_current_spend, max_budget=user_max_budget
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
             ),
         )
         mock_send_alert.assert_awaited_once()
@@ -219,7 +222,10 @@ async def test_budget_alerts_crossed_again(slack_alerting):
         await slack_alerting.budget_alerts(
             "user_budget",
             user_info=CallInfo(
-                token="", spend=user_current_spend, max_budget=user_max_budget
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
             ),
         )
         mock_send_alert.assert_awaited_once()
@@ -227,7 +233,10 @@ async def test_budget_alerts_crossed_again(slack_alerting):
         await slack_alerting.budget_alerts(
             "user_budget",
             user_info=CallInfo(
-                token="", spend=user_current_spend, max_budget=user_max_budget
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
             ),
         )
         mock_send_alert.assert_not_awaited()
@@ -502,6 +511,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
             "key_alias": "my-test-key",
             "projected_exceeded_date": "10/20/2024",
             "projected_spend": 200,
+            "event_group": Litellm_EntityType.KEY,
         }
 
         user_info = CallInfo(**user_info)
@@ -540,6 +550,7 @@ async def test_webhook_alerting(alerting_type):
             "key_alias": "my-test-key",
             "projected_exceeded_date": "10/20/2024",
             "projected_spend": 200,
+            "event_group": Litellm_EntityType.KEY,
         }
 
         user_info = CallInfo(**user_info)
@@ -961,6 +972,7 @@ async def test_spend_report_cache(report_type):
             user_id="test@test.com",
             user_email="test@test.com",
             key_alias="test-key",
+            event_group=Litellm_EntityType.KEY,
         )
 
         with patch.object(
@@ -1000,6 +1012,7 @@ async def test_soft_budget_alerts():
             user_id="test@test.com",
             user_email="test@test.com",
             key_alias="test-key",
+            event_group=Litellm_EntityType.KEY,
         )
 
         await slack_alerting.budget_alerts(

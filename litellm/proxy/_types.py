@@ -161,6 +161,9 @@ class Litellm_EntityType(enum.Enum):
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
 
+    # global proxy level entity
+    PROXY = "proxy"
+
 
 def hash_token(token: str):
     import hashlib
@@ -1823,6 +1826,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
+    event_group: Litellm_EntityType
 
 
 class WebhookEvent(CallInfo):
@@ -1835,8 +1839,8 @@ class WebhookEvent(CallInfo):
         "internal_user_created",
         "spend_tracked",
     ]
-    event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
     event_message: str  # human-readable description of event
+    event_group: Litellm_EntityType
 
 
 class SpecialModelNames(enum.Enum):

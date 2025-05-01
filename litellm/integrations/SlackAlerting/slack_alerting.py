@@ -26,7 +26,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
+from litellm.proxy._types import (
+    AlertType,
+    CallInfo,
+    Litellm_EntityType,
+    VirtualKeyEvent,
+    WebhookEvent,
+)
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
@@ -604,31 +610,29 @@ class SlackAlerting(CustomBatchLogger):
                 "soft_budget_crossed",
             ]
         ] = None
-        event_group: Optional[
-            Literal["internal_user", "team", "key", "proxy", "customer"]
-        ] = None
+        event_group: Optional[Litellm_EntityType] = None
         event_message: str = ""
         webhook_event: Optional[WebhookEvent] = None
         if type == "proxy_budget":
-            event_group = "proxy"
+            event_group = Litellm_EntityType.PROXY
             event_message += "Proxy Budget: "
         elif type == "soft_budget":
-            event_group = "proxy"
+            event_group = Litellm_EntityType.PROXY
             event_message += "Soft Budget Crossed: "
         elif type == "user_budget":
-            event_group = "internal_user"
+            event_group = Litellm_EntityType.USER
             event_message += "User Budget: "
             _id = user_info.user_id or _id
         elif type == "team_budget":
-            event_group = "team"
+            event_group = Litellm_EntityType.TEAM
             event_message += "Team Budget: "
             _id = user_info.team_id or _id
         elif type == "token_budget":
-            event_group = "key"
+            event_group = Litellm_EntityType.KEY
             event_message += "Key Budget: "
             _id = user_info.token
         elif type == "projected_limit_exceeded":
-            event_group = "key"
+            event_group = Litellm_EntityType.KEY
             event_message += "Key Budget: Projected Limit Exceeded"
             event = "projected_limit_exceeded"
             _id = user_info.token
@@ -789,7 +793,7 @@ class SlackAlerting(CustomBatchLogger):
                 projected_exceeded_date=None,
                 projected_spend=None,
                 event="spend_tracked",
-                event_group="customer",
+                event_group=Litellm_EntityType.END_USER,
                 event_message="Customer spend tracked. Customer={}, spend={}".format(
                     end_user_id, response_cost
                 ),
