@@ -336,10 +336,20 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
         <Modal
           title="Delete Vector Store"
           visible={isDeleteModalOpen}
-          onOk={confirmDelete}
+          footer={null}
           onCancel={() => setIsDeleteModalOpen(false)}
         >
           <p>Are you sure you want to delete this vector store? This action cannot be undone.</p>
+            <div className="px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+            <TremorButton
+                onClick={confirmDelete}
+                color="red"
+                className="ml-2"
+                >
+                Delete
+                </TremorButton>
+                <TremorButton onClick={() => setIsDeleteModalOpen(false)} variant="primary">Cancel</TremorButton>
+            </div>
         </Modal>
       </div>
     </div>
