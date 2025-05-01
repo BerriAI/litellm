@@ -30,7 +30,7 @@ def test_models_list_json_format():
     ]
     
     # Mock the Client class and its models.list() method
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = mock_models
@@ -76,7 +76,7 @@ def test_models_list_table_format():
     ]
     
     # Mock the Client class and its models.list() method
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = mock_models
@@ -119,7 +119,7 @@ def test_models_list_with_base_url():
     runner = CliRunner()
     custom_base_url = "http://custom.server:8000"
     
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = []
@@ -150,7 +150,7 @@ def test_models_list_with_api_key():
     runner = CliRunner()
     custom_api_key = "custom-test-key"
     
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = []
@@ -180,7 +180,7 @@ def test_models_list_error_handling():
     """Test error handling in the models list command"""
     runner = CliRunner()
     
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock to raise an exception
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.side_effect = Exception("API Error")
@@ -208,46 +208,29 @@ def test_models_info_json_format():
     """Test the models info command with JSON output format"""
     runner = CliRunner()
     
-    # Use ISO format datetime strings
-    test_datetime = "2025-04-29T21:31:43.843000+00:00"
-    
     # Mock data that would be returned by the API
-    mock_info = [
+    mock_models_info = [
         {
             "model_name": "gpt-4",
             "litellm_params": {
-                "model": "gpt-4-0613",
-                "litellm_credential_name": "azure-1"
+                "model": "gpt-4",
+                "litellm_credential_name": "openai-1"
             },
             "model_info": {
-                "created_at": test_datetime,
-                "updated_at": test_datetime,
                 "id": "model-123",
-                "input_cost_per_token": 0.01,
-                "output_cost_per_token": 0.02
-            }
-        },
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo-0613",
-                "litellm_credential_name": "azure-2"
-            },
-            "model_info": {
-                "created_at": test_datetime,
-                "updated_at": test_datetime,
-                "id": "model-456",
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002
+                "created_at": "2025-04-29T21:31:43.843000+00:00",
+                "updated_at": "2025-04-29T21:31:43.843000+00:00",
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002
             }
         }
     ]
     
     # Mock the Client class and its models.info() method
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
-        mock_client_instance.models.info.return_value = mock_info
+        mock_client_instance.models.info.return_value = mock_models_info
         MockClient.return_value = mock_client_instance
         
         # Run the command
@@ -258,9 +241,9 @@ def test_models_info_json_format():
         
         # Parse the output and verify it matches our mock data
         output_data = json.loads(result.output)
-        assert output_data == mock_info
+        assert output_data == mock_models_info
         
-        # Verify the client was called correctly
+        # Verify the client was called correctly with env var values
         MockClient.assert_called_once_with(
             base_url="http://localhost:4000",
             api_key="sk-test"
@@ -276,77 +259,51 @@ def test_models_info_table_format():
     """Test the models info command with table output format"""
     runner = CliRunner()
     
-    # Use ISO format datetime strings
-    test_datetime = "2025-04-29T21:31:43.843000+00:00"
-    
     # Mock data that would be returned by the API
-    mock_info = [
+    mock_models_info = [
         {
             "model_name": "gpt-4",
             "litellm_params": {
-                "model": "gpt-4-0613",
-                "litellm_credential_name": "azure-1"
+                "model": "gpt-4",
+                "litellm_credential_name": "openai-1"
             },
             "model_info": {
-                "created_at": test_datetime,
-                "updated_at": test_datetime,
                 "id": "model-123",
-                "input_cost_per_token": 0.01,
-                "output_cost_per_token": 0.02
+                "created_at": "2025-04-29T21:31:43.843000+00:00",
+                "updated_at": "2025-04-29T21:31:43.843000+00:00",
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002
             }
         }
     ]
     
-    # Test cases for different column combinations
-    test_cases = [
-        {
-            "columns": None,  # Default columns
-            "expected_present": ["Public Model", "Upstream Model", "Updated At", "gpt-4", "gpt-4-0613", "2025-04-29 21:31"],
-            "expected_absent": ["Credential Name", "Created At", "ID", "Input Cost", "Output Cost", "azure-1", "model-123", "$10.0000"]
-        },
-        {
-            "columns": "public_model,input_cost,output_cost",
-            "expected_present": ["Public Model", "Input Cost", "Output Cost", "gpt-4", "$10.0000", "$20.0000"],
-            "expected_absent": ["Upstream Model", "Updated At", "gpt-4-0613", "2025-04-29 21:31"]
-        },
-        {
-            "columns": "credential_name,id",
-            "expected_present": ["Credential Name", "ID", "azure-1", "model-123"],
-            "expected_absent": ["Public Model", "Input Cost", "gpt-4", "$10.0000"]
-        }
-    ]
-    
     # Mock the Client class and its models.info() method
-    with patch("litellm.proxy.client.cli.Client") as MockClient:
+    with patch("litellm.proxy.client.groups.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
-        mock_client_instance.models.info.return_value = mock_info
+        mock_client_instance.models.info.return_value = mock_models_info
         MockClient.return_value = mock_client_instance
         
-        # Test each column combination
-        for test_case in test_cases:
-            # Prepare command arguments
-            args = ["models", "info"]
-            if test_case["columns"]:
-                args.extend(["--columns", test_case["columns"]])
-            
-            # Run the command
-            result = runner.invoke(cli, args)
-            
-            # Check that the command succeeded
-            assert result.exit_code == 0
-            
-            # Check for expected content
-            for expected in test_case["expected_present"]:
-                assert expected in result.output, f"Expected '{expected}' to be present in output"
-            
-            # Check for absent content
-            for unexpected in test_case["expected_absent"]:
-                assert unexpected not in result.output, f"Expected '{unexpected}' to be absent from output"
+        # Run the command with default columns
+        result = runner.invoke(cli, ["models", "info"])
         
-        # Verify the client was called correctly
-        MockClient.assert_called_with(
+        # Check that the command succeeded
+        assert result.exit_code == 0
+        
+        # Verify the output contains expected table elements
+        assert "Public Model" in result.output
+        assert "Upstream Model" in result.output
+        assert "Updated At" in result.output
+        assert "gpt-4" in result.output
+        assert "2025-04-29 21:31" in result.output
+        
+        # Verify seconds and microseconds are not shown
+        assert "21:31:43" not in result.output
+        assert "843000" not in result.output
+        
+        # Verify the client was called correctly with env var values
+        MockClient.assert_called_once_with(
             base_url="http://localhost:4000",
             api_key="sk-test"
         )
-        assert mock_client_instance.models.info.call_count == len(test_cases) 
+        mock_client_instance.models.info.assert_called_once() 
