@@ -25,6 +25,17 @@ def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
         return str(iso_datetime_str)
 
 
+def format_timestamp(timestamp: Optional[int]) -> str:
+    """Format a Unix timestamp (integer) to human-readable date with minute resolution."""
+    if timestamp is None:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(timestamp)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(timestamp)
+
+
 def format_cost_per_1k_tokens(cost: Optional[float]) -> str:
     """Format a per-token cost to cost per 1000 tokens."""
     if cost is None:
@@ -96,10 +107,15 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
 
         # Add rows
         for model in models:
+            created = model.get("created")
+            # Convert string timestamp to integer if needed
+            if isinstance(created, str) and created.isdigit():
+                created = int(created)
+            
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
-                format_iso_datetime_str(model.get("created")),
+                format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created),
                 str(model.get("owned_by", ""))
             )
 
