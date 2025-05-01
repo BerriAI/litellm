@@ -210,29 +210,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
               wrapperCol={{ span: 16 }}
               labelAlign="left"
             >
-              <Form.Item
-                label="Vector Store ID"
-                name="vector_store_id"
-                rules={[{ required: true, message: "Please input a vector store ID" }]}
-              >
-                <TextInput />
-              </Form.Item>
-
-              <Form.Item
-                label="Vector Store Name"
-                name="vector_store_name"
-              >
-                <TextInput />
-              </Form.Item>
-
-              <Form.Item
-                label="Description"
-                name="vector_store_description"
-              >
-                <Input.TextArea rows={4} />
-              </Form.Item>
-
-              <Form.Item
+            <Form.Item
                 label={
                   <span>
                     Provider{' '}
@@ -277,16 +255,55 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
                   })}
                 </Select2>
               </Form.Item>
-
-              {/* Credentials dropdown */}
-              <div className="mb-4">
-                <Text className="text-sm text-gray-500 mb-2">
-                  Either select existing credentials OR enter provider credentials below
-                </Text>
-              </div>
+              <Form.Item
+                label={
+                    <span>
+                      Vector Store ID{' '}
+                      <Tooltip title="Enter the vector store ID from your api provider">
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </Tooltip>
+                    </span>
+                }
+                name="vector_store_id"
+                rules={[{ required: true, message: "Please input the vector store ID from your api provider" }]}
+              >
+                <TextInput />
+              </Form.Item>
 
               <Form.Item
-                label="Existing Credentials"
+                label={
+                    <span>
+                        Vector Store Name{' '}
+                        <Tooltip title="Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                    </span>
+                }
+                name="vector_store_name"
+              >
+                <TextInput />
+              </Form.Item>
+
+              <Form.Item
+                label="Description"
+                name="vector_store_description"
+              >
+                <Input.TextArea rows={4} />
+              </Form.Item>
+
+              
+
+              {/* Credentials dropdown */}
+
+              <Form.Item
+                label={
+                    <span>
+                        Existing Credentials{' '}
+                        <Tooltip title="Optionally select API provider credentials for this vector store eg. Bedrock API KEY">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                    </span>
+                }
                 name="litellm_credential_name"
               >
                 <Select2
@@ -307,11 +324,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
                 />
               </Form.Item>
 
-              <div className="flex items-center my-4">
-                <div className="flex-grow border-t border-gray-200"></div>
-                <span className="px-4 text-gray-500 text-sm">OR</span>
-                <div className="flex-grow border-t border-gray-200"></div>
-              </div>
 
               <Form.Item
                 label={
@@ -332,12 +344,12 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
               </Form.Item>
 
               <div className="flex justify-end space-x-3">
-                <Button onClick={() => setIsCreateModalVisible(false)}>
+                <TremorButton onClick={() => setIsCreateModalVisible(false)} variant="secondary">
                   Cancel
-                </Button>
-                <Button type="primary" htmlType="submit">
+                </TremorButton>
+                <TremorButton variant="primary" type="submit">
                   Create
-                </Button>
+                </TremorButton>
               </div>
             </Form>
           </Modal>
