@@ -3,7 +3,6 @@ Base class across routing strategies to abstract commmon functions like batch in
 """
 
 import asyncio
-import threading
 from abc import ABC
 from typing import List, Optional, Set, Tuple, Union
 
