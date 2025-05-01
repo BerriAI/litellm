@@ -227,10 +227,10 @@ def cost_per_token(  # noqa: PLR0915
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
-        model_info = litellm.get_model_info(
+        speech_model_info = litellm.get_model_info(
             model=model_without_prefix, custom_llm_provider=custom_llm_provider
         )
-        cost_metric = select_cost_metric_for_model(model_info)
+        cost_metric = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0
         if cost_metric == "cost_per_character":
