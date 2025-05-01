@@ -1,10 +1,11 @@
 import os
-from typing import Literal, Union
+from typing import Literal, Type, Union
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .managed_files import _PROXY_LiteLLMManagedFiles
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
+from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 
 try:
     if (
@@ -12,17 +13,17 @@ try:
         == "true"
     ):  # FEATURE FLAG as it's still in development
         from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
-            _PROXY_MaxParallelRequestsHandler,
+            _PROXY_MaxParallelRequestsHandler as _PROXY_MaxParallelRequestsHandlerV2,
         )
 
-        max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+        max_parallel_request_handler: Type[
+            Union[
+                _PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandlerV2
+            ]
+        ] = _PROXY_MaxParallelRequestsHandlerV2
     else:
-        from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
-
         max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
 except ImportError:
-    from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
-
     max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
 
 # List of all available hooks that can be enabled
