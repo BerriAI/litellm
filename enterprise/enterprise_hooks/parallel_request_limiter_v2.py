@@ -249,6 +249,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             "tpm": total_tokens,
             "rpm": 0,
         }
+        print(f"increment_value_by_group: {increment_value_by_group}")
         for group in ["request_count", "rpm", "tpm"]:
             key = self._get_current_usage_key(
                 user_api_key_dict=user_api_key_dict,
@@ -257,7 +258,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 rate_limit_type="key",
                 group=cast(RateLimitGroups, group),
             )
-            
+            print(f"key: {key}")
             # For request_count, check current value before decrementing
             # if group == "request_count":
             #     current_value = await self.internal_usage_cache.async_get_cache(
@@ -271,7 +272,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     
             increment_list.append((key, increment_value_by_group[group]))
 
-
+        print(f"increment_list: {increment_list}")
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,
