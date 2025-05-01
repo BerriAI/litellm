@@ -1,8 +1,11 @@
-import click
+# stdlib imports
 from typing import Optional
-from rich.console import Console
 
-from .groups.models import models
+# third party imports
+import click
+
+# local imports
+from .commands.models import models
 
 
 @click.group()
@@ -23,7 +26,6 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     ctx.ensure_object(dict)
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
-    ctx.obj["console"] = Console()
 
 
 # Add the models command group

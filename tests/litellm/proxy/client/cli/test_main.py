@@ -30,7 +30,7 @@ def test_models_list_json_format():
     ]
     
     # Mock the Client class and its models.list() method
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = mock_models
@@ -76,7 +76,7 @@ def test_models_list_table_format():
     ]
     
     # Mock the Client class and its models.list() method
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = mock_models
@@ -119,7 +119,7 @@ def test_models_list_with_base_url():
     runner = CliRunner()
     custom_base_url = "http://custom.server:8000"
     
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = []
@@ -150,7 +150,7 @@ def test_models_list_with_api_key():
     runner = CliRunner()
     custom_api_key = "custom-test-key"
     
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.return_value = []
@@ -180,7 +180,7 @@ def test_models_list_error_handling():
     """Test error handling in the models list command"""
     runner = CliRunner()
     
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock to raise an exception
         mock_client_instance = MagicMock()
         mock_client_instance.models.list.side_effect = Exception("API Error")
@@ -227,7 +227,7 @@ def test_models_info_json_format():
     ]
     
     # Mock the Client class and its models.info() method
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.info.return_value = mock_models_info
@@ -278,7 +278,7 @@ def test_models_info_table_format():
     ]
     
     # Mock the Client class and its models.info() method
-    with patch("litellm.proxy.client.cli.groups.models.Client") as MockClient:
+    with patch("litellm.proxy.client.cli.commands.models.Client") as MockClient:
         # Configure the mock
         mock_client_instance = MagicMock()
         mock_client_instance.models.info.return_value = mock_models_info
