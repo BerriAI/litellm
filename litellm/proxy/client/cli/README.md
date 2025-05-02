@@ -98,16 +98,16 @@ Options:
 
 - `--format`: Output format (table or json, default: table)
 - `--columns`: Comma-separated list of columns to display. Valid columns:
-- public_model
-- upstream_model
-- credential_name
-- created_at
-- updated_at
-- id
-- input_cost
-- output_cost
+  - `public_model`
+  - `upstream_model`
+  - `credential_name`
+  - `created_at`
+  - `updated_at`
+  - `id`
+  - `input_cost`
+  - `output_cost`
 
-Default columns: public_model,upstream_model,updated_at
+Default columns: `public_model`, `upstream_model`, `updated_at`
 
 ## Environment Variables
 
