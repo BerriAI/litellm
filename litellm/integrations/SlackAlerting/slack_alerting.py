@@ -698,9 +698,7 @@ class SlackAlerting(CustomBatchLogger):
         if user_info.soft_budget is not None:
             if user_info.spend >= user_info.soft_budget:
                 event = "soft_budget_crossed"
-                event_message += (
-                    f"Soft Budget Crossed\n Total Soft Budget:`{user_info.soft_budget}`"
-                )
+                event_message += f"Total Soft Budget:`{user_info.soft_budget}`"
 
         #####################################################################
         # MAX BUDGET CHECK
@@ -745,6 +743,8 @@ class SlackAlerting(CustomBatchLogger):
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
+            if isinstance(v, Litellm_EntityType):
+                v = v.value
             msg += f"*{k}:* `{v}`\n"
 
         return msg

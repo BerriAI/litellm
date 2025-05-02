@@ -33,7 +33,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
-from litellm.proxy._types import CallInfo, Litellm_EntityType
+from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
 from litellm.utils import get_api_base
@@ -1023,14 +1023,109 @@ async def test_soft_budget_alerts():
 
         # Verify alert message contains correct percentage
         alert_message = mock_send_alert.call_args[1]["message"]
-        print(alert_message)
+        
+        print("GOT MESSAGE\n\n", alert_message)
 
         expected_message = (
-            "Soft Budget Crossed: \n\n"
+            "Soft Budget Crossed: Total Soft Budget:`80.0`\n"
+            "\n"
             "*spend:* `80.0`\n"
             "*soft_budget:* `80.0`\n"
             "*user_id:* `test@test.com`\n"
             "*user_email:* `test@test.com`\n"
             "*key_alias:* `test-key`\n"
+            "*event_group:* `key`\n"
         )
         assert alert_message == expected_message
+
+
+key_info = CallInfo(
+    token="test_token",
+    spend=81,
+    soft_budget=80,
+    max_budget=100,
+    user_id="test@test.com",
+    user_email="test@test.com",
+    key_alias="test-key",
+    event_group=Litellm_EntityType.KEY,
+)
+
+team_info = CallInfo(
+    token="test_token",
+    spend=160,
+    soft_budget=150,
+    max_budget=200,
+    team_id="team-123",
+    team_alias="engineering-team",
+    event_group=Litellm_EntityType.TEAM,
+)
+
+user_info = CallInfo(
+    token="test_token",
+    spend=45,
+    soft_budget=40,
+    max_budget=50,
+    user_id="user123",
+    event_group=Litellm_EntityType.USER,
+)
+
+key_no_max_budget_info = CallInfo(
+    token="test_token",
+    spend=90,
+    soft_budget=85,
+    user_id="dev@test.com",
+    user_email="dev@test.com",
+    key_alias="dev-key",
+    event_group=Litellm_EntityType.KEY,
+)
+
+
+@pytest.mark.parametrize(
+    "entity_info",
+    [
+        key_info,
+        team_info,
+        user_info,
+        key_no_max_budget_info,
+    ],
+)
+@pytest.mark.asyncio
+async def test_soft_budget_alerts_webhook(entity_info):
+    """
+    Tests that soft budget alerts are triggered for different entity types.
+    
+    Tests:
+    - Key with max budget
+    - Team 
+    - User
+    - Key without max budget
+    """
+    slack_alerting = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Test entity hit soft budget limit
+        await slack_alerting.budget_alerts(
+            type="soft_budget",
+            user_info=entity_info,
+        )
+        mock_send_alert.assert_called_once()
+
+        # Verify the webhook event
+        call_args = mock_send_alert.call_args[1]
+        logged_webhook_event: WebhookEvent = call_args["user_info"]
+        
+        # Validate the webhook event has all expected fields
+        assert logged_webhook_event.spend == entity_info.spend
+        assert logged_webhook_event.soft_budget == entity_info.soft_budget
+        assert logged_webhook_event.max_budget == entity_info.max_budget
+        assert logged_webhook_event.user_id == entity_info.user_id
+        assert logged_webhook_event.user_email == entity_info.user_email
+        assert logged_webhook_event.key_alias == entity_info.key_alias
+        assert logged_webhook_event.event_group == entity_info.event_group
+        
+        
+        
+        
+        
+        
+        
