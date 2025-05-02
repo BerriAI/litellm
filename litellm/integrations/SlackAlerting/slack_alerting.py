@@ -615,6 +615,7 @@ class SlackAlerting(CustomBatchLogger):
         elif type == "soft_budget":
             event_group = "proxy"
             event_message += "Soft Budget Crossed: "
+            _id = user_info.team_id or user_info.user_id or _id
         elif type == "user_budget":
             event_group = "internal_user"
             event_message += "User Budget: "
