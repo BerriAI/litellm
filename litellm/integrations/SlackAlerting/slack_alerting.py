@@ -577,7 +577,7 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
-    async def budget_alerts(  # noqa: PLR0915
+    async def budget_alerts(
         self,
         type: Literal[
             "token_budget",
@@ -589,6 +589,13 @@ class SlackAlerting(CustomBatchLogger):
         ],
         user_info: CallInfo,
     ):
+        """
+        Send a budget alert on slack or webhook
+
+        Args:
+            type: The type of budget alert to send
+            user_info: The user info to send the alert for
+        """
         ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
         # - Alert once within 24hr period
         # - Cache this information
