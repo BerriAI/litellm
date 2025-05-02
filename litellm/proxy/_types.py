@@ -31,6 +31,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -1990,6 +1991,7 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
