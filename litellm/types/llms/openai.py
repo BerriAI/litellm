@@ -809,10 +809,12 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     ]
 
 
-class ChatCompletionUsageBlock(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+class ChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    prompt_tokens_details: Optional[dict]
+    completion_tokens_details: Optional[dict]
 
 
 class OpenAIChatCompletionChunk(ChatCompletionChunk):
@@ -1295,6 +1297,42 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
+
+
+class OpenAIChatCompletionLogprobs(TypedDict, total=False):
+    content: List[OpenAIChatCompletionLogprobsContent]
+    refusal: List[OpenAIChatCompletionLogprobsContent]
+
+
+class OpenAIChatCompletionChoices(TypedDict, total=False):
+    finish_reason: Required[str]
+    index: Required[int]
+    logprobs: Optional[OpenAIChatCompletionLogprobs]
+    message: Required[ChatCompletionResponseMessage]
+
+
+class OpenAIChatCompletionResponse(TypedDict, total=False):
+    id: Required[str]
+    object: Required[str]
+    created: Required[int]
+    model: Required[str]
+    choices: Required[List[OpenAIChatCompletionChoices]]
+    usage: Required[ChatCompletionUsageBlock]
+    system_fingerprint: str
+    service_tier: str
+
 OpenAIChatCompletionFinishReason = Literal[
     "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
+
