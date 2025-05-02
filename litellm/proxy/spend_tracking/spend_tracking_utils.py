@@ -87,7 +87,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = vector_store_request_metadata
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -487,6 +489,31 @@ def _get_proxy_server_request_for_spend_logs_payload(
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
     return "{}"
+
+
+def _get_vector_store_request_for_spend_logs_payload(
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
+) -> Optional[List[StandardLoggingVectorStoreRequest]]:
+    """
+    If user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    """
+    if _should_store_prompts_and_responses_in_spend_logs():
+        return vector_store_request_metadata
+
+    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    if vector_store_request_metadata is None:
+        return None
+    sanitized_vector_store_request_metadata = []
+    for vector_store_request in vector_store_request_metadata:
+        vector_store_search_response = (
+            vector_store_request.get("vector_store_search_response", {}) or {}
+        )
+        response_data = vector_store_search_response.get("data", []) or []
+        for response_item in response_data:
+            for content_item in response_item.get("content", []) or []:
+                if "text" in content_item:
+                    content_item["text"] = "REDACTED"
+    return sanitized_vector_store_request_metadata
 
 
 def _get_response_for_spend_logs_payload(

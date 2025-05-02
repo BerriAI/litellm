@@ -21,4 +21,5 @@ vector_stores:
 
 general_settings:
   alerting: ["webhook"]
+  store_prompts_in_spend_logs: true
 
