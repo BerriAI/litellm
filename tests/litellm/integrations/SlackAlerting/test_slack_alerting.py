@@ -4,7 +4,7 @@ import os
 import sys
 import unittest
 from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -164,12 +164,11 @@ class TestSlackAlerting(unittest.TestCase):
 
     # Calling update_values with alerting args should try to start the periodic task which will fail
     @patch("asyncio.create_task")
-    def test_update_values_starts_periodic_task(mock_create_task):
+    def test_update_values_starts_periodic_task(self, mock_create_task):
         # Make it do nothing (or return a dummy future)
         mock_create_task.return_value = AsyncMock()  # prevents awaiting errors
 
-        sa = SlackAlerting()
-        assert(sa.periodic_started == False)
+        assert(self.slack_alerting.periodic_started == False)
 
-        sa.update_values(alerting_args={"slack_alerting": "True"})
-        assert(sa.periodic_started == True)
+        self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
+        assert(self.slack_alerting.periodic_started == True)
