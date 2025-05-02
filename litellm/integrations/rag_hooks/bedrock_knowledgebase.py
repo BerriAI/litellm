@@ -76,9 +76,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
         """
         vector_store_ids = non_default_params.pop("vector_store_ids", None)
-        vector_store_request_metadata: Optional[
-            List[StandardLoggingVectorStoreRequest]
-        ] = []
+        vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
         if vector_store_ids:
             for vector_store_id in vector_store_ids:
                 query = self._get_kb_query_from_messages(messages)
@@ -138,7 +136,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         if retrieval_results is None:
             return vector_store_search_response
 
-        vector_store_search_response["data"] = []
+        vector_search_response_data: List[VectorStoreSearchResult] = []
         for retrieval_result in retrieval_results:
             content: Optional[BedrockKBContent] = retrieval_result.get("content", None)
             if content is None:
@@ -152,7 +150,8 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
                     content=[VectorStoreResultContent(text=content_text, type="text")],
                 )
             )
-            vector_store_search_response["data"].append(vector_store_search_result)
+            vector_search_response_data.append(vector_store_search_result)
+        vector_store_search_response["data"] = vector_search_response_data
         return vector_store_search_response
 
     def _get_kb_query_from_messages(self, messages: List[AllMessageValues]) -> str:
