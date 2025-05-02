@@ -28,6 +28,7 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
     """List all credentials"""
     client = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
     response = client.list()
+    assert isinstance(response, dict)
 
     if output_format == "json":
         rich.print_json(data=response)
