@@ -30,7 +30,7 @@ interface VectorStoreViewerProps {
 }
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
-  const [sectionExpanded, setSectionExpanded] = useState(false);
+  const [sectionExpanded, setSectionExpanded] = useState(true);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
   if (!data || data.length === 0) {

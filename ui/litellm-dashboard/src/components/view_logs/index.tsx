@@ -833,11 +833,6 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} />
 
-      {/* Vector Store Request Data - Show only if present */}
-      {hasVectorStoreData && (
-        <VectorStoreViewer data={metadata.vector_store_request_metadata} />
-      )}
-
       {/* Request/Response Panel */}
       <div className="grid grid-cols-2 gap-4">
         {/* Request Side */}
@@ -893,6 +888,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
         </div>
       </div>
+
+      {/* Vector Store Request Data - Show only if present */}
+            {hasVectorStoreData && (
+        <VectorStoreViewer data={metadata.vector_store_request_metadata} />
+      )}
 
       {/* Error Card - Only show for failures */}
       {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
