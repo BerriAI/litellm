@@ -606,7 +606,6 @@ class SlackAlerting(CustomBatchLogger):
         _id = budget_alert_class.get_id(user_info)
         user_info_json = user_info.model_dump(exclude_none=True)
         user_info_str = self._get_user_info_str(user_info)
-        event_group = user_info.event_group
         event_message = budget_alert_class.get_event_message()
 
         # Set default event unless we're in projected_limit_exceeded
@@ -635,13 +634,12 @@ class SlackAlerting(CustomBatchLogger):
         )
 
         # send alert
-        if event is not None and event_group is not None:
+        if event is not None and user_info.event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 webhook_event = WebhookEvent(
                     event=event,
-                    event_group=event_group,
                     event_message=event_message,
                     **user_info_json,
                 )
