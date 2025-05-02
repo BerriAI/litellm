@@ -1,0 +1,91 @@
+"""Tests for the HTTP command group."""
+
+import json
+import pytest
+from click.testing import CliRunner
+
+from litellm.proxy.client.cli.commands.http import http
+
+
+@pytest.fixture
+def runner():
+    """Create a CLI test runner."""
+    return CliRunner()
+
+
+def test_request_get(runner):
+    """Test making a GET request."""
+    result = runner.invoke(
+        http,
+        ["request", "GET", "/models"],
+        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+    )
+    assert result.exit_code == 0
+
+
+def test_request_post_with_json(runner):
+    """Test making a POST request with JSON data."""
+    result = runner.invoke(
+        http,
+        [
+            "request",
+            "POST",
+            "/chat/completions",
+            "-j",
+            '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}',
+        ],
+        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+    )
+    assert result.exit_code == 0
+
+
+def test_request_with_headers(runner):
+    """Test making a request with custom headers."""
+    result = runner.invoke(
+        http,
+        [
+            "request",
+            "GET",
+            "/models",
+            "-H",
+            "X-Custom-Header:value",
+            "-H",
+            "Accept:application/json",
+        ],
+        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+    )
+    assert result.exit_code == 0
+
+
+def test_request_invalid_json(runner):
+    """Test error handling for invalid JSON data."""
+    result = runner.invoke(
+        http,
+        [
+            "request",
+            "POST",
+            "/chat/completions",
+            "-j",
+            '{"invalid": json}',  # Invalid JSON
+        ],
+        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+    )
+    assert result.exit_code == 2  # Click error code for invalid parameter
+    assert "Invalid JSON format" in result.output
+
+
+def test_request_invalid_header(runner):
+    """Test error handling for invalid header format."""
+    result = runner.invoke(
+        http,
+        [
+            "request",
+            "GET",
+            "/models",
+            "-H",
+            "invalid-header",  # Invalid header format
+        ],
+        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+    )
+    assert result.exit_code == 2  # Click error code for invalid parameter
+    assert "Invalid header format" in result.output 

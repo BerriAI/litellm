@@ -8,6 +8,7 @@ import click
 from .commands.models import models
 from .commands.credentials import credentials
 from .commands.chat import chat
+from .commands.http import http
 
 
 @click.group()
@@ -36,6 +37,8 @@ cli.add_command(models)
 cli.add_command(credentials)
 # Add the chat command group
 cli.add_command(chat)
+# Add the http command group
+cli.add_command(http)
 
 
 if __name__ == "__main__":

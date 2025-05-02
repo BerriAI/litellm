@@ -193,6 +193,44 @@ litellm-proxy chat completions gpt-4 \
   --top-p 0.9
 ```
 
+### HTTP Commands
+
+The CLI provides commands for making direct HTTP requests to your LiteLLM proxy server:
+
+#### Make HTTP Request
+
+Make an HTTP request to any endpoint:
+
+```bash
+litellm-proxy http request <method> <uri> [options]
+```
+
+Arguments:
+- `method`: HTTP method (GET, POST, PUT, DELETE, etc.)
+- `uri`: URI path (will be appended to base_url)
+
+Options:
+- `--data`, `-d`: Data to send in the request body (as JSON string)
+- `--json`, `-j`: JSON data to send in the request body (as JSON string)
+- `--header`, `-H`: HTTP headers in 'key:value' format. Can be specified multiple times.
+
+Examples:
+
+1. List models:
+```bash
+litellm-proxy http request GET /models
+```
+
+2. Create a chat completion:
+```bash
+litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+3. Test connection with custom headers:
+```bash
+litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value"
+```
+
 ### Model Information
 
 Get detailed information about all models:
@@ -261,6 +299,14 @@ litellm-proxy credentials list
 litellm-proxy credentials create azure-prod \
   --info '{"custom_llm_provider": "azure"}' \
   --values '{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
+```
+
+7. Make a custom HTTP request:
+
+```bash
+litellm-proxy http request POST /chat/completions \
+  -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}' \
+  -H "X-Custom-Header:value"
 ```
 
 ## Error Handling
