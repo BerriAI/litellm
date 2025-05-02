@@ -44,6 +44,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
+    OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -810,6 +811,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return usage
 
+    def _check_finish_reason(
+        self,
+        chat_completion_message: ChatCompletionResponseMessage,
+        finish_reason: Optional[str],
+    ) -> OpenAIChatCompletionFinishReason:
+        if chat_completion_message.get("function_call"):
+            return "function_call"
+        elif chat_completion_message.get("tool_calls"):
+            return "tool_calls"
+        elif finish_reason and (
+            finish_reason == "SAFETY" or finish_reason == "RECITATION"
+        ):  # vertex ai
+            return "content_filter"
+        else:
+            return "stop"
+
     def _process_candidates(self, _candidates, model_response, litellm_params):
         """Helper method to process candidates and extract metadata"""
         grounding_metadata: List[dict] = []
@@ -865,7 +882,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_message["function_call"] = functions
 
             choice = litellm.Choices(
-                finish_reason=candidate.get("finishReason", "stop"),
+                finish_reason=self._check_finish_reason(
+                    chat_completion_message, candidate.get("finishReason")
+                ),
                 index=candidate.get("index", idx),
                 message=chat_completion_message,  # type: ignore
                 logprobs=chat_completion_logprobs,
