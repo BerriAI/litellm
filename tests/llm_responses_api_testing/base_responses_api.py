@@ -116,17 +116,19 @@ class BaseResponsesAPITest(ABC):
         litellm._turn_on_debug()
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
-        if sync_mode:
-            response = litellm.responses(
-                input="Basic ping", max_output_tokens=20,
-                **base_completion_call_args
-            )
-        else:
-            response = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20,
-                **base_completion_call_args
-            )
-
+        try: 
+            if sync_mode:
+                response = litellm.responses(
+                    input="Basic ping", max_output_tokens=20,
+                    **base_completion_call_args
+                )
+            else:
+                response = await litellm.aresponses(
+                    input="Basic ping", max_output_tokens=20,
+                    **base_completion_call_args
+                )
+        except litellm.InternalServerError: 
+            pytest.skip("Skipping test due to litellm.InternalServerError")
         print("litellm response=", json.dumps(response, indent=4, default=str))
 
         # Use the helper function to validate the response
