@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -503,7 +504,6 @@ def _get_vector_store_request_for_spend_logs_payload(
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
-    sanitized_vector_store_request_metadata = []
     for vector_store_request in vector_store_request_metadata:
         vector_store_search_response = (
             vector_store_request.get("vector_store_search_response", {}) or {}
@@ -512,8 +512,8 @@ def _get_vector_store_request_for_spend_logs_payload(
         for response_item in response_data:
             for content_item in response_item.get("content", []) or []:
                 if "text" in content_item:
-                    content_item["text"] = "REDACTED"
-    return sanitized_vector_store_request_metadata
+                    content_item["text"] = REDACTED_BY_LITELM_STRING
+    return vector_store_request_metadata
 
 
 def _get_response_for_spend_logs_payload(
