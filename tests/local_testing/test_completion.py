@@ -1477,7 +1477,7 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio"]
+    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
@@ -1519,6 +1519,7 @@ async def test_openai_compatible_custom_api_base(provider):
     [
         "openai",
         "hosted_vllm",
+        "llamafile",
     ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
