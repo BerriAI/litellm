@@ -13,6 +13,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
     ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -559,3 +560,14 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
             return mime_type
 
     return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_names.append(tool.get("function", {}).get("name"))
+    return tool_call_names
