@@ -31,7 +31,7 @@ def test_map_openai_params():
     non_default_params = {"response_format": {"type": "json_schema"}}
     optional_params = {"response_format": True}
     result = config.map_openai_params(
-        non_default_params, optional_params, "llama-3-8b-instruct", False
+        non_default_params, optional_params, "llama-3.3-8B-instruct", False
     )
     assert "response_format" in result
     assert result["response_format"]["type"] == "json_schema"
@@ -40,7 +40,7 @@ def test_map_openai_params():
     non_default_params = {"response_format": {"type": "text"}}
     optional_params = {"response_format": True}
     result = config.map_openai_params(
-        non_default_params, optional_params, "llama-3-8b-instruct", False
+        non_default_params, optional_params, "llama-3.3-8B-instruct", False
     )
     assert "response_format" not in result
 
@@ -51,7 +51,7 @@ def test_map_openai_params():
     }
     optional_params = {"temperature": True, "response_format": True}
     result = config.map_openai_params(
-        non_default_params, optional_params, "llama-3-8b-instruct", False
+        non_default_params, optional_params, "llama-3.3-8B-instruct", False
     )
     assert "temperature" in result
     assert result["temperature"] == 0.7
