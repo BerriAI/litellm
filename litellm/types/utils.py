@@ -1745,6 +1745,16 @@ class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     OpenAI format vector store search response
     """
 
+    start_time: Optional[float]
+    """
+    Start time of the vector store request
+    """
+
+    end_time: Optional[float]
+    """
+    End time of the vector store request
+    """
+
 
 class StandardBuiltInToolsParams(TypedDict, total=False):
     """
