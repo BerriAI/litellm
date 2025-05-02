@@ -34,10 +34,11 @@ class LlamaAPIConfig(OpenAIGPTConfig):
             pass
 
         optional_params = super().get_supported_openai_params(model)
-        # Tool calling, Functional Calling, tool choice are not working
-        optional_params.remove("tools")
-        optional_params.remove("tool_choice")
-        optional_params.remove("function_call")
+        if not supports_function_calling:
+            optional_params.remove("function_call")
+        if not supports_tool_choice:
+            optional_params.remove("tools")
+            optional_params.remove("tool_choice")
         return optional_params
 
     def map_openai_params(
