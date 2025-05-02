@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -1338,6 +1339,7 @@ async def _virtual_key_max_budget_check(
             team_id=valid_token.team_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1383,6 +1385,7 @@ async def _virtual_key_soft_budget_check(
             team_alias=valid_token.team_alias,
             user_email=None,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1418,6 +1421,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
