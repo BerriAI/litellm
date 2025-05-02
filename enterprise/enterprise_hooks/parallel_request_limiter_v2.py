@@ -144,16 +144,14 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             increment_list=increment_list,
             ttl=60,
         )
-
-        if (
-            results[0] > max_parallel_requests
-            if max_parallel_requests is not None
-            else False or results[1] > rpm_limit
-            if rpm_limit is not None
-            else False or results[2] > tpm_limit
-            if tpm_limit is not None
-            else False
-        ):
+        should_raise_error = False
+        if max_parallel_requests is not None:
+            should_raise_error = results[0] > max_parallel_requests
+        if rpm_limit is not None:
+            should_raise_error = should_raise_error or results[1] > rpm_limit
+        if tpm_limit is not None:
+            should_raise_error = should_raise_error or results[2] > tpm_limit
+        if should_raise_error:
             raise self.raise_rate_limit_error(
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
             )
@@ -292,7 +290,6 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         rate_limit_types = ["key", "user", "customer", "team"]
         for rate_limit_type in rate_limit_types:
             for group in ["request_count", "rpm", "tpm"]:
-                print(f"group: {group}, rate_limit_type: {rate_limit_type}")
                 key = self._get_current_usage_key(
                     user_api_key_dict=user_api_key_dict,
                     precise_minute=precise_minute,
@@ -302,7 +299,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 )
 
                 increment_list.append((key, increment_value_by_group[group]))
-        print(f"increment_list: {increment_list}")
+
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,

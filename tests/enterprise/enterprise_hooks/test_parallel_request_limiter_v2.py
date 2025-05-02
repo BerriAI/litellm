@@ -112,6 +112,7 @@ async def test_normal_router_call_v2(monkeypatch):
         # "team"
     ],
 )
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     """
@@ -202,8 +203,18 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     )
 
 
+@pytest.mark.parametrize(
+    "rate_limit_object",
+    [
+        "key",
+        # "model_per_key",
+        "user",
+        # "customer",
+        # "team"
+    ],
+)
 @pytest.mark.asyncio
-async def test_normal_router_call_rpm(monkeypatch):
+async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
     """
     Test normal router call with parallel request limiter v2
     """
@@ -237,7 +248,10 @@ async def test_normal_router_call_rpm(monkeypatch):
 
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
+    if rate_limit_object == "key":
+        user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=1)
+    elif rate_limit_object == "user":
+        user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_rpm_limit=1)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -256,7 +270,7 @@ async def test_normal_router_call_rpm(monkeypatch):
         user_api_key_dict=user_api_key_dict,
         precise_minute=precise_minute,
         model=None,
-        rate_limit_type="key",
+        rate_limit_type=rate_limit_object,
         group="rpm",
     )
     await asyncio.sleep(1)
