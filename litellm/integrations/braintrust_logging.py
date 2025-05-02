@@ -17,23 +17,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.utils import print_verbose
+from litellm.utils import get_utc_datetime, print_verbose
 
 global_braintrust_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback
 )
 global_braintrust_sync_http_handler = HTTPHandler()
 API_BASE = "https://api.braintrustdata.com/v1"
-
-
-def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
-    else:
-        return datetime.utcnow()  # type: ignore
 
 
 class BraintrustLogger(CustomLogger):

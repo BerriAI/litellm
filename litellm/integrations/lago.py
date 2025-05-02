@@ -16,16 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
-
-def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
-    else:
-        return datetime.utcnow()  # type: ignore
+from litellm.utils import get_utc_datetime
 
 
 class LagoLogger(CustomLogger):
