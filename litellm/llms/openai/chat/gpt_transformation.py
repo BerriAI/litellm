@@ -16,6 +16,12 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _extract_reasoning_content,
+    _handle_invalid_parallel_tool_calls,
+    _should_convert_tool_call_to_json_mode,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -26,8 +32,16 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
+    OpenAIChatCompletionChoices,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+)
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
@@ -240,6 +254,126 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             **optional_params,
         }
 
+    def _passed_in_tools(self, optional_params: dict) -> bool:
+        return optional_params.get("tools", None) is not None
+
+    def _check_and_fix_if_content_is_tool_call(
+        self, content: str, optional_params: dict
+    ) -> Optional[ChatCompletionMessageToolCall]:
+        """
+        Check if the content is a tool call
+        """
+        import json
+
+        if not self._passed_in_tools(optional_params):
+            return None
+        tool_call_names = get_tool_call_names(optional_params.get("tools", []))
+        try:
+            json_content = json.loads(content)
+            if (
+                json_content.get("type") == "function"
+                and json_content.get("name") in tool_call_names
+            ):
+                return ChatCompletionMessageToolCall(
+                    function=Function(
+                        name=json_content.get("name"),
+                        arguments=json_content.get("arguments"),
+                    )
+                )
+        except Exception:
+            return None
+
+        return None
+
+    def _get_finish_reason(self, message: Message, received_finish_reason: str) -> str:
+        if message.tool_calls is not None:
+            return "tool_calls"
+        else:
+            return received_finish_reason
+
+    def _transform_choices(
+        self,
+        choices: List[OpenAIChatCompletionChoices],
+        json_mode: Optional[bool] = None,
+        optional_params: Optional[dict] = None,
+    ) -> List[Choices]:
+        transformed_choices = []
+
+        for choice in choices:
+            ## HANDLE JSON MODE - anthropic returns single function call]
+            tool_calls = choice["message"].get("tool_calls", None)
+            new_tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+            message_content = choice["message"].get("content", None)
+            if tool_calls is not None:
+                _openai_tool_calls = []
+                for _tc in tool_calls:
+                    _openai_tc = ChatCompletionMessageToolCall(**_tc)  # type: ignore
+                    _openai_tool_calls.append(_openai_tc)
+                fixed_tool_calls = _handle_invalid_parallel_tool_calls(
+                    _openai_tool_calls
+                )
+
+                if fixed_tool_calls is not None:
+                    new_tool_calls = fixed_tool_calls
+            elif (
+                optional_params is not None
+                and message_content
+                and isinstance(message_content, str)
+            ):
+                new_tool_call = self._check_and_fix_if_content_is_tool_call(
+                    message_content, optional_params
+                )
+                if new_tool_call is not None:
+                    choice["message"]["content"] = None  # remove the content
+                    new_tool_calls = [new_tool_call]
+
+            translated_message: Optional[Message] = None
+            finish_reason: Optional[str] = None
+            if new_tool_calls and _should_convert_tool_call_to_json_mode(
+                tool_calls=new_tool_calls,
+                convert_tool_call_to_json_mode=json_mode,
+            ):
+                # to support response_format on claude models
+                json_mode_content_str: Optional[str] = (
+                    str(new_tool_calls[0]["function"].get("arguments", "")) or None
+                )
+                if json_mode_content_str is not None:
+                    translated_message = Message(content=json_mode_content_str)
+                    finish_reason = "stop"
+
+            if translated_message is None:
+                ## get the reasoning content
+                (
+                    reasoning_content,
+                    content_str,
+                ) = _extract_reasoning_content(cast(dict, choice["message"]))
+
+                translated_message = Message(
+                    role="assistant",
+                    content=content_str,
+                    reasoning_content=reasoning_content,
+                    thinking_blocks=None,
+                    tool_calls=new_tool_calls,
+                )
+
+            if finish_reason is None:
+                finish_reason = choice["finish_reason"]
+
+            translated_choice = Choices(
+                finish_reason=finish_reason,
+                index=choice["index"],
+                message=translated_message,
+                logprobs=None,
+                enhancements=None,
+            )
+
+            translated_choice.finish_reason = self._get_finish_reason(
+                translated_message, choice["finish_reason"]
+            )
+            transformed_choices.append(translated_choice)
+
+        return transformed_choices
+
     def transform_response(
         self,
         model: str,
@@ -384,6 +518,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return (
             api_base
             or litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )

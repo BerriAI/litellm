@@ -2,7 +2,17 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -29,6 +39,7 @@ from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
@@ -39,6 +50,11 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse
+
+if TYPE_CHECKING:
+    from .vector_stores import VectorStorSearchResponse
+else:
+    VectorStorSearchResponse = Any
 
 
 def _generate_id():  # private helper function
@@ -150,6 +166,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_vector_size: Optional[int]
+    output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -377,12 +394,18 @@ class Function(OpenAIObject):
 
     def __init__(
         self,
-        arguments: Optional[Union[Dict, str]],
+        arguments: Optional[Union[Dict, str]] = None,
         name: Optional[str] = None,
         **params,
     ):
         if arguments is None:
-            arguments = ""
+            if params.get("parameters", None) is not None and isinstance(
+                params["parameters"], dict
+            ):
+                arguments = json.dumps(params["parameters"])
+                params.pop("parameters")
+            else:
+                arguments = ""
         elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
@@ -391,7 +414,7 @@ class Function(OpenAIObject):
         name = name
 
         # Build a dictionary with the structure your BaseModel expects
-        data = {"arguments": arguments, "name": name, **params}
+        data = {"arguments": arguments, "name": name}
 
         super(Function, self).__init__(**data)
 
@@ -545,7 +568,9 @@ class Message(OpenAIObject):
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
@@ -560,7 +585,11 @@ class Message(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -643,7 +672,9 @@ class Message(OpenAIObject):
 
 class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -654,7 +685,11 @@ class Delta(OpenAIObject):
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None,
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -829,8 +864,11 @@ class Usage(CompletionUsage):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if reasoning_tokens:
+            text_tokens = (
+                completion_tokens - reasoning_tokens if completion_tokens else None
+            )
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens
+                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
@@ -1682,6 +1720,32 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     """
 
 
+class StandardLoggingVectorStoreRequest(TypedDict, total=False):
+    """
+    Logging information for a vector store request/payload
+    """
+
+    vector_store_id: Optional[str]
+    """
+    ID of the vector store
+    """
+
+    custom_llm_provider: Optional[str]
+    """
+    Custom LLM provider the vector store is associated with eg. bedrock, openai, anthropic, etc.
+    """
+
+    query: Optional[str]
+    """
+    Query to the vector store
+    """
+
+    vector_store_search_response: Optional[VectorStorSearchResponse]
+    """
+    OpenAI format vector store search response
+    """
+
+
 class StandardBuiltInToolsParams(TypedDict, total=False):
     """
     Standard built-in OpenAItools parameters
@@ -1713,6 +1777,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
 
@@ -1965,6 +2030,7 @@ all_litellm_params = [
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
     "allowed_openai_params",
+    "litellm_session_id",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2069,6 +2135,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
@@ -2231,7 +2298,25 @@ class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
     LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
 
+    LITELLM_MANAGED_RESPONSE_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
+    )
+
 
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
 ]
+
+
+class DynamicPromptManagementParamLiteral(str, Enum):
+    """
+    If any of these params are passed, the user is trying to use dynamic prompt management
+    """
+
+    CACHE_CONTROL_INJECTION_POINTS = "cache_control_injection_points"
+    KNOWLEDGE_BASES = "knowledge_bases"
+    VECTOR_STORE_IDS = "vector_store_ids"
+
+    @classmethod
+    def list_all_params(cls):
+        return [param.value for param in cls]

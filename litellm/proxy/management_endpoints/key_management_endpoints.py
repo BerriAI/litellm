@@ -372,7 +372,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
-
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -583,6 +583,10 @@ async def generate_key_fn(  # noqa: PLR0915
 
         response = GenerateKeyResponse(**response)
 
+        response.token = (
+            response.token_id
+        )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=data,
@@ -659,8 +663,9 @@ def prepare_key_update_data(
             and (isinstance(budget_duration, str))
             and len(budget_duration) > 0
         ):
-            duration_s = duration_in_seconds(duration=budget_duration)
-            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
@@ -723,6 +728,7 @@ async def update_key_fn(
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
 
     Example:
     ```bash
@@ -1167,6 +1173,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     send_invite_email: Optional[bool] = None,
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
+    allowed_routes: Optional[list] = None,
+    sso_user_id: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1245,6 +1253,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "budget_duration": budget_duration,
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
+            "sso_user_id": sso_user_id,
         }
         if teams is not None:
             user_data["teams"] = teams
@@ -1272,6 +1281,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "blocked": blocked,
             "created_by": created_by,
             "updated_by": updated_by,
+            "allowed_routes": allowed_routes or [],
         }
 
         if (
@@ -1340,10 +1350,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             create_key_response = await prisma_client.insert_data(
                 data=key_data, table_name="key"
             )
+
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
             )
+            key_data["created_at"] = getattr(create_key_response, "created_at", None)
+            key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
@@ -1849,6 +1862,7 @@ async def validate_key_list_check(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     prisma_client: PrismaClient,
 ) -> Optional[LiteLLM_UserTable]:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1912,6 +1926,31 @@ async def validate_key_list_check(
                 param="organization_id",
                 code=status.HTTP_403_FORBIDDEN,
             )
+
+    if key_hash:
+        try:
+            key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": key_hash},
+            )
+        except Exception:
+            raise ProxyException(
+                message="Key Hash not found.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_hash",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        can_user_query_key_info = await _can_user_query_key_info(
+            user_api_key_dict=user_api_key_dict,
+            key=key_hash,
+            key_info=key_info,
+        )
+        if not can_user_query_key_info:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
     return complete_user_info
 
 
@@ -1960,11 +1999,17 @@ async def list_keys(
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
+    key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
     ),
+    sort_by: Optional[str] = Query(
+        default=None,
+        description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
+    ),
+    sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -1992,6 +2037,7 @@ async def list_keys(
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             prisma_client=prisma_client,
         )
 
@@ -2017,9 +2063,12 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            key_hash=key_hash,
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -2045,6 +2094,42 @@ async def list_keys(
         )
 
 
+def _validate_sort_params(
+    sort_by: Optional[str], sort_order: str
+) -> Optional[Dict[str, str]]:
+    order_by: Dict[str, str] = {}
+
+    if sort_by is None:
+        return None
+    # Validate sort_by is a valid column
+    valid_columns = [
+        "spend",
+        "max_budget",
+        "created_at",
+        "updated_at",
+        "token",
+        "key_alias",
+    ]
+    if sort_by not in valid_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort column. Must be one of: {', '.join(valid_columns)}"
+            },
+        )
+
+    # Validate sort_order
+    if sort_order.lower() not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
+        )
+
+    order_by[sort_by] = sort_order.lower()
+
+    return order_by
+
+
 async def _list_key_helper(
     prisma_client: PrismaClient,
     page: int,
@@ -2053,11 +2138,14 @@ async def _list_key_helper(
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
+    key_hash: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -2099,6 +2187,8 @@ async def _list_key_helper(
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
         user_condition["organization_id"] = organization_id
+    if key_hash and isinstance(key_hash, str):
+        user_condition["token"] = key_hash
 
     if user_condition:
         or_conditions.append(user_condition)
@@ -2120,12 +2210,20 @@ async def _list_key_helper(
 
     verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
 
+    order_by: Optional[Dict[str, str]] = (
+        _validate_sort_params(sort_by, sort_order)
+        if sort_by is not None and isinstance(sort_by, str)
+        else None
+    )
+
     # Fetch keys with pagination
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where=where,  # type: ignore
         skip=skip,  # type: ignore
         take=size,  # type: ignore
-        order=[
+        order=order_by
+        if order_by
+        else [
             {"created_at": "desc"},
             {"token": "desc"},  # fallback sort
         ],

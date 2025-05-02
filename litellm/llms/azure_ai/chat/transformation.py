@@ -1,3 +1,4 @@
+import enum
 from typing import Any, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
@@ -17,6 +18,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
+
+
+class AzureFoundryErrorStrings(str, enum.Enum):
+    SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -240,11 +245,17 @@ class AzureAIStudioConfig(OpenAIConfig):
     ) -> bool:
         should_drop_params = litellm_params.get("drop_params") or litellm.drop_params
         error_text = e.response.text
+
         if should_drop_params and "Extra inputs are not permitted" in error_text:
             return True
         elif (
             "unknown field: parameter index is not a valid field" in error_text
         ):  # remove index from tool calls
+            return True
+        elif (
+            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value
+            in error_text
+        ):  # remove extra-parameters from tool calls
             return True
         return super().should_retry_llm_api_inside_llm_translation_on_http_error(
             e=e, litellm_params=litellm_params
@@ -265,5 +276,46 @@ class AzureAIStudioConfig(OpenAIConfig):
             litellm.remove_index_from_tool_calls(
                 messages=_messages,
             )
+        elif (
+            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value
+            in e.response.text
+        ):
+            request_data = self._drop_extra_params_from_request_data(
+                request_data, e.response.text
+            )
         data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
+
+    def _drop_extra_params_from_request_data(
+        self, request_data: dict, error_text: str
+    ) -> dict:
+        params_to_drop = self._extract_params_to_drop_from_error_text(error_text)
+        if params_to_drop:
+            for param in params_to_drop:
+                if param in request_data:
+                    request_data.pop(param, None)
+        return request_data
+
+    def _extract_params_to_drop_from_error_text(
+        self, error_text: str
+    ) -> Optional[List[str]]:
+        """
+        Error text looks like this"
+            "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.
+        """
+        import re
+
+        # Extract parameters within square brackets
+        match = re.search(r"\[(.*?)\]", error_text)
+        if not match:
+            return []
+
+        # Parse the extracted string into a list of parameter names
+        params_str = match.group(1)
+        params = []
+        for param in params_str.split(","):
+            # Clean up the parameter name (remove quotes, spaces)
+            clean_param = param.strip().strip("'").strip('"')
+            if clean_param:
+                params.append(clean_param)
+        return params

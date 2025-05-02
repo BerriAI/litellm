@@ -3,18 +3,17 @@ import TabItem from '@theme/TabItem';
 
 # Infinity
 
-| Property | Details |
-|-------|-------|
-| Description | Infinity is a high-throughput, low-latency REST API for serving text-embeddings, reranking models and clip|
-| Provider Route on LiteLLM | `infinity/` |
-| Supported Operations | `/rerank` |
-| Link to Provider Doc | [Infinity ↗](https://github.com/michaelfeil/infinity) |
-
+| Property                  | Details                                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Description               | Infinity is a high-throughput, low-latency REST API for serving text-embeddings, reranking models and clip |
+| Provider Route on LiteLLM | `infinity/`                                                                                                |
+| Supported Operations      | `/rerank`, `/embeddings`                                                                                   |
+| Link to Provider Doc      | [Infinity ↗](https://github.com/michaelfeil/infinity)                                                      |
 
 ## **Usage - LiteLLM Python SDK**
 
 ```python
-from litellm import rerank
+from litellm import rerank, embedding
 import os
 
 os.environ["INFINITY_API_BASE"] = "http://localhost:8080"
@@ -39,8 +38,8 @@ model_list:
   - model_name: custom-infinity-rerank
     litellm_params:
       model: infinity/rerank
-      api_key: os.environ/INFINITY_API_KEY
       api_base: https://localhost:8080
+      api_key: os.environ/INFINITY_API_KEY
 ```
 
 Start litellm
@@ -51,7 +50,9 @@ litellm --config /path/to/config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-Test request
+## Test request:
+
+### Rerank
 
 ```bash
 curl http://0.0.0.0:4000/rerank \
@@ -70,15 +71,14 @@ curl http://0.0.0.0:4000/rerank \
   }'
 ```
 
+#### Supported Cohere Rerank API Params
 
-## Supported Cohere Rerank API Params
-
-| Param | Type | Description |
-|-------|-------|-------|
-| `query` | `str` | The query to rerank the documents against |
-| `documents` | `list[str]` | The documents to rerank |
-| `top_n` | `int` | The number of documents to return |
-| `return_documents` | `bool` | Whether to return the documents in the response |
+| Param              | Type        | Description                                     |
+| ------------------ | ----------- | ----------------------------------------------- |
+| `query`            | `str`       | The query to rerank the documents against       |
+| `documents`        | `list[str]` | The documents to rerank                         |
+| `top_n`            | `int`       | The number of documents to return               |
+| `return_documents` | `bool`      | Whether to return the documents in the response |
 
 ### Usage - Return Documents
 
@@ -138,6 +138,7 @@ response = rerank(
     raw_scores=True, # 👈 PROVIDER-SPECIFIC PARAM
 )
 ```
+
 </TabItem>
 
 <TabItem value="proxy" label="PROXY">
@@ -161,7 +162,7 @@ litellm --config /path/to/config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-3. Test it!  
+3. Test it!
 
 ```bash
 curl http://0.0.0.0:4000/rerank \
@@ -179,6 +180,121 @@ curl http://0.0.0.0:4000/rerank \
     "raw_scores": True # 👈 PROVIDER-SPECIFIC PARAM
   }'
 ```
+
 </TabItem>
 
+</Tabs>
+
+## Embeddings
+
+LiteLLM provides an OpenAI api compatible `/embeddings` endpoint for embedding calls.
+
+**Setup**
+
+Add this to your litellm proxy config.yaml
+
+```yaml
+model_list:
+  - model_name: custom-infinity-embedding
+    litellm_params:
+      model: infinity/provider/custom-embedding-v1
+      api_base: http://localhost:8080
+      api_key: os.environ/INFINITY_API_KEY
+```
+
+### Test request:
+
+```bash
+curl http://0.0.0.0:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "custom-infinity-embedding",
+    "input": ["hello"]
+  }'
+```
+
+#### Supported Embedding API Params
+
+| Param             | Type        | Description                                                 |
+| ----------------- | ----------- | ----------------------------------------------------------- |
+| `model`           | `str`       | The embedding model to use                                  |
+| `input`           | `list[str]` | The text inputs to generate embeddings for                  |
+| `encoding_format` | `str`       | The format to return embeddings in (e.g. "float", "base64") |
+| `modality`        | `str`       | The type of input (e.g. "text", "image", "audio")           |
+
+### Usage - Basic Examples
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import embedding
+import os
+
+os.environ["INFINITY_API_BASE"] = "http://localhost:8080"
+
+response = embedding(
+    model="infinity/bge-small",
+    input=["good morning from litellm"]
+)
+
+print(response.data[0]['embedding'])
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "custom-infinity-embedding",
+    "input": ["hello"]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Usage - OpenAI Client
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+  api_key="<LITELLM_MASTER_KEY>",
+  base_url="<LITELLM_URL>"
+)
+
+response = client.embeddings.create(
+  model="bge-small",
+  input=["The food was delicious and the waiter..."],
+  encoding_format="float"
+)
+
+print(response.data[0].embedding)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bge-small",
+    "input": ["The food was delicious and the waiter..."],
+    "encoding_format": "float"
+  }'
+```
+
+</TabItem>
 </Tabs>

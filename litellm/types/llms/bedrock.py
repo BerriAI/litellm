@@ -185,6 +185,7 @@ class ToolUseBlockStartEvent(TypedDict):
 
 class ContentBlockStartEvent(TypedDict, total=False):
     toolUse: Optional[ToolUseBlockStartEvent]
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class ContentBlockDeltaEvent(TypedDict, total=False):

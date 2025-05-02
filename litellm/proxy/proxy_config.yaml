@@ -1,18 +1,24 @@
 model_list:
-  - model_name: anhropic-auto-inject-cache-user-message
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
-      api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
-  
-  - model_name: anhropic-auto-inject-cache-system-message
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-3-5-sonnet-with-vector-store
     litellm_params:
-      model: anhropic/claude-3-5-sonnet-20240620
+      model: anthropic/claude-3-5-sonnet-latest
       api_key: os.environ/ANTHROPIC_API_KEY
-      cache_control_injection_points:
-        - location: message
-          role: user
+      vector_store_ids: ["T37J8R4WTM"]
 
+vector_stores:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      custom_llm_provider: "bedrock"
+      vector_store_id: "T37J8R4WTM"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
+        
+
+general_settings:
+  alerting: ["webhook"]
 

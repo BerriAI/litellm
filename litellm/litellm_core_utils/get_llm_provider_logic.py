@@ -101,7 +101,6 @@ def get_llm_provider(  # noqa: PLR0915
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
-
     try:
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params is not None:
@@ -477,6 +476,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.HostedVLLMChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "llamafile":
+        # llamafile is OpenAI compatible.
+        (api_base, dynamic_api_key) = litellm.LlamafileChatConfig()._get_openai_compatible_provider_info(
+                api_base,
+                api_key
+            )
     elif custom_llm_provider == "lm_studio":
         # lm_studio is openai compatible, we just need to set this to custom_openai
         (

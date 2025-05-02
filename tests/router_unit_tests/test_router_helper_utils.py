@@ -1157,3 +1157,14 @@ def test_cached_get_model_group_info(model_list):
     # Verify the cache info shows hits
     cache_info = router._cached_get_model_group_info.cache_info()
     assert cache_info.hits > 0  # Should have at least one cache hit
+
+
+def test_init_responses_api_endpoints(model_list):
+    """Test if the '_init_responses_api_endpoints' function is working correctly"""
+    from typing import Callable
+    router = Router(model_list=model_list)
+
+    assert router.aget_responses is not None
+    assert isinstance(router.aget_responses, Callable)
+    assert router.adelete_responses is not None
+    assert isinstance(router.adelete_responses, Callable)

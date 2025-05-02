@@ -21,6 +21,10 @@ DEFAULT_MAX_TOKENS = 256  # used when providers need a default
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = 1024  # 1MB = 1024KB
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 
+DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = 1024
+DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET = 2048
+DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = 4096
+MAX_TOKEN_TRIMMING_ATTEMPTS = 10  # Maximum number of attempts to trim the message
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
@@ -90,6 +94,7 @@ STREAM_SSE_DONE_STRING: str = "[DONE]"
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND = 0.001400  # price per second for a100 80GB
 FIREWORKS_AI_56_B_MOE = 56
 FIREWORKS_AI_176_B_MOE = 176
+FIREWORKS_AI_4_B = 4
 FIREWORKS_AI_16_B = 16
 FIREWORKS_AI_80_B = 80
 
@@ -151,6 +156,7 @@ LITELLM_CHAT_PROVIDERS = [
     "custom",
     "litellm_proxy",
     "hosted_vllm",
+    "llamafile",
     "lm_studio",
     "galadriel",
 ]
@@ -240,6 +246,7 @@ openai_compatible_providers: List = [
     "github",
     "litellm_proxy",
     "hosted_vllm",
+    "llamafile",
     "lm_studio",
     "galadriel",
 ]
@@ -248,6 +255,7 @@ openai_text_completion_compatible_providers: List = (
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
+        "llamafile",
     ]
 )
 _openai_like_providers: List = [

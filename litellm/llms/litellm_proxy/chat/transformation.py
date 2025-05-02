@@ -13,6 +13,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> List:
         list = super().get_supported_openai_params(model)
         list.append("thinking")
+        list.append("reasoning_effort")
         return list
 
     def _map_openai_params(

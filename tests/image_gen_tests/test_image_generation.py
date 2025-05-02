@@ -161,6 +161,9 @@ class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
 
+class TestOpenAIGPTImage1(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "gpt-image-1"}
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:

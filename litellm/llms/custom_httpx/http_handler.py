@@ -650,6 +650,49 @@ class HTTPHandler:
         except Exception as e:
             raise e
 
+    def delete(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        stream: bool = False,
+    ):
+        try:
+            if timeout is not None:
+                req = self.client.build_request(
+                    "DELETE", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                )
+            else:
+                req = self.client.build_request(
+                    "DELETE", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                )
+            response = self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+            if stream is True:
+                setattr(e, "message", mask_sensitive_info(e.response.read()))
+                setattr(e, "text", mask_sensitive_info(e.response.read()))
+            else:
+                error_text = mask_sensitive_info(e.response.text)
+                setattr(e, "message", error_text)
+                setattr(e, "text", error_text)
+
+            setattr(e, "status_code", e.response.status_code)
+
+            raise e
+        except Exception as e:
+            raise e
+
     def __del__(self) -> None:
         try:
             self.close()
