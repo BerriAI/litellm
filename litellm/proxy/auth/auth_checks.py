@@ -692,8 +692,32 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                # Create user data with default parameters
+                user_data = {"user_id": user_id}
+                
+                # Apply default user email if provided
+                if user_email:
+                    user_data["user_email"] = user_email
+                    
+                import litellm
+                # Apply default internal user params if available
+                if litellm.default_internal_user_params:
+                    
+                    for key, value in litellm.default_internal_user_params.items():
+                        if key == "available_teams":  # Skip team-related settings
+                            continue
+                        user_data[key] = value
+                
+                # Apply default budget settings if available
+                if "max_budget" not in user_data and litellm.max_internal_user_budget is not None:
+                    user_data["max_budget"] = str(litellm.max_internal_user_budget)
+                
+                if "budget_duration" not in user_data and litellm.internal_user_budget_duration is not None:
+                    user_data["budget_duration"] = litellm.internal_user_budget_duration
+                
+                # Create the user with all default parameters
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id},
+                    data=user_data,
                     include={"organization_memberships": True},
                 )
             else:
