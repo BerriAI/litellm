@@ -162,7 +162,7 @@ class TestSlackAlerting(unittest.TestCase):
         self.assertEqual(event, "soft_budget_crossed")
         self.assertTrue("Total Soft Budget" in event_message)
 
-    # Calling update_values with alerting args should try to start the periodic task which will fail
+    # Calling update_values with alerting args should try to start the periodic task 
     @patch("asyncio.create_task")
     def test_update_values_starts_periodic_task(self, mock_create_task):
         # Make it do nothing (or return a dummy future)
