@@ -2341,8 +2341,6 @@ def test_completion_datarobot():
         {"role": "user", "content": "What's the weather like in San Francisco?"}
     ]
     try:
-        litellm.set_verbose = True
-
         # Local testing with API keys in .env
         # response = completion(
         #     model="datarobot/azure/gpt-4",
