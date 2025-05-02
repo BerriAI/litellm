@@ -17,6 +17,7 @@ from litellm.types.utils import (
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -43,6 +44,9 @@ def _get_spend_logs_metadata(
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+    vector_store_request_metadata: Optional[
+        List[StandardLoggingVectorStoreRequest]
+    ] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
@@ -63,6 +67,7 @@ def _get_spend_logs_metadata(
             proxy_server_request=None,
             batch_models=None,
             mcp_tool_call_metadata=None,
+            vector_store_request_metadata=None,
             model_map_information=None,
             usage_object=None,
         )
@@ -82,6 +87,7 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["vector_store_request_metadata"] = vector_store_request_metadata
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -223,6 +229,13 @@ def get_logging_payload(  # noqa: PLR0915
         ),
         mcp_tool_call_metadata=(
             standard_logging_payload["metadata"].get("mcp_tool_call_metadata", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        vector_store_request_metadata=(
+            standard_logging_payload["metadata"].get(
+                "vector_store_request_metadata", None
+            )
             if standard_logging_payload is not None
             else None
         ),
