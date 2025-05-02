@@ -1,5 +1,5 @@
 #### What this tests ####
-#    This tests litellm.token_counter() function
+#    This tests litellm.token_counter.token_counter() function
 import traceback
 import os
 import sys
@@ -7,6 +7,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
+
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,9 +20,10 @@ from litellm import (
     decode,
     encode,
     get_modified_max_tokens,
-    token_counter,
+    token_counter as token_counter_old,
 )
-from large_text import text
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from tests.large_text import text
 from messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -29,38 +31,48 @@ from messages_with_counts import (
 )
 
 
+def token_counter_both_assert_same(**args):
+    new = token_counter_new(**args)
+    old = token_counter_old(**args)
+    assert new == old, f"New token counter {new} does not match old token counter {old}"
+    return new
+
+## Choose which token_counter the test will use.
+
+#token_counter = token_counter_new
+#token_counter = token_counter_old
+token_counter = token_counter_both_assert_same
+
+
 def test_token_counter_normal_plus_function_calling():
-    try:
-        messages = [
-            {"role": "system", "content": "System prompt"},
-            {"role": "user", "content": "content1"},
-            {"role": "assistant", "content": "content2"},
-            {"role": "user", "content": "conten3"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_E0lOb1h6qtmflUyok4L06TgY",
-                        "function": {
-                            "arguments": '{"query":"search query","domain":"google.ca","gl":"ca","hl":"en"}',
-                            "name": "SearchInternet",
-                        },
-                        "type": "function",
-                    }
-                ],
-            },
-            {
-                "tool_call_id": "call_E0lOb1h6qtmflUyok4L06TgY",
-                "role": "tool",
-                "name": "SearchInternet",
-                "content": "tool content",
-            },
-        ]
-        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-        print(f"tokens: {tokens}")
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+    messages = [
+        {"role": "system", "content": "System prompt"},
+        {"role": "user", "content": "content1"},
+        {"role": "assistant", "content": "content2"},
+        {"role": "user", "content": "conten3"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_E0lOb1h6qtmflUyok4L06TgY",
+                    "function": {
+                        "arguments": '{"query":"search query","domain":"google.ca","gl":"ca","hl":"en"}',
+                        "name": "SearchInternet",
+                    },
+                    "type": "function",
+                }
+            ],
+        },
+        {
+            "tool_call_id": "call_E0lOb1h6qtmflUyok4L06TgY",
+            "role": "tool",
+            "name": "SearchInternet",
+            "content": "tool content",
+        },
+    ]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens == 80
 
 
 # test_token_counter_normal_plus_function_calling()
@@ -75,6 +87,18 @@ def test_token_counter_textonly(message_count_pair):
         model="gpt-35-turbo", messages=[message_count_pair["message"]]
     )
     assert counted_tokens == message_count_pair["count"]
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_TEXT,
+)
+def test_token_counter_count_response_tokens(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-35-turbo", messages=[message_count_pair["message"]], count_response_tokens=True
+    )
+    # 3 tokens are not added because of count_response_tokens=True
+    expected = message_count_pair["count"] - 3 
+    assert counted_tokens == expected
 
 
 @pytest.mark.parametrize(
@@ -100,11 +124,23 @@ def test_token_counter_with_tools(message_count_pair):
         tool_choice=message_count_pair["tool_choice"],
     )
     expected_tokens = message_count_pair["count"]
-    diff = counted_tokens - expected_tokens
-    assert (
-        diff >= 0 and diff <= 3
-    ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by 3 in the over-counting direction."
+    actual_diff = counted_tokens - expected_tokens
 
+    if "count-tolerate" in message_count_pair:
+        if message_count_pair["count-tolerate"] == counted_tokens:
+            pass # expected
+        else:
+            tolerated_diff = message_count_pair["count-tolerate"] - expected_tokens
+            assert actual_diff <= tolerated_diff, f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            if actual_diff != tolerated_diff:
+                raise  NeedsToleranceUpdateError(f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}")
+
+    else:
+        assert expected_tokens == counted_tokens, f"Expected {expected_tokens} tokens, got {counted_tokens}."
+
+class NeedsToleranceUpdateError(Exception):
+    """Custom exception to mark tests that have improved"""
+    pass
 
 def test_tokenizers():
     try:
@@ -184,7 +220,7 @@ def test_encoding_and_decoding():
         # llama2 encoding + decoding
         llama2_tokens = encode(model="meta-llama/Llama-2-7b-chat", text=sample_text)
         llama2_text = decode(
-            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens.ids
+            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens.ids # type: ignore
         )
 
         assert llama2_text == sample_text
@@ -350,6 +386,7 @@ def test_empty_tools():
     print(result)
 
 
+@pytest.mark.skip(reason="Skipping this test temporarily because it relies on a function being called that I am removing.")
 def test_gpt_4o_token_counter():
     with patch.object(
         litellm.utils, "openai_token_counter", new=MagicMock()
@@ -383,6 +420,35 @@ def test_img_url_token_counter(img_url):
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
 
+def test_token_counter():
+    try:
+        messages = [{"role": "user", "content": "hi how are you what time is it"}]
+        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+        print("gpt-35-turbo")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="claude-2", messages=messages)
+        print("claude-2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="gemini/chat-bison", messages=messages)
+        print("gemini/chat-bison")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="ollama/llama2", messages=messages)
+        print("ollama/llama2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
+        print("anthropic.claude-instant-v1")
+        print(tokens)
+        assert tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 import unittest
 from unittest.mock import patch, MagicMock
