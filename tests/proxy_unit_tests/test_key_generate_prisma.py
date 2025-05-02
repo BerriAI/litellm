@@ -4004,7 +4004,6 @@ async def test_reset_budget_job(prisma_client, entity_type):
         entity_id = team_id
 
         # Update the team to set spend and reset_at to now
-        current_time = datetime.utcnow()
         await prisma_client.db.litellm_teamtable.update(
             where={"team_id": team_id},
             data={
