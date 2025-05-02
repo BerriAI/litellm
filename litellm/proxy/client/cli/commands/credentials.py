@@ -33,11 +33,11 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
         rich.print_json(data=response)
     else:  # table format
         table = Table(title="Credentials")
-        
+
         # Add columns
         table.add_column("Credential Name", style="cyan")
         table.add_column("Custom LLM Provider", style="green")
-        
+
         # Add rows
         for cred in response.get("credentials", []):
             info = cred.get("credential_info", {})
@@ -45,7 +45,7 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
                 str(cred.get("credential_name", "")),
                 str(info.get("custom_llm_provider", "")),
             )
-        
+
         rich.print(table)
 
 
@@ -112,4 +112,4 @@ def get(ctx: click.Context, credential_name: str):
     """Get a credential by name"""
     client = CredentialsManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
     response = client.get(credential_name)
-    rich.print_json(data=response) 
+    rich.print_json(data=response)

@@ -61,9 +61,7 @@ def request(
             key, value = h.split(":", 1)
             headers[key.strip()] = value.strip()
         except ValueError:
-            raise click.BadParameter(
-                f"Invalid header format: {h}. Expected format: 'key:value'"
-            )
+            raise click.BadParameter(f"Invalid header format: {h}. Expected format: 'key:value'")
 
     # Parse JSON data if provided
     json_data = None
@@ -99,4 +97,4 @@ def request(
             rich.print_json(data=error_body)
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
-        raise click.Abort() 
+        raise click.Abort()
