@@ -57,7 +57,6 @@ class DeepEvalLogger(CustomLogger):
             self.update_current_span_attributes(
                 self.LlmAttributes(input=input, output=output)
             )
-            # TODO: subject to change with next update in tracing
             raise Exception(error_str)
 
         send_litellm_message_failure_trace(
@@ -102,7 +101,6 @@ class DeepEvalLogger(CustomLogger):
                 kwargs
             )
         except Exception as e:
-            # TODO: see if there is any verbose print method
             verbose_logger.debug(f"Unable to get cost per token: {e}")
 
         # Get token count
@@ -137,8 +135,6 @@ class DeepEvalLogger(CustomLogger):
                 self.LlmAttributes(
                     input=input,
                     output=output,
-                    # TODO: Ask if we need to add prompt
-                    # prompt=?
                     input_token_count=input_token_count,
                     output_token_count=output_token_count,
                 )
@@ -154,7 +150,6 @@ class DeepEvalLogger(CustomLogger):
         def send_litellm_tool_success_trace(input_parameters, output=None):
             self.update_current_span_attributes(
                 self.ToolAttributes(
-                    # TODO: input and output subject to change with next update in tracing failure
                     input_parameters=input_parameters,
                     output=output,
                 )
@@ -168,7 +163,6 @@ class DeepEvalLogger(CustomLogger):
                     and choice.message.content is not None
                 ):
                     send_litellm_message_success_trace(
-                        # TODO: input and output subject to change with next update in tracing
                         input=_prepare_input_str(kwargs["input"]),
                         output=choice.message.content,
                         input_token_count=input_token_count,
