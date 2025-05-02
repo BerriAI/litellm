@@ -260,14 +260,25 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 self.check_key_in_limits_v2(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
-                    max_parallel_requests=max_parallel_requests,
+                    max_parallel_requests=None,
                     precise_minute=precise_minute,
                     tpm_limit=user_api_key_dict.user_tpm_limit,
                     rpm_limit=user_api_key_dict.user_rpm_limit,
                     rate_limit_type="user",
                 )
             )
-
+        elif user_api_key_dict.team_id is not None:
+            tasks.append(
+                self.check_key_in_limits_v2(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    max_parallel_requests=None,
+                    precise_minute=precise_minute,
+                    tpm_limit=user_api_key_dict.team_tpm_limit,
+                    rpm_limit=user_api_key_dict.team_rpm_limit,
+                    rate_limit_type="team",
+                )
+            )
         await asyncio.gather(*tasks)
 
         return

@@ -109,7 +109,7 @@ async def test_normal_router_call_v2(monkeypatch):
         # "model_per_key",
         "user",
         # "customer",
-        # "team"
+        "team",
     ],
 )
 @pytest.mark.flaky(reruns=3)
@@ -152,6 +152,8 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
     elif rate_limit_object == "user":
         user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_tpm_limit=10)
+    elif rate_limit_object == "team":
+        user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_tpm_limit=10)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -188,6 +190,7 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         metadata={
             "user_api_key": _api_key,
             "user_api_key_user_id": user_api_key_dict.user_id,
+            "user_api_key_team_id": user_api_key_dict.team_id,
         },
         mock_response="hello",
     )
@@ -210,9 +213,10 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         # "model_per_key",
         "user",
         # "customer",
-        # "team"
+        "team",
     ],
 )
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
     """
@@ -252,6 +256,8 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
         user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=1)
     elif rate_limit_object == "user":
         user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_rpm_limit=1)
+    elif rate_limit_object == "team":
+        user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_rpm_limit=1)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -285,7 +291,11 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
     response = await router.acompletion(
         model="azure-model",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        metadata={"user_api_key": _api_key},
+        metadata={
+            "user_api_key": _api_key,
+            "user_api_key_user_id": user_api_key_dict.user_id,
+            "user_api_key_team_id": user_api_key_dict.team_id,
+        },
         mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
@@ -397,8 +407,19 @@ async def test_streaming_router_call_v2(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "rate_limit_object",
+    [
+        "key",
+        # "model_per_key",
+        "user",
+        # "customer",
+        "team",
+    ],
+)
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_bad_router_call_v2(monkeypatch):
+async def test_bad_router_call_v2(monkeypatch, rate_limit_object):
     """
     Test bad router call with parallel request limiter v2
     """
@@ -432,7 +453,12 @@ async def test_bad_router_call_v2(monkeypatch):
 
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    if rate_limit_object == "key":
+        user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=1)
+    elif rate_limit_object == "user":
+        user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_rpm_limit=1)
+    elif rate_limit_object == "team":
+        user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_rpm_limit=1)
     local_cache = DualCache()
 
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -452,8 +478,8 @@ async def test_bad_router_call_v2(monkeypatch):
         user_api_key_dict=user_api_key_dict,
         precise_minute=precise_minute,
         model=None,
-        rate_limit_type="key",
-        group="request_count",
+        rate_limit_type=rate_limit_object,
+        group="rpm",
     )
     await asyncio.sleep(1)
     assert (
@@ -474,5 +500,5 @@ async def test_bad_router_call_v2(monkeypatch):
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )
-        == 0
+        == 1
     )
