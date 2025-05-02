@@ -152,4 +152,4 @@ The CLI will display appropriate error messages when:
 - The requested model doesn't exist
 - Any other operation fails
 
-For detailed debugging, use the `--debug` flag with any command. 
+For detailed debugging, use the `--debug` flag with any command.
