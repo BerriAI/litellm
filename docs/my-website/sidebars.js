@@ -236,6 +236,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
+        "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
         "providers/cloudflare_workers",
