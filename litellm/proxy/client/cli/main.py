@@ -15,12 +15,14 @@ from .commands.http import http
 @click.option(
     "--base-url",
     envvar="LITELLM_PROXY_URL",
+    show_envvar=True,
     default="http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
     "--api-key",
     envvar="LITELLM_PROXY_API_KEY",
+    show_envvar=True,
     help="API key for authentication",
 )
 @click.pass_context
