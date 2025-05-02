@@ -5419,16 +5419,16 @@ def attempt_message_addition(
 
     # if temp_message_tokens > max_tokens, try shortening temp_messages
     elif "function_call" not in message:
-        verbose_logger.debug(f"attempting to shorten message to fit limit")
+        verbose_logger.debug("attempting to shorten message to fit limit")
         # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is greate than max_tokens)
         updated_message = shorten_message_to_fit_limit(message, available_tokens, model)
         if can_add_message(updated_message, final_messages, max_tokens, model):
             verbose_logger.debug(
-                f"can add message, returning [updated_message] + final_messages"
+                "can add message, returning [updated_message] + final_messages"
             )
             return [updated_message] + final_messages
         else:
-            verbose_logger.debug(f"cannot add message, returning final_messages")
+            verbose_logger.debug("cannot add message, returning final_messages")
     return final_messages
 
 
