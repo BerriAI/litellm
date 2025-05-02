@@ -288,6 +288,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return None
 
+    def _get_finish_reason(self, message: Message, received_finish_reason: str) -> str:
+        if message.tool_calls is not None:
+            return "tool_calls"
+        else:
+            return received_finish_reason
+
     def _transform_choices(
         self,
         choices: List[OpenAIChatCompletionChoices],
@@ -367,6 +373,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 enhancements=None,
             )
 
+            translated_choice.finish_reason = self._get_finish_reason(
+                translated_message, choice["finish_reason"]
+            )
             transformed_choices.append(translated_choice)
 
         return transformed_choices

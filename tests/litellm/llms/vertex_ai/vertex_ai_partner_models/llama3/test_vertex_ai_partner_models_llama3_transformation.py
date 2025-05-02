@@ -58,4 +58,5 @@ class TestVertexAILlama3Config:
             choices=choices, json_mode=False, optional_params=optional_params
         )
         assert response[0].message.tool_calls is not None
+        assert response[0].finish_reason == "tool_calls"
         # response = config.transform_response(
