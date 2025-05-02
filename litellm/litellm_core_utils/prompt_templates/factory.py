@@ -2251,7 +2251,6 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 
-
 def _parse_content_type(content_type: str) -> str:
     m = Message()
     m["content-type"] = content_type
@@ -3452,6 +3451,19 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        if "cache_control" in tool:
+            _cache_point_block = (
+                litellm.AmazonConverseConfig()._get_cache_point_block(
+                    message_block=cast(
+                        OpenAIMessageContentListBlock, tool
+                    ),
+                    block_type="tool",
+                )
+            )
+            if _cache_point_block is not None:
+                tool_block_list.append(_cache_point_block)
+            continue
+
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )

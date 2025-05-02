@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIChatCompletionToolParam,
     OpenAIMessageContentListBlock,
+    ChatCompletionToolMessage,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -352,6 +353,7 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionToolMessage,
         ],
         block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
@@ -364,9 +366,23 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionToolMessage,
         ],
         block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
+        pass
+
+    @overload
+    def _get_cache_point_block(
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+            ChatCompletionToolMessage,
+        ],
+        block_type: Literal["tool"],
+    ) -> Optional[ToolBlock]:
         pass
 
     def _get_cache_point_block(
@@ -375,15 +391,18 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionToolMessage,
         ],
-        block_type: Literal["system", "content_block"],
-    ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
+        block_type: Literal["system", "content_block", "tool"],
+    ) -> Optional[Union[SystemContentBlock, ContentBlock, ToolBlock]]:
         if message_block.get("cache_control", None) is None:
             return None
         if block_type == "system":
             return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
-        else:
+        elif block_type == "content_block":
             return ContentBlock(cachePoint=CachePointBlock(type="default"))
+        else:
+            return ToolBlock(cachePoint=CachePointBlock(type="default"))
 
     def _transform_system_message(
         self, messages: List[AllMessageValues]

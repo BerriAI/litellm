@@ -145,7 +145,6 @@ def test_transform_thinking_blocks_with_redacted_content():
     assert transformed_thinking_blocks[0]["type"] == "thinking"
     assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
 
-
 def test_apply_tool_call_transformation_if_needed():
     from litellm.types.utils import Message
 
@@ -176,3 +175,42 @@ def test_apply_tool_call_transformation_if_needed():
     assert transformed_message.tool_calls[0].function.arguments == json.dumps(
         tool_response["parameters"]
     )
+
+def test_transform_tool_call_with_cache_control():
+    config = AmazonConverseConfig()
+
+    messages = [{"role": "user", "content": "Am I lost?"}]
+
+    tools = [
+        {
+        "type": "function",
+        "function": {
+            "name": "get_location",
+            "description": "Get the user's location",
+            "parameters": {"location": "string"},
+            },
+        },
+        { "cache_control": {"type": "default"} }
+    ]
+
+    result = config._transform_request(
+        model="",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={}
+    )
+
+    assert "toolConfig" in result
+    assert "tools" in result["toolConfig"]
+
+    assert len(result["toolConfig"]["tools"]) == 2
+
+    function_out_msg = result["toolConfig"]["tools"][0]
+    assert function_out_msg["toolSpec"]["name"] == "get_location"
+    assert function_out_msg["toolSpec"]["description"] == "Get the user's location"
+    assert function_out_msg["toolSpec"]["inputSchema"]["json"]["location"] == "string"
+
+    transformed_cache_msg = result["toolConfig"]["tools"][1]
+    assert "cachePoint" in transformed_cache_msg
+    assert transformed_cache_msg["cachePoint"]["type"] == "default"
+
