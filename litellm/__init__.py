@@ -951,6 +951,8 @@ from .llms.deepgram.audio_transcription.transformation import (
 from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+from .llms.openai.image.gpt_image_transformation import GPTImageConfig
+from .llms.openai.image.dall_e_image_transformation import DallEImageConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
