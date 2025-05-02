@@ -21,10 +21,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
-    get_tool_call_names,
-)
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
