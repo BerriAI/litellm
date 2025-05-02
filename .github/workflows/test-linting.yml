@@ -22,7 +22,9 @@ jobs:
 
     - name: Install dependencies
       run: |
+        pip install openai==1.68.2
         poetry install --with dev
+
 
     - name: Run Black formatting
       run: |
