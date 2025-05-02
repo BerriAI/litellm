@@ -6,6 +6,7 @@ import click
 
 # local imports
 from .commands.models import models
+from .commands.credentials import credentials
 
 
 @click.group()
@@ -30,6 +31,8 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
 
 # Add the models command group
 cli.add_command(models)
+# Add the credentials command group
+cli.add_command(credentials)
 
 
 if __name__ == "__main__":

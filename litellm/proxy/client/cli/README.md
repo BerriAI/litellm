@@ -86,6 +86,63 @@ Options:
 - `--param`, `-p`: Model parameters in key=value format (can be specified multiple times)
 - `--info`, `-i`: Model info in key=value format (can be specified multiple times)
 
+### Credentials Management
+
+The CLI provides commands for managing credentials on your LiteLLM proxy server:
+
+#### List Credentials
+
+View all available credentials:
+
+```bash
+litellm-proxy credentials list [--format table|json]
+```
+
+Options:
+
+- `--format`: Output format (table or json, default: table)
+
+The table format displays:
+- Credential Name
+- Custom LLM Provider
+
+#### Create Credential
+
+Create a new credential:
+
+```bash
+litellm-proxy credentials create <credential-name> --info <json-string> --values <json-string>
+```
+
+Options:
+
+- `--info`: JSON string containing credential info (e.g., custom_llm_provider)
+- `--values`: JSON string containing credential values (e.g., api_key)
+
+Example:
+
+```bash
+litellm-proxy credentials create azure-cred \
+  --info '{"custom_llm_provider": "azure"}' \
+  --values '{"api_key": "sk-123", "api_base": "https://example.azure.openai.com"}'
+```
+
+#### Get Credential
+
+Get information about a specific credential:
+
+```bash
+litellm-proxy credentials get <credential-name>
+```
+
+#### Delete Credential
+
+Delete a credential:
+
+```bash
+litellm-proxy credentials delete <credential-name>
+```
+
 ### Model Information
 
 Get detailed information about all models:
@@ -142,6 +199,20 @@ litellm-proxy models info --format json
 litellm-proxy models update model-123 -p temperature=0.7 -i description="Updated model"
 ```
 
+5. List all credentials in table format:
+
+```bash
+litellm-proxy credentials list
+```
+
+6. Create a new credential for Azure:
+
+```bash
+litellm-proxy credentials create azure-prod \
+  --info '{"custom_llm_provider": "azure"}' \
+  --values '{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
+```
+
 ## Error Handling
 
 The CLI will display appropriate error messages when:
@@ -149,7 +220,8 @@ The CLI will display appropriate error messages when:
 - The proxy server is not accessible
 - Authentication fails
 - Invalid parameters are provided
-- The requested model doesn't exist
+- The requested model or credential doesn't exist
+- Invalid JSON is provided for credential creation
 - Any other operation fails
 
 For detailed debugging, use the `--debug` flag with any command.
