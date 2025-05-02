@@ -2320,59 +2320,28 @@ def completion(  # type: ignore # noqa: PLR0915
                     original_response=response,
                     additional_args={"headers": headers},
                 )
+
         elif custom_llm_provider == "datarobot":
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("DATAROBOT_API_BASE")
-                or "https://app.datarobot.com"
+            response = openai_like_chat_completion.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                optional_params=optional_params,
+                acompletion=acompletion,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                custom_endpoint=True,  # DataRobot requires custom_endpoint true
             )
-
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.datarobot_key
-                or get_secret("DATAROBOT_API_KEY")
-            )
-
-            datarobot_headers = {
-                "Authorization": f"bearer {api_key}",
-            }
-
-            _headers = headers or litellm.headers
-            if _headers:
-                datarobot_headers.update(_headers)
-
-            headers = datarobot_headers
-
-            ## COMPLETION CALL
-            try:
-                response = base_llm_http_handler.completion(
-                    model=model,
-                    stream=stream,
-                    messages=messages,
-                    acompletion=acompletion,
-                    api_base=api_base,
-                    model_response=model_response,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    custom_llm_provider="datarobot",
-                    timeout=timeout,
-                    headers=headers,
-                    encoding=encoding,
-                    api_key=api_key,
-                    logging_obj=logging,
-                    client=client,
-                )
-            except Exception as e:
-                ## LOGGING - log the original exception returned
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=str(e),
-                    additional_args={"headers": headers},
-                )
-                raise e
         elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base
