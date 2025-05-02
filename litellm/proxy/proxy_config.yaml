@@ -19,4 +19,6 @@ vector_stores:
         source: "https://www.litellm.com/docs"
         
 
+general_settings:
+  alerting: ["webhook"]
 
