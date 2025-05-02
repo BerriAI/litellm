@@ -10,7 +10,6 @@ Run checks for:
 """
 import asyncio
 import re
-import sys
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
@@ -45,6 +44,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
+from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 
@@ -957,14 +957,7 @@ async def get_team_object(
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
-        from datetime import datetime, timedelta
-
-        if sys.version_info >= (3, 11):
-            from datetime import UTC
-        else:
-            from datetime import timezone
-
-            UTC = timezone.utc
+        from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             encrypt_value_helper,
@@ -974,7 +967,7 @@ class ExperimentalUIJWTToken:
             raise Exception("User role is required for experimental UI login")
 
         # Calculate expiration time (10 minutes from now)
-        expiration_time = datetime.now(UTC) + timedelta(minutes=10)
+        expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
