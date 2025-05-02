@@ -12,6 +12,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -97,7 +98,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
