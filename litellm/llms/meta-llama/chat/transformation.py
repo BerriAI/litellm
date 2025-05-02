@@ -22,11 +22,13 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         response_format: only json_schema is working
         """
         supports_function_calling: Optional[bool] = None
+        supports_tool_choice: Optional[bool] = None
         try:
             model_info = get_model_info(model, custom_llm_provider="meta-llama")
             supports_function_calling = model_info.get(
                 "supports_function_calling", False
             )
+            supports_tool_choice = model_info.get("supports_tool_choice", False)
         except Exception as e:
             verbose_logger.debug(f"Error getting supported openai params: {e}")
             pass
