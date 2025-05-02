@@ -18,7 +18,7 @@ def test_request_get(runner):
     result = runner.invoke(
         http,
         ["request", "GET", "/models"],
-        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+        obj={"base_url": "http://localhost:4000", "api_key": "sk-test-key"},
     )
     assert result.exit_code == 0
 
@@ -34,7 +34,7 @@ def test_request_post_with_json(runner):
             "-j",
             '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}',
         ],
-        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+        obj={"base_url": "http://localhost:4000", "api_key": "sk-test-key"},
     )
     assert result.exit_code == 0
 
@@ -52,7 +52,7 @@ def test_request_with_headers(runner):
             "-H",
             "Accept:application/json",
         ],
-        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+        obj={"base_url": "http://localhost:4000", "api_key": "sk-test-key"},
     )
     assert result.exit_code == 0
 
@@ -68,7 +68,7 @@ def test_request_invalid_json(runner):
             "-j",
             '{"invalid": json}',  # Invalid JSON
         ],
-        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+        obj={"base_url": "http://localhost:4000", "api_key": "sk-test-key"},
     )
     assert result.exit_code == 2  # Click error code for invalid parameter
     assert "Invalid JSON format" in result.output
@@ -85,7 +85,7 @@ def test_request_invalid_header(runner):
             "-H",
             "invalid-header",  # Invalid header format
         ],
-        obj={"base_url": "http://localhost:4000", "api_key": "test-key"},
+        obj={"base_url": "http://localhost:4000", "api_key": "sk-test-key"},
     )
     assert result.exit_code == 2  # Click error code for invalid parameter
     assert "Invalid header format" in result.output 
