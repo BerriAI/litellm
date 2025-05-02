@@ -22,3 +22,4 @@ vector_stores:
 general_settings:
   alerting: ["webhook"]
 
+

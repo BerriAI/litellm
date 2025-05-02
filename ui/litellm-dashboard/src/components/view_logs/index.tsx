@@ -16,6 +16,7 @@ import { Tooltip } from "antd";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
 import { SessionView } from './SessionView';
+import { VectorStoreViewer } from './VectorStoreViewer';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -724,8 +725,9 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   };
 
   // Extract error information from metadata if available
-  const hasError = row.original.metadata?.status === "failure";
-  const errorInfo = hasError ? row.original.metadata?.error_information : null;
+  const metadata = row.original.metadata || {};
+  const hasError = metadata.status === "failure";
+  const errorInfo = hasError ? metadata.error_information : null;
   
   // Check if request/response data is missing
   const hasMessages = row.original.messages && 
@@ -747,6 +749,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     }
     return formatData(row.original.response);
   };
+  
+  // Extract vector store request metadata if available
+  const hasVectorStoreData = metadata.vector_store_request_metadata && 
+    Array.isArray(metadata.vector_store_request_metadata) && 
+    metadata.vector_store_request_metadata.length > 0;
 
   return (
     <div className="p-6 bg-gray-50 space-y-6">
@@ -881,6 +888,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
         </div>
       </div>
+
+      {/* Vector Store Request Data - Show only if present */}
+            {hasVectorStoreData && (
+        <VectorStoreViewer data={metadata.vector_store_request_metadata} />
+      )}
 
       {/* Error Card - Only show for failures */}
       {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}

@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -79,6 +80,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
         if vector_store_ids:
             for vector_store_id in vector_store_ids:
+                start_time = datetime.now()
                 query = self._get_kb_query_from_messages(messages)
                 bedrock_kb_response = await self.make_bedrock_kb_retrieve_request(
                     knowledge_base_id=vector_store_id,
@@ -110,6 +112,8 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
                         query=query,
                         vector_store_search_response=vector_store_search_response,
                         custom_llm_provider=self.CUSTOM_LLM_PROVIDER,
+                        start_time=start_time.timestamp(),
+                        end_time=datetime.now().timestamp(),
                     )
                 )
 
