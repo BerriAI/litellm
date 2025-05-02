@@ -233,14 +233,17 @@ class RedisCache(BaseCache):
             raise e
 
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
-        from redis.asyncio import Redis
-
         start_time = time.time()
         try:
             keys = []
-            _redis_client: Redis = self.init_async_client()  # type: ignore
+            _redis_client = self.init_async_client()
+            if not hasattr(_redis_client, "scan_iter"):
+                verbose_logger.debug(
+                    "Redis client does not support scan_iter, potentially using Redis Cluster. Returning empty list."
+                )
+                return []
 
-            async for key in _redis_client.scan_iter(match=pattern + "*", count=count):
+            async for key in _redis_client.scan_iter(match=pattern + "*", count=count):  # type: ignore
                 keys.append(key)
                 if len(keys) >= count:
                     break

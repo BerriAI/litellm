@@ -105,7 +105,14 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
-            "proxy/ui_logs"
+            {
+              type: "category",
+              label: "UI Logs",
+              items: [
+                "proxy/ui_logs",
+                "proxy/ui_logs_sessions"
+              ]
+            }
           ],
         },
         {
@@ -229,6 +236,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
+        "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
         "providers/cloudflare_workers",
@@ -264,6 +272,7 @@ const sidebars = {
         "reasoning_content",
         "completion/prompt_caching",
         "completion/predict_outputs",
+        "completion/knowledgebase",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",

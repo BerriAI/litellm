@@ -14,7 +14,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
@@ -22,7 +22,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -95,9 +94,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     is_internal_user = False
     if data.user_role and data.user_role.is_internal_user_role:
@@ -293,7 +292,7 @@ async def new_user(
 
             event = WebhookEvent(
                 event="internal_user_created",
-                event_group="internal_user",
+                event_group=Litellm_EntityType.USER,
                 event_message="Welcome to LiteLLM Proxy",
                 token=response.get("token", ""),
                 spend=response.get("spend", 0.0),
@@ -651,9 +650,11 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
-        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = user_reset_at
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        non_default_values["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=non_default_values["budget_duration"]
+        )
 
     if "max_budget" not in non_default_values:
         if (
@@ -665,14 +666,14 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
-            duration_s = duration_in_seconds(
-                duration=non_default_values["budget_duration"]
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
             )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            non_default_values["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=non_default_values["budget_duration"]
+            )
 
     return non_default_values
 
@@ -1055,9 +1056,9 @@ async def get_users(
         where=where_conditions,
         skip=skip,
         take=page_size,
-        order=order_by
-        if order_by
-        else {"created_at": "desc"},  # Default to created_at desc if no sort specified
+        order=(
+            order_by if order_by else {"created_at": "desc"}
+        ),  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
@@ -1310,13 +1311,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:

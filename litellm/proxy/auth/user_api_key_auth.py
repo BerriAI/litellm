@@ -57,7 +57,11 @@ from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
-
+custom_litellm_key_header = APIKeyHeader(
+    name=SpecialHeaders.custom_litellm_api_key.value,
+    auto_error=False,
+    description="Bearer token",
+)
 api_key_header = APIKeyHeader(
     name=SpecialHeaders.openai_authorization.value,
     auto_error=False,
@@ -188,6 +192,7 @@ async def get_global_proxy_spend(
                 max_budget=litellm.max_budget,
                 spend=global_proxy_spend,
                 token=token,
+                event_group=Litellm_EntityType.PROXY,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
@@ -228,6 +233,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     google_ai_studio_api_key_header: Optional[str],
     azure_apim_header: Optional[str],
     request_data: dict,
+    custom_litellm_key_header: Optional[str] = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -261,7 +267,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             "pass_through_endpoints", None
         )
         passed_in_key: Optional[str] = None
-        if isinstance(api_key, str):
+        ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
+        if isinstance(custom_litellm_key_header, str):
+            api_key = custom_litellm_key_header
+        elif isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
         elif isinstance(azure_api_key_header, str):
@@ -512,23 +521,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params[
-                                "end_user_tpm_limit"
-                            ] = budget_info.tpm_limit
+                            end_user_params["end_user_tpm_limit"] = (
+                                budget_info.tpm_limit
+                            )
                         if budget_info.rpm_limit is not None:
-                            end_user_params[
-                                "end_user_rpm_limit"
-                            ] = budget_info.rpm_limit
+                            end_user_params["end_user_rpm_limit"] = (
+                                budget_info.rpm_limit
+                            )
                         if budget_info.max_budget is not None:
-                            end_user_params[
-                                "end_user_max_budget"
-                            ] = budget_info.max_budget
+                            end_user_params["end_user_max_budget"] = (
+                                budget_info.max_budget
+                            )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -867,11 +876,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            await _virtual_key_max_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
+            if route in LiteLLMRoutes.llm_api_routes.value:
+                await _virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
+                )
 
             # Check 5. Soft Budget Check
             await _virtual_key_soft_budget_check(
@@ -943,6 +953,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         max_budget=litellm.max_budget,
                         user_id=litellm_proxy_admin_name,
                         team_id=valid_token.team_id,
+                        event_group=Litellm_EntityType.PROXY,
                     )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
@@ -1025,6 +1036,9 @@ async def user_api_key_auth(
         google_ai_studio_api_key_header
     ),
     azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
+    custom_litellm_key_header: Optional[str] = fastapi.Security(
+        custom_litellm_key_header
+    ),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
@@ -1041,6 +1055,7 @@ async def user_api_key_auth(
         google_ai_studio_api_key_header=google_ai_studio_api_key_header,
         azure_apim_header=azure_apim_header,
         request_data=request_data,
+        custom_litellm_key_header=custom_litellm_key_header,
     )
 
     end_user_id = get_end_user_id_from_request_body(request_data)

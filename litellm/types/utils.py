@@ -1988,6 +1988,7 @@ all_litellm_params = [
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
     "allowed_openai_params",
+    "litellm_session_id",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2092,6 +2093,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
@@ -2262,3 +2264,17 @@ class SpecialEnums(Enum):
 LLMResponseTypes = Union[
     ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
 ]
+
+
+class DynamicPromptManagementParamLiteral(str, Enum):
+    """
+    If any of these params are passed, the user is trying to use dynamic prompt management
+    """
+
+    CACHE_CONTROL_INJECTION_POINTS = "cache_control_injection_points"
+    KNOWLEDGE_BASES = "knowledge_bases"
+    VECTOR_STORE_IDS = "vector_store_ids"
+
+    @classmethod
+    def list_all_params(cls):
+        return [param.value for param in cls]
