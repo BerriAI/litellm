@@ -3857,13 +3857,12 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
 
 
 def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
-    else:
-        return datetime.utcnow()  # type: ignore
+    # notes -
+    #  - datetime.UTC was introduced in py3.11
+    #  - datetime.UTC is datetime.timezone.utc (available in py3.8+)
+    #  - datetime.datetime.utcnow is deprecated
+    #  - utcnow is not timezone aware while now w/ tz is
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def get_max_tokens(model: str) -> Optional[int]:
