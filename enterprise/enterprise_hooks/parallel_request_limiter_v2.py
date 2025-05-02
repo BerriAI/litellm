@@ -3,6 +3,7 @@ V2 Implementation of Parallel Requests, TPM, RPM Limiting on the proxy
 
 Designed to work on a multi-instance setup, where multiple instances are writing to redis simultaneously
 """
+import asyncio
 import sys
 from datetime import datetime, timedelta
 from typing import (
@@ -51,6 +52,7 @@ class CacheObject(TypedDict):
 
 
 RateLimitGroups = Literal["request_count", "tpm", "rpm"]
+RateLimitTypes = Literal["key", "model_per_key", "user", "customer", "team"]
 
 
 class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
@@ -110,10 +112,10 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        max_parallel_requests: int,
+        max_parallel_requests: Optional[int],
         precise_minute: str,
-        tpm_limit: int,
-        rpm_limit: int,
+        tpm_limit: Optional[int],
+        rpm_limit: Optional[int],
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
     ):
         ## INCREMENT CURRENT USAGE
@@ -133,6 +135,11 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             )
             increment_list.append((key, increment_value_by_group[group]))
 
+        if (
+            not max_parallel_requests and not rpm_limit and not tpm_limit
+        ):  # no rate limits
+            return
+
         results = await self._increment_value_list_in_current_window(
             increment_list=increment_list,
             ttl=60,
@@ -140,8 +147,12 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
 
         if (
             results[0] > max_parallel_requests
-            or results[1] > rpm_limit
-            or results[2] > tpm_limit
+            if max_parallel_requests is not None
+            else False or results[1] > rpm_limit
+            if rpm_limit is not None
+            else False or results[2] > tpm_limit
+            if tpm_limit is not None
+            else False
         ):
             raise self.raise_rate_limit_error(
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
@@ -231,17 +242,35 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         current_minute = datetime.now().strftime("%M")
         precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
+        tasks = []
         if api_key is not None:
             # CHECK IF REQUEST ALLOWED for key
-            await self.check_key_in_limits_v2(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                max_parallel_requests=max_parallel_requests,
-                precise_minute=precise_minute,
-                tpm_limit=tpm_limit,
-                rpm_limit=rpm_limit,
-                rate_limit_type="key",
+            tasks.append(
+                self.check_key_in_limits_v2(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    max_parallel_requests=max_parallel_requests,
+                    precise_minute=precise_minute,
+                    tpm_limit=tpm_limit,
+                    rpm_limit=rpm_limit,
+                    rate_limit_type="key",
+                )
             )
+        elif user_api_key_dict.user_id is not None:
+            # CHECK IF REQUEST ALLOWED for key
+            tasks.append(
+                self.check_key_in_limits_v2(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    max_parallel_requests=max_parallel_requests,
+                    precise_minute=precise_minute,
+                    tpm_limit=user_api_key_dict.user_tpm_limit,
+                    rpm_limit=user_api_key_dict.user_rpm_limit,
+                    rate_limit_type="user",
+                )
+            )
+
+        await asyncio.gather(*tasks)
 
         return
 
@@ -260,17 +289,20 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             "rpm": 0,
         }
 
-        for group in ["request_count", "rpm", "tpm"]:
-            key = self._get_current_usage_key(
-                user_api_key_dict=user_api_key_dict,
-                precise_minute=precise_minute,
-                model=model,
-                rate_limit_type="key",
-                group=cast(RateLimitGroups, group),
-            )
+        rate_limit_types = ["key", "user", "customer", "team"]
+        for rate_limit_type in rate_limit_types:
+            for group in ["request_count", "rpm", "tpm"]:
+                print(f"group: {group}, rate_limit_type: {rate_limit_type}")
+                key = self._get_current_usage_key(
+                    user_api_key_dict=user_api_key_dict,
+                    precise_minute=precise_minute,
+                    model=model,
+                    rate_limit_type=cast(RateLimitTypes, rate_limit_type),
+                    group=cast(RateLimitGroups, group),
+                )
 
-            increment_list.append((key, increment_value_by_group[group]))
-
+                increment_list.append((key, increment_value_by_group[group]))
+        print(f"increment_list: {increment_list}")
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,

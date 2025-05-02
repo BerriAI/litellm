@@ -7,14 +7,18 @@ import sys
 from datetime import datetime
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
+    _PROXY_MaxParallelRequestsHandler,
+)
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from enterprise.enterprise_hooks.parallel_request_limiter_v2 import _PROXY_MaxParallelRequestsHandler
-from fastapi import HTTPException
+
+
 @pytest.mark.asyncio
 async def test_normal_router_call_v2(monkeypatch):
     """
@@ -52,7 +56,9 @@ async def test_normal_router_call_v2(monkeypatch):
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
@@ -96,8 +102,18 @@ async def test_normal_router_call_v2(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "rate_limit_object",
+    [
+        "key",
+        # "model_per_key",
+        "user",
+        # "customer",
+        # "team"
+    ],
+)
 @pytest.mark.asyncio
-async def test_normal_router_call_tpm(monkeypatch):
+async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     """
     Test normal router call with parallel request limiter v2
     """
@@ -131,9 +147,14 @@ async def test_normal_router_call_tpm(monkeypatch):
 
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
+    if rate_limit_object == "key":
+        user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
+    elif rate_limit_object == "user":
+        user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_tpm_limit=10)
     local_cache = DualCache()
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
@@ -148,7 +169,7 @@ async def test_normal_router_call_tpm(monkeypatch):
         user_api_key_dict=user_api_key_dict,
         precise_minute=precise_minute,
         model=None,
-        rate_limit_type="key",
+        rate_limit_type=rate_limit_object,
         group="tpm",
     )
     await asyncio.sleep(1)
@@ -163,7 +184,10 @@ async def test_normal_router_call_tpm(monkeypatch):
     response = await router.acompletion(
         model="azure-model",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        metadata={"user_api_key": _api_key},
+        metadata={
+            "user_api_key": _api_key,
+            "user_api_key_user_id": user_api_key_dict.user_id,
+        },
         mock_response="hello",
     )
     await asyncio.sleep(1)  # success is done in a separate thread
@@ -176,6 +200,7 @@ async def test_normal_router_call_tpm(monkeypatch):
         )
         == response.usage.total_tokens
     )
+
 
 @pytest.mark.asyncio
 async def test_normal_router_call_rpm(monkeypatch):
@@ -214,7 +239,9 @@ async def test_normal_router_call_rpm(monkeypatch):
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
     local_cache = DualCache()
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
@@ -260,9 +287,11 @@ async def test_normal_router_call_rpm(monkeypatch):
 
     with pytest.raises(HTTPException):
         await parallel_request_handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
         )
-
 
 
 @pytest.mark.asyncio
@@ -303,9 +332,11 @@ async def test_streaming_router_call_v2(monkeypatch):
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    
+
     print(f"litellm callbacks pre-set: {litellm.callbacks}")
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
@@ -351,6 +382,7 @@ async def test_streaming_router_call_v2(monkeypatch):
         == 0
     )
 
+
 @pytest.mark.asyncio
 async def test_bad_router_call_v2(monkeypatch):
     """
@@ -388,8 +420,10 @@ async def test_bad_router_call_v2(monkeypatch):
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
@@ -421,7 +455,7 @@ async def test_bad_router_call_v2(monkeypatch):
         original_exception=Exception("test"),
         user_api_key_dict=user_api_key_dict,
     )
-    
+
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
