@@ -1,3 +1,4 @@
+import json as json_lib
 from typing import Optional
 
 import click
@@ -66,7 +67,7 @@ def request(
     json_data = None
     if json:
         try:
-            json_data = json.loads(json)
+            json_data = json_lib.loads(json)
         except ValueError as e:
             raise click.BadParameter(f"Invalid JSON format: {e}")
 
@@ -74,7 +75,7 @@ def request(
     request_data = None
     if data:
         try:
-            request_data = json.loads(data)
+            request_data = json_lib.loads(data)
         except ValueError:
             # If not JSON, use as raw data
             request_data = data
@@ -94,6 +95,6 @@ def request(
         try:
             error_body = e.response.json()
             rich.print_json(data=error_body)
-        except json.JSONDecodeError:
+        except json_lib.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
