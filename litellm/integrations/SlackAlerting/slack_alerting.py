@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
@@ -599,9 +600,16 @@ class SlackAlerting(CustomBatchLogger):
             return
         if "budget_alerts" not in self.alert_types:
             return
-        _id: Optional[str] = "default_id"  # used for caching
+
+        # Get the appropriate budget alert type handler
+        budget_alert_class = get_budget_alert_type(type)
+        _id = budget_alert_class.get_id(user_info)
         user_info_json = user_info.model_dump(exclude_none=True)
         user_info_str = self._get_user_info_str(user_info)
+        event_group = user_info.event_group
+        event_message = budget_alert_class.get_event_message()
+
+        # Set default event unless we're in projected_limit_exceeded
         event: Optional[
             Literal[
                 "budget_crossed",
@@ -609,33 +617,11 @@ class SlackAlerting(CustomBatchLogger):
                 "projected_limit_exceeded",
                 "soft_budget_crossed",
             ]
-        ] = None
-        event_group: Optional[Litellm_EntityType] = None
-        event_message: str = ""
+        ] = (
+            "projected_limit_exceeded" if type == "projected_limit_exceeded" else None
+        )
+
         webhook_event: Optional[WebhookEvent] = None
-        if type == "proxy_budget":
-            event_group = Litellm_EntityType.PROXY
-            event_message += "Proxy Budget: "
-        elif type == "soft_budget":
-            event_group = Litellm_EntityType.PROXY
-            event_message += "Soft Budget Crossed: "
-        elif type == "user_budget":
-            event_group = Litellm_EntityType.USER
-            event_message += "User Budget: "
-            _id = user_info.user_id or _id
-        elif type == "team_budget":
-            event_group = Litellm_EntityType.TEAM
-            event_message += "Team Budget: "
-            _id = user_info.team_id or _id
-        elif type == "token_budget":
-            event_group = Litellm_EntityType.KEY
-            event_message += "Key Budget: "
-            _id = user_info.token
-        elif type == "projected_limit_exceeded":
-            event_group = Litellm_EntityType.KEY
-            event_message += "Key Budget: Projected Limit Exceeded"
-            event = "projected_limit_exceeded"
-            _id = user_info.token
 
         # percent of max_budget left to spend
         if user_info.max_budget is None and user_info.soft_budget is None:
