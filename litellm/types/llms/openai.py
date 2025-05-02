@@ -809,10 +809,12 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     ]
 
 
-class ChatCompletionUsageBlock(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+class ChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    prompt_tokens_details: Optional[dict]
+    completion_tokens_details: Optional[dict]
 
 
 class OpenAIChatCompletionChunk(ChatCompletionChunk):
@@ -824,12 +826,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -856,18 +858,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -1293,3 +1295,44 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
+
+
+class OpenAIChatCompletionLogprobs(TypedDict, total=False):
+    content: List[OpenAIChatCompletionLogprobsContent]
+    refusal: List[OpenAIChatCompletionLogprobsContent]
+
+
+class OpenAIChatCompletionChoices(TypedDict, total=False):
+    finish_reason: Required[str]
+    index: Required[int]
+    logprobs: Optional[OpenAIChatCompletionLogprobs]
+    message: Required[ChatCompletionResponseMessage]
+
+
+class OpenAIChatCompletionResponse(TypedDict, total=False):
+    id: Required[str]
+    object: Required[str]
+    created: Required[int]
+    model: Required[str]
+    choices: Required[List[OpenAIChatCompletionChoices]]
+    usage: Required[ChatCompletionUsageBlock]
+    system_fingerprint: str
+    service_tier: str
+
+OpenAIChatCompletionFinishReason = Literal[
+    "stop", "content_filter", "function_call", "tool_calls", "length"
+]
+

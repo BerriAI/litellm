@@ -12,6 +12,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -97,7 +99,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -556,3 +560,16 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
             return mime_type
 
     return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names: List[str] = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_name = tool.get("function", {}).get("name")
+            if tool_call_name:
+                tool_call_names.append(tool_call_name)
+    return tool_call_names

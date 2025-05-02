@@ -26,13 +26,15 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
     LangfuseClass: TypeAlias = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
-
+    LiteLLMLoggingObj = Any
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
@@ -172,6 +174,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[
         str,
         List[AllMessageValues],

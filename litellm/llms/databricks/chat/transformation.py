@@ -351,7 +351,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                         thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
 
-    def _transform_choices(
+    def _transform_dbrx_choices(
         self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
     ) -> List[Choices]:
         transformed_choices = []
@@ -462,7 +462,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
 
-        model_response.choices = self._transform_choices(  # type: ignore
+        model_response.choices = self._transform_dbrx_choices(  # type: ignore
             choices=completion_response["choices"],
             json_mode=json_mode,
         )
