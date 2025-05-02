@@ -47,14 +47,10 @@ model_list:
       api_key: sk-xxxxxxx
 
 mcp_servers:
-  {
-    "zapier_mcp": {
-      "url": "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
-    },
-    "fetch": {
-      "url": "http://localhost:8000/sse"
-    }
-  }
+  zapier_mcp:
+    url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
+  fetch:
+    url: "http://localhost:8000/sse"
 ```
 
 

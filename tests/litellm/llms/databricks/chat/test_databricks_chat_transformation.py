@@ -38,7 +38,7 @@ def test_transform_choices():
         }
     ]
 
-    choices = config._transform_choices(choices=databricks_choices)
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
 
     assert len(choices) == 1
     assert choices[0].message.content == "# 5 Question and Answer Pairs"

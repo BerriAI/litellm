@@ -24,6 +24,8 @@ jobs:
       run: |
         pip install openai==1.68.2
         poetry install --with dev
+        pip install openai==1.68.2
+
 
 
     - name: Run Black formatting
