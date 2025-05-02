@@ -1,19 +1,18 @@
-import json
 import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import httpx
 import pytest
 
 from litellm.llms.datarobot.chat.transformation import DataRobotConfig
 
 
 class TestDataRobotConfig:
+    @pytest.fixture
+    def handler(self):
+        return DataRobotConfig()
 
     @pytest.mark.parametrize(
         "api_base, expected_url",
         [
+            (None, "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("http://localhost:5001", "http://localhost:5001/api/v2/genai/llmgw/chat/completions/"),
             ("https://app.datarobot.com", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("https://app.datarobot.com/api/v2/genai/llmgw/chat/completions", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
@@ -23,6 +22,25 @@ class TestDataRobotConfig:
             ("https://app.datarobot.com/api/v2/deployments/deployment_id/", "https://app.datarobot.com/api/v2/deployments/deployment_id/"),
         ]
     )
-    def test_get_complete_url(self, api_base, expected_url):
-        handler = DataRobotConfig()
-        assert handler.get_complete_url(api_base, "test_model", {}, {}, False) == expected_url
+    def test_resolve_api_base(self, api_base, expected_url, handler):
+        assert handler._resolve_api_base(api_base) == expected_url
+
+    def test_resolve_api_base_with_environment_variable(self, handler):
+        os.environ["DATAROBOT_API_BASE"] = "https://env.datarobot.com"
+        assert handler._resolve_api_base(None) == "https://env.datarobot.com/api/v2/genai/llmgw/chat/completions/"
+        del os.environ["DATAROBOT_API_BASE"]
+
+    @pytest.mark.parametrize(
+        "api_key, expected_api_key",
+        [
+            (None, "fake-api-key"),
+            ("PASSTHROUGH_KEY", "PASSTHROUGH_KEY"),
+        ]
+    )
+    def test_resolve_api_key(self, api_key, expected_api_key, handler):
+        assert handler._resolve_api_key(api_key) == expected_api_key
+
+    def test_resolve_api_key_with_environment_variable(self, handler):
+        os.environ["DATAROBOT_API_KEY"] = "env_key"
+        assert handler._resolve_api_key(None) == "env_key"
+        del os.environ["DATAROBOT_API_KEY"]
