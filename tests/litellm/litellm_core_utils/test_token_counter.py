@@ -1,34 +1,29 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
-import traceback
 import os
 import sys
 import time
+import traceback
 from unittest.mock import MagicMock
 
 import pytest
 
-
 sys.path.insert(
-    0, os.path.abspath("../..")
+    0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
-from litellm import (
-    create_pretrained_tokenizer,
-    decode,
-    encode,
-    get_modified_max_tokens,
-    token_counter as token_counter_old,
-)
-from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from tests.large_text import text
 from messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
 )
+
+import litellm
+from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
+from litellm import token_counter as token_counter_old
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from tests.large_text import text
 
 
 def token_counter_both_assert_same(**args):
@@ -37,11 +32,27 @@ def token_counter_both_assert_same(**args):
     assert new == old, f"New token counter {new} does not match old token counter {old}"
     return new
 
+
 ## Choose which token_counter the test will use.
 
-#token_counter = token_counter_new
-#token_counter = token_counter_old
+# token_counter = token_counter_new
+# token_counter = token_counter_old
 token_counter = token_counter_both_assert_same
+
+
+def test_token_counter_basic():
+    assert (
+        token_counter(
+            model="claude-2",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "This is a long message that definitely exceeds the token limit.",
+                }
+            ],
+        )
+        == 19
+    )
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -88,16 +99,19 @@ def test_token_counter_textonly(message_count_pair):
     )
     assert counted_tokens == message_count_pair["count"]
 
+
 @pytest.mark.parametrize(
     "message_count_pair",
     MESSAGES_TEXT,
 )
 def test_token_counter_count_response_tokens(message_count_pair):
     counted_tokens = token_counter(
-        model="gpt-35-turbo", messages=[message_count_pair["message"]], count_response_tokens=True
+        model="gpt-35-turbo",
+        messages=[message_count_pair["message"]],
+        count_response_tokens=True,
     )
     # 3 tokens are not added because of count_response_tokens=True
-    expected = message_count_pair["count"] - 3 
+    expected = message_count_pair["count"] - 3
     assert counted_tokens == expected
 
 
@@ -128,19 +142,28 @@ def test_token_counter_with_tools(message_count_pair):
 
     if "count-tolerate" in message_count_pair:
         if message_count_pair["count-tolerate"] == counted_tokens:
-            pass # expected
+            pass  # expected
         else:
             tolerated_diff = message_count_pair["count-tolerate"] - expected_tokens
-            assert actual_diff <= tolerated_diff, f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            assert (
+                actual_diff <= tolerated_diff
+            ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
             if actual_diff != tolerated_diff:
-                raise  NeedsToleranceUpdateError(f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}")
+                raise NeedsToleranceUpdateError(
+                    f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}"
+                )
 
     else:
-        assert expected_tokens == counted_tokens, f"Expected {expected_tokens} tokens, got {counted_tokens}."
+        assert (
+            expected_tokens == counted_tokens
+        ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
+
 
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
+
     pass
+
 
 def test_tokenizers():
     try:
@@ -220,7 +243,7 @@ def test_encoding_and_decoding():
         # llama2 encoding + decoding
         llama2_tokens = encode(model="meta-llama/Llama-2-7b-chat", text=sample_text)
         llama2_text = decode(
-            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens.ids # type: ignore
+            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens.ids  # type: ignore
         )
 
         assert llama2_text == sample_text
@@ -386,7 +409,9 @@ def test_empty_tools():
     print(result)
 
 
-@pytest.mark.skip(reason="Skipping this test temporarily because it relies on a function being called that I am removing.")
+@pytest.mark.skip(
+    reason="Skipping this test temporarily because it relies on a function being called that I am removing."
+)
 def test_gpt_4o_token_counter():
     with patch.object(
         litellm.utils, "openai_token_counter", new=MagicMock()
@@ -406,7 +431,6 @@ def test_gpt_4o_token_counter():
     ],
 )
 def test_img_url_token_counter(img_url):
-
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     width, height = get_image_dimensions(data=img_url)
@@ -419,6 +443,7 @@ def test_img_url_token_counter(img_url):
 
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
+
 
 def test_token_counter():
     try:
@@ -450,9 +475,11 @@ def test_token_counter():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 import unittest
-from unittest.mock import patch, MagicMock
-from litellm.utils import encoding, _select_tokenizer_helper, claude_json_str
+from unittest.mock import MagicMock, patch
+
+from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
 
 class TestTokenizerSelection(unittest.TestCase):
