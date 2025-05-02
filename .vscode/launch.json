@@ -1,0 +1,19 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "LiteLLM Config Debug",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "litellm.proxy.proxy_cli",
+      "args": ["--config", "config.yaml", "--port", "4000", "--debug"],
+      "justMyCode": false,
+      "env": {
+        "DEBUG": "True"
+      }
+    }
+  ]
+}

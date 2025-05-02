@@ -63,10 +63,47 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
 
 def _validate_anthropic_response(response: Dict[str, Any]):
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    """
+    Validate that the response matches the structure defined in the Anthropic Messages API
+    https://docs.anthropic.com/claude/reference/messages_post
+    """
+    # Required fields
+    assert "id" in response, "Response missing required 'id' field"
+    assert "type" in response, "Response missing required 'type' field"
+    assert response["type"] == "message", "Response 'type' must be 'message'"
+    assert "role" in response, "Response missing required 'role' field"
+    assert response["role"] == "assistant", "Response 'role' must be 'assistant'"
+    assert "content" in response, "Response missing required 'content' field"
+    assert isinstance(response["content"], list), "Response 'content' must be a list"
+    assert len(response["content"]) > 0, "Response 'content' cannot be empty"
+    
+    # Validate content blocks
+    for block in response["content"]:
+        assert "type" in block, "Content block missing required 'type' field"
+        if block["type"] == "text":
+            assert "text" in block, "Text content block missing required 'text' field"
+        elif block["type"] == "tool_use":
+            assert "id" in block, "Tool use content block missing required 'id' field"
+            assert "name" in block, "Tool use content block missing required 'name' field"
+            assert "input" in block, "Tool use content block missing required 'input' field"
+    
+    # Required model field
+    assert "model" in response, "Response missing required 'model' field"
+    
+    # Required stop_reason field
+    assert "stop_reason" in response, "Response missing required 'stop_reason' field"
+    valid_stop_reasons = ["end_turn", "max_tokens", "stop_sequence", "tool_use", None]
+    assert response["stop_reason"] in valid_stop_reasons, f"Invalid stop_reason: {response['stop_reason']}"
+    
+    # Required stop_sequence field (can be null)
+    assert "stop_sequence" in response, "Response missing required 'stop_sequence' field"
+    
+    # Required usage field
+    assert "usage" in response, "Response missing required 'usage' field"
+    assert "input_tokens" in response["usage"], "Usage missing required 'input_tokens' field"
+    assert "output_tokens" in response["usage"], "Usage missing required 'output_tokens' field"
+    assert isinstance(response["usage"]["input_tokens"], int), "input_tokens must be an integer"
+    assert isinstance(response["usage"]["output_tokens"], int), "output_tokens must be an integer"
 
 
 @pytest.mark.asyncio
@@ -91,11 +128,8 @@ async def test_anthropic_messages_non_streaming():
         max_tokens=100,
     )
 
-    # Verify response
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    # Verify response structure
+    _validate_anthropic_response(response)
 
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
@@ -125,9 +159,36 @@ async def test_anthropic_messages_streaming():
         client=async_httpx_client,
     )
 
+    # For streaming, collect chunks and validate the final combined response
+    collected_chunks = []
+    collected_content = []
+    
     if isinstance(response, AsyncIterator):
         async for chunk in response:
             print("chunk=", chunk)
+            collected_chunks.append(chunk)
+            if "content" in chunk and len(chunk["content"]) > 0:
+                for content_block in chunk["content"]:
+                    if content_block.get("type") == "text" and "text" in content_block:
+                        collected_content.append(content_block["text"])
+    
+    # Validate that we received at least one chunk
+    assert len(collected_chunks) > 0, "No streaming chunks received"
+    
+    # Validate structure of the first and last chunks
+    if len(collected_chunks) > 0:
+        first_chunk = collected_chunks[0]
+        last_chunk = collected_chunks[-1]
+        
+        # First chunk should have basic message structure
+        assert "id" in first_chunk, "First chunk missing 'id' field"
+        assert "model" in first_chunk, "First chunk missing 'model' field"
+        
+        # Last chunk should have stop_reason
+        assert "stop_reason" in last_chunk, "Last chunk missing 'stop_reason' field"
+        
+        # Both should have role = assistant
+        assert first_chunk.get("role") == "assistant", "Chunk role should be 'assistant'"
 
 
 @pytest.mark.asyncio
@@ -213,11 +274,8 @@ async def test_anthropic_messages_litellm_router_non_streaming():
         max_tokens=100,
     )
 
-    # Verify response
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    # Verify response structure
+    _validate_anthropic_response(response)
 
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
