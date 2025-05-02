@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { getProviderLogoAndName } from "../provider_info_helpers";
 
 interface VectorStoreContent {
   text: string;
@@ -91,7 +92,23 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                     </div>
                     <div className="flex">
                       <span className="font-medium w-1/3">Provider:</span>
-                      <span>{request.custom_llm_provider}</span>
+                      <span className="flex items-center">
+                        {(() => {
+                          const { logo, displayName } = getProviderLogoAndName(request.custom_llm_provider);
+                          return (
+                            <>
+                              {logo && (
+                                <img 
+                                  src={logo} 
+                                  alt={`${displayName} logo`} 
+                                  className="h-5 w-5 mr-2" 
+                                />
+                              )}
+                              {displayName}
+                            </>
+                          );
+                        })()}
+                      </span>
                     </div>
                   </div>
                   <div className="space-y-2">
