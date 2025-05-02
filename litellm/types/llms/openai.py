@@ -809,10 +809,10 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     ]
 
 
-class ChatCompletionUsageBlock(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+class ChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
     prompt_tokens_details: Optional[dict]
     completion_tokens_details: Optional[dict]
 
