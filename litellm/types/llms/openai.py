@@ -1331,3 +1331,8 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
     usage: Required[ChatCompletionUsageBlock]
     system_fingerprint: str
     service_tier: str
+
+OpenAIChatCompletionFinishReason = Literal[
+    "stop", "content_filter", "function_call", "tool_calls", "length"
+]
+
