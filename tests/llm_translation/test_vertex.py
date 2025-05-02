@@ -1408,3 +1408,4 @@ def test_aaavertex_embeddings_distances(
         print("text_response: ", text_response)
         text_embedding = text_response.data[0].embedding
 
+
