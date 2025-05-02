@@ -37,14 +37,33 @@ def setup_and_teardown():
 
     import asyncio
 
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    # Create new event loop
+    loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
+    # Store any existing Redis connections to clean up later
+    redis_connections = []
+    if hasattr(litellm, "cache") and hasattr(litellm.cache, "redis_cache"):
+        redis_connections.append(litellm.cache.redis_cache)
+    
     print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
     # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
+    try:
+        # Close Redis connections
+        for redis_conn in redis_connections:
+            if hasattr(redis_conn, "close"):
+                loop.run_until_complete(redis_conn.close())
+    except Exception as e:
+        print(f"Error closing Redis connections: {e}")
+    
+    # Close the event loop
+    try:
+        loop.close()
+    except Exception as e:
+        print(f"Error closing event loop: {e}")
+    
     asyncio.set_event_loop(None)  # Remove the reference to the loop
 
 
