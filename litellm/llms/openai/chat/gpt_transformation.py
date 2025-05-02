@@ -345,9 +345,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     finish_reason = "stop"
 
             if translated_message is None:
-                ## get the content str
-                content_str = convert_content_list_to_str(choice["message"])
-
                 ## get the reasoning content
                 (
                     reasoning_content,
