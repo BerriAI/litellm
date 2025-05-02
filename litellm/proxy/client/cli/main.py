@@ -7,6 +7,7 @@ import click
 # local imports
 from .commands.models import models
 from .commands.credentials import credentials
+from .commands.chat import chat
 
 
 @click.group()
@@ -33,6 +34,8 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
 cli.add_command(models)
 # Add the credentials command group
 cli.add_command(credentials)
+# Add the chat command group
+cli.add_command(chat)
 
 
 if __name__ == "__main__":

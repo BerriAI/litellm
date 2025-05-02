@@ -143,6 +143,56 @@ Delete a credential:
 litellm-proxy credentials delete <credential-name>
 ```
 
+### Chat Commands
+
+The CLI provides commands for interacting with chat models through your LiteLLM proxy server:
+
+#### Chat Completions
+
+Create a chat completion:
+
+```bash
+litellm-proxy chat completions <model> [options]
+```
+
+Arguments:
+- `model`: The model to use (e.g., gpt-4, claude-2)
+
+Options:
+- `--message`, `-m`: Messages in 'role:content' format. Can be specified multiple times to create a conversation.
+- `--temperature`, `-t`: Sampling temperature between 0 and 2
+- `--top-p`: Nucleus sampling parameter between 0 and 1
+- `--n`: Number of completions to generate
+- `--max-tokens`: Maximum number of tokens to generate
+- `--presence-penalty`: Presence penalty between -2.0 and 2.0
+- `--frequency-penalty`: Frequency penalty between -2.0 and 2.0
+- `--user`: Unique identifier for the end user
+
+Examples:
+
+1. Simple completion:
+```bash
+litellm-proxy chat completions gpt-4 -m "user:Hello, how are you?"
+```
+
+2. Multi-message conversation:
+```bash
+litellm-proxy chat completions gpt-4 \
+  -m "system:You are a helpful assistant" \
+  -m "user:What's the capital of France?" \
+  -m "assistant:The capital of France is Paris." \
+  -m "user:What's its population?"
+```
+
+3. With generation parameters:
+```bash
+litellm-proxy chat completions gpt-4 \
+  -m "user:Write a story" \
+  --temperature 0.7 \
+  --max-tokens 500 \
+  --top-p 0.9
+```
+
 ### Model Information
 
 Get detailed information about all models:
