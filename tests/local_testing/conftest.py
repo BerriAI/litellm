@@ -25,12 +25,16 @@ def setup_and_teardown():
     import litellm
     from litellm import Router
 
+    # Store any existing Redis connections before reload
+    redis_connections = []
+    if hasattr(litellm, "cache") and hasattr(litellm.cache, "redis_cache"):
+        redis_connections.append(litellm.cache.redis_cache)
+
     importlib.reload(litellm)
 
     try:
         if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
             import litellm.proxy.proxy_server
-
             importlib.reload(litellm.proxy.proxy_server)
     except Exception as e:
         print(f"Error reloading litellm.proxy.proxy_server: {e}")
@@ -41,24 +45,31 @@ def setup_and_teardown():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Store any existing Redis connections to clean up later
-    redis_connections = []
-    if hasattr(litellm, "cache") and hasattr(litellm.cache, "redis_cache"):
-        redis_connections.append(litellm.cache.redis_cache)
-    
     print(litellm)
     yield
 
     # Teardown code (executes after the yield point)
     try:
-        # Close Redis connections
+        # Close any Redis connections
         for redis_conn in redis_connections:
             if hasattr(redis_conn, "close"):
-                loop.run_until_complete(redis_conn.close())
+                try:
+                    loop.run_until_complete(redis_conn.close())
+                except Exception as e:
+                    print(f"Error closing Redis connection: {e}")
     except Exception as e:
-        print(f"Error closing Redis connections: {e}")
-    
-    # Close the event loop
+        print(f"Error in Redis cleanup: {e}")
+
+    try:
+        # Cancel all running tasks
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    except Exception as e:
+        print(f"Error cancelling tasks: {e}")
+
     try:
         loop.close()
     except Exception as e:
