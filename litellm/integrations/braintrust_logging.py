@@ -17,7 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.utils import get_utc_datetime, print_verbose
+from litellm.utils import print_verbose
 
 global_braintrust_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback
