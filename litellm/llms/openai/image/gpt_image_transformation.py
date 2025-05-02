@@ -58,7 +58,7 @@ class GPTImageConfig:
         Returns True if the model is a GPT Image model
         """
         if model:
-            if "gpt-image" in model:
+            if "gpt" in model:
                 return True
         return False
     
