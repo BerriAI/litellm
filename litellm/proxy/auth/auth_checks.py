@@ -652,7 +652,6 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
-
     if user_id is None:
         return None
 
@@ -664,9 +663,11 @@ async def get_user_object(
                 return LiteLLM_UserTable(**cached_user_obj)
             elif isinstance(cached_user_obj, LiteLLM_UserTable):
                 return cached_user_obj
+                
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
+        
     try:
         db_access_time_key = "user_id:{}".format(user_id)
         should_check_db = _should_check_db(
@@ -686,34 +687,29 @@ async def get_user_object(
                     sso_user_id=sso_user_id,
                     user_email=user_email,
                 )
-
         else:
             response = None
 
         if response is None:
             if user_id_upsert:
-                # Create user data with default parameters
-                user_data = {"user_id": user_id}
+                # Create new user request data
+                from litellm.proxy.management_endpoints.internal_user_endpoints import NewUserRequest, _update_internal_new_user_params
                 
-                # Apply default user email if provided
-                if user_email:
-                    user_data["user_email"] = user_email
-                    
-                import litellm
-                # Apply default internal user params if available
-                if litellm.default_internal_user_params:
-                    
-                    for key, value in litellm.default_internal_user_params.items():
-                        if key == "available_teams":  # Skip team-related settings
-                            continue
-                        user_data[key] = value
+                # Create base user data
+                user_data = {
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "max_budget": litellm.default_internal_user_params.get("max_budget", None),
+                    "budget_duration": litellm.default_internal_user_params.get("budget_duration", None),
+                    "models": litellm.default_internal_user_params.get("models", None),
+                    "user_role": litellm.default_internal_user_params.get("user_role", None),
+                }
                 
-                # Apply default budget settings if available
-                if "max_budget" not in user_data and litellm.max_internal_user_budget is not None:
-                    user_data["max_budget"] = str(litellm.max_internal_user_budget)
-                
-                if "budget_duration" not in user_data and litellm.internal_user_budget_duration is not None:
-                    user_data["budget_duration"] = litellm.internal_user_budget_duration
+                # Use the helper function from internal_user_endpoints to apply defaults
+                user_data = _update_internal_new_user_params(
+                    data_json=user_data,
+                    data=NewUserRequest(**user_data)
+                )
                 
                 # Create the user with all default parameters
                 response = await prisma_client.db.litellm_usertable.create(
@@ -727,7 +723,6 @@ async def get_user_object(
             response.organization_memberships is not None
             and len(response.organization_memberships) > 0
         ):
-            # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
                 LiteLLM_OrganizationMembershipTable(**membership.model_dump())
                 for membership in response.organization_memberships
