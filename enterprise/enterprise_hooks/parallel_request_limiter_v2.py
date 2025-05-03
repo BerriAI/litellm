@@ -135,6 +135,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             )
             increment_list.append((key, increment_value_by_group[group]))
 
+        print(f"increment_list: {increment_list}")
         if (
             not max_parallel_requests and not rpm_limit and not tpm_limit
         ):  # no rate limits
@@ -279,6 +280,18 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type="team",
                 )
             )
+        elif user_api_key_dict.end_user_id is not None:
+            tasks.append(
+                self.check_key_in_limits_v2(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    max_parallel_requests=None,
+                    precise_minute=precise_minute,
+                    tpm_limit=user_api_key_dict.end_user_tpm_limit,
+                    rpm_limit=user_api_key_dict.end_user_rpm_limit,
+                    rate_limit_type="customer",
+                )
+            )
         await asyncio.gather(*tasks)
 
         return
@@ -311,6 +324,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
 
                 increment_list.append((key, increment_value_by_group[group]))
 
+        print(f"increment_list in _update_usage_in_cache_post_call: {increment_list}")
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,
@@ -344,7 +358,9 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             user_api_key_team_id = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_team_id", None
             )
-            user_api_key_end_user_id = kwargs.get("user")
+            user_api_key_end_user_id = kwargs.get("user") or kwargs["litellm_params"][
+                "metadata"
+            ].get("user_api_key_end_user_id", None)
 
             # ------------
             # Setup values

@@ -108,7 +108,7 @@ async def test_normal_router_call_v2(monkeypatch):
         "key",
         # "model_per_key",
         "user",
-        # "customer",
+        "customer",
         "team",
     ],
 )
@@ -154,6 +154,8 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         user_api_key_dict = UserAPIKeyAuth(user_id="12345", user_tpm_limit=10)
     elif rate_limit_object == "team":
         user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_tpm_limit=10)
+    elif rate_limit_object == "customer":
+        user_api_key_dict = UserAPIKeyAuth(end_user_id="12345", end_user_tpm_limit=10)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -191,6 +193,7 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
             "user_api_key": _api_key,
             "user_api_key_user_id": user_api_key_dict.user_id,
             "user_api_key_team_id": user_api_key_dict.team_id,
+            "user_api_key_end_user_id": user_api_key_dict.end_user_id,
         },
         mock_response="hello",
     )
