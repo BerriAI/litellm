@@ -143,6 +143,94 @@ Delete a credential:
 litellm-proxy credentials delete <credential-name>
 ```
 
+### Keys Management
+
+The CLI provides commands for managing API keys on your LiteLLM proxy server:
+
+#### List Keys
+
+View all API keys:
+
+```bash
+litellm-proxy keys list [--format table|json] [options]
+```
+
+Options:
+
+- `--format`: Output format (table or json, default: table)
+- `--page`: Page number for pagination
+- `--size`: Number of items per page
+- `--user-id`: Filter keys by user ID
+- `--team-id`: Filter keys by team ID
+- `--organization-id`: Filter keys by organization ID
+- `--key-hash`: Filter by specific key hash
+- `--key-alias`: Filter by key alias
+- `--return-full-object`: Return the full key object
+- `--include-team-keys`: Include team keys in the response
+
+#### Generate Key
+
+Generate a new API key:
+
+```bash
+litellm-proxy keys generate [options]
+```
+
+Options:
+
+- `--models`: Comma-separated list of allowed models
+- `--aliases`: JSON string of model alias mappings
+- `--spend`: Maximum spend limit for this key
+- `--duration`: Duration for which the key is valid (e.g. '24h', '7d')
+- `--key-alias`: Alias/name for the key
+- `--team-id`: Team ID to associate the key with
+- `--user-id`: User ID to associate the key with
+- `--budget-id`: Budget ID to associate the key with
+- `--config`: JSON string of additional configuration parameters
+
+Example:
+
+```bash
+litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
+```
+
+#### Delete Keys
+
+Delete API keys by key or alias:
+
+```bash
+litellm-proxy keys delete [--keys <comma-separated-keys>] [--key-aliases <comma-separated-aliases>]
+```
+
+Options:
+
+- `--keys`: Comma-separated list of API keys to delete
+- `--key-aliases`: Comma-separated list of key aliases to delete
+
+Example:
+
+```bash
+litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
+```
+
+#### Get Key Info
+
+Get information about a specific API key:
+
+```bash
+litellm-proxy keys info --key <key-hash>
+```
+
+Options:
+
+- `--key`: The key hash to get information about
+
+Example:
+
+```bash
+litellm-proxy keys info --key sk-key1
+```
+
 ### Chat Commands
 
 The CLI provides commands for interacting with chat models through your LiteLLM proxy server:
