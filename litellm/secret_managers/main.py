@@ -327,6 +327,8 @@ def get_secret(  # noqa: PLR0915
                 secret_value_as_bool, bool
             ):
                 return secret_value_as_bool
+            elif secret is None:
+                return default_value
             else:
                 return secret
     except Exception as e:

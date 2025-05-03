@@ -1558,7 +1558,12 @@ class ProxyConfig:
         environment_variables = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
-                os.environ[key] = str(get_secret(secret_name=key, default_value=value))
+                secret = get_secret(secret_name=key, default_value=value)
+                if isinstance(secret, str):
+                    os.environ[key] = secret
+                else:
+                    from litellm._logging import verbose_logger
+                    verbose_logger.error(f"Warning: Secret value for {key} does not resolve to a string")
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
