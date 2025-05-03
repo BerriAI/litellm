@@ -33,7 +33,7 @@ Options:
 
 - `--format`: Output format (table or json, default: table)
 
-### Model Information
+#### Model Information
 
 Get detailed information about all models:
 
