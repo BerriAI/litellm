@@ -1711,15 +1711,14 @@ referencing = ">=0.31.0"
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.1.14"
+version = "0.1.15"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.1.14-py3-none-any.whl", hash = "sha256:f8439b89893c58920f776c60d5efaf3f9ceb87454bc42d32217542104acba826"},
-    {file = "litellm_proxy_extras-0.1.14.tar.gz", hash = "sha256:b0908d3e4a388d74f754a40d1e7c4fe148941e2abcf78a524a5016e7e5ca2331"},
+    {file = "litellm_proxy_extras-0.1.15.tar.gz", hash = "sha256:0e9b9074023eea8954183746f196d4a62f5d9fda2838fac3cb94d6ee1899a308"},
 ]
 
 [[package]]
@@ -3041,7 +3040,7 @@ description = "JSON Web Token implementation in Python"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "python_version < \"3.14\" and (extra == \"extra-proxy\" or extra == \"proxy\") or extra == \"proxy\" or extra == \"extra-proxy\""
+markers = "extra == \"extra-proxy\" or extra == \"proxy\""
 files = [
     {file = "PyJWT-2.9.0-py3-none-any.whl", hash = "sha256:3b02fb0f44517787776cf48f2ae25d8e14f300e6d7545a4315cee571a415e850"},
     {file = "pyjwt-2.9.0.tar.gz", hash = "sha256:7e1e5b56cc735432a7369cbfa0efe50fa113ebecdc04ae6922deba8b84582d0c"},
@@ -4671,4 +4670,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "77055a2db83ca59781970a2d483cfa388ef1c733456567d2cd52023c79acf720"
+content-hash = "f3db3692fca349dbbf2db9274b6ba1d7f92faaf5f1560d6d835aea18b29b5a10"
