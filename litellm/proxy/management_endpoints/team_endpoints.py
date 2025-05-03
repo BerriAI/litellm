@@ -571,10 +571,6 @@ async def update_team(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
-        )
 
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
@@ -593,6 +589,10 @@ async def update_team(
     if (
         data.organization_id is not None and len(data.organization_id) > 0
     ):  # allow unsetting the organization_id
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+            )
         organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
             where={"organization_id": data.organization_id},
             include={"litellm_budget_table": True, "users": True},
