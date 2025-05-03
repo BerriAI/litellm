@@ -33,6 +33,29 @@ Options:
 
 - `--format`: Output format (table or json, default: table)
 
+### Model Information
+
+Get detailed information about all models:
+
+```bash
+litellm-proxy models info [options]
+```
+
+Options:
+
+- `--format`: Output format (table or json, default: table)
+- `--columns`: Comma-separated list of columns to display. Valid columns:
+  - `public_model`
+  - `upstream_model`
+  - `credential_name`
+  - `created_at`
+  - `updated_at`
+  - `id`
+  - `input_cost`
+  - `output_cost`
+
+Default columns: `public_model`, `upstream_model`, `updated_at`
+
 #### Add Model
 
 Add a new model to the proxy:
@@ -318,29 +341,6 @@ litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messag
 ```bash
 litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value"
 ```
-
-### Model Information
-
-Get detailed information about all models:
-
-```bash
-litellm-proxy models info [options]
-```
-
-Options:
-
-- `--format`: Output format (table or json, default: table)
-- `--columns`: Comma-separated list of columns to display. Valid columns:
-  - `public_model`
-  - `upstream_model`
-  - `credential_name`
-  - `created_at`
-  - `updated_at`
-  - `id`
-  - `input_cost`
-  - `output_cost`
-
-Default columns: `public_model`, `upstream_model`, `updated_at`
 
 ## Environment Variables
 
