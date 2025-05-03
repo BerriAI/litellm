@@ -9,7 +9,6 @@ Docs: https://llama.developer.meta.com/docs/features/compatibility/
 from typing import Optional
 
 from litellm import get_model_info, verbose_logger
-
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
