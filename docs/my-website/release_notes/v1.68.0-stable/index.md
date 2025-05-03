@@ -78,7 +78,8 @@ pip install litellm==1.68.0.post1
     - Ensure Non-Admin virtual keys can access /mcp routes - [PR](https://github.com/BerriAI/litellm/pull/10473)
       
       **Note:** Currently, all Virtual Keys are able to access the MCP endpoints. We are working on a feature to allow restricting MCP access by keys/teams/users/orgs. Follow [here](https://github.com/BerriAI/litellm/discussions/9891) for updates.
-
+- **Moderations**
+    - Add logging callback support for `/moderations` API - [PR](https://github.com/BerriAI/litellm/pull/10390)
 
 
 ## Spend Tracking / Budget Improvements
@@ -94,41 +95,42 @@ pip install litellm==1.68.0.post1
 
 
 ## Management Endpoints / UI
-- **Models**
-    - Triton - Support adding model/provider on UI - https://github.com/BerriAI/litellm/pull/10456
-    - VertexAI - Fix adding vertex models with reusable credentials - https://github.com/BerriAI/litellm/pull/10528
-    - LLM Credentials - show existing credentials for easy editing - https://github.com/BerriAI/litellm/pull/10519
 - **Virtual Keys**
-    - Fix filtering on key alias - https://github.com/BerriAI/litellm/pull/10455
-    - Support global filtering on keys - https://github.com/BerriAI/litellm/pull/10455
-    - Pagination - fix clicking on next/back buttons on table - https://github.com/BerriAI/litellm/pull/10528
-- **Organizations**
-    - Fix showing org budget on table - https://github.com/BerriAI/litellm/pull/10528
+    - Fix filtering on key alias - [PR](https://github.com/BerriAI/litellm/pull/10455)
+    - Support global filtering on keys - [PR](https://github.com/BerriAI/litellm/pull/10455)
+    - Pagination - fix clicking on next/back buttons on table - [PR](https://github.com/BerriAI/litellm/pull/10528)
+- **Models**
+    - Triton - Support adding model/provider on UI - [PR](https://github.com/BerriAI/litellm/pull/10456)
+    - VertexAI - Fix adding vertex models with reusable credentials - [PR](https://github.com/BerriAI/litellm/pull/10528)
+    - LLM Credentials - show existing credentials for easy editing - [PR](https://github.com/BerriAI/litellm/pull/10519)
 - **Teams**
-    - Allow reassigning team to other org - https://github.com/BerriAI/litellm/pull/10527
+    - Allow reassigning team to other org - [PR](https://github.com/BerriAI/litellm/pull/10527)
+- **Organizations**
+    - Fix showing org budget on table - [PR](https://github.com/BerriAI/litellm/pull/10528)
+
 
 
 ## Logging / Guardrail Integrations
-- Add logging callback support for `/moderations` API https://github.com/BerriAI/litellm/pull/10390
-- Langsmith - respect langsmith_batch_size param https://github.com/BerriAI/litellm/pull/10411
+- **[Langsmith](../../docs/observability/langsmith_integration)**
+    - Respect [langsmith_batch_size](../../docs/observability/langsmith_integration#local-testing---control-batch-size) param - [PR](https://github.com/BerriAI/litellm/pull/10411)
 
 ## Performance / Loadbalancing / Reliability improvements
-- **Redis**
-    - Ensure all redis queues are periodically flushed https://github.com/BerriAI/litellm/pull/10393
-- **Rate Limits**
-    - Multi-instance rate limiting support across keys/teams/users/customers - https://github.com/BerriAI/litellm/pull/10458, https://github.com/BerriAI/litellm/pull/10497, 
-- **Azure OpenAI OIDC**
-    - allow using litellm defined params for OIDC Auth - https://github.com/BerriAI/litellm/pull/10394
+- **[Redis](../../docs/proxy/caching)**
+    - Ensure all redis queues are periodically flushed, this fixes an issue where redis queue size was growing indefinitely when request tags were used - [PR](https://github.com/BerriAI/litellm/pull/10393)
+- **[Rate Limits](../../docs/proxy/users#set-rate-limits)**
+    - Multi-instance rate limiting support across keys/teams/users/customers - [PR](https://github.com/BerriAI/litellm/pull/10458), [PR](https://github.com/BerriAI/litellm/pull/10497), [PR](https://github.com/BerriAI/litellm/pull/10500)
+- **[Azure OpenAI OIDC](../../docs/providers/azure#entra-id---use-azure_ad_token)**
+    - allow using litellm defined params for [OIDC Auth](../../docs/providers/azure#entra-id---use-azure_ad_token) - [PR](https://github.com/BerriAI/litellm/pull/10394)
 
 
 ## General Proxy Improvements
 - **Security**
-    - Allow blocking web crawlers - https://github.com/BerriAI/litellm/pull/10420
+    - Allow blocking web crawlers - [PR](https://github.com/BerriAI/litellm/pull/10420) [NEEDS DOCS]
 - **Auth**
-    - Support `x-litellm-api-key` param by default https://github.com/BerriAI/litellm/pull/10392
-    - allow key at max budget to call non-llm api endpoints https://github.com/BerriAI/litellm/pull/10392
-- **New Python Client Library for LiteLLM Proxy management endpoints**
-    - Initial PR - https://github.com/BerriAI/litellm/pull/10445
-    - Support for doing HTTP requests - https://github.com/BerriAI/litellm/pull/10452
-- **Windows**
-    - Don’t require uvloop for windows - https://github.com/BerriAI/litellm/pull/10483
+    - Support `x-litellm-api-key` param by default, this fixes an issue from the prior release where `x-litellm-api-key` was not being used on vertex ai passthrough requests - [PR](https://github.com/BerriAI/litellm/pull/10392)
+    - Allow key at max budget to call non-llm api endpoints - [PR](https://github.com/BerriAI/litellm/pull/10392)
+- **New Python Client Library for LiteLLM Proxy management endpoints** [NEEDS DOCS]
+    - Initial PR - [PR](https://github.com/BerriAI/litellm/pull/10445)
+    - Support for doing HTTP requests - [PR](https://github.com/BerriAI/litellm/pull/10452)
+- **Dependencies**
+    - Don’t require uvloop for windows - [PR](https://github.com/BerriAI/litellm/pull/10483)
