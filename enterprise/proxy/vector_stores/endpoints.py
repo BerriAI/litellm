@@ -23,6 +23,7 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStoreListResponse,
     VectorStoreDeleteRequest,
 )
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
 
@@ -121,19 +122,9 @@ async def list_vector_stores(
             )
 
         # Get vector stores from database
-        vector_stores_from_db: List[LiteLLM_ManagedVectorStore] = []
-        if prisma_client is not None:
-            _vector_stores_from_db = (
-                await prisma_client.db.litellm_managedvectorstorestable.find_many(
-                    order={"created_at": "desc"},
-                )
-            )
-            for vector_store in _vector_stores_from_db:
-                _dict_vector_store = dict(vector_store)
-                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
-                    **_dict_vector_store
-                )
-                vector_stores_from_db.append(_litellm_managed_vector_store)
+        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+            prisma_client=prisma_client
+        )
 
         # Combine in-memory and database vector stores
         combined_vector_stores: List[LiteLLM_ManagedVectorStore] = (

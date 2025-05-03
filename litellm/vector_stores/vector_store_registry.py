@@ -1,7 +1,7 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.vector_stores import (
@@ -9,6 +9,11 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_VectorStoreConfig,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+else:
+    PrismaClient = Any
 
 
 class VectorStoreRegistry:
@@ -172,3 +177,29 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores
             if vector_store.get("vector_store_id") != vector_store_id
         ]
+
+    #########################################################
+    ########### DB management helpers for vector stores ###########
+    #########################################################
+
+    @staticmethod
+    async def _get_vector_stores_from_db(
+        prisma_client: Optional[PrismaClient],
+    ) -> List[LiteLLM_ManagedVectorStore]:
+        """
+        Get vector stores from the database
+        """
+        vector_stores_from_db: List[LiteLLM_ManagedVectorStore] = []
+        if prisma_client is not None:
+            _vector_stores_from_db = (
+                await prisma_client.db.litellm_managedvectorstorestable.find_many(
+                    order={"created_at": "desc"},
+                )
+            )
+            for vector_store in _vector_stores_from_db:
+                _dict_vector_store = dict(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
+                    **_dict_vector_store
+                )
+                vector_stores_from_db.append(_litellm_managed_vector_store)
+        return vector_stores_from_db
