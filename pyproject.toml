@@ -56,6 +56,7 @@ boto3 = {version = "1.34.34", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "1.5.0", optional = true, python = ">=3.10"}
 litellm-proxy-extras = {version = "0.1.14", optional = true}
+anthropic = "^0.50.0"
 
 [tool.poetry.extras]
 proxy = [

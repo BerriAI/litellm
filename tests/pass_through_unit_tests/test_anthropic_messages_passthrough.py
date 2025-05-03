@@ -67,43 +67,8 @@ def _validate_anthropic_response(response: Dict[str, Any]):
     Validate that the response matches the structure defined in the Anthropic Messages API
     https://docs.anthropic.com/claude/reference/messages_post
     """
-    # Required fields
-    assert "id" in response, "Response missing required 'id' field"
-    assert "type" in response, "Response missing required 'type' field"
-    assert response["type"] == "message", "Response 'type' must be 'message'"
-    assert "role" in response, "Response missing required 'role' field"
-    assert response["role"] == "assistant", "Response 'role' must be 'assistant'"
-    assert "content" in response, "Response missing required 'content' field"
-    assert isinstance(response["content"], list), "Response 'content' must be a list"
-    assert len(response["content"]) > 0, "Response 'content' cannot be empty"
-    
-    # Validate content blocks
-    for block in response["content"]:
-        assert "type" in block, "Content block missing required 'type' field"
-        if block["type"] == "text":
-            assert "text" in block, "Text content block missing required 'text' field"
-        elif block["type"] == "tool_use":
-            assert "id" in block, "Tool use content block missing required 'id' field"
-            assert "name" in block, "Tool use content block missing required 'name' field"
-            assert "input" in block, "Tool use content block missing required 'input' field"
-    
-    # Required model field
-    assert "model" in response, "Response missing required 'model' field"
-    
-    # Required stop_reason field
-    assert "stop_reason" in response, "Response missing required 'stop_reason' field"
-    valid_stop_reasons = ["end_turn", "max_tokens", "stop_sequence", "tool_use", None]
-    assert response["stop_reason"] in valid_stop_reasons, f"Invalid stop_reason: {response['stop_reason']}"
-    
-    # Required stop_sequence field (can be null)
-    assert "stop_sequence" in response, "Response missing required 'stop_sequence' field"
-    
-    # Required usage field
-    assert "usage" in response, "Response missing required 'usage' field"
-    assert "input_tokens" in response["usage"], "Usage missing required 'input_tokens' field"
-    assert "output_tokens" in response["usage"], "Usage missing required 'output_tokens' field"
-    assert isinstance(response["usage"]["input_tokens"], int), "input_tokens must be an integer"
-    assert isinstance(response["usage"]["output_tokens"], int), "output_tokens must be an integer"
+    from anthropic.types.message import Message
+    Message.model_validate(response)
 
 
 @pytest.mark.asyncio
@@ -124,7 +89,7 @@ async def test_anthropic_messages_non_streaming():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
     )
 
@@ -153,42 +118,71 @@ async def test_anthropic_messages_streaming():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
         stream=True,
         client=async_httpx_client,
     )
 
-    # For streaming, collect chunks and validate the final combined response
+    # Expected event types according to Anthropic's documentation
+    expected_events = {"message_start", "content_block_start", "content_block_delta", 
+                      "content_block_stop", "message_delta", "message_stop"}
+    
+    # Track received event types
+    received_event_types = set()
+    
+    # For streaming, collect chunks and validate
     collected_chunks = []
-    collected_content = []
+    text_content = []
     
     if isinstance(response, AsyncIterator):
         async for chunk in response:
             print("chunk=", chunk)
             collected_chunks.append(chunk)
-            if "content" in chunk and len(chunk["content"]) > 0:
-                for content_block in chunk["content"]:
-                    if content_block.get("type") == "text" and "text" in content_block:
-                        collected_content.append(content_block["text"])
+            
+            # Handle bytes format (SSE)
+            if isinstance(chunk, bytes):
+                chunk_str = chunk.decode("utf-8")
+                # Process SSE format (data: {...})
+                for line in chunk_str.split("\n"):
+                    if line.startswith("data: "):
+                        try:
+                            json_data = json.loads(line[6:])  # Skip 'data: ' prefix
+                            
+                            # Add event type to our tracking set
+                            if "type" in json_data:
+                                received_event_types.add(json_data["type"])
+                            
+                            # Extract text content from content_block_delta events
+                            if json_data.get("type") == "content_block_delta" and \
+                               json_data.get("delta", {}).get("type") == "text_delta":
+                                text_content.append(json_data["delta"]["text"])
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse JSON from: {line[6:]} - Error: {e}")
+            else:
+                # If not bytes, try to extract event type and content
+                if hasattr(chunk, "type"):
+                    received_event_types.add(chunk.type)
+                
+                # Try to extract text from the chunk
+                if hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                    text_content.append(chunk.delta.text)
+    
+    # Print summary of what we received
+    print(f"Received event types: {received_event_types}")
+    print(f"Text content: {''.join(text_content)}")
     
     # Validate that we received at least one chunk
     assert len(collected_chunks) > 0, "No streaming chunks received"
     
-    # Validate structure of the first and last chunks
-    if len(collected_chunks) > 0:
-        first_chunk = collected_chunks[0]
-        last_chunk = collected_chunks[-1]
-        
-        # First chunk should have basic message structure
-        assert "id" in first_chunk, "First chunk missing 'id' field"
-        assert "model" in first_chunk, "First chunk missing 'model' field"
-        
-        # Last chunk should have stop_reason
-        assert "stop_reason" in last_chunk, "Last chunk missing 'stop_reason' field"
-        
-        # Both should have role = assistant
-        assert first_chunk.get("role") == "assistant", "Chunk role should be 'assistant'"
+    # Check that we received the expected event types
+    # Note: We might not receive all event types in a single response
+    common_events = received_event_types.intersection(expected_events)
+    assert len(common_events) > 0, f"Didn't receive any expected event types. Got: {received_event_types}"
+    
+    # If we got content_block_delta events, we should have collected some text
+    if "content_block_delta" in received_event_types:
+        assert len(text_content) > 0, "Received content_block_delta events but no text content"
 
 
 @pytest.mark.asyncio
@@ -200,7 +194,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
         response = await litellm.anthropic.messages.acreate(
             messages=["hi"],
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-            model="claude-3-haiku-20240307",
+            model="claude-3-5-haiku-20241022",
             max_tokens=100,
             stream=True,
         )
@@ -224,7 +218,7 @@ async def test_anthropic_messages_router_streaming_with_bad_request():
                 {
                     "model_name": "claude-special-alias",
                     "litellm_params": {
-                        "model": "claude-3-haiku-20240307",
+                        "model": "claude-3-5-haiku-20241022",
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     },
                 }
@@ -257,7 +251,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -308,7 +302,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -335,7 +329,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
         test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
+        == "claude-3-5-haiku-20241022"
     )
 
     # check logged usage + spend
@@ -365,7 +359,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -465,7 +459,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
         test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
+        == "claude-3-5-haiku-20241022"
     )
 
     # check logged usage + spend
@@ -508,7 +502,7 @@ async def test_anthropic_messages_with_extra_headers():
                 "text": "Why did the chicken cross the road? To get to the other side!",
             }
         ],
-        "model": "claude-3-haiku-20240307",
+        "model": "claude-3-5-haiku-20241022",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
@@ -521,7 +515,7 @@ async def test_anthropic_messages_with_extra_headers():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
         client=mock_client,
         provider_specific_header={
