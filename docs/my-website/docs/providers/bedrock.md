@@ -60,9 +60,9 @@ Here's how to call Bedrock with the LiteLLM Proxy Server
 
 ```yaml
 model_list:
-  - model_name: bedrock-claude-v1
+  - model_name: bedrock-claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-instant-v1
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME

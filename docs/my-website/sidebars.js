@@ -61,6 +61,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/management_client",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -190,7 +191,15 @@ const sidebars = {
         slug: "/providers",
       },
       items: [
-        "providers/openai",
+        {
+          type: "category",
+          label: "OpenAI",
+          items: [
+            "providers/openai",
+            "providers/openai/responses_api",
+            "providers/openai/text_to_speech",
+          ]
+        },
         "providers/text_completion_openai",
         "providers/openai_compatible",
         "providers/azure",
