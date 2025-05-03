@@ -11,6 +11,7 @@ import gzip
 import json
 import logging
 import time
+from typing import Optional, List
 from unittest.mock import AsyncMock, patch, Mock
 
 import pytest
@@ -20,6 +21,18 @@ from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.rag_hooks.bedrock_knowledgebase import BedrockKnowledgeBaseHook
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingVectorStoreRequest
+from litellm.types.vector_stores import VectorStorSearchResponse
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
+        super().__init__()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_payload = kwargs.get("standard_logging_object")
+        pass
 
 
 @pytest.mark.asyncio
@@ -143,4 +156,57 @@ async def test_openai_with_knowledge_base_mock_openai():
         assert messages[1]["role"] == "user"
         assert BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING in messages[1]["content"]
 
+
+@pytest.mark.asyncio
+async def test_logging_with_knowledge_base_hook():
+    """
+    Test that the knowledge base request was logged in standard logging payload
+    """
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [BedrockKnowledgeBaseHook(), test_custom_logger]
+    litellm.set_verbose = True
+    await litellm.acompletion(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        vector_store_ids = [
+            "T37J8R4WTM"
+        ],
+    )
+
+    # sleep for 1 second to allow the logging callback to run
+    await asyncio.sleep(1)
+
+    # assert that the knowledge base request was logged in the standard logging payload
+    standard_logging_payload: Optional[StandardLoggingPayload] = test_custom_logger.standard_logging_payload
+    assert standard_logging_payload is not None
+
+
+    metadata = standard_logging_payload["metadata"]
+    standard_logging_vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]] = metadata["vector_store_request_metadata"]
+
+    print("standard_logging_vector_store_request_metadata:", json.dumps(standard_logging_vector_store_request_metadata, indent=4, default=str))
+
+    # 1 vector store request was made, expect 1 vector store request metadata object
+    assert len(standard_logging_vector_store_request_metadata) == 1
+
+    # expect the vector store request metadata object to have the correct values
+    vector_store_request_metadata = standard_logging_vector_store_request_metadata[0]
+    assert vector_store_request_metadata.get("vector_store_id") == "T37J8R4WTM"
+    assert vector_store_request_metadata.get("query") == "what is litellm?"
+    assert vector_store_request_metadata.get("custom_llm_provider") == "bedrock"
+
+
+    vector_store_search_response: VectorStorSearchResponse = vector_store_request_metadata.get("vector_store_search_response")
+    assert vector_store_search_response is not None
+    assert vector_store_search_response.get("search_query") == "what is litellm?"
+    assert len(vector_store_search_response.get("data", [])) >=0
+    for item in vector_store_search_response.get("data", []):
+        assert item.get("score") is not None
+        assert item.get("content") is not None
+        assert len(item.get("content", [])) >= 0
+        for content_item in item.get("content", []):
+            text_content = content_item.get("text")
+            assert text_content is not None
+            assert len(text_content) > 0
+            
 

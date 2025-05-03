@@ -46,6 +46,7 @@ def reset_mock_cache():
     _model_cache.flush_cache()
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
+    litellm._turn_on_debug()
     messages = [
         {
             "role": "user",

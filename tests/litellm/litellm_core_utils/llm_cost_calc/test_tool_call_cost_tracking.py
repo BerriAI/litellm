@@ -99,6 +99,9 @@ def test_get_cost_for_built_in_tools_web_search():
 
 
 def test_get_cost_for_built_in_tools_file_search():
+    """
+    Test that the cost for a file search is 0.00 when no response object is provided
+    """
     model = "gpt-4"
     standard_built_in_tools_params = StandardBuiltInToolsParams(
         file_search=FileSearchTool(type="file_search")
@@ -110,4 +113,4 @@ def test_get_cost_for_built_in_tools_file_search():
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
 
-    assert cost == 0.0025
+    assert cost == 0.00

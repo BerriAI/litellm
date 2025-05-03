@@ -69,6 +69,7 @@ from litellm.constants import (
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
+    MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -121,9 +122,7 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import (
-    get_modified_max_tokens,
-)
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
@@ -180,7 +179,7 @@ from litellm.types.utils import (
 )
 
 try:
-    # Python 3.9+
+    # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
         "anthropic_tokenizer.json"
     ).open("r") as f:
@@ -213,6 +212,7 @@ from typing import (
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -265,8 +265,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -760,7 +758,7 @@ def function_setup(  # noqa: PLR0915
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
         logging_obj = LiteLLMLogging(
-            model=model, # type: ignore
+            model=model,  # type: ignore
             messages=messages,
             stream=stream,
             litellm_call_id=kwargs["litellm_call_id"],
@@ -1608,6 +1606,7 @@ def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = 
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
+
 def create_pretrained_tokenizer(
     identifier: str, revision="main", auth_token: Optional[str] = None
 ):
@@ -1663,10 +1662,20 @@ def token_counter(
 ) -> int:
     """
     The same as `litellm.litellm_core_utils.token_counter`.
-    
+
     Kept for backwards compatibility.
     """
-    return token_counter_new(model, custom_tokenizer, text, messages, count_response_tokens, tools, tool_choice, use_default_image_token_count, default_token_count)
+    return token_counter_new(
+        model,
+        custom_tokenizer,
+        text,
+        messages,
+        count_response_tokens,
+        tools,
+        tool_choice,
+        use_default_image_token_count,
+        default_token_count,
+    )
 
 
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
@@ -5361,12 +5370,19 @@ def process_messages(messages, max_tokens, model):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
-
+    verbose_logger.debug(
+        f"calling process_messages with messages: {messages}, max_tokens: {max_tokens}, model: {model}"
+    )
     for message in messages:
+        verbose_logger.debug(f"processing final_messages: {final_messages}")
         used_tokens = get_token_count(final_messages, model)
         available_tokens = max_tokens - used_tokens
+        verbose_logger.debug(
+            f"used_tokens: {used_tokens}, available_tokens: {available_tokens}"
+        )
         if available_tokens <= 3:
             break
+
         final_messages = attempt_message_addition(
             final_messages=final_messages,
             message=message,
@@ -5374,7 +5390,10 @@ def process_messages(messages, max_tokens, model):
             max_tokens=max_tokens,
             model=model,
         )
-
+        verbose_logger.debug(
+            f"final_messages after attempt_message_addition: {final_messages}"
+        )
+    verbose_logger.debug(f"Final messages: {final_messages}")
     return final_messages
 
 
@@ -5383,17 +5402,24 @@ def attempt_message_addition(
 ):
     temp_messages = [message] + final_messages
     temp_message_tokens = get_token_count(messages=temp_messages, model=model)
-
+    verbose_logger.debug(
+        f"temp_message_tokens: {temp_message_tokens}, max_tokens: {max_tokens}"
+    )
     if temp_message_tokens <= max_tokens:
         return temp_messages
 
     # if temp_message_tokens > max_tokens, try shortening temp_messages
     elif "function_call" not in message:
+        verbose_logger.debug("attempting to shorten message to fit limit")
         # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is greate than max_tokens)
         updated_message = shorten_message_to_fit_limit(message, available_tokens, model)
         if can_add_message(updated_message, final_messages, max_tokens, model):
+            verbose_logger.debug(
+                "can add message, returning [updated_message] + final_messages"
+            )
             return [updated_message] + final_messages
-
+        else:
+            verbose_logger.debug("cannot add message, returning final_messages")
     return final_messages
 
 
@@ -5407,9 +5433,17 @@ def get_token_count(messages, model):
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
+def shorten_message_to_fit_limit(
+    message, tokens_needed, model: Optional[str], raise_error_on_max_limit: bool = False
+):
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
+
+    Args:
+        message: The message to shorten
+        tokens_needed: The maximum number of tokens allowed
+        model: The model being used (optional)
+        raise_error_on_max_limit: If True, raises an error when max attempts reached. If False, returns final trimmed content.
     """
 
     # For OpenAI models, even blank messages cost 7 token,
@@ -5419,9 +5453,16 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
         return message
 
     content = message["content"]
+    attempts = 0
 
-    while True:
+    verbose_logger.debug(f"content: {content}")
+
+    while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
+        verbose_logger.debug(f"getting token count for message: {message}")
         total_tokens = get_token_count([message], model)
+        verbose_logger.debug(
+            f"total_tokens: {total_tokens}, tokens_needed: {tokens_needed}"
+        )
 
         if total_tokens <= tokens_needed:
             break
@@ -5437,7 +5478,14 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
 
         trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
+        verbose_logger.debug(f"trimmed_content: {trimmed_content}")
         content = trimmed_content
+        attempts += 1
+
+    if attempts >= MAX_TOKEN_TRIMMING_ATTEMPTS and raise_error_on_max_limit:
+        raise Exception(
+            f"Failed to trim message to fit within {tokens_needed} tokens after {MAX_TOKEN_TRIMMING_ATTEMPTS} attempts"
+        )
 
     return message
 
@@ -5523,9 +5571,11 @@ def trim_messages(
             # we remove all system messages from the messages list
             messages = [message for message in messages if message["role"] != "system"]
 
+        verbose_logger.debug(f"Processed system message: {system_message_event}")
         final_messages = process_messages(
             messages=messages, max_tokens=max_tokens, model=model
         )
+        verbose_logger.debug(f"Processed messages: {final_messages}")
 
         # Add system message to the beginning of the final messages
         if system_message_event:
@@ -5534,6 +5584,9 @@ def trim_messages(
         if len(tool_messages) > 0:
             final_messages.extend(tool_messages)
 
+        verbose_logger.debug(
+            f"Final messages: {final_messages}, return_response_tokens: {return_response_tokens}"
+        )
         if (
             return_response_tokens
         ):  # if user wants token count with new trimmed messages
@@ -5993,6 +6046,15 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         raise TypeError(
             f"Invalid message type: {type(message)}. Expected dict or Pydantic model."
         )
+
+
+def convert_list_message_to_dict(messages: List):
+    new_messages = []
+    for message in messages:
+        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        new_messages.append(cleaned_message)
+    return new_messages
 
 
 def validate_and_fix_openai_messages(messages: List):
