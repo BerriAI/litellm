@@ -61,6 +61,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/management_client",
         {
           type: "category",
           label: "Making LLM Requests",

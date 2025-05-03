@@ -125,11 +125,11 @@ pip install litellm==1.68.0.post1
 
 ## General Proxy Improvements
 - **Security**
-    - Allow blocking web crawlers - [PR](https://github.com/BerriAI/litellm/pull/10420) [NEEDS DOCS]
+    - Allow [blocking web crawlers](../../docs/proxy/enterprise#blocking-web-crawlers) - [PR](https://github.com/BerriAI/litellm/pull/10420)
 - **Auth**
-    - Support `x-litellm-api-key` param by default, this fixes an issue from the prior release where `x-litellm-api-key` was not being used on vertex ai passthrough requests - [PR](https://github.com/BerriAI/litellm/pull/10392)
+    - Support [`x-litellm-api-key` header param by default](../../docs/pass_through/vertex_ai#use-with-virtual-keys), this fixes an issue from the prior release where `x-litellm-api-key` was not being used on vertex ai passthrough requests - [PR](https://github.com/BerriAI/litellm/pull/10392)
     - Allow key at max budget to call non-llm api endpoints - [PR](https://github.com/BerriAI/litellm/pull/10392)
-- **New Python Client Library for LiteLLM Proxy management endpoints** [NEEDS DOCS]
+- 🆕 **[Python Client Library](../../docs/proxy/management_client) for LiteLLM Proxy management endpoints**
     - Initial PR - [PR](https://github.com/BerriAI/litellm/pull/10445)
     - Support for doing HTTP requests - [PR](https://github.com/BerriAI/litellm/pull/10452)
 - **Dependencies**
