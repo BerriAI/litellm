@@ -91,6 +91,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardLoggingPromptManagementMetadata,
+    StandardLoggingVectorStoreRequest,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -551,6 +552,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
+                litellm_logging_obj=self,
             )
         self.messages = messages
         return model, messages, non_default_params
@@ -3286,6 +3288,9 @@ class StandardLoggingPayloadSetup:
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
         mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+        vector_store_request_metadata: Optional[
+            List[StandardLoggingVectorStoreRequest]
+        ] = None,
         usage_object: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
@@ -3334,6 +3339,7 @@ class StandardLoggingPayloadSetup:
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
+            vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
         )
         if isinstance(metadata, dict):
@@ -3694,6 +3700,9 @@ def get_standard_logging_object_payload(
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
             mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
+            vector_store_request_metadata=kwargs.get(
+                "vector_store_request_metadata", None
+            ),
             usage_object=usage.model_dump(),
         )
 
@@ -3838,6 +3847,7 @@ def get_standard_logging_metadata(
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,
+        vector_store_request_metadata=None,
         usage_object=None,
     )
     if isinstance(metadata, dict):

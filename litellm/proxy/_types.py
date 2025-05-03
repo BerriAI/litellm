@@ -31,6 +31,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
@@ -160,6 +161,9 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+
+    # global proxy level entity
+    PROXY = "proxy"
 
 
 def hash_token(token: str):
@@ -1823,6 +1827,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
     projected_spend: Optional[float] = None
+    event_group: Litellm_EntityType
 
 
 class WebhookEvent(CallInfo):
@@ -1835,8 +1840,8 @@ class WebhookEvent(CallInfo):
         "internal_user_created",
         "spend_tracked",
     ]
-    event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
     event_message: str  # human-readable description of event
+    event_group: Litellm_EntityType
 
 
 class SpecialModelNames(enum.Enum):
@@ -1986,6 +1991,7 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: Optional[str]
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]

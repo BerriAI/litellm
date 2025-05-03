@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -26,6 +27,17 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBRetrievalResult,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.utils import StandardLoggingVectorStoreRequest
+from litellm.types.vector_stores import (
+    VectorStoreResultContent,
+    VectorStoreSearchResult,
+    VectorStorSearchResponse,
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -35,6 +47,7 @@ else:
 
 class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
     CONTENT_PREFIX_STRING = "Context: \n\n"
+    CUSTOM_LLM_PROVIDER = "bedrock"
 
     def __init__(
         self,
@@ -58,25 +71,92 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
         """
         vector_store_ids = non_default_params.pop("vector_store_ids", None)
+        vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
         if vector_store_ids:
             for vector_store_id in vector_store_ids:
-                response = await self.make_bedrock_kb_retrieve_request(
+                start_time = datetime.now()
+                query = self._get_kb_query_from_messages(messages)
+                bedrock_kb_response = await self.make_bedrock_kb_retrieve_request(
                     knowledge_base_id=vector_store_id,
-                    query=self._get_kb_query_from_messages(messages),
+                    query=query,
                 )
-                verbose_logger.debug(f"Bedrock Knowledge Base Response: {response}")
+                verbose_logger.debug(
+                    f"Bedrock Knowledge Base Response: {bedrock_kb_response}"
+                )
 
-                context_message = (
-                    self.get_chat_completion_message_from_bedrock_kb_response(response)
+                context_message, context_string = (
+                    self.get_chat_completion_message_from_bedrock_kb_response(
+                        bedrock_kb_response
+                    )
                 )
                 if context_message is not None:
                     messages.append(context_message)
+
+                #################################################################################################
+                ########## LOGGING for Standard Logging Payload, Langfuse, s3, LiteLLM DB etc. ##################
+                #################################################################################################
+                vector_store_search_response: VectorStorSearchResponse = (
+                    self.transform_bedrock_kb_response_to_vector_store_search_response(
+                        bedrock_kb_response=bedrock_kb_response, query=query
+                    )
+                )
+                vector_store_request_metadata.append(
+                    StandardLoggingVectorStoreRequest(
+                        vector_store_id=vector_store_id,
+                        query=query,
+                        vector_store_search_response=vector_store_search_response,
+                        custom_llm_provider=self.CUSTOM_LLM_PROVIDER,
+                        start_time=start_time.timestamp(),
+                        end_time=datetime.now().timestamp(),
+                    )
+                )
+
+            litellm_logging_obj.model_call_details["vector_store_request_metadata"] = (
+                vector_store_request_metadata
+            )
+
         return model, messages, non_default_params
+
+    def transform_bedrock_kb_response_to_vector_store_search_response(
+        self,
+        bedrock_kb_response: BedrockKBResponse,
+        query: str,
+    ) -> VectorStorSearchResponse:
+        """
+        Transform a BedrockKBResponse to a VectorStorSearchResponse
+        """
+        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
+            bedrock_kb_response.get("retrievalResults", None)
+        )
+        vector_store_search_response: VectorStorSearchResponse = (
+            VectorStorSearchResponse(search_query=query, data=[])
+        )
+        if retrieval_results is None:
+            return vector_store_search_response
+
+        vector_search_response_data: List[VectorStoreSearchResult] = []
+        for retrieval_result in retrieval_results:
+            content: Optional[BedrockKBContent] = retrieval_result.get("content", None)
+            if content is None:
+                continue
+            content_text: Optional[str] = content.get("text", None)
+            if content_text is None:
+                continue
+            vector_store_search_result: VectorStoreSearchResult = (
+                VectorStoreSearchResult(
+                    score=retrieval_result.get("score", None),
+                    content=[VectorStoreResultContent(text=content_text, type="text")],
+                )
+            )
+            vector_search_response_data.append(vector_store_search_result)
+        vector_store_search_response["data"] = vector_search_response_data
+        return vector_store_search_response
 
     def _get_kb_query_from_messages(self, messages: List[AllMessageValues]) -> str:
         """
@@ -256,7 +336,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
     @staticmethod
     def get_chat_completion_message_from_bedrock_kb_response(
         response: BedrockKBResponse,
-    ) -> Optional[ChatCompletionUserMessage]:
+    ) -> Tuple[Optional[ChatCompletionUserMessage], str]:
         """
         Retrieves the context from the Bedrock Knowledge Base response and returns a ChatCompletionUserMessage object.
         """
@@ -264,7 +344,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             "retrievalResults", None
         )
         if retrieval_results is None:
-            return None
+            return None, ""
 
         # string to combine the context from the knowledge base
         context_string: str = BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING
@@ -284,4 +364,4 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             role="user",
             content=context_string,
         )
-        return message
+        return message, context_string

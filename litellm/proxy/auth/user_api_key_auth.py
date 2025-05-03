@@ -192,6 +192,7 @@ async def get_global_proxy_spend(
                 max_budget=litellm.max_budget,
                 spend=global_proxy_spend,
                 token=token,
+                event_group=Litellm_EntityType.PROXY,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
@@ -520,23 +521,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params[
-                                "end_user_tpm_limit"
-                            ] = budget_info.tpm_limit
+                            end_user_params["end_user_tpm_limit"] = (
+                                budget_info.tpm_limit
+                            )
                         if budget_info.rpm_limit is not None:
-                            end_user_params[
-                                "end_user_rpm_limit"
-                            ] = budget_info.rpm_limit
+                            end_user_params["end_user_rpm_limit"] = (
+                                budget_info.rpm_limit
+                            )
                         if budget_info.max_budget is not None:
-                            end_user_params[
-                                "end_user_max_budget"
-                            ] = budget_info.max_budget
+                            end_user_params["end_user_max_budget"] = (
+                                budget_info.max_budget
+                            )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
@@ -952,6 +953,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         max_budget=litellm.max_budget,
                         user_id=litellm_proxy_admin_name,
                         team_id=valid_token.team_id,
+                        event_group=Litellm_EntityType.PROXY,
                     )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
