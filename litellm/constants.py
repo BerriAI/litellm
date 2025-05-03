@@ -135,6 +135,7 @@ LITELLM_CHAT_PROVIDERS = [
     "deepinfra",
     "perplexity",
     "mistral",
+    "asi",
     "groq",
     "nvidia_nim",
     "cerebras",

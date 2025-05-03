@@ -402,6 +402,7 @@ vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
 ai21_chat_models: List = []
+asi_models: List = ["asi1-mini"]
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
@@ -632,6 +633,7 @@ model_list = (
     + vertex_text_models
     + ai21_models
     + ai21_chat_models
+    + asi_models
     + together_ai_models
     + baseten_models
     + aleph_alpha_models
@@ -703,6 +705,7 @@ models_by_provider: dict = {
     "xai": xai_models,
     "deepseek": deepseek_models,
     "mistral": mistral_chat_models,
+    "asi": asi_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
     "infinity": infinity_models,
