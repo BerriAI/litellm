@@ -3,7 +3,7 @@
 import base64
 import io
 import struct
-from typing import Callable, List, Literal, Optional, Tuple, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union, cast
 
 import tiktoken
 
@@ -26,7 +26,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     OpenAIMessageContent,
 )
-from litellm.types.utils import SelectTokenizerResponse
+from litellm.types.utils import Message, SelectTokenizerResponse
 
 
 def get_modified_max_tokens(
@@ -298,16 +298,19 @@ TokenCounterFunction = Callable[[str], int]
 Type for a function that counts tokens in a string.
 """
 
+
 class _MessageCountParams:
     """
     A class to hold the parameters for counting tokens in messages.
     """
+
     def __init__(
         self,
         model: str,
         custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]],
     ):
         from litellm.utils import print_verbose
+
         actual_model = _fix_model_name(model)
         if actual_model == "gpt-3.5-turbo-0301":
             self.tokens_per_message = (
@@ -320,8 +323,10 @@ class _MessageCountParams:
         elif actual_model in litellm.azure_llms:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
-        else:                
-            print_verbose(f"Warning: unknown model {model}. Using default token params.")
+        else:
+            print_verbose(
+                f"Warning: unknown model {model}. Using default token params."
+            )
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
@@ -331,7 +336,7 @@ def token_counter(
     model="",
     custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
     text: Optional[Union[str, List[str]]] = None,
-    messages: Optional[List[AllMessageValues]] = None,
+    messages: Optional[List[Union[AllMessageValues, Message]]] = None,
     count_response_tokens: Optional[bool] = False,
     tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
@@ -355,6 +360,11 @@ def token_counter(
     Returns:
     int: The number of tokens in the text.
     """
+    from litellm.utils import convert_list_message_to_dict
+
+    verbose_logger.debug(
+        f"messages in token_counter: {messages}, text in token_counter: {text}"
+    )
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
@@ -371,13 +381,16 @@ def token_counter(
         num_tokens = count_function(text_to_count)
 
     elif messages is not None:
+        new_messages = cast(
+            List[AllMessageValues], convert_list_message_to_dict(messages)
+        )
         params = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(
-            params, messages, use_default_image_token_count, default_token_count
+            params, new_messages, use_default_image_token_count, default_token_count
         )
         if count_response_tokens is False:
             includes_system_message = any(
-                [message.get("role", None) == "system" for message in messages]
+                [message.get("role", None) == "system" for message in new_messages]
             )
             num_tokens += _count_extra(
                 params.count_function, tools, tool_choice, includes_system_message
@@ -397,7 +410,7 @@ def _count_messages(
 ) -> int:
     """
     Count the number of tokens in a list of messages.
-    
+
     Args:
         params (_MessageCountParams): The parameters for counting tokens.
         messages (List[AllMessageValues]): The list of messages to count tokens in.
@@ -405,6 +418,8 @@ def _count_messages(
         default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs.
     """
     num_tokens = 0
+    if len(messages) == 0:
+        return num_tokens
     for message in messages:
         num_tokens += params.tokens_per_message
         for key, value in message.items():
@@ -430,7 +445,7 @@ def _count_messages(
                 num_tokens += params.count_function(value)
                 if key == "name":
                     num_tokens += params.tokens_per_name
-            elif key == 'content' and isinstance(value, List):
+            elif key == "content" and isinstance(value, List):
                 num_tokens += _count_content_list(
                     params.count_function,
                     value,
@@ -556,7 +571,7 @@ def _count_content_list(
                     url = image_url_dict.get("url")
                     num_tokens += calculate_img_tokens(
                         data=url,
-                        mode=detail, # type: ignore
+                        mode=detail,  # type: ignore
                         use_default_image_token_count=use_default_image_token_count,
                     )
                 elif isinstance(c["image_url"], str):

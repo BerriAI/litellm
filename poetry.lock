@@ -3977,6 +3977,8 @@ version = "0.21.0"
 description = "Fast implementation of asyncio event loop on top of libuv"
 optional = true
 python-versions = ">=3.8.0"
+groups = ["main"]
+markers = "sys_platform != \"win32\" and extra == \"proxy\""
 files = [
     {file = "uvloop-0.21.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:ec7e6b09a6fdded42403182ab6b832b71f4edaf7f37a9a0e371a01db5f0cb45f"},
     {file = "uvloop-0.21.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:196274f2adb9689a289ad7d65700d37df0c0930fd8e4e743fa4834e850d7719d"},
@@ -4357,4 +4359,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "23a660966fb8924895b28d805c85911a74678c4c10668662d36e54212c3ec00e"
+content-hash = "c023dadcdd3e8c25c86653869dee7cd83b92095097cb1dd96497d9c035cb1b20"
