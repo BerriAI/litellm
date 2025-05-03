@@ -198,7 +198,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         metadata: {
           ...parsedMetadata,
           guardrails: values.guardrails || []
-        }
+        },
+        organization_id: values.organization_id,
       };
       
       const response = await teamUpdateCall(accessToken, updateData);
@@ -334,6 +335,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    organization_id: info.organization_id,
                   }}
                   layout="vertical"
                 >
@@ -405,6 +407,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+                  
+                  <Form.Item label="Organization ID" name="organization_id">
+                    <Input />
+                  </Form.Item>
+
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
                   </Form.Item>
