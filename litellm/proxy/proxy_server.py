@@ -2028,11 +2028,13 @@ class ProxyConfig:
         ## VECTOR STORES
         vector_stores_config = config.get("vector_stores", None)
         if vector_stores_config:
-            from litellm.proxy.vector_stores.vector_store_registry import (
-                global_vector_store_manager,
-            )
+            from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
-            global_vector_store_manager.load_vector_stores_from_config(
+            if litellm.vector_store_registry is None:
+                litellm.vector_store_registry = VectorStoreRegistry()
+
+            # Load vector stores from config
+            litellm.vector_store_registry.load_vector_stores_from_config(
                 vector_stores_config
             )
         pass

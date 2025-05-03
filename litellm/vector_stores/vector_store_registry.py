@@ -1,7 +1,7 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.vector_stores import (
@@ -11,11 +11,62 @@ from litellm.types.vector_stores import (
 )
 
 
-class VectorStoreManager:
-    def __init__(self):
-        self.vector_stores: List[LiteLLM_ManagedVectorStore] = []
+class VectorStoreRegistry:
+    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
+        self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
+        self.vector_store_ids_to_vector_store_map: Dict[
+            str, LiteLLM_ManagedVectorStore
+        ] = {}
+
+    def get_vector_store_to_run(
+        self, non_default_params: Dict
+    ) -> Optional[LiteLLM_ManagedVectorStore]:
+        """
+        Returns the vector store to run
+
+         vectore_stores can be run in two ways:
+            1. vector_store_ids is provided in the non_default_params
+            2. vector_store_ids is provided as a tool in the request
+
+
+        This will return the first vector store found in the registry.
+        """
+        vector_store_ids: List[str] = []
+
+        # 1. check if vector_store_ids is provided in the non_default_params
+        vector_store_ids = non_default_params.get("vector_store_ids", None) or []
+
+        # 2. check if vector_store_ids is provided as a tool in the request
+        vector_store_ids = self._get_vector_store_ids_from_tool_calls(
+            non_default_params=non_default_params, vector_store_ids=vector_store_ids
+        )
+
+        # check if the vector store ids are in the registry
+        if len(vector_store_ids) <= 0:
+            return None
+
+        for vector_store_id in vector_store_ids:
+            for vector_store in self.vector_stores:
+                if vector_store.get("vector_store_id") == vector_store_id:
+                    return vector_store
+
+    def _get_vector_store_ids_from_tool_calls(
+        self, non_default_params: Dict, vector_store_ids: List[str]
+    ) -> List[str]:
+        """
+        Returns the vector store ids from the tool calls
+        """
+        tools = non_default_params.get("tools", None)
+        if tools:
+            for tool in tools:
+                if "vector_store_ids" in tool:
+                    vector_store_ids.extend(tool["vector_store_ids"])
+        return vector_store_ids
 
     def load_vector_stores_from_config(self, vector_stores_config: List[Dict]):
+        """
+        Loads vector stores from the litellm proxy config.yaml
+        """
         for vector_store_config in vector_stores_config:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(
@@ -75,5 +126,18 @@ class VectorStoreManager:
 
         return response
 
+    def add_vector_store_to_registry(self, vector_store: LiteLLM_ManagedVectorStore):
+        """
+        Add a vector store to the registry
+        """
+        self.vector_stores.append(vector_store)
 
-global_vector_store_manager = VectorStoreManager()
+    def delete_vector_store_from_registry(self, vector_store_id: str):
+        """
+        Delete a vector store from the registry
+        """
+        self.vector_stores = [
+            vector_store
+            for vector_store in self.vector_stores
+            if vector_store.get("vector_store_id") != vector_store_id
+        ]

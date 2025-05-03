@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -45,7 +45,7 @@ else:
     StandardCallbackDynamicParams = Any
 
 
-class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
+class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
     CONTENT_PREFIX_STRING = "Context: \n\n"
     CUSTOM_LLM_PROVIDER = "bedrock"
 
@@ -310,28 +310,16 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             )
 
     @staticmethod
-    def should_use_prompt_management_hook(non_default_params: Dict) -> bool:
-        if non_default_params.get("vector_store_ids", None):
-            return True
-        return False
-
-    @staticmethod
-    def get_initialized_custom_logger(
-        non_default_params: Dict,
-    ) -> Optional[CustomLogger]:
+    def get_initialized_custom_logger() -> Optional[CustomLogger]:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )
 
-        if BedrockKnowledgeBaseHook.should_use_prompt_management_hook(
-            non_default_params
-        ):
-            return _init_custom_logger_compatible_class(
-                logging_integration="bedrock_knowledgebase_hook",
-                internal_usage_cache=None,
-                llm_router=None,
-            )
-        return None
+        return _init_custom_logger_compatible_class(
+            logging_integration="bedrock_vector_store",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
 
     @staticmethod
     def get_chat_completion_message_from_bedrock_kb_response(
@@ -347,7 +335,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             return None, ""
 
         # string to combine the context from the knowledge base
-        context_string: str = BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING
+        context_string: str = BedrockVectorStore.CONTENT_PREFIX_STRING
         for retrieval_result in retrieval_results:
             retrieval_result_content: Optional[BedrockKBContent] = (
                 retrieval_result.get("content", None) or {}

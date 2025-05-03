@@ -43,9 +43,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
-from litellm.integrations.rag_hooks.bedrock_knowledgebase import (
-    BedrockKnowledgeBaseHook,
-)
+from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -601,13 +599,26 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return anthropic_cache_control_logger
 
-        if bedrock_knowledgebase_logger := BedrockKnowledgeBaseHook.get_initialized_custom_logger(
-            non_default_params
-        ):
-            self.model_call_details["prompt_integration"] = (
-                bedrock_knowledgebase_logger.__class__.__name__
-            )
-            return bedrock_knowledgebase_logger
+        #########################################################
+        # Vector Store / Knowledge Base hooks
+        #########################################################
+        if litellm.vector_store_registry is not None:
+            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params
+            ):
+                vector_store_custom_logger = (
+                    litellm.ProviderConfigManager.get_provider_vector_store_config(
+                        provider=cast(
+                            litellm.LlmProviders,
+                            vector_store_to_run.get("custom_llm_provider"),
+                        ),
+                    )
+                )
+                self.model_call_details["prompt_integration"] = (
+                    vector_store_custom_logger.__class__.__name__
+                )
+                return vector_store_custom_logger
+
         return None
 
     def get_custom_logger_for_anthropic_cache_control_hook(
@@ -3025,13 +3036,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
-        elif logging_integration == "bedrock_knowledgebase_hook":
+        elif logging_integration == "bedrock_vector_store":
             for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockKnowledgeBaseHook):
+                if isinstance(callback, BedrockVectorStore):
                     return callback
-            bedrock_knowledgebase_hook = BedrockKnowledgeBaseHook()
-            _in_memory_loggers.append(bedrock_knowledgebase_hook)
-            return bedrock_knowledgebase_hook  # type: ignore
+            bedrock_vector_store = BedrockVectorStore()
+            _in_memory_loggers.append(bedrock_vector_store)
+            return bedrock_vector_store  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -3174,9 +3185,9 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
                     return callback
-        elif logging_integration == "bedrock_knowledgebase_hook":
+        elif logging_integration == "bedrock_vector_store":
             for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockKnowledgeBaseHook):
+                if isinstance(callback, BedrockVectorStore):
                     return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
