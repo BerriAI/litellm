@@ -106,7 +106,7 @@ async def test_normal_router_call_v2(monkeypatch):
     "rate_limit_object",
     [
         "key",
-        # "model_per_key",
+        "model_per_key",
         "user",
         "customer",
         "team",
@@ -156,6 +156,11 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_tpm_limit=10)
     elif rate_limit_object == "customer":
         user_api_key_dict = UserAPIKeyAuth(end_user_id="12345", end_user_tpm_limit=10)
+    elif rate_limit_object == "model_per_key":
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key=_api_key,
+            metadata={"model_tpm_limit": {"azure-model": 10}},
+        )
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -163,7 +168,10 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "azure-model"},
+        call_type="",
     )
 
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -173,7 +181,7 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
         precise_minute=precise_minute,
-        model=None,
+        model="azure-model",
         rate_limit_type=rate_limit_object,
         group="tpm",
     )
@@ -213,7 +221,7 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
     "rate_limit_object",
     [
         "key",
-        # "model_per_key",
+        "model_per_key",
         "user",
         "customer",
         "team",
@@ -263,6 +271,11 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
         user_api_key_dict = UserAPIKeyAuth(team_id="12345", team_rpm_limit=1)
     elif rate_limit_object == "customer":
         user_api_key_dict = UserAPIKeyAuth(end_user_id="12345", end_user_rpm_limit=1)
+    elif rate_limit_object == "model_per_key":
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key=_api_key,
+            metadata={"model_rpm_limit": {"azure-model": 1}},
+        )
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -270,7 +283,10 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     await parallel_request_handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "azure-model"},
+        call_type="",
     )
 
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -280,7 +296,7 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
         precise_minute=precise_minute,
-        model=None,
+        model="azure-model",
         rate_limit_type=rate_limit_object,
         group="rpm",
     )
@@ -319,7 +335,7 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
-            data={},
+            data={"model": "azure-model"},
             call_type="",
         )
 

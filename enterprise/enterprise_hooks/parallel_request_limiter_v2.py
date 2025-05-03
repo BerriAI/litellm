@@ -26,6 +26,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import (
+    get_key_model_rpm_limit,
+    get_key_model_tpm_limit,
+)
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 if TYPE_CHECKING:
@@ -85,25 +89,33 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
         model: Optional[str],
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
         group: RateLimitGroups,
-    ) -> str:
-        if rate_limit_type == "key":
+    ) -> Optional[str]:
+        if rate_limit_type == "key" and user_api_key_dict.api_key is not None:
             return (
                 f"{self.prefix}::{user_api_key_dict.api_key}::{precise_minute}::{group}"
             )
-        elif rate_limit_type == "model_per_key" and model is not None:
+        elif (
+            rate_limit_type == "model_per_key"
+            and model is not None
+            and user_api_key_dict.api_key is not None
+        ):
             return f"{self.prefix}::{user_api_key_dict.api_key}::{model}::{precise_minute}::{group}"
-        elif rate_limit_type == "user":
+        elif rate_limit_type == "user" and user_api_key_dict.user_id is not None:
             return (
                 f"{self.prefix}::{user_api_key_dict.user_id}::{precise_minute}::{group}"
             )
-        elif rate_limit_type == "customer":
+        elif (
+            rate_limit_type == "customer" and user_api_key_dict.end_user_id is not None
+        ):
             return f"{self.prefix}::{user_api_key_dict.end_user_id}::{precise_minute}::{group}"
-        elif rate_limit_type == "team":
+        elif rate_limit_type == "team" and user_api_key_dict.team_id is not None:
             return (
                 f"{self.prefix}::{user_api_key_dict.team_id}::{precise_minute}::{group}"
             )
+        elif rate_limit_type == "model_per_key" and model is not None:
+            return f"{self.prefix}::{user_api_key_dict.api_key}::{model}::{precise_minute}::{group}"
         else:
-            raise ValueError(f"Invalid rate limit type: {rate_limit_type}")
+            return None
 
     def get_key_pattern_to_sync(self) -> Optional[str]:
         return self.prefix + "::"
@@ -133,9 +145,10 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                 rate_limit_type=rate_limit_type,
                 group=cast(RateLimitGroups, group),
             )
+            if key is None:
+                continue
             increment_list.append((key, increment_value_by_group[group]))
 
-        print(f"increment_list: {increment_list}")
         if (
             not max_parallel_requests and not rpm_limit and not tpm_limit
         ):  # no rate limits
@@ -234,7 +247,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     local_only=True,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-        _model = data.get("model", None)
+        requested_model = data.get("model", None)
 
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_hour = datetime.now().strftime("%H")
@@ -255,7 +268,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type="key",
                 )
             )
-        elif user_api_key_dict.user_id is not None:
+        if user_api_key_dict.user_id is not None:
             # CHECK IF REQUEST ALLOWED for key
             tasks.append(
                 self.check_key_in_limits_v2(
@@ -268,7 +281,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type="user",
                 )
             )
-        elif user_api_key_dict.team_id is not None:
+        if user_api_key_dict.team_id is not None:
             tasks.append(
                 self.check_key_in_limits_v2(
                     user_api_key_dict=user_api_key_dict,
@@ -280,7 +293,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type="team",
                 )
             )
-        elif user_api_key_dict.end_user_id is not None:
+        if user_api_key_dict.end_user_id is not None:
             tasks.append(
                 self.check_key_in_limits_v2(
                     user_api_key_dict=user_api_key_dict,
@@ -292,6 +305,37 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type="customer",
                 )
             )
+        if requested_model and (
+            get_key_model_tpm_limit(user_api_key_dict) is not None
+            or get_key_model_rpm_limit(user_api_key_dict) is not None
+        ):
+            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict) or {}
+            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict) or {}
+
+            should_check_rate_limit = False
+            if requested_model in _tpm_limit_for_key_model:
+                should_check_rate_limit = True
+            elif requested_model in _rpm_limit_for_key_model:
+                should_check_rate_limit = True
+
+            if should_check_rate_limit:
+                model_specific_tpm_limit: Optional[int] = None
+                model_specific_rpm_limit: Optional[int] = None
+                if requested_model in _tpm_limit_for_key_model:
+                    model_specific_tpm_limit = _tpm_limit_for_key_model[requested_model]
+                if requested_model in _rpm_limit_for_key_model:
+                    model_specific_rpm_limit = _rpm_limit_for_key_model[requested_model]
+                tasks.append(
+                    self.check_key_in_limits_v2(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        max_parallel_requests=None,
+                        precise_minute=precise_minute,
+                        tpm_limit=model_specific_tpm_limit,
+                        rpm_limit=model_specific_rpm_limit,
+                        rate_limit_type="model_per_key",
+                    )
+                )
         await asyncio.gather(*tasks)
 
         return
@@ -311,7 +355,7 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
             "rpm": 0,
         }
 
-        rate_limit_types = ["key", "user", "customer", "team"]
+        rate_limit_types = ["key", "user", "customer", "team", "model_per_key"]
         for rate_limit_type in rate_limit_types:
             for group in ["request_count", "rpm", "tpm"]:
                 key = self._get_current_usage_key(
@@ -321,10 +365,10 @@ class _PROXY_MaxParallelRequestsHandler(BaseRoutingStrategy, CustomLogger):
                     rate_limit_type=cast(RateLimitTypes, rate_limit_type),
                     group=cast(RateLimitGroups, group),
                 )
-
+                if key is None:
+                    continue
                 increment_list.append((key, increment_value_by_group[group]))
 
-        print(f"increment_list in _update_usage_in_cache_post_call: {increment_list}")
         if increment_list:  # Only call if we have values to increment
             await self._increment_value_list_in_current_window(
                 increment_list=increment_list,
