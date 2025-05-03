@@ -31,8 +31,8 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessag
 from litellm.types.utils import StandardLoggingVectorStoreRequest
 from litellm.types.vector_stores import (
     VectorStoreResultContent,
+    VectorStoreSearchResponse,
     VectorStoreSearchResult,
-    VectorStorSearchResponse,
 )
 from litellm.utils import load_credentials_from_list
 
@@ -110,7 +110,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                 #################################################################################################
                 ########## LOGGING for Standard Logging Payload, Langfuse, s3, LiteLLM DB etc. ##################
                 #################################################################################################
-                vector_store_search_response: VectorStorSearchResponse = (
+                vector_store_search_response: VectorStoreSearchResponse = (
                     self.transform_bedrock_kb_response_to_vector_store_search_response(
                         bedrock_kb_response=bedrock_kb_response, query=query
                     )
@@ -136,15 +136,15 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         self,
         bedrock_kb_response: BedrockKBResponse,
         query: str,
-    ) -> VectorStorSearchResponse:
+    ) -> VectorStoreSearchResponse:
         """
-        Transform a BedrockKBResponse to a VectorStorSearchResponse
+        Transform a BedrockKBResponse to a VectorStoreSearchResponse
         """
         retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
             bedrock_kb_response.get("retrievalResults", None)
         )
-        vector_store_search_response: VectorStorSearchResponse = (
-            VectorStorSearchResponse(search_query=query, data=[])
+        vector_store_search_response: VectorStoreSearchResponse = (
+            VectorStoreSearchResponse(search_query=query, data=[])
         )
         if retrieval_results is None:
             return vector_store_search_response
