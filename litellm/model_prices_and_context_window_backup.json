@@ -6323,7 +6323,7 @@
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text", "code"]
     },
-    "vertex_ai/meta/llama-4-scout-128b-16e-instruct-maas": {
+    "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": {
         "max_tokens": 10e6,
         "max_input_tokens": 10e6,
         "max_output_tokens": 10e6,
