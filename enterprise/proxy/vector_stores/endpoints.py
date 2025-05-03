@@ -70,10 +70,14 @@ async def new_vector_store(
                 vector_store.get("vector_store_metadata")
             )
 
-        new_vector_store = (
+        _new_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.create(
                 data=vector_store
             )
+        )
+
+        new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(
+            _new_vector_store.model_dump()
         )
 
         # Add vector store to registry
