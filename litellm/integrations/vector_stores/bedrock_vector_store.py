@@ -81,7 +81,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         if litellm.vector_store_registry is None:
             return model, messages, non_default_params
 
-        vector_store_ids = litellm.vector_store_registry.get_vector_store_ids_to_run(
+        vector_store_ids = litellm.vector_store_registry.pop_vector_store_ids_to_run(
             non_default_params=non_default_params, tools=tools
         )
         vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []

@@ -38,6 +38,23 @@ class VectorStoreRegistry:
 
         return vector_store_ids
 
+    def pop_vector_store_ids_to_run(
+        self, non_default_params: Dict, tools: Optional[List[Dict]] = None
+    ) -> List[str]:
+        """
+        Pops the vector store ids from the non_default_params and tools
+        """
+        vector_store_ids: List[str] = []
+
+        # 1. check if vector_store_ids is provided in the non_default_params
+        vector_store_ids = non_default_params.pop("vector_store_ids", None) or []
+
+        # 2. check if vector_store_ids is provided as a tool in the request
+        vector_store_ids = self._get_vector_store_ids_from_tool_calls(
+            tools=tools, vector_store_ids=vector_store_ids
+        )
+        return vector_store_ids
+
     def get_vector_store_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> Optional[LiteLLM_ManagedVectorStore]:
