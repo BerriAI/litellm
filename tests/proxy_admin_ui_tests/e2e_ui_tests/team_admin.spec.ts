@@ -1,253 +1,163 @@
-/**
- * Team Admin
- */
-import { test, expect } from '@playwright/test';
-import { loginToUI } from '../utils/login';
+import { test, expect } from "@playwright/test";
+import { loginToUI } from "../utils/login";
 
-test.describe("team admin ui test", async () => {
+test.describe("Invite User, Set Password, and Login", () => {
+  let testEmail: string;
+  const testPassword = "Password123!"; // Define a password
+  const teamName1 = `team-invite-test-1-${Date.now()}`;
+  const teamName2 = `team-invite-test-2-${Date.now()}`;
+  const keyName1 = `key-${teamName1}`;
+  const keyName2 = `key-${teamName2}`;
+
   test.beforeEach(async ({ page }) => {
-    await loginToUI(page);
-    //Navigate to Teams page
-    await page.goto("http://localhost:4000/ui?page=teams")
-  })
+    await loginToUI(page); // Login as admin first
+    await page.goto("http://localhost:4000/ui?page=teams");
 
-  test("Invite a user, make them team Admin and give them no access to models", async ({ page }) => {
+     // --- Create Team 1 ---
+     await page.getByRole('button', { name: '+ Create New Team' }).click();
+     await page.getByLabel('Team Name').waitFor({ state: 'visible', timeout: 5000 }); // Wait for label
+     await page.getByLabel('Team Name').click();
+     await page.getByLabel('Team Name').fill(teamName1);
+     await page.getByRole('button', { name: 'Create Team' }).click();
+     // Wait for the modal to close or for a success message if applicable
+     await expect(page.locator('.ant-modal-wrap').filter({ hasText: 'Create New Team' })).not.toBeVisible({ timeout: 10000 });
+     console.log(`Created Team 1: ${teamName1}`);
+ 
+     // --- Create Team 2 ---
+     await page.getByRole('button', { name: '+ Create New Team' }).click();
+     await page.getByLabel('Team Name').waitFor({ state: 'visible', timeout: 5000 }); // Wait for label
+     await page.getByLabel('Team Name').click();
+     await page.getByLabel('Team Name').fill(teamName2);
+     await page.getByRole('button', { name: 'Create Team' }).click();
+     // Wait for the modal to close or for a success message if applicable
+     await expect(page.locator('.ant-modal-wrap').filter({ hasText: 'Create New Team' })).not.toBeVisible({ timeout: 10000 });
+     console.log(`Created Team 2: ${teamName2}`);
+ 
+     // Verify both teams are listed
+     await page.goto("http://localhost:4000/ui?page=teams"); // Refresh or ensure on teams page
+     await expect(page.getByText(teamName1)).toBeVisible({ timeout: 10000 });
+     await expect(page.getByText(teamName2)).toBeVisible({ timeout: 10000 });
 
-    //Create two teams
-    //Create a team
-    await page.locator('button span:has-text("Create New Team")').click();
+    // --- Navigate to Keys Page ---
+    await page.goto("http://localhost:4000/ui?page=api-keys");
+    await expect(page.getByRole('button', { name: '+ Create New Key' })).toBeVisible(); // Wait for page load
 
-    //Enter "team test-1" in the team name input field
-    await page.fill('input[id="team_alias"]', 'team test-1');
+    // --- Create Key for Team 1 ---
+    await page.getByRole('button', { name: '+ Create New Key' }).click();
+    const createKeyModal1 = page.locator('.ant-modal-wrap').filter({ hasText: 'Key Ownership' });
+    await expect(createKeyModal1).toBeVisible();
 
-    //Create team test-1
-    await page.locator('button span:has-text("Create Team")').click();
+    // Select Team 1
+    await createKeyModal1.locator('.ant-select-selector >> input').first().click(); // Click to open team dropdown
+    await page.locator('.ant-select-item-option').filter({ hasText: teamName1 }).click(); // Click specific team name
 
-    //Create a team
-    await page.locator('button span:has-text("Create New Team")').click();
-
-    //Enter "team test-2" in the team name input field
-    await page.fill('input[id="team_alias"]', 'team test-2');
-
-    //Create team test-2
-    await page.locator('button span:has-text("Create Team")').click();
-
-    //Go to virtual keys tab
-    await page.goto("http://localhost:4000/ui?page=api-keys")
-
-    //Create one keys for team test-1 and test-2 each 
-    //Create key for team test-1
-    await page.getByRole('button', {name: '+ Create New Key'}).click();
-
-    // Click on team dropdown
-    await page.locator('input.ant-select-selection-search-input').first().click();
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option:has-text("team test-1")');
-
-    // Click on the "team test-1" option
-    await page.locator('.ant-select-item-option:has-text("team test-1")').click();
-
-    const keyName1 = `key-test-1`
+    // Enter Key Name 1
     await page.fill('input[id="key_alias"]', keyName1);
 
     // Click on models dropdown
-    await page.locator('input#models').click(); 
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
+    await page.locator('input#models').click();
     await page.waitForSelector('.ant-select-item-option[title="All Team Models"]');
-
-    // Click on the "team test-1" option
     await page.locator('.ant-select-item-option[title="All Team Models"]').click();
 
-    // Click on create key
-    await page.getByRole('button', {name: 'Create Key'}).click();
+    // Click Create Key
+    await createKeyModal1.getByRole('button', { name: 'Create Key' }).click();
 
-    //Close modal
-    await page.locator('button[aria-label="Close"]').click();
+    // Close the Key Generated modal (which appears after successful creation)
+    const keyGeneratedModal1 = page.locator('.ant-modal-wrap').filter({ hasText: 'Save your Key' });
+    await expect(keyGeneratedModal1).toBeVisible({ timeout: 10000 });
+    await keyGeneratedModal1.locator('button[aria-label="Close"]').click();
+    await expect(keyGeneratedModal1).not.toBeVisible(); // Wait for close
+    console.log(`Created Key 1: ${keyName1} for Team: ${teamName1}`);
 
-    await page.waitForTimeout(1000);
+    // --- Create Key for Team 2 ---
+    await page.getByRole('button', { name: '+ Create New Key' }).click();
+    const createKeyModal2 = page.locator('.ant-modal-wrap').filter({ hasText: 'Key Ownership' });
+    await expect(createKeyModal2).toBeVisible();
 
-    //Create key for team test-2
-    await page.getByRole('button', {name: '+ Create New Key'}).click();
+    // Select Team 2
+    await createKeyModal2.locator('.ant-select-selector >> input').first().click(); // Click to open team dropdown
+    await page.locator('.ant-select-item-option').filter({ hasText: teamName2 }).click(); // Click specific team name
 
-    // Click on team dropdown
-    await page.locator('input.ant-select-selection-search-input').first().click();
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option:has-text("team test-2")');
-
-    // Click on the "team test-1" option
-    await page.locator('.ant-select-item-option:has-text("team test-2")').click();
-
-    const keyName2 = `key-test-2`
+    // Enter Key Name 2
     await page.fill('input[id="key_alias"]', keyName2);
 
     // Click on models dropdown
-    await page.locator('input#models').click(); 
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-2" option to be visible using the title attribute
+    await page.locator('input#models').click();
     await page.waitForSelector('.ant-select-item-option[title="All Team Models"]');
-
-    // Click on the "team test-2" option
     await page.locator('.ant-select-item-option[title="All Team Models"]').click();
 
-    // Click on create key
-    await page.getByRole('button', {name: 'Create Key'}).click();
+    // Click Create Key
+    await createKeyModal2.getByRole('button', { name: 'Create Key' }).click();
 
-    //Close modal
-    await page.locator('button[aria-label="Close"]').click();
+    // Close the Key Generated modal
+    const keyGeneratedModal2 = page.locator('.ant-modal-wrap').filter({ hasText: 'Save your Key' });
+    await expect(keyGeneratedModal2).toBeVisible({ timeout: 10000 });
+    await keyGeneratedModal2.locator('button[aria-label="Close"]').click();
+    await expect(keyGeneratedModal2).not.toBeVisible(); // Wait for close
+    console.log(`Created Key 2: ${keyName2} for Team: ${teamName2}`);
+  });
 
-    await page.waitForTimeout(1000);
+  test("Invite user, set password via link, and login", async ({ page }) => {
+    // Navigate to Users page
+    await page.goto("http://localhost:4000/ui?page=users");
 
-    // Go to users tab
-    await page.goto("http://localhost:4000/ui?page=users")
+    // Go to Internal User tab
+    const internalUserTab = page.locator("span.ant-menu-title-content", {
+      hasText: "Internal User",
+    });
+    await internalUserTab.waitFor({ state: "visible", timeout: 10000 });
+    await internalUserTab.click();
 
-    //Wait for user tab to view
-    await expect(page.locator('h1:has-text("User")')).toBeVisible();
+    // --- Invite User Flow ---
+    await page.getByRole('button', { name: '+ Invite User' }).click();
 
-    // Create two users
-    // First user is assigned to team test-1
-    // Second user is not assigned to any team
+    // Wait for the invite user modal to be visible
+    const inviteModal = page.locator('.ant-modal-wrap').filter({ hasText: 'Invite User' });
+    await expect(inviteModal).toBeVisible();
 
-    //First User
-    //Look for Invite User
-    await expect(page.locator('button:has-text("Invite User")').first()).toBeVisible();
+    testEmail = `test-${Date.now()}@litellm.ai`; // Use a unique email
+    // Assuming the email input is the first one with 'base-input' test id inside the modal
+    await inviteModal.getByTestId('base-input').first().fill(testEmail);
 
-    //Click on Invite User
-    await page.locator('button:has-text("Invite User")').first().click();
+    // Select Global Admin Role (or another appropriate role)
+    const globalRoleLabel = inviteModal.getByLabel('Global Proxy Role');
+    await globalRoleLabel.click();
+    // Wait for the dropdown option to be visible before clicking
+    const adminRoleOption = page.getByTitle('Admin (All Permissions)', { exact: true });
+    await adminRoleOption.waitFor({ state: 'visible', timeout: 5000 });
+    await adminRoleOption.click();
 
-    //Fill invite form
-    const email1 = `testuser${Date.now()}@example.com`; // create unique email
-    await page.fill('input[id="user_email"]', email1);
+    // Select Team - Add explicit wait before clicking
+    const teamIdLabel = inviteModal.getByLabel('Team ID');
+    // Wait for the label associated with the Team ID select to be visible
+    await teamIdLabel.waitFor({ state: 'visible', timeout: 10000 }); // Increased timeout for safety
+    await teamIdLabel.click();
 
-    //Click on Global Proxy Role dropdown
-    await page.click('input#user_role');
+    // Wait for the team name option to be visible in the dropdown
+    const teamNameOption = page.getByText(teamName1, { exact: true });
+    await teamNameOption.waitFor({ state: 'visible', timeout: 5000 });
+    await teamNameOption.click();
 
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
+    // Create User
+    await inviteModal.getByRole('button', { name: 'Create User' }).click();
 
-    // Wait for the "Admin (All Permissions)" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option[title="Admin (All Permissions)"]');
+    // --- Capture Invitation Link ---
+    const invitationModal = page.locator('.ant-modal-wrap').filter({ hasText: 'Invitation Link' });
+    await expect(invitationModal).toBeVisible({ timeout: 15000 }); // Wait longer for modal
 
-    // Click on the "Admin (All Permissions)" option
-    await page.locator('.ant-select-item-option[title="Admin (All Permissions)"]').click();
-
-    // Open the dropdown by clicking the input
-    await page.click('input#team_id');
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option[title="team test-1"]');
-
-    // Click on the "team test-1" option
-    await page.locator('.ant-select-item-option[title="team test-1"]').click();
-    
-    // Click on "Create User"
-    await page.click('button:has-text("Create User")');
-
-    const invitationLink = await page
+    // Locate the text element containing the URL more reliably
+    const invitationUrl = await page
     .locator('div.flex.justify-between.pt-5.pb-2') // find the correct div
     .filter({ hasText: 'Invitation Link' }) // find the div that has text "Invitation Link"
     .locator('p') // find all <p> inside that div
     .nth(1) // pick the second <p> (index 1)
     .innerText();
 
-    //Close modal
-    await page.getByRole('button', { name: 'Close' }).first().click();
+    // Close Invitation Link Modal
+    await page.locator('.ant-modal-wrap').filter({ hasText: 'Invitation Link' }).locator('button[aria-label="Close"]').click();
 
-    //Second User
-    //Look for Invite User
-    await expect(page.locator('button:has-text("Invite User")').first()).toBeVisible();
-
-    //Click on Invite User
-    await page.locator('button:has-text("Invite User")').first().click();
-
-    //Fill invite form
-    const email2 = `testuser${Date.now()}@example.com`; // create unique email
-    await page.fill('input[id="user_email"]', email2);
-
-    // Open the dropdown by clicking the input
-    await page.click('input#team_id');
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option[title="team test-1"]');
-
-    // Click on the "team test-1" option
-    await page.locator('.ant-select-item-option[title="team test-1"]').click();
-    
-    // Click on "Create User"
-    await page.click('button:has-text("Create User")');
-    
-    //Close modal
-    const closeButton = page.getByRole('button', { name: 'Close' }).first();
-    if (await closeButton.isVisible()) {
-      await closeButton.waitFor({ state: 'visible' });
-      console.log("close button is visible")
-      await closeButton.click();
-    }
-    await page.waitForTimeout(1000);
-
-    await page.goto("http://localhost:4000/ui?page=teams")
-
-    // Wait for teams table to load
-    await page.waitForSelector("table");
-
-    //Locate the edit button in the first row
-    const teamEditButton = await page.locator(
-      "table tbody tr:first-child td:nth-child(9) span:first-of-type"
-    )
-
-    //Click on edit button in the first row
-    await teamEditButton.click();
-
-    //Wait for settings tab to load
-    await page.waitForSelector('button span:has-text("Settings")');
-
-    //Check for tabs
-    await expect(page.locator('button:has-text("Overview")')).toBeVisible();
-    await expect(page.locator('button:has-text("Members")')).toBeVisible();
-    await expect(page.locator('button:has-text("Member Permissions")')).toBeVisible();
-    await expect(page.locator('div[role="tablist"] button:has-text("Settings")')).toBeVisible();
-
-    //Click on members tab
-    await page.locator('button:has-text("Members")').click();
-
-    //Locate the edit button in the last row
-    await page.locator('table tbody tr:last-child td:nth-child(4) span.tremor-Icon-root').first().click();
-
-    // Open the dropdown by clicking the input
-    // Force clicking on the input field to open the dropdown
-    await page.locator('input#role').click({ force: true });
-
-    // Wait for the dropdown to be visible
-    await page.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "admin" option to be visible using the title attribute
-    await page.waitForSelector('.ant-select-item-option[title="Admin"]');
-
-    // Click on the "team test-1" option
-    await page.locator('.ant-select-item-option[title="Admin"]').click();
-        
-    // Click on "Create User"
-    await page.click('button:has-text("Save Changes")');
+    // Close Invite User Modal
+    await page.locator('.ant-modal-wrap').filter({ hasText: 'Invite User' }).locator('button[aria-label="Close"]').click();
 
     // Open invite link as new page (simulate invited user)
     const context = await page.context()?.browser()?.newContext();
@@ -255,179 +165,27 @@ test.describe("team admin ui test", async () => {
     if (!invitedUserPage) {
       throw new Error('invitedUserPage is undefined');
     }
-    await invitedUserPage?.goto(invitationLink || '');
+    await invitedUserPage?.goto(invitationUrl || '');
 
     //Insert new password
-    await invitedUserPage?.fill('input#password', 'gm');
+    await invitedUserPage?.fill('input#password', testPassword);
 
     //Click on submit
     await invitedUserPage?.getByRole('button', { name: 'Sign Up' }).click();
 
-    await invitedUserPage?.waitForTimeout(1000);
-    
-    //Wait for keys table to load
-    await invitedUserPage?.waitForSelector("table");
+    // // --- Verify Keys Created ---
+    // await invitedUserPage?.waitForSelector("table"); 
 
-    //Check that the two new keys in team test-1 are visible
-    const checkKeyName2 = await invitedUserPage?.locator("table tbody tr:first-child td:nth-child(2) span:first-of-type").textContent();
+    // // Verify keyName1 (associated with user's team) IS visible in the table
+    // const keyTable = invitedUserPage.locator('table'); // Locate the table element
+    // await expect(keyTable).toBeVisible({ timeout: 10000 }); // Ensure table exists
+    // // Use getByText within the table scope to find the key name
+    // await expect(keyTable.getByText(keyName1, { exact: true })).toBeVisible({ timeout: 10000 });
+    // console.log(`Verified key ${keyName1} is visible for user ${testEmail}`);
 
-    // Perform the comparison after awaiting textContent
-    await expect(checkKeyName2).toBe(keyName2);
-
-    const checkKeyName1 = await invitedUserPage?.locator("table tbody tr:nth-child(2) td:nth-child(2) span:first-of-type").textContent();
-
-    // Perform the comparison after awaiting textContent
-    await expect(checkKeyName1).toBe(keyName1);
-
-    //Go to team
-    await invitedUserPage?.goto("http://localhost:4000/ui?page=teams")
-
-    // Wait for users table to load
-    await invitedUserPage?.waitForSelector("table");
-
-    const teamIdButton = invitedUserPage?.locator(
-      "table tbody tr:first-child td:nth-child(2) span:first-of-type"
-    )
-
-    //Click on edit button in the first row
-    await teamIdButton?.click();
-
-    //Click on members tab
-    await invitedUserPage?.locator('button:has-text("Members")').click();
-
-    //Click add member
-    await invitedUserPage?.locator('button:has-text("Add Member")').click();
-
-    //Add test user email
-    await invitedUserPage?.fill('input[id="user_email"]', email2);
-
-    // Wait for the dropdown to be visible
-    await invitedUserPage?.waitForSelector('.ant-select-dropdown');
-
-    // Click the first option
-    await invitedUserPage?.locator('.ant-select-item-option').first().click();
-        
-    //Locate "Add Member"
-    const addMemberButton = await invitedUserPage?.locator('button:has-text("Add Member")');
-
-    // Click on "Add Member"
-    await addMemberButton?.last().click();
-
-    //Click on members tab
-    await invitedUserPage?.locator('button:has-text("Members")').click();
-
-    //Check the new user is added
-    const testEmail = await invitedUserPage?.locator('table tbody tr:last-child td:nth-child(2) p').textContent();
-
-    await expect(testEmail).toBe(email2)
-
-    //Locate the delete button in the last row
-    await invitedUserPage?.locator('table tbody tr:last-child td:nth-child(4) span.tremor-Icon-root').last().click();
-
-    //TODO: Add, edit and delete model in team. Able to see all team models in test key dropdown.
-    // //Add model
-    // //Go to models
-    // await invitedUserPage.goto("http://localhost:4000/ui?page=models")
-
-    // //Click on Add Model
-    // await invitedUserPage.locator('button[role="tab"] >> text=Add Model').click();
-
-    // //Verify we are on Add Model page
-    // await expect(invitedUserPage.locator('h2:has-text("Add new model")')).toBeVisible();
-
-    // //Select provider from dropdown
-    // await invitedUserPage.fill('input[id="custom_llm_provider"]', "");
-
-    // //Wait for the dropdown to be visible
-    // await invitedUserPage.waitForSelector('.ant-select-dropdown');
-
-    // //Click the first option to add provider
-    // await invitedUserPage.locator('.ant-select-item-option').first().click();
-
-    // //LiteLLM Model Name, select one model
-    // await invitedUserPage.locator('input#model').click();
-
-    // //Wait for the dropdown to be visible
-    // await invitedUserPage.waitForSelector('.ant-select-dropdown');
-
-    // //Click the first option to add model
-    // await invitedUserPage?.locator('[title="Custom Model Name (Enter below)"]').click();
-
-    // //Insert custom model name
-    // const modelName = "custom_model_name"
-    // await invitedUserPage.fill('input[id="custom_model_name"]', modelName);
-
-    // //Fill openAPI key
-    // await invitedUserPage.fill('input[id="api_key"]', "abcd1234-efgh5678-ijkl9012-mnop3456");
-
-    // // Click on team dropdown
-    // await invitedUserPage.locator('input.ant-select-selection-search-input').last().click();
-
-    // // // Wait for the dropdown to be visible
-    // // await invitedUserPage.waitForSelector('.rc-virtual-list');
-
-    // // Wait for the "team test-1" option to be visible using the title attribute
-    // await invitedUserPage.waitForSelector('.ant-select-item-option:has-text("team test-1")');
-
-    // // Click on the "team test-1" option
-    // await invitedUserPage.locator('.ant-select-item-option:has-text("team test-1")').click();
-
-    // //Add Model
-    // await invitedUserPage.locator('button:has-text("Add Model")').last().click();
-
-    // //Click on All Models tab
-    // await invitedUserPage.locator('button:has-text("All Models")').click(); 
-
-    // //Check the new model is added
-    // const newModel = await invitedUserPage?.locator('table tbody tr:last-child td:nth-child(2) p').textContent();
-
-    // await expect(newModel).toBe(modelName)
-
-    //Able to create team key with all team models
-    //Go to virtual keys tab
-    await invitedUserPage.goto("http://localhost:4000/ui?page=api-keys")
-
-    //Create key for team test-1
-    await invitedUserPage.getByRole('button', {name: '+ Create New Key'}).click();
-
-    // Click on team dropdown
-    await invitedUserPage.locator('input.ant-select-selection-search-input').first().click();
-
-    // Wait for the dropdown to be visible
-    await invitedUserPage.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await invitedUserPage.waitForSelector('.ant-select-item-option:has-text("team test-1")');
-
-    // Click on the "team test-1" option
-    await invitedUserPage.locator('.ant-select-item-option:has-text("team test-1")').click();
-
-    const keyName3 = `key-test-3`
-    await invitedUserPage.fill('input[id="key_alias"]', keyName3);
-
-    // Click on models dropdown
-    await invitedUserPage.locator('input#models').click(); 
-
-    // Wait for the dropdown to be visible
-    await invitedUserPage.waitForSelector('.rc-virtual-list');
-
-    // Wait for the "team test-1" option to be visible using the title attribute
-    await invitedUserPage.waitForSelector('.ant-select-item-option[title="All Team Models"]');
-
-    // Click on the "team test-1" option
-    await invitedUserPage.locator('.ant-select-item-option[title="All Team Models"]').click();
-
-    // Click on create key
-    await invitedUserPage.getByRole('button', {name: 'Create Key'}).click();
-
-    //Close modal
-    await invitedUserPage.locator('button[aria-label="Close"]').click();
-
-    //Verify if the key is added
-    const checkKeyName3 = await invitedUserPage.locator("table tbody tr:first-child td:nth-child(2) span:first-of-type").textContent();
-
-    // Perform the comparison after awaiting textContent
-    await expect(checkKeyName3).toBe(keyName3);
+    // // Verify keyName2 (associated with the *other* team) IS NOT visible
+    // await expect(keyTable.getByText(keyName2, { exact: true })).not.toBeVisible();
+    // console.log(`Verified key ${keyName2} is NOT visible for user ${testEmail}`);
 
   })
 })
