@@ -833,13 +833,16 @@ jobs:
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
+            pip install "requests-mock>=1.12.1"
+            pip install "responses==0.25.7"
+
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files

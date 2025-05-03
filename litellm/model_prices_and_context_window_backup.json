@@ -1567,6 +1567,17 @@
         "litellm_provider": "openai",
         "supported_endpoints": ["/v1/audio/speech"]
     },
+    "gpt-4o-mini-tts": {
+        "mode": "audio_speech", 
+        "input_cost_per_token": 2.5e-6,
+        "output_cost_per_token": 10e-6,
+        "output_cost_per_audio_token": 12e-6,
+        "output_cost_per_second": 0.00025,
+        "litellm_provider": "openai",
+        "supported_modalities": ["text", "audio"],
+        "supported_output_modalities": ["audio"],
+        "supported_endpoints": ["/v1/audio/speech"]
+    },
     "azure/computer-use-preview": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
@@ -6298,6 +6309,62 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_tool_choice": true
     },
+    "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": {
+        "max_tokens": 10e6,
+        "max_input_tokens": 10e6,
+        "max_output_tokens": 10e6,
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 0.70e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": {
+        "max_tokens": 10e6,
+        "max_input_tokens": 10e6,
+        "max_output_tokens": 10e6,
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 0.70e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": {
+        "max_tokens": 1e6,
+        "max_input_tokens": 1e6,
+        "max_output_tokens": 1e6,
+        "input_cost_per_token": 0.35e-6,
+        "output_cost_per_token": 1.15e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas": {
+        "max_tokens": 1e6,
+        "max_input_tokens": 1e6,
+        "max_output_tokens": 1e6,
+        "input_cost_per_token": 0.35e-6,
+        "output_cost_per_token": 1.15e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
     "vertex_ai/meta/llama3-70b-instruct-maas": {
         "max_tokens": 32000,
         "max_input_tokens": 32000,
@@ -8670,6 +8737,20 @@
         "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "us.amazon.nova-premier-v1:0": {
+        "max_tokens": 4096,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.0000125,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true
+    },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
@@ -8727,6 +8808,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -8845,6 +8927,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
     },

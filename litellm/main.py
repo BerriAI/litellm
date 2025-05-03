@@ -412,7 +412,9 @@ async def acompletion(
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
-            prompt_id=kwargs.get("prompt_id", None), non_default_params=kwargs
+            prompt_id=kwargs.get("prompt_id", None),
+            non_default_params=kwargs,
+            tools=tools,
         )
     ):
         (
@@ -425,6 +427,7 @@ async def acompletion(
             non_default_params=kwargs,
             prompt_id=kwargs.get("prompt_id", None),
             prompt_variables=kwargs.get("prompt_variables", None),
+            tools=tools,
         )
 
     #########################################################
@@ -3610,6 +3613,7 @@ def embedding(  # noqa: PLR0915
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
+            or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
         ):
             api_base = (

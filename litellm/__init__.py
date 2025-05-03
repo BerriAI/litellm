@@ -72,7 +72,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
-from enum import Enum
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -115,7 +114,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
-    "bedrock_knowledgebase_hook",
+    "bedrock_vector_store",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -355,6 +354,7 @@ project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-7-sonnet-20250219-v1:0",
     "anthropic.claude-3-5-haiku-20241022-v1:0",
     "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1021,6 +1021,7 @@ from .llms.azure.azure import (
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.llamafile.chat.transformation import LlamafileChatConfig
 from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
@@ -1075,6 +1076,11 @@ from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
+
+### Vector Store Registry ###
+from .vector_stores.vector_store_registry import VectorStoreRegistry
+
+vector_store_registry: Optional[VectorStoreRegistry] = None
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem

@@ -1015,6 +1015,7 @@ async def update_cache(  # noqa: PLR0915
                 user_id=existing_spend_obj.user_id,
                 projected_spend=projected_spend,
                 projected_exceeded_date=projected_exceeded_date,
+                event_group=Litellm_EntityType.KEY,
             )
             # alert user
             asyncio.create_task(
@@ -1998,6 +1999,19 @@ class ProxyConfig:
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
 
+        ## CREDENTIALS
+        credential_list_dict = self.load_credential_list(config=config)
+        litellm.credential_list = credential_list_dict
+
+        ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
+        self._init_non_llm_configs(config=config)
+
+        return router, router.get_model_list(), general_settings
+
+    def _init_non_llm_configs(self, config: dict):
+        """
+        Initialize non-LLM configs eg. MCP tools, vector stores, etc.
+        """
         ## MCP TOOLS
         mcp_tools_config = config.get("mcp_tools", None)
         if mcp_tools_config:
@@ -2011,10 +2025,19 @@ class ProxyConfig:
 
             global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
 
-        ## CREDENTIALS
-        credential_list_dict = self.load_credential_list(config=config)
-        litellm.credential_list = credential_list_dict
-        return router, router.get_model_list(), general_settings
+        ## VECTOR STORES
+        vector_store_registry_config = config.get("vector_store_registry", None)
+        if vector_store_registry_config:
+            from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+            if litellm.vector_store_registry is None:
+                litellm.vector_store_registry = VectorStoreRegistry()
+
+            # Load vector stores from config
+            litellm.vector_store_registry.load_vector_stores_from_config(
+                vector_store_registry_config
+            )
+        pass
 
     def _load_alerting_settings(self, general_settings: dict):
         """
@@ -2653,9 +2676,39 @@ class ProxyConfig:
                     db_general_settings=db_general_settings.param_value,
                 )
 
+            # initialize vector stores table in db
+            await self._init_vector_stores_in_db(prisma_client=prisma_client)
+
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+        try:
+            # read vector stores from db table
+            vector_stores = await VectorStoreRegistry._get_vector_stores_from_db(
+                prisma_client=prisma_client
+            )
+            if len(vector_stores) <= 0:
+                return
+
+            if litellm.vector_store_registry is None:
+                litellm.vector_store_registry = VectorStoreRegistry(
+                    vector_stores=vector_stores
+                )
+            else:
+                for vector_store in vector_stores:
+                    litellm.vector_store_registry.add_vector_store_to_registry(
+                        vector_store=vector_store
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {}".format(
                     str(e)
                 )
             )

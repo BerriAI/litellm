@@ -327,7 +327,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
-  }]
+  }],
+  [Providers.Triton]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: false
+  },
+  {
+    key: "api_base",
+    label: "API Base",
+    placeholder: "http://localhost:8000/generate",
+    required: false
+  }
+]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
@@ -335,11 +348,41 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   uploadProps
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  
+  const form = Form.useFormInstance(); // Get form instance from context
+
   // Simply use the fields as defined in PROVIDER_CREDENTIAL_FIELDS
   const allFields = React.useMemo(() => {
     return PROVIDER_CREDENTIAL_FIELDS[selectedProviderEnum] || [];
   }, [selectedProviderEnum]);
+
+  const handleUpload = {
+    name: "file",
+    accept: ".json",
+    beforeUpload: (file: any) => {
+      if (file.type === "application/json") {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          if (e.target) {
+            const jsonStr = e.target.result as string;
+            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
+            form.setFieldsValue({ vertex_credentials: jsonStr });
+            console.log("Form values after setting:", form.getFieldsValue());
+          }
+        };
+        reader.readAsText(file);
+      }
+      // Prevent upload
+      return false;
+    },
+    onChange(info: any) {
+      console.log("Upload onChange triggered in ProviderSpecificFields");
+      console.log("Current form values:", form.getFieldsValue());
+      
+      if (info.file.status !== "uploading") {
+        console.log(info.file, info.fileList);
+      }
+    }
+  };
 
   return (
     <>
@@ -364,7 +407,21 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 ))}
               </Select>
             ) : field.type === "upload" ? (
-              <Upload {...uploadProps}>
+              <Upload 
+                {...handleUpload}
+                onChange={(info) => {
+                  // First call the original onChange
+                  if (uploadProps?.onChange) {
+                    uploadProps.onChange(info);
+                  }
+                  
+                  // Check the field value after a short delay
+                  setTimeout(() => {
+                    const value = form.getFieldValue(field.key);
+                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
+                  }, 500);
+                }}
+              >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (

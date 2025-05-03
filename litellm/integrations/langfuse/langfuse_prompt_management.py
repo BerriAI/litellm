@@ -4,7 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 from typing_extensions import TypeAlias
@@ -26,13 +26,15 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
     LangfuseClass: TypeAlias = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
-
+    LiteLLMLoggingObj = Any
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
@@ -172,6 +174,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[
         str,
         List[AllMessageValues],
