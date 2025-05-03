@@ -117,8 +117,8 @@ pip install litellm==1.68.0.post1
 ## Performance / Loadbalancing / Reliability improvements
 - **[Redis](../../docs/proxy/caching)**
     - Ensure all redis queues are periodically flushed, this fixes an issue where redis queue size was growing indefinitely when request tags were used - [PR](https://github.com/BerriAI/litellm/pull/10393)
-- **[Rate Limits](../../docs/proxy/users#set-rate-limits)**
-    - Multi-instance rate limiting support across keys/teams/users/customers - [PR](https://github.com/BerriAI/litellm/pull/10458), [PR](https://github.com/BerriAI/litellm/pull/10497), [PR](https://github.com/BerriAI/litellm/pull/10500)
+- **[Rate Limits](../../docs/proxy/users#set-rate-limit)**
+    - [Multi-instance rate limiting](../../docs/proxy/users#beta-multi-instance-rate-limiting) support across keys/teams/users/customers - [PR](https://github.com/BerriAI/litellm/pull/10458), [PR](https://github.com/BerriAI/litellm/pull/10497), [PR](https://github.com/BerriAI/litellm/pull/10500)
 - **[Azure OpenAI OIDC](../../docs/providers/azure#entra-id---use-azure_ad_token)**
     - allow using litellm defined params for [OIDC Auth](../../docs/providers/azure#entra-id---use-azure_ad_token) - [PR](https://github.com/BerriAI/litellm/pull/10394)
 
