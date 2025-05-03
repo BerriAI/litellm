@@ -77,7 +77,7 @@ class VectorStoreSearchResult(TypedDict, total=False):
     content: Optional[List[VectorStoreResultContent]]
 
 
-class VectorStorSearchResponse(TypedDict, total=False):
+class VectorStoreSearchResponse(TypedDict, total=False):
     """Response after searching a vector store"""
 
     object: Literal[
