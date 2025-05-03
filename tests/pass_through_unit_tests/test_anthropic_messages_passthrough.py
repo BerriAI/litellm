@@ -328,6 +328,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
     response_prompt_tokens = 0
     response_completion_tokens = 0
     all_anthropic_usage_chunks = []
+    buffer = ""
 
     async for chunk in response:
         # Decode chunk if it's bytes
@@ -336,8 +337,9 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
         # Handle SSE format chunks
         if isinstance(chunk, bytes):
             chunk_str = chunk.decode("utf-8")
+            buffer += chunk_str
             # Extract the JSON data part from SSE format
-            for line in chunk_str.split("\n"):
+            for line in buffer.split("\n"):
                 if line.startswith("data: "):
                     try:
                         json_data = json.loads(line[6:])  # Skip the 'data: ' prefix
