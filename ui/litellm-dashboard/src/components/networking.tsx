@@ -42,7 +42,7 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
-  credential_values: object;
+  credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
     description?: string;
@@ -3250,14 +3250,15 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      message.error("Failed to update team settings: " + errorData);
+      throw new Error(errorData);
     }
     const data = await response.json() as { data: Team, team_id: string };
     console.log("Update Team Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    // Handle success - you might want to update some state or UI based on the updated team
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update team:", error);
     throw error;
   }
 };

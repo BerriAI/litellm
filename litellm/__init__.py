@@ -114,7 +114,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
-    "bedrock_knowledgebase_hook",
+    "bedrock_vector_store",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -1069,6 +1069,11 @@ from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
+
+### Vector Store Registry ###
+from .vector_stores.vector_store_registry import VectorStoreRegistry
+
+vector_store_registry: Optional[VectorStoreRegistry] = None
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
