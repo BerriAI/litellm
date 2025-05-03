@@ -23,6 +23,8 @@ interface DataTableProps<TData, TValue> {
   renderSubComponent: (props: { row: Row<TData> }) => React.ReactElement;
   getRowCanExpand: (row: Row<TData>) => boolean;
   isLoading?: boolean;
+  loadingMessage?: string;
+  noDataMessage?: string;
 }
 
 export function DataTable<TData, TValue>({
@@ -31,6 +33,8 @@ export function DataTable<TData, TValue>({
   getRowCanExpand,
   renderSubComponent,
   isLoading = false,
+  loadingMessage = "🚅 Loading logs...",
+  noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
@@ -66,7 +70,7 @@ export function DataTable<TData, TValue>({
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>🚅 Loading logs...</p>
+                  <p>{loadingMessage}</p>
                 </div>
               </TableCell>
             </TableRow>
@@ -99,7 +103,7 @@ export function DataTable<TData, TValue>({
           : <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
                 <div className="text-center text-gray-500">
-                  <p>No logs found</p>
+                  <p>{noDataMessage}</p>
                 </div>
               </TableCell>
             </TableRow>
