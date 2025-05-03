@@ -102,11 +102,6 @@ request_data = {
     ],
 }
 
-global_redis_cache = RedisCache(
-    host=os.getenv("REDIS_HOST"),
-    port=os.getenv("REDIS_PORT"),
-    password=os.getenv("REDIS_PASSWORD"),
-)
 
 
 @pytest.fixture
@@ -143,6 +138,11 @@ async def setup_db_connection(prisma_client):
 async def test_pod_lock_acquisition_when_no_active_lock():
     """Test if a pod can acquire a lock when no lock is active"""
     cronjob_id = str(uuid.uuid4())
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # Attempt to acquire lock
@@ -165,6 +165,11 @@ async def test_pod_lock_acquisition_after_completion():
     """Test if a new pod can acquire lock after previous pod completes"""
     cronjob_id = str(uuid.uuid4())
     # First pod acquires and releases lock
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
     await first_lock_manager.acquire_lock(
         cronjob_id=cronjob_id,
@@ -192,6 +197,11 @@ async def test_pod_lock_acquisition_after_expiry():
     """Test if a new pod can acquire lock after previous pod's lock expires"""
     cronjob_id = str(uuid.uuid4())
     # First pod acquires lock
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
     await first_lock_manager.acquire_lock(
         cronjob_id=cronjob_id,
@@ -222,6 +232,11 @@ async def test_pod_lock_acquisition_after_expiry():
 async def test_pod_lock_release():
     """Test if a pod can successfully release its lock"""
     cronjob_id = str(uuid.uuid4())
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # Acquire and then release lock
@@ -243,6 +258,11 @@ async def test_concurrent_lock_acquisition():
     """Test that only one pod can acquire the lock when multiple pods try simultaneously"""
 
     cronjob_id = str(uuid.uuid4())
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     # Create multiple lock managers simulating different pods
     lock_manager1 = PodLockManager(redis_cache=global_redis_cache)
     lock_manager2 = PodLockManager(redis_cache=global_redis_cache)
@@ -280,6 +300,11 @@ async def test_concurrent_lock_acquisition():
 async def test_lock_acquisition_with_expired_ttl():
     """Test that a pod can acquire a lock when existing lock has expired TTL"""
     cronjob_id = str(uuid.uuid4())
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
 
     # First pod acquires lock with a very short TTL to simulate expiration
@@ -312,7 +337,11 @@ async def test_lock_acquisition_with_expired_ttl():
 async def test_release_expired_lock():
     """Test that a pod cannot release a lock that has been taken over by another pod"""
     cronjob_id = str(uuid.uuid4())
-    
+    global_redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     # First pod acquires lock with a very short TTL
     first_lock_manager = PodLockManager(redis_cache=global_redis_cache)
     short_ttl = 1  # 1 second
