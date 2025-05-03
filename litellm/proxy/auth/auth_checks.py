@@ -1119,12 +1119,12 @@ async def get_org_object(
         )
 
 
-async def _can_object_call_model(
+def _can_object_call_model(
     model: str,
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
-    object_type: Literal["user", "team", "key"] = "user",
+    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1134,7 +1134,7 @@ async def _can_object_call_model(
         - llm_router: Optional[Router]
         - models: List[str]
         - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key"]. We use the object type to raise the correct exception type
+        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
 
     Returns:
         - True: if token allowed to call model
@@ -1233,12 +1233,31 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
         object_type="key",
+    )
+
+
+def can_org_access_model(
+    model: str,
+    org_object: Optional[LiteLLM_OrganizationTable],
+    llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+) -> Literal[True]:
+    """
+    Returns True if the team can access a specific model.
+
+    """
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=org_object.models if org_object else [],
+        team_model_aliases=team_model_aliases,
+        object_type="org",
     )
 
 
@@ -1252,7 +1271,7 @@ async def can_team_access_model(
     Returns True if the team can access a specific model.
 
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=team_object.models if team_object else [],
@@ -1277,7 +1296,7 @@ async def can_user_call_model(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
