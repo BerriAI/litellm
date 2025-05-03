@@ -1,5 +1,5 @@
 ---
-title: v1.68.0-stable - Improved User Management
+title: v1.68.0-stable
 slug: v1.68.0-stable
 date: 2025-05-03T10:00:00
 authors:
@@ -12,7 +12,6 @@ authors:
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
 
-tags: ["responses_api", "ui_improvements", "security", "session_management"]
 hide_table_of_contents: false
 ---
 import Image from '@theme/IdealImage';
@@ -30,23 +29,23 @@ import TabItem from '@theme/TabItem';
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.67.4-stable
+ghcr.io/berriai/litellm:main-v1.68.0-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.67.4.post1
+pip install litellm==1.68.0.post1
 ```
 </TabItem>
 </Tabs>
 
 ## New Models / Updated Models
-- **Gemini (VertexAI + Google AI Studio)**
-    - Handle more json schema - openapi schema conversion edge cases - https://github.com/BerriAI/litellm/pull/10351
-    - Tool calls - return ‘finish_reason=“tool_calls”’ on gemini tool calling response - https://github.com/BerriAI/litellm/pull/10485
-- **VertexAI**
+- **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
+    - Handle more json schema - openapi schema conversion edge cases [PR](https://github.com/BerriAI/litellm/pull/10351)
+    - Tool calls - return ‘finish_reason=“tool_calls”’ on gemini tool calling response [PR](https://github.com/BerriAI/litellm/pull/10485)
+- **[VertexAI](../../docs/providers/vertex#metallama-api)**
     - Meta/llama-4 model support - https://github.com/BerriAI/litellm/pull/10492
     - Meta/llama3 - handle tool call result in content - https://github.com/BerriAI/litellm/pull/10492
     - Meta/* - return ‘finish_reason=“tool_calls”’ on tool calling response - https://github.com/BerriAI/litellm/pull/10492
