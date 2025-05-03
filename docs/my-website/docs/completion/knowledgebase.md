@@ -92,6 +92,12 @@ vector_store_registry:
 
 <TabItem value="litellm-ui" label="LiteLLM UI">
 
+On the LiteLLM UI, Navigate to Experimental > Vector Stores > Create Vector Store. On this page you can create a vector store with a name, vector store id and credentials.
+<Image 
+  img={require('../../img/kb_2.png')}
+  style={{width: '50%'}}
+/>
+
 
 
 
@@ -149,19 +155,88 @@ print(response.choices[0].message.content)
 ```
 
 </TabItem>
-<TabItem value="litellm-ui" label="LiteLLM UI">
-
-
-
-</TabItem>
-
 </Tabs>
+
+
+
 
 ## Advanced
 
+### Logging Vector Store Usage
+
+LiteLLM allows you to view your vector store usage in the LiteLLM UI on the `Logs` page.
+
+After completing a request with a vector store, navigate to the `Logs` page on LiteLLM. Here you should be able to see the query sent to the vector store and corresponding response with scores.
+
+<Image 
+  img={require('../../img/kb_4.png')}
+  style={{width: '80%'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  LiteLLM Logs Page: Vector Store Usage
+</p>
+
+
 ### Listing available vector stores
 
+You can list all available vector stores using the /vector_store/list endpoint
+
+**Request:**
+```bash showLineNumbers title="List all available vector stores"
+curl -X GET "http://localhost:4000/vector_store/list" \
+  -H "Authorization: Bearer $LITELLM_API_KEY"
+```
+
+**Response:**
+
+The response will be a list of all vector stores that are available to use with LiteLLM.
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "vector_store_id": "T37J8R4WTM",
+      "custom_llm_provider": "bedrock",
+      "vector_store_name": "bedrock-litellm-website-knowledgebase",
+      "vector_store_description": "Bedrock vector store for the Litellm website knowledgebase",
+      "vector_store_metadata": {
+        "source": "https://www.litellm.com/docs"
+      },
+      "created_at": "2023-05-03T18:21:36.462Z",
+      "updated_at": "2023-05-03T18:21:36.462Z",
+      "litellm_credential_name": "bedrock_credentials"
+    }
+  ],
+  "total_count": 1,
+  "current_page": 1,
+  "total_pages": 1
+}
+```
+
+
 ### Always on for a model
+
+**Use this if you want vector stores to be used by default for a specific model.**
+
+In this config, we add `vector_store_ids` to the claude-3-5-sonnet-with-vector-store model. This means that any request to the claude-3-5-sonnet-with-vector-store model will always use the vector store with the id `T37J8R4WTM` defined in the `vector_store_registry`.
+
+```yaml showLineNumbers title="Always on for a model"
+model_list:
+  - model_name: claude-3-5-sonnet-with-vector-store
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet
+      vector_store_ids: ["T37J8R4WTM"]
+
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
+```
 
 ## How It Works
 
