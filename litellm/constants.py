@@ -161,6 +161,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "meta_llama",
 ]
 
 
@@ -221,6 +222,7 @@ openai_compatible_endpoints: List = [
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
+    "api.llama.com/compat/v1/",
 ]
 
 
@@ -251,12 +253,14 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "meta_llama",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
+        "meta_llama",
         "llamafile",
     ]
 )
