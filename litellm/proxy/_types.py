@@ -2188,6 +2188,11 @@ class ProxyErrorTypes(str, enum.Enum):
     User does not have access to the model
     """
 
+    org_model_access_denied = "org_model_access_denied"
+    """
+    Organization does not have access to the model
+    """
+
     expired_key = "expired_key"
     """
     Key has expired
@@ -2230,7 +2235,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team"]
+        cls, object_type: Literal["key", "user", "team", "org"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -2241,6 +2246,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_model_access_denied
         elif object_type == "user":
             return cls.user_model_access_denied
+        elif object_type == "org":
+            return cls.org_model_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (

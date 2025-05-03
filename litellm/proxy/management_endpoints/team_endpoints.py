@@ -57,6 +57,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
+    can_org_access_model,
     get_team_object,
     get_user_object,
 )
@@ -411,7 +412,7 @@ async def _update_model_table(
 
 
 def validate_team_org_change(
-    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable
+    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable, llm_router: Router
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
@@ -435,13 +436,11 @@ def validate_team_org_change(
             )
         else:
             for model in team.models:
-                if model not in organization.models:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": f"Cannot move team to organization. Team has model {model} that is not in the organization's models {organization.models}."
-                        },
-                    )
+                can_org_access_model(
+                    model=model,
+                    org_object=organization,
+                    llm_router=llm_router,
+                )
 
     # Check if the team's budget is less than the org's max_budget
     if (
@@ -561,13 +560,21 @@ async def update_team(
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
 
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
@@ -600,6 +607,7 @@ async def update_team(
         validate_team_org_change(
             team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
             organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+            llm_router=llm_router,
         )
     elif data.organization_id is not None and len(data.organization_id) == 0:
         # unsetting the organization_id
