@@ -63,6 +63,7 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores:
                 if vector_store.get("vector_store_id") == vector_store_id:
                     return vector_store
+        return None
 
     def _get_vector_store_ids_from_tool_calls(
         self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
