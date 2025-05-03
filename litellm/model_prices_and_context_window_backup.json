@@ -10894,42 +10894,6 @@
         "mode": "chat" ,
         "deprecation_date": "2025-02-22"
     },
-    "perplexity/sonar": { 
-        "max_tokens": 127072,
-        "max_input_tokens": 127072,
-        "max_output_tokens": 127072,
-        "input_cost_per_token": 0.000001, 
-        "output_cost_per_token": 0.000001,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar-pro": { 
-        "max_tokens": 200000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8096,
-        "input_cost_per_token": 0.000003, 
-        "output_cost_per_token": 0.000015,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar": { 
-        "max_tokens": 127072,
-        "max_input_tokens": 127072,
-        "max_output_tokens": 127072,
-        "input_cost_per_token": 0.000001, 
-        "output_cost_per_token": 0.000001,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar-pro": { 
-        "max_tokens": 200000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8096,
-        "input_cost_per_token": 0.000003, 
-        "output_cost_per_token": 0.000015,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
     "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -11032,6 +10996,23 @@
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity",
         "mode": "chat"
+    },
+    "perplexity/sonar-deep-research": {
+        "max_tokens": 12000,
+        "max_input_tokens": 12000,
+        "max_output_tokens": 12000,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "output_cost_per_reasoning_token": 3e-5,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 5e-3,
+            "search_context_size_high": 5e-3
+        },
+        "supports_reasoning": true,
+        "supports_web_search": true
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": {
         "max_tokens": 16384,
