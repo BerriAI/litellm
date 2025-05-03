@@ -46,49 +46,51 @@ pip install litellm==1.68.0.post1
     - Handle more json schema - openapi schema conversion edge cases [PR](https://github.com/BerriAI/litellm/pull/10351)
     - Tool calls - return ‘finish_reason=“tool_calls”’ on gemini tool calling response [PR](https://github.com/BerriAI/litellm/pull/10485)
 - **[VertexAI](../../docs/providers/vertex#metallama-api)**
-    - Meta/llama-4 model support - https://github.com/BerriAI/litellm/pull/10492
-    - Meta/llama3 - handle tool call result in content - https://github.com/BerriAI/litellm/pull/10492
-    - Meta/* - return ‘finish_reason=“tool_calls”’ on tool calling response - https://github.com/BerriAI/litellm/pull/10492
-- **Bedrock**
-    - Image Generation - Support new ‘stable-image-core’ models - https://github.com/BerriAI/litellm/pull/10351
-    - Knowledge Bases - support using Bedrock knowledge bases with `/chat/completions` https://github.com/BerriAI/litellm/pull/10413
-    - Anthropic - add ‘supports_pdf_input’ for claude-3.7-bedroc models 
-- **OpenAI**
-    - Support OPENAI_BASE_URL in addition to OPENAI_API_BASE - https://github.com/BerriAI/litellm/pull/10423
-    - Correctly re-raise 504 timeout errors - https://github.com/BerriAI/litellm/pull/10462
-    - Native Gpt-4o-mini-tts support - https://github.com/BerriAI/litellm/pull/10462
-- 🆕 **LlamaFile** provider [Docs](../../docs/providers/llamafile), [PR](https://github.com/BerriAI/litellm/pull/10482)
+    - Meta/llama-4 model support [PR](https://github.com/BerriAI/litellm/pull/10492)
+    - Meta/llama3 - handle tool call result in content [PR](https://github.com/BerriAI/litellm/pull/10492)
+    - Meta/* - return ‘finish_reason=“tool_calls”’ on tool calling response [PR](https://github.com/BerriAI/litellm/pull/10492)
+- **[Bedrock](../../docs/providers/bedrock#litellm-proxy-usage)**
+    - [Image Generation](../../docs/providers/bedrock#image-generation) - Support new ‘stable-image-core’ models - [PR](https://github.com/BerriAI/litellm/pull/10351)
+    - [Knowledge Bases](../../docs/completion/knowledgebase) - support using Bedrock knowledge bases with `/chat/completions` [PR](https://github.com/BerriAI/litellm/pull/10413)
+    - [Anthropic](../../docs/providers/bedrock#litellm-proxy-usage) - add ‘supports_pdf_input’ for claude-3.7-bedrock models [PR](https://github.com/BerriAI/litellm/pull/9917), [Get Started](../../docs/completion/document_understanding#checking-if-a-model-supports-pdf-input)
+- **[OpenAI](../../docs/providers/openai)**
+    - Support OPENAI_BASE_URL in addition to OPENAI_API_BASE [PR](https://github.com/BerriAI/litellm/pull/10423)
+    - Correctly re-raise 504 timeout errors [PR](https://github.com/BerriAI/litellm/pull/10462)
+    - Native Gpt-4o-mini-tts support [PR](https://github.com/BerriAI/litellm/pull/10462)
+- 🆕 **[LlamaFile](../../docs/providers/llamafile)** provider [PR](https://github.com/BerriAI/litellm/pull/10482)
 
 
 
 ## LLM API Endpoints
-- **Response API** 
-    - Fix for handling multi turn sessions https://github.com/BerriAI/litellm/pull/10415
-- **Embeddings**
-    - Caching fixes - https://github.com/BerriAI/litellm/pull/10424
+- **[Response API](../../docs/response_api)** 
+    - Fix for handling multi turn sessions [PR](https://github.com/BerriAI/litellm/pull/10415)
+- **[Embeddings](../../docs/embedding/supported_embedding)**
+    - Caching fixes - [PR](https://github.com/BerriAI/litellm/pull/10424)
         - handle str -> list cache
         - Return usage tokens for cache hit 
         - Combine usage tokens on partial cache hits 
-- 🆕 **Vector Stores**
-    - Allow defining Vector Store Configs - https://github.com/BerriAI/litellm/pull/10448
-    - Log StandardLoggingVectorStoreRequest for requests made when a vector store - https://github.com/BerriAI/litellm/pull/10509
-    - Show Vector Store / KB Request on LiteLLM Logs Page  - https://github.com/BerriAI/litellm/pull/10514
-    - Allow using vector store in OpenAI API spec with tools - https://github.com/BerriAI/litellm/pull/10516
-- **MCP**
-    - Ensure Non-Admin virtual keys can access /mcp routes - https://github.com/BerriAI/litellm/pull/10473
+- 🆕 **[Vector Stores](../../docs/completion/knowledgebase)**
+    - Allow defining Vector Store Configs - [PR](https://github.com/BerriAI/litellm/pull/10448)
+    - New StandardLoggingPayload field for requests made when a vector store is used - [PR](https://github.com/BerriAI/litellm/pull/10509)
+    - Show Vector Store / KB Request on LiteLLM Logs Page  - [PR](https://github.com/BerriAI/litellm/pull/10514)
+    - Allow using vector store in OpenAI API spec with tools - [PR](https://github.com/BerriAI/litellm/pull/10516)
+- **[MCP](../../docs/mcp)**
+    - Ensure Non-Admin virtual keys can access /mcp routes - [PR](https://github.com/BerriAI/litellm/pull/10473)
+      
+      **Note:** Currently, all Virtual Keys are able to access the MCP endpoints. We are working on a feature to allow restricting MCP access by keys/teams/users/orgs. Follow [here](https://github.com/BerriAI/litellm/discussions/9891) for updates.
 
 
 
 ## Spend Tracking / Budget Improvements
-- **OpenAI**
-    - computer-use-preview cost tracking / pricing https://github.com/BerriAI/litellm/pull/10422
-    - Gpt-4o-mini-tts input cost tracking - https://github.com/BerriAI/litellm/pull/10462
-- **Fireworks AI** - pricing updates - new `0-4b` model pricing tier + llama4 model pricing
-- **Budgets**
-    - Budget resets now happen as start of day/week/month - https://github.com/BerriAI/litellm/pull/10333
-    - Trigger Soft Budget Webhooks When Key Crosses Threshold - https://github.com/BerriAI/litellm/pull/10491
-- **Token Counting**
-    - Rewrite of token_counter() function to handle to prevent undercounting tokens - https://github.com/BerriAI/litellm/pull/10409
+- **[OpenAI](../../docs/providers/openai)**
+    - [computer-use-preview](../../docs/providers/openai/responses_api#computer-use) cost tracking / pricing [PR](https://github.com/BerriAI/litellm/pull/10422)
+    - [gpt-4o-mini-tts](../../docs/providers/openai/text_to_speech) input cost tracking - [PR](https://github.com/BerriAI/litellm/pull/10462)
+- **[Fireworks AI](../../docs/providers/fireworks_ai)** - pricing updates - new `0-4b` model pricing tier + llama4 model pricing
+- **[Budgets](../../docs/proxy/users#set-budgets)**
+    - [Budget resets](../../docs/proxy/users#reset-budgets) now happen as start of day/week/month - [PR](https://github.com/BerriAI/litellm/pull/10333)
+    - Trigger [Soft Budget Alerts](../../docs/proxy/alerting#soft-budget-alerts-for-virtual-keys) When Key Crosses Threshold - [PR](https://github.com/BerriAI/litellm/pull/10491)
+- **[Token Counting](../../docs/completion/token_usage#3-token_counter)**
+    - Rewrite of token_counter() function to handle to prevent undercounting tokens - [PR](https://github.com/BerriAI/litellm/pull/10409)
 
 
 ## Management Endpoints / UI
