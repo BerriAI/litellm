@@ -53,6 +53,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         vector_store_name: formValues.vector_store_name,
         vector_store_description: formValues.vector_store_description,
         vector_store_metadata: metadata,
+        litellm_credential_name: formValues.litellm_credential_name,
       });
       message.success("Vector store created successfully");
       form.resetFields();
