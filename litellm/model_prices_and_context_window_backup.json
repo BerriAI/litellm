@@ -4860,11 +4860,11 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "meta-llama/Llama-4-Scout-17B-16E-Instruct-FP8": {
+    "meta_llama/Llama-4-Scout-17B-16E-Instruct-FP8": {
         "max_tokens": 128000,
         "max_input_tokens": 10000000,
         "max_output_tokens": 4028,
-        "litellm_provider": "meta-llama",
+        "litellm_provider": "meta_llama",
         "mode": "chat",
         "supports_function_calling": false,
         "source": "https://llama.developer.meta.com/docs/models",
@@ -4872,11 +4872,11 @@
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text"]
     },
-    "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+    "meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
         "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 4028,
-        "litellm_provider": "meta-llama",
+        "litellm_provider": "meta_llama",
         "mode": "chat",
         "supports_function_calling": false,
         "source": "https://llama.developer.meta.com/docs/models",
@@ -4884,11 +4884,11 @@
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text"]
     },
-    "meta-llama/Llama-3.3-70B-Instruct": {
+    "meta_llama/Llama-3.3-70B-Instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 4028,
-        "litellm_provider": "meta-llama",
+        "litellm_provider": "meta_llama",
         "mode": "chat",
         "supports_function_calling": false,
         "source": "https://llama.developer.meta.com/docs/models",
@@ -4896,11 +4896,11 @@
         "supported_modalities": ["text"],
         "supported_output_modalities": ["text"]
     },
-    "meta-llama/Llama-3.3-8B-Instruct": {
+    "meta_llama/Llama-3.3-8B-Instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 4028,
-        "litellm_provider": "meta-llama",
+        "litellm_provider": "meta_llama",
         "mode": "chat",
         "supports_function_calling": false,
         "source": "https://llama.developer.meta.com/docs/models",

@@ -557,7 +557,7 @@ def add_known_models():
             xai_models.append(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.append(key)
-        elif value.get("litellm_provider") == "meta-llama":
+        elif value.get("litellm_provider") == "meta_llama":
             llama_models.append(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.append(key)
@@ -727,7 +727,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
-    "meta-llama": llama_models,
+    "meta_llama": llama_models,
 }
 
 # mapping for those models which have larger equivalents

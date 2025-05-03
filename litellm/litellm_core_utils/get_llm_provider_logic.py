@@ -216,7 +216,7 @@ def get_llm_provider(  # noqa: PLR0915
                         custom_llm_provider = "galadriel"
                         dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
                     elif endpoint == "https://api.llama.com/compat/v1":
-                        custom_llm_provider = "meta-llama"
+                        custom_llm_provider = "meta_llama"
                         dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
@@ -447,7 +447,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.sambanova.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SAMBANOVA_API_KEY")
-    elif custom_llm_provider == "meta-llama":
+    elif custom_llm_provider == "meta_llama":
         api_base = (
             api_base
             or get_secret("LLAMA_API_BASE")
@@ -488,10 +488,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
     elif custom_llm_provider == "llamafile":
         # llamafile is OpenAI compatible.
-        (api_base, dynamic_api_key) = litellm.LlamafileChatConfig()._get_openai_compatible_provider_info(
-                api_base,
-                api_key
-            )
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LlamafileChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "lm_studio":
         # lm_studio is openai compatible, we just need to set this to custom_openai
         (

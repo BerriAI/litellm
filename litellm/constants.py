@@ -161,7 +161,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
-    "meta-llama",
+    "meta_llama",
 ]
 
 
@@ -253,14 +253,14 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
-    "meta-llama",
+    "meta_llama",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
-        "meta-llama",
+        "meta_llama",
         "llamafile",
     ]
 )

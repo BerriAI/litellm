@@ -23,7 +23,7 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         supports_function_calling: Optional[bool] = None
         supports_tool_choice: Optional[bool] = None
         try:
-            model_info = get_model_info(model, custom_llm_provider="meta-llama")
+            model_info = get_model_info(model, custom_llm_provider="meta_llama")
             supports_function_calling = model_info.get(
                 "supports_function_calling", False
             )
