@@ -1,7 +1,7 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.vector_stores import (
@@ -165,8 +165,14 @@ class VectorStoreRegistry:
     def add_vector_store_to_registry(self, vector_store: LiteLLM_ManagedVectorStore):
         """
         Add a vector store to the registry
+
+        Only add the vector store if it is not already in the registry
         """
-        self.vector_stores.append(vector_store)
+        vector_store_id = vector_store.get("vector_store_id")
+        for vector_store in self.vector_stores:
+            if vector_store.get("vector_store_id") == vector_store_id:
+                return
+        self.vector_stores.append(cast(LiteLLM_ManagedVectorStore, vector_store))
 
     def delete_vector_store_from_registry(self, vector_store_id: str):
         """
