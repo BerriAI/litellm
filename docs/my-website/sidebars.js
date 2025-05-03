@@ -208,7 +208,14 @@ const sidebars = {
         },
         "providers/anthropic",
         "providers/aws_sagemaker",
-        "providers/bedrock",
+        {
+          type: "category",
+          label: "Bedrock",
+          items: [
+            "providers/bedrock",
+            "providers/bedrock_vector_store",
+          ]
+        },
         "providers/litellm_proxy",
         "providers/mistral",
         "providers/codestral",
