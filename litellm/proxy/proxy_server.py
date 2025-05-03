@@ -2026,8 +2026,8 @@ class ProxyConfig:
             global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
 
         ## VECTOR STORES
-        vector_stores_config = config.get("vector_stores", None)
-        if vector_stores_config:
+        vector_store_registry_config = config.get("vector_store_registry", None)
+        if vector_store_registry_config:
             from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
             if litellm.vector_store_registry is None:
@@ -2035,7 +2035,7 @@ class ProxyConfig:
 
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(
-                vector_stores_config
+                vector_store_registry_config
             )
         pass
 
