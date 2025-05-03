@@ -3658,7 +3658,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 encoding=encoding,
                 api_key=cohere_key,  # type: ignore
-                complete_api_base=api_key,
+                complete_api_base=api_base,
                 headers=headers,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
