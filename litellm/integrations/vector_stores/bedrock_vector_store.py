@@ -34,6 +34,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResult,
     VectorStorSearchResponse,
 )
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -92,6 +93,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
                 bedrock_kb_response = await self.make_bedrock_kb_retrieve_request(
                     knowledge_base_id=vector_store_id,
                     query=query,
+                    non_default_params=non_default_params,
                 )
                 verbose_logger.debug(
                     f"Bedrock Knowledge Base Response: {bedrock_kb_response}"
@@ -235,6 +237,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         guardrail_version: Optional[str] = None,
         next_token: Optional[str] = None,
         retrieval_configuration: Optional[BedrockKBRetrievalConfiguration] = None,
+        non_default_params: Optional[dict] = None,
     ) -> BedrockKBResponse:
         """
         Make a Bedrock Knowledge Base retrieve request.
@@ -252,7 +255,21 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         """
         from fastapi import HTTPException
 
-        credentials = self.get_credentials()
+        non_default_params = non_default_params or {}
+        load_credentials_from_list(kwargs=non_default_params)
+        credentials = self.get_credentials(
+            aws_access_key_id=non_default_params.get("aws_access_key_id", None),
+            aws_secret_access_key=non_default_params.get("aws_secret_access_key", None),
+            aws_session_token=non_default_params.get("aws_session_token", None),
+            aws_region_name=non_default_params.get("aws_region_name", None),
+            aws_session_name=non_default_params.get("aws_session_name", None),
+            aws_profile_name=non_default_params.get("aws_profile_name", None),
+            aws_role_name=non_default_params.get("aws_role_name", None),
+            aws_web_identity_token=non_default_params.get(
+                "aws_web_identity_token", None
+            ),
+            aws_sts_endpoint=non_default_params.get("aws_sts_endpoint", None),
+        )
         aws_region_name = self._get_aws_region_name(
             optional_params=self.optional_params
         )
