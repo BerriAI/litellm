@@ -161,6 +161,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
 ]
 
 
@@ -220,7 +221,7 @@ openai_compatible_endpoints: List = [
     "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
-    "api.galadriel.ai/v1",
+    "api.galadriel.ai/v1"
 ]
 
 
@@ -251,6 +252,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "github_copilot",  # GitHub Copilot Chat API
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

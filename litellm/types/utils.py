@@ -2155,6 +2155,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
 
 
