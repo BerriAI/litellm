@@ -208,7 +208,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setIsEditing(false);
       fetchTeamInfo();
     } catch (error) {
-      message.error("Failed to update team settings");
       console.error("Error updating team:", error);
     }
   };
