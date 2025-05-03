@@ -77,7 +77,7 @@ async def new_vector_store(
         )
 
         new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(
-            _new_vector_store.model_dump()
+            **_new_vector_store.model_dump()
         )
 
         # Add vector store to registry
