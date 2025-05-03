@@ -1151,6 +1151,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     user_id: Optional[str] = None,
     user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
+    team_member_role: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,

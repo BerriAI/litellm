@@ -366,7 +366,7 @@ const Createuser: React.FC<CreateuserProps> = ({
             </Select>
           </Form.Item>
 
-          <Form.Item label="Team Role" className="gap-2" name="team_role">
+          <Form.Item label="Team Role" className="gap-2" name="team_member_role">
             <Select placeholder="Select Team Role" style={{ width: "100%" }}>
               {teamMemberRoles.map((teamMemberRole) => (
                 <Select.Option
