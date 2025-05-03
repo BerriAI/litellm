@@ -424,23 +424,24 @@ def validate_team_org_change(
 
     # Check if the org has access to the team's models
     if len(organization.models) > 0:
-        if (
-            team.models is None or len(team.models) == 0
-        ) and SpecialModelNames.all_proxy_models.value not in organization.models:
+        if SpecialModelNames.all_proxy_models.value in organization.models:
+            pass
+        elif team.models is None or len(team.models) == 0:
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": "Cannot move team to organization. Team has access to all proxy models, but the organization does not."
                 },
             )
-        for model in team.models:
-            if model not in organization.models:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": f"Cannot move team to organization. Team has model {model} that is not in the organization's models {organization.models}."
-                    },
-                )
+        else:
+            for model in team.models:
+                if model not in organization.models:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Cannot move team to organization. Team has model {model} that is not in the organization's models {organization.models}."
+                        },
+                    )
 
     # Check if the team's budget is less than the org's max_budget
     if (
