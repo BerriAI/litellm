@@ -3,23 +3,12 @@ model_list:
     litellm_params:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: claude-3-5-sonnet-with-vector-store
+
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
     litellm_params:
-      model: anthropic/claude-3-5-sonnet-latest
-      api_key: os.environ/ANTHROPIC_API_KEY
-      vector_store_ids: ["T37J8R4WTM"]
-
-# vector_stores:
-#   - vector_store_name: "bedrock-litellm-website-knowledgebase"
-#     litellm_params:
-#       custom_llm_provider: "bedrock"
-#       vector_store_id: "T37J8R4WTM"
-#       vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
-#       vector_store_metadata:
-#         source: "https://www.litellm.com/docs"
-        
-
-general_settings:
-  alerting: ["webhook"]
-
-
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
