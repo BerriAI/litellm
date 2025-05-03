@@ -1,4 +1,17 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # Using Vector Stores (Knowledge Bases)
+
+<Image 
+  img={require('../../img/kb.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  Use Vector Stores with any LiteLLM supported model
+</p>
+
 
 LiteLLM integrates with vector stores, allowing your models to access your organization's data for more accurate and contextually relevant responses.
 
@@ -87,9 +100,6 @@ vector_store_registry:
 </Tabs>
 
 #### 2. Make a request with vector_store_ids parameter
-
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 
 <Tabs>
 <TabItem value="curl" label="Curl">

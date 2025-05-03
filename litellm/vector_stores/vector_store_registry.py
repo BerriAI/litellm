@@ -172,7 +172,7 @@ class VectorStoreRegistry:
         for vector_store in self.vector_stores:
             if vector_store.get("vector_store_id") == vector_store_id:
                 return
-        self.vector_stores.append(cast(LiteLLM_ManagedVectorStore, vector_store))
+        self.vector_stores.append(vector_store)
 
     def delete_vector_store_from_registry(self, vector_store_id: str):
         """
