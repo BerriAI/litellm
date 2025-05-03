@@ -14,7 +14,7 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -83,7 +83,9 @@ class RedisCache(BaseCache):
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
-        self.redis_async_client: Optional[async_redis_client] = None
+        self.redis_async_client: Optional[
+            Union[async_redis_client, async_redis_cluster_client]
+        ] = None
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
 
@@ -134,13 +136,27 @@ class RedisCache(BaseCache):
     def init_async_client(
         self,
     ) -> Union[async_redis_client, async_redis_cluster_client]:
-        from .._redis import get_redis_async_client
+        from litellm import in_memory_llm_clients_cache
 
-        if self.redis_async_client is None:
-            self.redis_async_client = get_redis_async_client(
+        from .._redis import get_redis_async_client, get_redis_connection_pool
+
+        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
+        if cached_client is not None:
+            redis_async_client = cast(
+                Union[async_redis_client, async_redis_cluster_client], cached_client
+            )
+        else:
+            # Create new connection pool and client for current event loop
+            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
+            redis_async_client = get_redis_async_client(
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
-        return self.redis_async_client
+            in_memory_llm_clients_cache.set_cache(
+                key="async-redis-client", value=self.redis_async_client
+            )
+
+        self.redis_async_client = redis_async_client  # type: ignore
+        return redis_async_client
 
     def check_and_fix_namespace(self, key: str) -> str:
         """
