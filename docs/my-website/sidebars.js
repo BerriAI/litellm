@@ -226,6 +226,7 @@ const sidebars = {
           ]
         },
         "providers/litellm_proxy",
+        "providers/meta_llama",
         "providers/mistral",
         "providers/codestral",
         "providers/cohere",
