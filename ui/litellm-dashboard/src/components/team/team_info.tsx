@@ -409,7 +409,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
                   
                   <Form.Item label="Organization ID" name="organization_id">
-                    <Input />
+                    <Input type=""/>
                   </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">
@@ -459,6 +459,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text className="font-medium">Budget</Text>
                       <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {info.budget_duration || 'Never'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Organization ID</Text>
+                    <div>{info.organization_id}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Status</Text>
