@@ -445,8 +445,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
-            const jsonStr = e.target.result as string;
+            const jsonStr = e.target.result as string; 
+            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
+            console.log("Form values right after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
@@ -455,6 +457,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return false;
     },
     onChange(info) {
+      console.log("Upload onChange triggered with values:", info);
+      console.log("Current form values:", form.getFieldsValue());
+      
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
