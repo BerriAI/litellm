@@ -127,27 +127,21 @@ async def new_organization(
             },
         )
 
-    if user_api_key_dict.user_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Cannot associate a user_id to this action. Check `/key/info` to validate if 'user_id' is set."
-            },
-        )
-
     if llm_router is None:
         raise HTTPException(
             status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
         )
 
-    user_object = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id}
-    )
+    user_object_correct_type: Optional[LiteLLM_UserTable] = None
 
-    if user_object is None:
-        raise HTTPException(status_code=400, detail={"error": "User not found"})
-
-    user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+    if user_api_key_dict.user_id is not None:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        except Exception:
+            pass
 
     if data.budget_id is None:
         """
