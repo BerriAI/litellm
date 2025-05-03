@@ -42,7 +42,7 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
-  credential_values: object;
+  credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
     description?: string;
