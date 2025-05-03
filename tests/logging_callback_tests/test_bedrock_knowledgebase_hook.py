@@ -175,6 +175,55 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
 
 
 @pytest.mark.asyncio
+async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vector_store_registry):
+    """
+    Tests that vector store ids can be passed as tools
+
+    This is the OpenAI format
+    """
+    litellm.callbacks = [BedrockVectorStore()]
+    litellm.set_verbose = True
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "what is litellm?"}],
+                tools=[{
+                    "type": "file_search",
+                    "vector_store_ids": ["T37J8R4WTM"]
+                }],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        # Verify the API was called
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        
+        # Verify the request contains messages with knowledge base context
+        assert "messages" in request_body
+        messages = request_body["messages"]
+        
+        # We expect at least 2 messages:
+        # 1. User message with the question
+        # 2. User message with the knowledge base context
+        assert len(messages) >= 2
+        
+        print("request messages:", json.dumps(messages, indent=4, default=str))
+
+        # assert message[1] is the user message with the knowledge base context
+        assert messages[1]["role"] == "user"
+        assert BedrockVectorStore.CONTENT_PREFIX_STRING in messages[1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
     """
     Test that the knowledge base request was logged in standard logging payload

@@ -462,6 +462,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         non_default_params: Dict,
         prompt_id: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> bool:
         """
         Return True if prompt management hooks should be run
@@ -470,7 +471,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return True
 
         if self._should_run_prompt_management_hooks_without_prompt_id(
-            non_default_params=non_default_params
+            non_default_params=non_default_params,
+            tools=tools,
         ):
             return True
 
@@ -479,6 +481,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _should_run_prompt_management_hooks_without_prompt_id(
         self,
         non_default_params: Dict,
+        tools: Optional[List[Dict]] = None,
     ) -> bool:
         """
         Certain prompt management hooks don't need a `prompt_id` to be passed in, they are triggered by dynamic params
@@ -487,6 +490,15 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         for param in non_default_params:
             if param in DynamicPromptManagementParamLiteral.list_all_params():
+                return True
+
+        #############################################################################
+        # Check if Vector Store / Knowledge Base hooks should be applied to the prompt
+        #############################################################################
+        if litellm.vector_store_registry is not None:
+            if litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params, tools=tools
+            ):
                 return True
         return False
 
@@ -530,6 +542,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -551,6 +564,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 litellm_logging_obj=self,
+                tools=tools,
             )
         self.messages = messages
         return model, messages, non_default_params

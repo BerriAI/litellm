@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
@@ -72,11 +73,17 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
         """
-        vector_store_ids = non_default_params.pop("vector_store_ids", None)
+        if litellm.vector_store_registry is None:
+            return model, messages, non_default_params
+
+        vector_store_ids = litellm.vector_store_registry.get_vector_store_ids_to_run(
+            non_default_params=non_default_params, tools=tools
+        )
         vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
         if vector_store_ids:
             for vector_store_id in vector_store_ids:

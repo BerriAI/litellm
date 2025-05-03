@@ -18,8 +18,28 @@ class VectorStoreRegistry:
             str, LiteLLM_ManagedVectorStore
         ] = {}
 
+    def get_vector_store_ids_to_run(
+        self, non_default_params: Dict, tools: Optional[List[Dict]] = None
+    ) -> List[str]:
+        """
+        Returns the vector store ids to run
+
+        vector_store_ids can be provided in two ways:
+        """
+        vector_store_ids: List[str] = []
+
+        # 1. check if vector_store_ids is provided in the non_default_params
+        vector_store_ids = non_default_params.get("vector_store_ids", None) or []
+
+        # 2. check if vector_store_ids is provided as a tool in the request
+        vector_store_ids = self._get_vector_store_ids_from_tool_calls(
+            tools=tools, vector_store_ids=vector_store_ids
+        )
+
+        return vector_store_ids
+
     def get_vector_store_to_run(
-        self, non_default_params: Dict
+        self, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> Optional[LiteLLM_ManagedVectorStore]:
         """
         Returns the vector store to run
@@ -31,14 +51,8 @@ class VectorStoreRegistry:
 
         This will return the first vector store found in the registry.
         """
-        vector_store_ids: List[str] = []
-
-        # 1. check if vector_store_ids is provided in the non_default_params
-        vector_store_ids = non_default_params.get("vector_store_ids", None) or []
-
-        # 2. check if vector_store_ids is provided as a tool in the request
-        vector_store_ids = self._get_vector_store_ids_from_tool_calls(
-            non_default_params=non_default_params, vector_store_ids=vector_store_ids
+        vector_store_ids = self.get_vector_store_ids_to_run(
+            non_default_params=non_default_params, tools=tools
         )
 
         # check if the vector store ids are in the registry
@@ -51,12 +65,11 @@ class VectorStoreRegistry:
                     return vector_store
 
     def _get_vector_store_ids_from_tool_calls(
-        self, non_default_params: Dict, vector_store_ids: List[str]
+        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
     ) -> List[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        tools = non_default_params.get("tools", None)
         if tools:
             for tool in tools:
                 if "vector_store_ids" in tool:
