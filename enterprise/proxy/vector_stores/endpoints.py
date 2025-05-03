@@ -18,9 +18,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.vector_stores.vector_store_registry import (
-    global_vector_store_manager,
-)
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
@@ -117,9 +114,11 @@ async def list_vector_stores(
 
     try:
         # Get in-memory vector stores
-        in_memory_vector_stores: List[LiteLLM_ManagedVectorStore] = copy.deepcopy(
-            global_vector_store_manager.vector_stores
-        )
+        in_memory_vector_stores: List[LiteLLM_ManagedVectorStore] = []
+        if litellm.vector_store_registry is not None:
+            in_memory_vector_stores = copy.deepcopy(
+                litellm.vector_store_registry.vector_stores
+            )
 
         # Get vector stores from database
         vector_stores_from_db: List[LiteLLM_ManagedVectorStore] = []
