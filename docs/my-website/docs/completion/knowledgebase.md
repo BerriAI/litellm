@@ -240,9 +240,9 @@ vector_store_registry:
 
 ## How It Works
 
-LiteLLM implements a `BedrockKnowledgeBaseHook` that intercepts your completion requests for handling the integration with Bedrock Knowledge Bases.
+If your request includes a `vector_store_ids` parameter where any of the vector store ids are found in the `vector_store_registry`, LiteLLM will automatically use the vector store for the request.
 
-1. You make a completion request with the `vector_store_ids` parameter
+1. You make a completion request with the `vector_store_ids` parameter and any of the vector store ids are found in the `litellm.vector_store_registry`
 2. LiteLLM automatically:
    - Uses your last message as the query to retrieve relevant information from the Knowledge Base
    - Adds the retrieved context to your conversation
@@ -295,3 +295,62 @@ When using the Knowledge Base integration with LiteLLM, you can include the foll
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `vector_store_ids` | List[str] | List of Knowledge Base IDs to query |
+
+### VectorStoreRegistry
+
+The `VectorStoreRegistry` is a central component for managing vector stores in LiteLLM. It acts as a registry where you can configure and access your vector stores.
+
+#### What is VectorStoreRegistry?
+
+`VectorStoreRegistry` is a class that:
+- Maintains a collection of vector stores that LiteLLM can use
+- Allows you to register vector stores with their credentials and metadata
+- Makes vector stores accessible via their IDs in your completion requests
+
+#### Using VectorStoreRegistry in Python
+
+```python
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, LiteLLM_ManagedVectorStore
+
+# Initialize the vector store registry with one or more vector stores
+litellm.vector_store_registry = VectorStoreRegistry(
+    vector_stores=[
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="YOUR_VECTOR_STORE_ID",  # Required: Unique ID for referencing this store
+            custom_llm_provider="bedrock"            # Required: Provider (e.g., "bedrock")
+        )
+    ]
+)
+```
+
+#### LiteLLM_ManagedVectorStore Parameters
+
+Each vector store in the registry is configured using a `LiteLLM_ManagedVectorStore` object with these parameters:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `vector_store_id` | str | Yes | Unique identifier for the vector store |
+| `custom_llm_provider` | str | Yes | The provider of the vector store (e.g., "bedrock") |
+| `vector_store_name` | str | No | A friendly name for the vector store |
+| `vector_store_description` | str | No | Description of what the vector store contains |
+| `vector_store_metadata` | dict or str | No | Additional metadata about the vector store |
+| `litellm_credential_name` | str | No | Name of the credentials to use for this vector store |
+
+#### Configuring VectorStoreRegistry in config.yaml
+
+For the LiteLLM Proxy, you can configure the same registry in your `config.yaml` file:
+
+```yaml showLineNumbers title="Vector store configuration in config.yaml"
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"  # Optional friendly name
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"                            # Required: Unique ID  
+      custom_llm_provider: "bedrock"                           # Required: Provider
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
+```
+
+The `litellm_params` section accepts all the same parameters as the `LiteLLM_ManagedVectorStore` constructor in the Python SDK.
+
+
