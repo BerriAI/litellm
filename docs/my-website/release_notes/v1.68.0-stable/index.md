@@ -41,7 +41,16 @@ pip install litellm==1.68.0.post1
 </TabItem>
 </Tabs>
 
-## Bedrock Vector Stores
+## Key Highlights
+
+LiteLLM v1.68.0-stable will be live soon. Here are the key highlights of this release:
+
+- **Bedrock Knowledge Base**: You can now call query your Bedrock Knowledge Base with all LiteLLM models via `/chat/completion` or `/responses` API.
+- **Rate Limits**: This release brings accurate rate limiting across multiple instances, reducing spillover to at most 10 additional requests in high traffic. 
+- **Meta Llama API**: Added support for Meta Llama API [Get Started](https://docs.litellm.ai/docs/providers/meta_llama)
+- **LlamaFile**: Added support for LlamaFile [Get Started](https://docs.litellm.ai/docs/providers/llamafile)
+
+## Bedrock Knowledge Base (Vector Store)
 
 <Image img={require('../../img/release_notes/bedrock_kb.png')}/>
 <br/>
@@ -56,6 +65,24 @@ This release adds support for Bedrock vector stores (knowledge bases) in LiteLLM
 For the next release we plan on allowing you to set key, user, team, org permissions for vector stores. 
 
 [Read more here](https://docs.litellm.ai/docs/completion/knowledgebase)
+
+## Rate Limiting
+
+This release brings accurate multi-instance rate limiting across keys/users/teams. Outlining key engineering changes below:
+
+- **Change**: Instances now increment cache value instead of setting it. To avoid calling Redis on each request, this is synced every 0.01s.
+- **Accuracy**: In testing, we saw a maximum spill over from expected of 10 requests, in high traffic (100 RPS, 3 instances), vs. current 189 request spillover
+- **Performance**: Our load tests show this to reduce median response time by 100ms in high traffic 
+
+This is currently behind a feature flag, and we plan to have this be the default by next week. To enable this today, just add this environment variable:
+
+```
+export LITELLM_RATE_LIMIT_ACCURACY=true
+```
+
+[Read more here](../../docs/proxy/users#beta-multi-instance-rate-limiting) 
+
+
 
 ## New Models / Updated Models
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
