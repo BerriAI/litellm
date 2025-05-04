@@ -52,9 +52,9 @@ from .llms.openai import (
 from .rerank import RerankResponse
 
 if TYPE_CHECKING:
-    from .vector_stores import VectorStorSearchResponse
+    from .vector_stores import VectorStoreSearchResponse
 else:
-    VectorStorSearchResponse = Any
+    VectorStoreSearchResponse = Any
 
 
 def _generate_id():  # private helper function
@@ -1740,7 +1740,7 @@ class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     Query to the vector store
     """
 
-    vector_store_search_response: Optional[VectorStorSearchResponse]
+    vector_store_search_response: Optional[VectorStoreSearchResponse]
     """
     OpenAI format vector store search response
     """
@@ -2156,6 +2156,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
+    LLAMA = "meta_llama"
 
 
 # Create a set of all provider values for quick lookup

@@ -75,6 +75,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
@@ -182,7 +183,7 @@ try:
     # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
         "anthropic_tokenizer.json"
-    ).open("r") as f:
+    ).open("r", encoding="utf-8") as f:
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -6176,6 +6177,8 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.LLAMA == provider:
+            return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
         elif litellm.LlmProviders.COHERE_CHAT == provider:
@@ -6479,6 +6482,18 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        return None
+
+    @staticmethod
+    def get_provider_vector_store_config(
+        provider: LlmProviders,
+    ) -> Optional[CustomLogger]:
+        from litellm.integrations.vector_stores.bedrock_vector_store import (
+            BedrockVectorStore,
+        )
+
+        if LlmProviders.BEDROCK == provider:
+            return BedrockVectorStore.get_initialized_custom_logger()
         return None
 
 

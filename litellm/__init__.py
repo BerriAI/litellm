@@ -114,7 +114,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
-    "bedrock_knowledgebase_hook",
+    "bedrock_vector_store",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -190,6 +190,7 @@ predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
+llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 snowflake_key: Optional[str] = None
@@ -432,6 +433,7 @@ galadriel_models: List = []
 sambanova_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+llama_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -555,6 +557,8 @@ def add_known_models():
             xai_models.append(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.append(key)
+        elif value.get("litellm_provider") == "meta_llama":
+            llama_models.append(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
@@ -665,6 +669,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + llama_models
 )
 
 model_list_set = set(model_list)
@@ -722,6 +727,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "meta_llama": llama_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -848,6 +854,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+from .llms.meta_llama.chat.transformation import LlamaAPIConfig
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -1069,6 +1076,11 @@ from .types.adapter import AdapterItem
 import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
+
+### Vector Store Registry ###
+from .vector_stores.vector_store_registry import VectorStoreRegistry
+
+vector_store_registry: Optional[VectorStoreRegistry] = None
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
