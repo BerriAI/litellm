@@ -178,34 +178,40 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
 
 
-class TestArizeLogger(CustomLogger):
+@pytest.fixture
+def arize_test_logger():
     """
-    Custom logger implementation to capture standard_callback_dynamic_params.
-    Used to verify that dynamic config keys are being passed to callbacks.
+    Fixture to provide a test logger for Arize tests.
     """
+    class TestArizeLogger(CustomLogger):
+        """
+        Custom logger implementation to capture standard_callback_dynamic_params.
+        Used to verify that dynamic config keys are being passed to callbacks.
+        """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = None
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.standard_callback_dynamic_params: Optional[
+                StandardCallbackDynamicParams
+            ] = None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # Capture dynamic params and print them for verification
-        print("logged kwargs", json.dumps(kwargs, indent=4, default=str))
-        self.standard_callback_dynamic_params = kwargs.get(
-            "standard_callback_dynamic_params"
-        )
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            # Capture dynamic params and print them for verification
+            print("logged kwargs", json.dumps(kwargs, indent=4, default=str))
+            self.standard_callback_dynamic_params = kwargs.get(
+                "standard_callback_dynamic_params"
+            )
+    
+    return TestArizeLogger()
 
 
 @pytest.mark.asyncio
-async def test_arize_dynamic_params():
-    """
-    Test to ensure that dynamic Arize keys (API key and space key)
-    are received inside the callback logger at runtime.
-    """
-    test_arize_logger = TestArizeLogger()
-    litellm.callbacks = [test_arize_logger]
+async def test_arize_dynamic_params(arize_test_logger):
+    """Test to ensure that dynamic Arize keys (API key and space key)
+    are received inside the callback logger at runtime."""
+    # Use the fixture instead of creating a new instance
+    test_logger = arize_test_logger
+    litellm.callbacks = [test_logger]
 
     # Perform a mocked async completion call to trigger logging
     await litellm.acompletion(
@@ -220,12 +226,12 @@ async def test_arize_dynamic_params():
     await asyncio.sleep(2)
 
     # Assert dynamic parameters were received in the callback
-    assert test_arize_logger.standard_callback_dynamic_params is not None
+    assert test_logger.standard_callback_dynamic_params is not None
     assert (
-        test_arize_logger.standard_callback_dynamic_params.get("arize_api_key")
+        test_logger.standard_callback_dynamic_params.get("arize_api_key")
         == "test_api_key_dynamic"
     )
     assert (
-        test_arize_logger.standard_callback_dynamic_params.get("arize_space_key")
+        test_logger.standard_callback_dynamic_params.get("arize_space_key")
         == "test_space_key_dynamic"
     )
