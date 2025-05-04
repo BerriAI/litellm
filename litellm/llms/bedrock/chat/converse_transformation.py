@@ -705,14 +705,18 @@ class AmazonConverseConfig(BaseConfig):
     ) -> List[str]:
         if tools is None:
             return []
-        tool_set = set()
+        tool_set: set[str] = set()
         for tool in tools:
             tool_spec = tool.get("toolSpec")
             function = tool.get("function")
             if tool_spec is not None:
-                tool_set.add(cast(dict, tool_spec).get("name"))
+                _name = cast(dict, tool_spec).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
             if function is not None:
-                tool_set.add(cast(dict, function).get("name"))
+                _name = cast(dict, function).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
         return list(tool_set)
 
     def apply_tool_call_transformation_if_needed(
