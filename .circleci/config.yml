@@ -41,7 +41,7 @@ jobs:
       - run:
           name: Run Windows-specific test
           command: |
-            python -m pytest tests/local_testing/test_basic_python_version.py::test_using_litellm_on_windows -v
+            python -m pytest tests/local_testing/test_litellm_on_windows.py -v
     
   local_testing:
     docker:
