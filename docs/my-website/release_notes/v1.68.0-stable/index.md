@@ -41,6 +41,22 @@ pip install litellm==1.68.0.post1
 </TabItem>
 </Tabs>
 
+## Bedrock Vector Stores
+
+<Image img={require('../../img/release_notes/bedrock_kb.png')}/>
+<br/>
+
+This release adds support for Bedrock vector stores (knowledge bases) in LiteLLM. With this update, you can:
+
+- Use Bedrock vector stores in the OpenAI /chat/completions spec with all LiteLLM supported models. 
+- View all available vector stores through the LiteLLM UI or API.
+- Configure vector stores to be always active for specific models.
+- Track vector store usage in LiteLLM Logs.
+
+For the next release we plan on allowing you to set key, user, team, org permissions for vector stores. 
+
+[Read more here](https://docs.litellm.ai/docs/completion/knowledgebase)
+
 ## New Models / Updated Models
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
     - Handle more json schema - openapi schema conversion edge cases [PR](https://github.com/BerriAI/litellm/pull/10351)
