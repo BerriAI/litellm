@@ -6,6 +6,13 @@ import sys
 
 import pytest
 
+# Register custom markers to avoid warnings
+def pytest_configure(config):
+    """
+    Register custom markers to avoid warnings.
+    """
+    config.addinivalue_line("markers", "flaky: mark test as flaky, will be rerun if it fails")
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
