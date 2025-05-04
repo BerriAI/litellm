@@ -710,9 +710,9 @@ class AmazonConverseConfig(BaseConfig):
             tool_spec = tool.get("toolSpec")
             function = tool.get("function")
             if tool_spec is not None:
-                tool_set.add(tool_spec.get("name"))
+                tool_set.add(cast(dict, tool_spec).get("name"))
             if function is not None:
-                tool_set.add(function.get("name"))
+                tool_set.add(cast(dict, function).get("name"))
         return list(tool_set)
 
     def apply_tool_call_transformation_if_needed(
