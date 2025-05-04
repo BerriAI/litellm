@@ -24,40 +24,44 @@ def setup_anthropic_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-some-key")
 
 
-class TestCustomPromptManagement(CustomPromptManagement):
-    def get_chat_completion_prompt(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
-        dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
-        print(
-            "TestCustomPromptManagement: running get_chat_completion_prompt for prompt_id: ",
-            prompt_id,
-        )
-        if prompt_id == "test_prompt_id":
-            messages = [
-                {"role": "user", "content": "This is the prompt for test_prompt_id"},
-            ]
-            return model, messages, non_default_params
-        elif prompt_id == "prompt_with_variables":
-            content = "Hello, {name}! You are {age} years old and live in {city}."
-            content_with_variables = content.format(**(prompt_variables or {}))
-            messages = [
-                {"role": "user", "content": content_with_variables},
-            ]
-            return model, messages, non_default_params
-        else:
-            return model, messages, non_default_params
+@pytest.fixture
+def custom_prompt_manager():
+    class TestCustomPromptManager(CustomPromptManagement):
+        def get_chat_completion_prompt(
+            self,
+            model: str,
+            messages: List[AllMessageValues],
+            non_default_params: dict,
+            prompt_id: Optional[str],
+            prompt_variables: Optional[dict],
+            dynamic_callback_params: StandardCallbackDynamicParams,
+        ) -> Tuple[str, List[AllMessageValues], dict]:
+            print(
+                "TestCustomPromptManagement: running get_chat_completion_prompt for prompt_id: ",
+                prompt_id,
+            )
+            if prompt_id == "test_prompt_id":
+                messages = [
+                    {"role": "user", "content": "This is the prompt for test_prompt_id"},
+                ]
+                return model, messages, non_default_params
+            elif prompt_id == "prompt_with_variables":
+                content = "Hello, {name}! You are {age} years old and live in {city}."
+                content_with_variables = content.format(**(prompt_variables or {}))
+                messages = [
+                    {"role": "user", "content": content_with_variables},
+                ]
+                return model, messages, non_default_params
+            else:
+                return model, messages, non_default_params
+    
+    return TestCustomPromptManager()
 
 
 @pytest.mark.asyncio
-async def test_custom_prompt_management_with_prompt_id(monkeypatch):
-    custom_prompt_management = TestCustomPromptManagement()
-    litellm.callbacks = [custom_prompt_management]
+async def test_custom_prompt_management_with_prompt_id(monkeypatch, custom_prompt_manager):
+    # Use the fixture instead of instantiating directly
+    litellm.callbacks = [custom_prompt_manager]
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
@@ -83,9 +87,8 @@ async def test_custom_prompt_management_with_prompt_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_custom_prompt_management_with_prompt_id_and_prompt_variables():
-    custom_prompt_management = TestCustomPromptManagement()
-    litellm.callbacks = [custom_prompt_management]
+async def test_custom_prompt_management_with_prompt_id_and_prompt_variables(custom_prompt_manager):
+    litellm.callbacks = [custom_prompt_manager]
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
@@ -112,9 +115,8 @@ async def test_custom_prompt_management_with_prompt_id_and_prompt_variables():
 
 
 @pytest.mark.asyncio
-async def test_custom_prompt_management_without_prompt_id():
-    custom_prompt_management = TestCustomPromptManagement()
-    litellm.callbacks = [custom_prompt_management]
+async def test_custom_prompt_management_without_prompt_id(custom_prompt_manager):
+    litellm.callbacks = [custom_prompt_manager]
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
