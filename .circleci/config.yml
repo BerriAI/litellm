@@ -110,6 +110,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==13.1.0"
+            pip uninstall posthog -y
       - save_cache:
           paths:
             - ./venv
