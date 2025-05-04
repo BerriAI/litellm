@@ -48,7 +48,7 @@ test.describe("Invite User, Set Password, and Login", () => {
 
     // --- Navigate to Keys Page ---
     await page.goto("http://localhost:4000/ui?page=api-keys");
-    await page.waitForTimeout(30000);
+    await page.waitForTimeout(3000);
     await expect(
       page.getByRole("button", { name: "+ Create New Key" })
     ).toBeVisible(); // Wait for page load
