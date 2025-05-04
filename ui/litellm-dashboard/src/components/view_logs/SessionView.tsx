@@ -86,8 +86,8 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
               data={logs}
               renderSubComponent={RequestViewer}
               getRowCanExpand={() => true}
-              expandedRequestId={expandedRequestId}
-              onRowExpand={setExpandedRequestId}
+              loadingMessage="Loading logs..."
+              noDataMessage="No logs found"
             />
           </div>
     </div>

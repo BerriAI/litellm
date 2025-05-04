@@ -435,11 +435,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
             <Row>
-              <Col span={10}></Col>
-              <Col span={10}>
+              <Col>
                 <Text className="mb-3 mt-1">
-                  Give litellm a gcp service account(.json file), so it
-                  can make the relevant calls
+                  Give a gcp service account(.json file)
                 </Text>
               </Col>
             </Row>
