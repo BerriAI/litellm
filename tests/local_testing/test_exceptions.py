@@ -1047,6 +1047,57 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
         assert exception_raised
 
 
+def test_openai_gateway_timeout_error():
+    """
+    Test that the OpenAI gateway timeout error is raised
+    """
+    openai_client = OpenAI()
+    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
+    def _return_exception(*args, **kwargs):
+        import datetime
+
+        from httpx import Headers, Request, Response
+
+        kwargs = {
+            "request": Request("POST", "https://www.google.com"),
+            "message": "Error code: 504 - Gateway Timeout Error!",
+            "body": {"detail": "Gateway Timeout Error!"},
+            "code": None,
+            "param": None,
+            "type": None,
+            "response": Response(
+                status_code=504,
+                headers=Headers(
+                    {
+                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
+                        "server": "uvicorn",
+                        "content-length": "30",
+                        "content-type": "application/json",
+                    }
+                ),
+                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+            ),
+            "status_code": 504,
+            "request_id": None,
+        }
+
+        exception = Exception()
+        for k, v in kwargs.items():
+            setattr(exception, k, v)
+        raise exception
+
+    try: 
+        with patch.object(
+            mapped_target,
+            "create",
+            side_effect=_return_exception,
+        ):
+            litellm.completion(model="openai/gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}], client=openai_client)
+        pytest.fail("Expected to raise Timeout")
+    except litellm.Timeout as e:
+        assert e.status_code == 504
+
+
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],

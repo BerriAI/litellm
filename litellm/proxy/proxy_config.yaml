@@ -1,7 +1,17 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
+
 general_settings:
   store_prompts_in_spend_logs: true

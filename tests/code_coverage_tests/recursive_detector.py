@@ -19,6 +19,7 @@ IGNORE_FUNCTIONS = [
     "_sanitize_request_body_for_spend_logs_payload", # testing added for circular reference
     "_sanitize_value", # testing added for circular reference
     "set_schema_property_ordering", # testing added for infinite recursion
+    "process_items", # testing added for infinite recursion + max depth set.
 ]
 
 

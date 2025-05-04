@@ -120,7 +120,7 @@ export function UserEditView({
           mode="multiple"
           placeholder="Select models"
           style={{ width: "100%" }}
-          disabled={!all_admin_roles.includes(userData.user_info?.user_role || "")}
+          disabled={!all_admin_roles.includes(userRole || "")}
           
         >
           <Select.Option key="all-proxy-models" value="all-proxy-models">

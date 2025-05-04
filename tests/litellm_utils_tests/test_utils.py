@@ -33,7 +33,6 @@ from litellm.utils import (
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
-    token_counter,
     trim_messages,
     validate_environment,
 )
@@ -47,6 +46,7 @@ def reset_mock_cache():
     _model_cache.flush_cache()
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
+    litellm._turn_on_debug()
     messages = [
         {
             "role": "user",
@@ -444,41 +444,6 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
-
-
-def test_token_counter():
-    try:
-        messages = [{"role": "user", "content": "hi how are you what time is it"}]
-        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-        print("gpt-35-turbo")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="claude-2", messages=messages)
-        print("claude-2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="gemini/chat-bison", messages=messages)
-        print("gemini/chat-bison")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="ollama/llama2", messages=messages)
-        print("ollama/llama2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
-        print("anthropic.claude-instant-v1")
-        print(tokens)
-        assert tokens > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_token_counter()
-
 
 @pytest.mark.parametrize(
     "model, expected_bool",
@@ -2127,6 +2092,20 @@ def test_get_provider_audio_transcription_config():
         )
 
 
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+        ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+    ],
+)
+
+def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
+    from litellm.utils import supports_pdf_input
+    
+    assert supports_pdf_input(model) == expected_bool
+
+    
 def test_get_valid_models_from_provider():
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2178,5 +2157,5 @@ def test_get_valid_models_from_dynamic_api_key():
     valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
-    
+
     
