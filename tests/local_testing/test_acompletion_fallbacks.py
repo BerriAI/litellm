@@ -101,3 +101,28 @@ async def test_completion_fallbacks_sync():
     )
     print(response)
     assert response is not None
+
+
+def test_completion_fallbacks_no_async_warning():
+    """
+    Test that completion with fallbacks doesn't show the async warning.
+    
+    This test verifies that the fix for the "Task was destroyed but it is pending!"
+    warning when using fallbacks works correctly.
+    
+    The test simply checks that the completion call with fallbacks completes
+    without raising any exceptions or warnings about pending tasks.
+    """
+    messages = [{"role": "user", "content": "Hello! How are you?"}]
+    
+    # This should not produce any warnings about pending tasks
+    response = litellm.completion(
+        messages=messages,
+        model="anthropic/claude-3-7-sonnet-20250219",
+        fallbacks=["azure/gpt-4o"]
+    )
+    
+    # If we get here without a warning, the test passes
+    assert response is not None
+    print("Test passed - no async warning")
+

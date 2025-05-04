@@ -97,7 +97,24 @@ def run_async_function(async_function, *args, **kwargs):
         new_loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
-            return new_loop.run_until_complete(async_function(*args, **kwargs))
+            result = new_loop.run_until_complete(async_function(*args, **kwargs))
+            
+            # Wait for all pending tasks to complete before closing the loop
+            # This prevents "Task was destroyed but it is pending" warnings
+            pending_tasks = asyncio.all_tasks(new_loop)
+            if pending_tasks:
+                # Remove the main task that just completed
+                pending_tasks = {t for t in pending_tasks if not t.done()}
+                if pending_tasks:
+                    # Give pending tasks a chance to complete (with a timeout)
+                    new_loop.run_until_complete(asyncio.wait(pending_tasks, timeout=2.0))
+                    
+                    # Cancel any remaining tasks that didn't complete within timeout
+                    for task in pending_tasks:
+                        if not task.done():
+                            task.cancel()
+            
+            return result
         finally:
             new_loop.close()
             asyncio.set_event_loop(None)
