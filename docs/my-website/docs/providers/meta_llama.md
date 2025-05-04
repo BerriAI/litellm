@@ -7,7 +7,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | Meta's Llama API provides access to Meta's family of large language models. |
 | Provider Route on LiteLLM | `meta_llama/` |
-| Supported Endpoints | `/chat/completions`, `/completions` |
+| Supported Endpoints | `/chat/completions`, `/completions`, `/responses` |
 | API Reference | [Llama API Reference ↗](https://www.llama.com/products/llama-api/) |
 
 ## Required Variables
