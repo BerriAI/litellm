@@ -808,9 +808,20 @@ async def _client_async_logging_helper(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
         # check if user does not want this to be logged
-        asyncio.create_task(
+        task = asyncio.create_task(
             logging_obj.async_success_handler(result, start_time, end_time)
         )
+        
+        # Add a done callback to handle any exceptions and prevent task destroyed warnings
+        def _handle_task_result(task):
+            try:
+                # This will re-raise any exception that occurred in the task
+                task.result()
+            except Exception as e:
+                print_verbose(f"Error in async_success_handler: {str(e)}")
+        
+        task.add_done_callback(_handle_task_result)
+        
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
