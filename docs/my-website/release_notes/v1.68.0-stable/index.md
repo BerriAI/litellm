@@ -57,9 +57,8 @@ pip install litellm==1.68.0.post1
     - Support OPENAI_BASE_URL in addition to OPENAI_API_BASE [PR](https://github.com/BerriAI/litellm/pull/10423)
     - Correctly re-raise 504 timeout errors [PR](https://github.com/BerriAI/litellm/pull/10462)
     - Native Gpt-4o-mini-tts support [PR](https://github.com/BerriAI/litellm/pull/10462)
+- 🆕 **[Meta Llama API](../../docs/providers/meta_llama)** provider [PR](https://github.com/BerriAI/litellm/pull/10451)
 - 🆕 **[LlamaFile](../../docs/providers/llamafile)** provider [PR](https://github.com/BerriAI/litellm/pull/10482)
-
-
 
 ## LLM API Endpoints
 - **[Response API](../../docs/response_api)** 
