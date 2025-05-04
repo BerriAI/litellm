@@ -479,6 +479,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/model/{model_id}/update",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
