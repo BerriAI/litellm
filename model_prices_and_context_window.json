@@ -8229,12 +8229,22 @@
         "max_tokens": 33792,
         "max_input_tokens": 33792,
         "max_output_tokens": 33792,
-        "input_cost_per_token": 0.00000018,
+        "input_cost_per_token": 0.00000006,
         "output_cost_per_token": 0.00000018,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
     },
+		"openrouter/qwen/qwen3-235b-a22b": {
+			"max_tokens": 40959,
+			"max_input_tokens": 40959,
+			"max_output_tokens": 41000,
+			"input_cost_per_token": 0.0000001,
+			"output_cost_per_token": 0.0000001,
+			"litellm_provider": "openrouter",
+			"mode": "chat",
+			"support_tool_choice": true
+		},
     "j2-ultra": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
