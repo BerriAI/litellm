@@ -691,8 +691,6 @@ export default function SpendLogsTable({
             data={filteredData}
             renderSubComponent={RequestViewer}
             getRowCanExpand={() => true}
-            onRowExpand={handleRowExpand}
-            expandedRequestId={expandedRequestId}
           />
         </div>
         </>
