@@ -154,6 +154,7 @@ async def test_openai_responses_api_web_search_cost_tracking(
     else:
         print("response", response)
 
+    await asyncio.sleep(1)
 
     if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
         test_custom_logger.standard_logging_payload.get("response")
