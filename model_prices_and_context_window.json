@@ -4796,7 +4796,7 @@
         "deprecation_date": "2025-10-01",
         "supports_tool_choice": true
     },
-    "text-bison": {
+    "vertex_ai/text-bison": {
         "max_tokens": 2048,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
@@ -4806,7 +4806,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-bison@001": {
+    "vertex_ai/text-bison@001": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4816,7 +4816,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-bison@002": {
+    "vertex_ai/text-bison@002": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4826,7 +4826,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-bison32k": {
+    "vertex_ai/text-bison32k": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4838,7 +4838,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-bison32k@002": {
+    "vertex_ai/text-bison32k@002": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4850,7 +4850,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-unicorn": {
+    "vertex_ai/text-unicorn": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4860,7 +4860,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-unicorn@001": {
+    "vertex_ai/text-unicorn@001": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -4870,7 +4870,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "chat-bison": {
+    "vertex_ai/chat-bison": {
         "max_tokens": 4096,
         "max_input_tokens": 8192,
         "max_output_tokens": 4096,
@@ -4883,7 +4883,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "chat-bison@001": {
+    "vertex_ai/chat-bison@001": {
         "max_tokens": 4096,
         "max_input_tokens": 8192,
         "max_output_tokens": 4096,
@@ -4896,7 +4896,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "chat-bison@002": {
+    "vertex_ai/chat-bison@002": {
         "max_tokens": 4096,
         "max_input_tokens": 8192,
         "max_output_tokens": 4096,
@@ -4910,7 +4910,7 @@
         "deprecation_date": "2025-04-09",
         "supports_tool_choice": true
     },
-    "chat-bison-32k": {
+    "vertex_ai/chat-bison-32k": {
         "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
@@ -4923,7 +4923,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "chat-bison-32k@002": {
+    "vertex_ai/chat-bison-32k@002": {
         "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
@@ -4936,7 +4936,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "code-bison": {
+    "vertex_ai/code-bison": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -4949,7 +4949,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "code-bison@001": {
+    "vertex_ai/code-bison@001": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -4961,7 +4961,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-bison@002": {
+    "vertex_ai/code-bison@002": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -4973,7 +4973,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-bison32k": {
+    "vertex_ai/code-bison32k": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -4985,7 +4985,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-bison-32k@002": {
+    "vertex_ai/code-bison-32k@002": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -4997,7 +4997,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-gecko@001": {
+    "vertex_ai/code-gecko@001": {
         "max_tokens": 64,
         "max_input_tokens": 2048,
         "max_output_tokens": 64,
@@ -5007,7 +5007,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-gecko@002": {
+    "vertex_ai/code-gecko@002": {
         "max_tokens": 64,
         "max_input_tokens": 2048,
         "max_output_tokens": 64,
@@ -5017,7 +5017,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-gecko": {
+    "vertex_ai/code-gecko": {
         "max_tokens": 64,
         "max_input_tokens": 2048,
         "max_output_tokens": 64,
@@ -5027,7 +5027,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "code-gecko-latest": {
+    "vertex_ai/code-gecko-latest": {
         "max_tokens": 64,
         "max_input_tokens": 2048,
         "max_output_tokens": 64,
@@ -5037,7 +5037,7 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "codechat-bison@latest": {
+    "vertex_ai/codechat-bison@latest": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -5050,7 +5050,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "codechat-bison": {
+    "vertex_ai/codechat-bison": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -5063,7 +5063,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "codechat-bison@001": {
+    "vertex_ai/codechat-bison@001": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -5076,7 +5076,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "codechat-bison@002": {
+    "vertex_ai/codechat-bison@002": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
         "max_output_tokens": 1024,
@@ -5089,7 +5089,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "codechat-bison-32k": {
+    "vertex_ai/codechat-bison-32k": {
         "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
@@ -5102,7 +5102,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "codechat-bison-32k@002": {
+    "vertex_ai/codechat-bison-32k@002": {
         "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
@@ -5181,7 +5181,7 @@
             "text"
         ]
     },
-    "gemini-pro": {
+    "vertex_ai/gemini-pro": {
         "max_tokens": 8192,
         "max_input_tokens": 32760,
         "max_output_tokens": 8192,
@@ -5197,7 +5197,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_tool_choice": true
     },
-    "gemini-1.0-pro": {
+    "vertex_ai/gemini-1.0-pro": {
         "max_tokens": 8192,
         "max_input_tokens": 32760,
         "max_output_tokens": 8192,
@@ -5213,7 +5213,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#google_models",
         "supports_tool_choice": true
     },
-    "gemini-1.0-pro-001": {
+    "vertex_ai/gemini-1.0-pro-001": {
         "max_tokens": 8192,
         "max_input_tokens": 32760,
         "max_output_tokens": 8192,
@@ -5230,7 +5230,7 @@
         "deprecation_date": "2025-04-09",
         "supports_tool_choice": true
     },
-    "gemini-1.0-ultra": {
+    "vertex_ai/gemini-1.0-ultra": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
@@ -5246,7 +5246,7 @@
         "source": "As of Jun, 2024. There is no available doc on vertex ai pricing gemini-1.0-ultra-001. Using gemini-1.0-pro pricing. Got max_tokens info here: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.0-ultra-001": {
+    "vertex_ai/gemini-1.0-ultra-001": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
@@ -5262,7 +5262,7 @@
         "source": "As of Jun, 2024. There is no available doc on vertex ai pricing gemini-1.0-ultra-001. Using gemini-1.0-pro pricing. Got max_tokens info here: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.0-pro-002": {
+    "vertex_ai/gemini-1.0-pro-002": {
         "max_tokens": 8192,
         "max_input_tokens": 32760,
         "max_output_tokens": 8192,
@@ -5279,7 +5279,7 @@
         "deprecation_date": "2025-04-09",
         "supports_tool_choice": true
     },
-    "gemini-1.5-pro": {
+    "vertex_ai/gemini-1.5-pro": {
         "max_tokens": 8192,
         "max_input_tokens": 2097152,
         "max_output_tokens": 8192,
@@ -5307,7 +5307,7 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-1.5-pro-002": {
+    "vertex_ai/gemini-1.5-pro-002": {
         "max_tokens": 8192,
         "max_input_tokens": 2097152,
         "max_output_tokens": 8192,
@@ -5335,7 +5335,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-1.5-pro",
         "deprecation_date": "2025-09-24"
     },
-    "gemini-1.5-pro-001": {
+    "vertex_ai/gemini-1.5-pro-001": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5363,7 +5363,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "deprecation_date": "2025-05-24"
     },
-    "gemini-1.5-pro-preview-0514": {
+    "vertex_ai/gemini-1.5-pro-preview-0514": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5389,7 +5389,7 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-1.5-pro-preview-0215": {
+    "vertex_ai/gemini-1.5-pro-preview-0215": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5415,7 +5415,7 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-1.5-pro-preview-0409": {
+    "vertex_ai/gemini-1.5-pro-preview-0409": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5440,7 +5440,7 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-1.5-flash": {
+    "vertex_ai/gemini-1.5-flash": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5473,7 +5473,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.5-flash-exp-0827": {
+    "vertex_ai/gemini-1.5-flash-exp-0827": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5506,7 +5506,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.5-flash-002": {
+    "vertex_ai/gemini-1.5-flash-002": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -5540,7 +5540,7 @@
         "deprecation_date": "2025-09-24",
         "supports_tool_choice": true
     },
-    "gemini-1.5-flash-001": {
+    "vertex_ai/gemini-1.5-flash-001": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5574,7 +5574,7 @@
         "deprecation_date": "2025-05-24",
         "supports_tool_choice": true
     },
-    "gemini-1.5-flash-preview-0514": {
+    "vertex_ai/gemini-1.5-flash-preview-0514": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5606,7 +5606,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-pro-experimental": {
+    "vertex_ai/gemini-pro-experimental": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5620,7 +5620,7 @@
         "supports_tool_choice": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
     },
-    "gemini-flash-experimental": {
+    "vertex_ai/gemini-flash-experimental": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
@@ -5634,7 +5634,7 @@
         "supports_tool_choice": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
     },
-    "gemini-pro-vision": {
+    "vertex_ai/gemini-pro-vision": {
         "max_tokens": 2048,
         "max_input_tokens": 16384,
         "max_output_tokens": 2048,
@@ -5651,7 +5651,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.0-pro-vision": {
+    "vertex_ai/gemini-1.0-pro-vision": {
         "max_tokens": 2048,
         "max_input_tokens": 16384,
         "max_output_tokens": 2048,
@@ -5668,7 +5668,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-1.0-pro-vision-001": {
+    "vertex_ai/gemini-1.0-pro-vision-001": {
         "max_tokens": 2048,
         "max_input_tokens": 16384,
         "max_output_tokens": 2048,
@@ -5686,7 +5686,7 @@
         "deprecation_date": "2025-04-09",
         "supports_tool_choice": true
     },
-    "medlm-medium": {
+    "vertex_ai/medlm-medium": {
         "max_tokens": 8192,
         "max_input_tokens": 32768,
         "max_output_tokens": 8192,
@@ -5697,7 +5697,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "medlm-large": {
+    "vertex_ai/medlm-large": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
@@ -5708,7 +5708,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
-    "gemini-2.5-pro-exp-03-25": {
+    "vertex_ai/gemini-2.5-pro-exp-03-25": {
         "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -5747,7 +5747,7 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
-    "gemini-2.0-pro-exp-02-05": {
+    "vertex_ai/gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
         "max_input_tokens": 2097152,
         "max_output_tokens": 8192,
@@ -5786,7 +5786,7 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
-    "gemini-2.0-flash-exp": {
+    "vertex_ai/gemini-2.0-flash-exp": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -5830,7 +5830,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_tool_choice": true
     },
-    "gemini-2.0-flash-001": {
+    "vertex_ai/gemini-2.0-flash-001": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -5864,7 +5864,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "deprecation_date": "2026-02-05"
     },
-    "gemini-2.0-flash-thinking-exp": {
+    "vertex_ai/gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -5908,7 +5908,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true
     },
-    "gemini-2.0-flash-thinking-exp-01-21": {
+    "vertex_ai/gemini-2.0-flash-thinking-exp-01-21": {
         "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -6033,7 +6033,7 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
     },
-    "gemini-2.5-flash-preview-04-17": {
+    "vertex_ai/gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -6072,7 +6072,7 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
     },
-    "gemini-2.0-flash": {
+    "vertex_ai/gemini-2.0-flash": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
@@ -6106,7 +6106,7 @@
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash"
     },
-    "gemini-2.0-flash-lite": {
+    "vertex_ai/gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
@@ -6137,7 +6137,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true
     },
-    "gemini-2.0-flash-lite-001": {
+    "vertex_ai/gemini-2.0-flash-lite-001": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
@@ -6169,7 +6169,7 @@
         "supports_tool_choice": true,
         "deprecation_date": "2026-02-25"
     },
-    "gemini-2.5-pro-preview-03-25": {
+    "vertex_ai/gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -7118,7 +7118,7 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
-    "text-embedding-004": {
+    "vertex_ai/text-embedding-004": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -7129,7 +7129,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "text-embedding-005": {
+    "vertex_ai/text-embedding-005": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -7140,7 +7140,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "text-multilingual-embedding-002": {
+    "vertex_ai/text-multilingual-embedding-002": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -7151,7 +7151,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "multimodalembedding": {
+    "vertex_ai/multimodalembedding": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -7174,7 +7174,7 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "multimodalembedding@001": {
+    "vertex_ai/multimodalembedding@001": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "output_vector_size": 768,
@@ -7197,7 +7197,7 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "text-embedding-large-exp-03-07": {
+    "vertex_ai/text-embedding-large-exp-03-07": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "output_vector_size": 3072,
@@ -7208,7 +7208,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
-    "textembedding-gecko": {
+    "vertex_ai/textembedding-gecko": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7219,7 +7219,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "textembedding-gecko-multilingual": {
+    "vertex_ai/textembedding-gecko-multilingual": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7230,7 +7230,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "textembedding-gecko-multilingual@001": {
+    "vertex_ai/textembedding-gecko-multilingual@001": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7241,7 +7241,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "textembedding-gecko@001": {
+    "vertex_ai/textembedding-gecko@001": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7252,7 +7252,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "textembedding-gecko@003": {
+    "vertex_ai/textembedding-gecko@003": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7263,7 +7263,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "text-embedding-preview-0409": {
+    "vertex_ai/text-embedding-preview-0409": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
@@ -7274,7 +7274,7 @@
         "mode": "embedding",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
-    "text-multilingual-embedding-preview-0409": {
+    "vertex_ai/text-multilingual-embedding-preview-0409": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "output_vector_size": 768,
