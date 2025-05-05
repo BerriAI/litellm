@@ -6,6 +6,7 @@ Callback to log events to a Generic API Endpoint
 - Flushes based on CustomBatchLogger settings
 """
 
+import asyncio
 import os
 import traceback
 import uuid
@@ -27,6 +28,7 @@ class GenericAPILogger(CustomBatchLogger):
         self,
         endpoint: Optional[str] = None,
         headers: Optional[dict] = None,
+        **kwargs,
     ):
         """
         Initialize the GenericAPILogger
@@ -35,6 +37,12 @@ class GenericAPILogger(CustomBatchLogger):
             endpoint: Optional[str] = None,
             headers: Optional[dict] = None,
         """
+        #########################################################
+        # Init httpx client
+        #########################################################
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         endpoint = endpoint or os.getenv("GENERIC_LOGGER_ENDPOINT")
         if endpoint is None:
             raise ValueError(
@@ -43,13 +51,17 @@ class GenericAPILogger(CustomBatchLogger):
         headers = headers or litellm.generic_logger_headers
         self.endpoint: str = endpoint
         self.headers: Dict = headers or {}
-        self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
         verbose_logger.debug(
             f"in init GenericAPILogger, endpoint {self.endpoint}, headers {self.headers}"
         )
+
+        #########################################################
+        # Init variables for batch flushing logs
+        #########################################################
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
+        asyncio.create_task(self.periodic_flush())
+        self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
