@@ -10,7 +10,7 @@ export async function loginToUI(page: Page) {
   console.log("Login form is visible");
 
   await page.fill('input[name="username"]', "admin");
-  await page.fill('input[name="password"]', "gm");
+  await page.fill('input[name="password"]', "sk-1234");
   console.log("Filled login credentials");
 
   const loginButton = page.locator('input[type="submit"]');

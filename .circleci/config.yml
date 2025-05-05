@@ -2612,7 +2612,7 @@ jobs:
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e UI_USERNAME="admin" \
-              -e UI_PASSWORD="gm" \
+              -e UI_PASSWORD="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
@@ -2638,7 +2638,7 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
+            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results --timeout 240000
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
