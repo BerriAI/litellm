@@ -28,6 +28,7 @@ class SupportedGuardrailIntegrations(Enum):
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
+    PANGEA = "pangea"
 
 
 class Role(Enum):
@@ -365,6 +366,8 @@ class LitellmParams(
         description="Will mask response content if guardrail makes any changes",
     )
 
+    # pangea params
+    pangea_recipe: Optional[str]
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
