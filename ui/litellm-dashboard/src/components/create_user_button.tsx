@@ -92,6 +92,7 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState(false);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
+  const teamRoleFormValue = Form.useWatch("team_id", form);
   const router = useRouter();
   const isLocal = process.env.NODE_ENV === "development";
 
@@ -254,7 +255,7 @@ const Createuser: React.FC<CreateuserProps> = ({
               )}
           </Select2>
         </Form.Item>
-        <Form.Item label="Team ID" name="team_id">
+        <Form.Item label="Team ID" name="team_id" >
           <Select placeholder="Select Team ID" style={{ width: "100%" }}>
             {teams ? (
               teams.map((team: any) => (
@@ -349,7 +350,7 @@ const Createuser: React.FC<CreateuserProps> = ({
             label="Team ID"
             className="gap-2"
             name="team_id"
-            help="If selected, user will be added as a 'user' role to the team."
+            help="If selected, user will be added as a 'user' role to the team, unless specified otherwise in Team Role."
           >
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
@@ -366,9 +367,21 @@ const Createuser: React.FC<CreateuserProps> = ({
             </Select>
           </Form.Item>
 
-          <Form.Item label="Team Role" className="gap-2" name="team_member_role">
-            <Select placeholder="Select Team Role" style={{ width: "100%" }}>
-              {teamMemberRoles.map((teamMemberRole) => (
+          <Form.Item 
+          label={
+            <span>
+              Team Role{" "}
+              <Tooltip title="Use to change default team member role. Note: Assigning the 'admin' role is an enterprise feature.">
+                <InfoCircleOutlined />
+              </Tooltip>
+            </span>
+          }
+          className="gap-2" 
+          name="team_member_role"
+          help=""
+          >
+            <Select placeholder="Select Team Role" style={{ width: "100%" }} disabled={teamRoleFormValue === undefined}>
+              { teamMemberRoles.map((teamMemberRole) => (
                 <Select.Option
                   key={teamMemberRole.value}
                   value={teamMemberRole.value}

@@ -54,6 +54,11 @@ export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
+export interface TeamMemberDetails {
+  team_id: string;
+  team_member_role: string;
+}
+
 
 const baseUrl = "/"; // Assuming the base URL is the root
 
@@ -511,6 +516,22 @@ export const keyCreateCall = async (
   }
 };
 
+export const extractTeamDetails = async (formValues: Record<string, any>) => {
+  let team_member_details: TeamMemberDetails = {
+    team_id: formValues.team_id,
+    team_member_role: formValues.team_member_role
+  }
+
+  return team_member_details;
+  
+}
+
+export const removeFormValue = async (formValues: Record<string, any>, formValue: string) => {
+  const processedFormValues = Object.fromEntries( Object.entries(formValues).filter(([key]) => key !== formValue))
+  
+  return processedFormValues;
+}
+
 export const userCreateCall = async (
   accessToken: string,
   userID: string | null,
@@ -542,6 +563,16 @@ export const userCreateCall = async (
       } catch (error) {
         throw new Error("Failed to parse metadata: " + error);
       }
+    }
+
+    if(formValues.team_member_role){
+      console.log("formValues.team_member_role: " + formValues.team_member_role);
+
+      formValues.team_member_details = await extractTeamDetails(formValues);
+
+      console.log("formValues after processing: " + JSON.stringify(formValues));
+
+      console.log("processed form: " + JSON.stringify(await removeFormValue(formValues, "team_member_role")));
     }
 
     console.log("Form Values after check:", formValues);

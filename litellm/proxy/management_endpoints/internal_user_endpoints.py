@@ -177,7 +177,7 @@ async def new_user(
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
-    - team_member_role: Optional[str] - Specify role of team user is being added to.
+    - team_member_details: Optional[dict] - Specify role of team user is being added to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
@@ -247,15 +247,19 @@ async def new_user(
                 team_member_add,
                 team_call_validation_checks
             )
-            
+
             team_member_add_request=TeamMemberAddRequest(
                 team_id=data_json.get("team_id", None),
                 member=Member(
                     user_id=data_json.get("user_id", None),
                     # role="user",
-                    role=data_json.get("team_member_role", "user"),
+                    role=data_json["team_member_details"]["team_member_role"],
                     user_email=data_json.get("user_email", None),
                 )
+            )
+
+            verbose_proxy_logger.info(
+                "Team Member Role {}".format(str(data_json["team_member_details"]["team_member_role"]))
             )
 
             try:
@@ -266,7 +270,6 @@ async def new_user(
             )
             except HTTPException as e:
                 raise e
-
 
             try:
                 await team_member_add(

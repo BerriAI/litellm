@@ -803,7 +803,7 @@ class NewUserRequest(GenerateRequestBase):
         ]
     ] = None
     teams: Optional[list] = None
-    team_member_role: Optional[str]
+    team_member_details: Optional[dict] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
