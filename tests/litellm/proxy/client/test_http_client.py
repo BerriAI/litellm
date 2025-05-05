@@ -26,13 +26,13 @@ def test_request_get(client):
         json={"models": []},
         status=200,
     )
-    
+
     # Make request
     response = client.request("GET", "/models")
-    
+
     # Check response
     assert response == {"models": []}
-    
+
     # Check request
     assert len(responses.calls) == 1
     assert responses.calls[0].request.url == "http://localhost:4000/models"
@@ -49,23 +49,20 @@ def test_request_post_with_json(client):
         json={"id": "model-123"},
         status=200,
     )
-    
+
     # Test data
-    json_data = {
-        "model": "gpt-4",
-        "params": {"temperature": 0.7}
-    }
-    
+    json_data = {"model": "gpt-4", "params": {"temperature": 0.7}}
+
     # Make request
     response = client.request(
         "POST",
         "/models",
         json=json_data,
     )
-    
+
     # Check response
     assert response == {"id": "model-123"}
-    
+
     # Check request
     assert len(responses.calls) == 1
     assert responses.calls[0].request.url == "http://localhost:4000/models"
@@ -82,7 +79,7 @@ def test_request_with_custom_headers(client):
         json={"models": []},
         status=200,
     )
-    
+
     # Make request with custom headers
     custom_headers = {
         "X-Custom-Header": "test-value",
@@ -93,7 +90,7 @@ def test_request_with_custom_headers(client):
         "/models",
         headers=custom_headers,
     )
-    
+
     # Check request headers
     assert len(responses.calls) == 1
     request_headers = responses.calls[0].request.headers
@@ -112,11 +109,11 @@ def test_request_http_error(client):
         json={"error": "Not authorized"},
         status=401,
     )
-    
+
     # Check that request raises exception
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.request("GET", "/models")
-    
+
     assert exc_info.value.response.status_code == 401
 
 
@@ -130,7 +127,7 @@ def test_request_invalid_json(client):
         body="not json",
         status=200,
     )
-    
+
     # Check that request raises exception
     with pytest.raises(json.JSONDecodeError) as exc_info:
         client.request("GET", "/models")
@@ -148,7 +145,7 @@ def test_base_url_trailing_slash():
 def test_uri_leading_slash():
     """Test that URIs with and without leading slashes work."""
     client = HTTPClient(base_url="http://localhost:4000")
-    
+
     with responses.RequestsMock() as rsps:
         # Mock endpoint
         rsps.add(
@@ -156,12 +153,12 @@ def test_uri_leading_slash():
             "http://localhost:4000/models",
             json={"models": []},
         )
-        
+
         # Both of these should work and hit the same endpoint
         client.request("GET", "/models")
         client.request("GET", "models")
-        
+
         # Check that both requests went to the same URL
         assert len(rsps.calls) == 2
         assert rsps.calls[0].request.url == "http://localhost:4000/models"
-        assert rsps.calls[1].request.url == "http://localhost:4000/models" 
+        assert rsps.calls[1].request.url == "http://localhost:4000/models"

@@ -309,3 +309,42 @@ def test_delete_unauthorized_error(client, requests_mock):
 
     with pytest.raises(UnauthorizedError):
         client.delete(keys=["key-to-delete"])
+
+
+def test_info_request_minimal(client, base_url, api_key):
+    """Test info request with minimal parameters"""
+    request = client.info(key="test-key", return_request=True)
+    assert request.method == "GET"
+    assert request.url == f"{base_url}/keys/info?key=test-key"
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"] == f"Bearer {api_key}"
+
+
+def test_info_mock_response(client, requests_mock):
+    """Test info with a mocked successful response"""
+    mock_response = {
+        "key": "test-key",
+        "user_id": "user123",
+        "team_id": "team456",
+        "models": ["gpt-4"],
+        "spend": 100.0,
+    }
+    requests_mock.get(f"{client._base_url}/keys/info?key=test-key", json=mock_response)
+    response = client.info(key="test-key")
+    assert response == mock_response
+
+
+def test_info_unauthorized_error(client, requests_mock):
+    """Test that info raises UnauthorizedError for 401 responses"""
+    requests_mock.get(f"{client._base_url}/keys/info?key=test-key", status_code=401, json={"error": "Unauthorized"})
+    with pytest.raises(UnauthorizedError):
+        client.info(key="test-key")
+
+
+def test_info_server_error(client, requests_mock):
+    """Test that info raises HTTPError for server errors"""
+    requests_mock.get(
+        f"{client._base_url}/keys/info?key=test-key", status_code=500, json={"error": "Internal Server Error"}
+    )
+    with pytest.raises(requests.exceptions.HTTPError):
+        client.info(key="test-key")
