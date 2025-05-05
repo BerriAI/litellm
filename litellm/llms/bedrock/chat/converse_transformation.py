@@ -34,7 +34,14 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Function,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
@@ -690,6 +697,65 @@ class AmazonConverseConfig(BaseConfig):
         )
         return openai_usage
 
+    def get_tool_call_names(
+        self,
+        tools: Optional[
+            Union[List[ToolBlock], List[OpenAIChatCompletionToolParam]]
+        ] = None,
+    ) -> List[str]:
+        if tools is None:
+            return []
+        tool_set: set[str] = set()
+        for tool in tools:
+            tool_spec = tool.get("toolSpec")
+            function = tool.get("function")
+            if tool_spec is not None:
+                _name = cast(dict, tool_spec).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
+            if function is not None:
+                _name = cast(dict, function).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
+        return list(tool_set)
+
+    def apply_tool_call_transformation_if_needed(
+        self,
+        message: Message,
+        tools: Optional[List[ToolBlock]] = None,
+        initial_finish_reason: Optional[str] = None,
+    ) -> Tuple[Message, Optional[str]]:
+        """
+        Apply tool call transformation to a message.
+
+        LLM providers (e.g. Bedrock, Vertex AI) sometimes return tool call in the response content.
+
+        If the response content is a JSON object, we can parse it and return the tool call in the tool_calls field.
+        """
+        returned_finish_reason = initial_finish_reason
+        if tools is None:
+            return message, returned_finish_reason
+
+        if message.content is not None:
+            try:
+                tool_call_names = self.get_tool_call_names(tools)
+                json_content = json.loads(message.content)
+                if (
+                    json_content.get("type") == "function"
+                    and json_content.get("name") in tool_call_names
+                ):
+                    tool_calls = [
+                        ChatCompletionMessageToolCall(function=Function(**json_content))
+                    ]
+
+                    message.tool_calls = tool_calls
+                    message.content = None
+                    returned_finish_reason = "tool_calls"
+            except Exception:
+                pass
+
+        return message, returned_finish_reason
+
     def _transform_response(
         self,
         model: str,
@@ -819,11 +885,23 @@ class AmazonConverseConfig(BaseConfig):
         ## CALCULATING USAGE - bedrock returns usage in the headers
         usage = self._transform_usage(completion_response["usage"])
 
+        ## HANDLE TOOL CALLS
+        _message = Message(**chat_completion_message)
+        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+
+        (
+            returned_message,
+            returned_finish_reason,
+        ) = self.apply_tool_call_transformation_if_needed(
+            message=_message,
+            tools=optional_params.get("tools"),
+            initial_finish_reason=initial_finish_reason,
+        )
         model_response.choices = [
             litellm.Choices(
-                finish_reason=map_finish_reason(completion_response["stopReason"]),
+                finish_reason=returned_finish_reason,
                 index=0,
-                message=litellm.Message(**chat_completion_message),
+                message=returned_message,
             )
         ]
         model_response.created = int(time.time())
