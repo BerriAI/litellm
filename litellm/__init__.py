@@ -132,6 +132,9 @@ datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged p
 gcs_pub_sub_use_v1: Optional[bool] = (
     False  # if you want to use v1 gcs pubsub logged payload
 )
+generic_api_use_v1: Optional[bool] = (
+    False  # if you want to use v1 generic api logged payload
+)
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Union[str, Callable, CustomLogger]] = (
     []
