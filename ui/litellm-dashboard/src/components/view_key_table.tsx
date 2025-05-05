@@ -280,42 +280,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const handleModelLimitClick = (token: KeyResponse) => {
-    setSelectedToken(token);
-    setModelLimitModalVisible(true);
-  };
-
-  const handleModelLimitSubmit = async (updatedMetadata: any) => {
-    if (accessToken == null || selectedToken == null) {
-      return;
-    }
-
-    const formValues = {
-      ...selectedToken,
-      metadata: updatedMetadata,
-      key: selectedToken.token,
-    };
-
-    try {
-      let newKeyValues = await keyUpdateCall(accessToken, formValues);
-      console.log("Model limits updated:", newKeyValues);
-
-      // Update the keys with the updated key
-      if (data) {
-        const updatedData = data.map((key) =>
-          key.token === selectedToken.token ? newKeyValues : key
-        );
-        setData(updatedData);
-      }
-      message.success("Model-specific limits updated successfully");
-    } catch (error) {
-      console.error("Error updating model-specific limits:", error);
-      message.error("Failed to update model-specific limits");
-    }
-
-    setModelLimitModalVisible(false);
-    setSelectedToken(null);
-  };
 
   useEffect(() => {
     if (teams) {

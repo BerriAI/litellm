@@ -452,6 +452,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -804,6 +805,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider == "bedrock":
                 if (
@@ -975,6 +977,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "sagemaker"
@@ -1093,6 +1096,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "vertex_ai"
@@ -1307,6 +1311,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"GeminiException - {original_exception.message}",
                         model=model,
                         llm_provider="palm",
+                        exception_status_code=original_exception.status_code,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
@@ -2050,6 +2055,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -2144,6 +2150,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True

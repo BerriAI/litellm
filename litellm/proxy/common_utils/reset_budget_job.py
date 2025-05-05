@@ -1,11 +1,10 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -328,8 +327,11 @@ class ResetBudgetJob:
         try:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                duration_s = duration_in_seconds(duration=item.budget_duration)
-                item.budget_reset_at = current_time + timedelta(seconds=duration_s)
+                # Get standardized reset time based on budget duration
+                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+                item.budget_reset_at = get_budget_reset_time(
+                    budget_duration=item.budget_duration
+                )
             return item
         except Exception as e:
             verbose_proxy_logger.exception(

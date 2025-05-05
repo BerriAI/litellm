@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -1118,12 +1119,12 @@ async def get_org_object(
         )
 
 
-async def _can_object_call_model(
+def _can_object_call_model(
     model: str,
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
-    object_type: Literal["user", "team", "key"] = "user",
+    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1133,7 +1134,7 @@ async def _can_object_call_model(
         - llm_router: Optional[Router]
         - models: List[str]
         - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key"]. We use the object type to raise the correct exception type
+        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
 
     Returns:
         - True: if token allowed to call model
@@ -1232,12 +1233,31 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
         object_type="key",
+    )
+
+
+def can_org_access_model(
+    model: str,
+    org_object: Optional[LiteLLM_OrganizationTable],
+    llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+) -> Literal[True]:
+    """
+    Returns True if the team can access a specific model.
+
+    """
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=org_object.models if org_object else [],
+        team_model_aliases=team_model_aliases,
+        object_type="org",
     )
 
 
@@ -1251,7 +1271,7 @@ async def can_team_access_model(
     Returns True if the team can access a specific model.
 
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=team_object.models if team_object else [],
@@ -1276,7 +1296,7 @@ async def can_user_call_model(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
@@ -1338,6 +1358,7 @@ async def _virtual_key_max_budget_check(
             team_id=valid_token.team_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1383,6 +1404,7 @@ async def _virtual_key_soft_budget_check(
             team_alias=valid_token.team_alias,
             user_email=None,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1418,6 +1440,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(

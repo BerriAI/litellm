@@ -34,6 +34,7 @@ import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import MCPToolsViewer from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
+import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from '@/lib/cva.config';
 
@@ -404,6 +405,12 @@ export default function CreateKeyPage() {
                 />
               ) : page == "tag-management" ? (
                 <TagManagement
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "vector-stores" ? (
+                <VectorStoreManagement
                   accessToken={accessToken}
                   userRole={userRole}
                   userID={userID}

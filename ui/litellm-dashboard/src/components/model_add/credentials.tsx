@@ -38,12 +38,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
   const [form] = Form.useForm();
-  console.log(`selectedCredential in credentials panel: ${JSON.stringify(selectedCredential)}`);
 
   const restrictedFields = ['credential_name', 'custom_llm_provider'];
   const handleUpdateCredential = async (values: any) => {
     if (!accessToken) {
-      console.error('No access token found');
       return;
     }
 
@@ -61,14 +59,12 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
 
     const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
     message.success('Credential updated successfully');
-    console.log(`response: ${JSON.stringify(response)}`);
     setIsUpdateModalOpen(false);
     fetchCredentials(accessToken);
   }
 
   const handleAddCredential = async (values: any) => {
     if (!accessToken) {
-      console.error('No access token found');
       return;
     }
 
@@ -87,7 +83,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     // Add to list and close modal
     const response = await credentialCreateCall(accessToken, newCredential);
     message.success('Credential added successfully');
-    console.log(`response: ${JSON.stringify(response)}`);
     setIsAddModalOpen(false);
     fetchCredentials(accessToken);
   };
@@ -120,11 +115,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
 
   const handleDeleteCredential = async (credentialName: string) => {
     if (!accessToken) {
-      console.error('No access token found');
       return;
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
-    console.log(`response: ${JSON.stringify(response)}`);
     message.success('Credential deleted successfully');
     fetchCredentials(accessToken);
   };
@@ -175,7 +168,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                       variant="light" 
                       size="sm"
                       onClick={() => {
-                        console.log(`credential being set: ${JSON.stringify(credential)}`);
                         setSelectedCredential(credential);
                         setIsUpdateModalOpen(true);
                       }}

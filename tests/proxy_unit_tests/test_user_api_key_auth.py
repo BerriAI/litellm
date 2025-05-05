@@ -999,3 +999,40 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         except ProxyException as e:
             print("e", e)
             assert "Only proxy admin can be used to generate" in str(e.message)
+
+
+@pytest.mark.asyncio
+async def test_x_litellm_api_key():
+    """
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_TeamTableCachedObj,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    master_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    ignored_key = "aj12445"
+
+    # Create request with headers as bytes
+    request = Request(
+        scope={
+            "type": "http"
+        }
+    )
+    request._url = URL(url="/chat/completions")
+
+    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
+    assert valid_token.token == hash_token(master_key)
+

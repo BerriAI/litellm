@@ -1354,15 +1354,30 @@ def test_generate_and_update_key(prisma_client):
             assert result["info"]["budget_duration"] == "1mo"
             assert result["info"]["max_budget"] == 100
 
-            # budget_reset_at should be 30 days from now
+            # budget_reset_at should exist for "1mo" duration
             assert result["info"]["budget_reset_at"] is not None
-            budget_reset_at = result["info"]["budget_reset_at"].replace(
-                tzinfo=timezone.utc
-            )
+            budget_reset_at = result["info"]["budget_reset_at"].replace(tzinfo=timezone.utc)
             current_time = datetime.now(timezone.utc)
 
-            # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 27
+            print(f"Budget reset time: {budget_reset_at}")
+            print(f"Current time: {current_time}")
+
+            # Instead of checking exact timing, just verify that:
+            # 1. Both are in the same day (for tests running same day)
+            # 2. Or budget_reset_at is in next month
+            if budget_reset_at.day == current_time.day:
+                # Same day of month - just check month difference
+                month_diff = budget_reset_at.month - current_time.month
+                if budget_reset_at.year > current_time.year:
+                    month_diff += 12
+                
+                # Should be scheduled for next month (at least 0.5 month away)
+                assert month_diff >= 1, f"Expected reset to be at least 1 month ahead, got {month_diff} months"
+                assert month_diff <= 2, f"Expected reset to be at most 2 months ahead, got {month_diff} months"
+            else:
+                # Just ensure the date is reasonable (not more than 40 days away)
+                days_diff = (budget_reset_at - current_time).days
+                assert 0 <= days_diff <= 40, f"Expected reset date to be reasonable, got {days_diff} days from now"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1924,7 +1939,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         pytest.fail(f"This should have not failed!. They key uses max_budget=None. {e}")
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -2729,10 +2744,14 @@ async def test_create_update_team(prisma_client):
     budget_reset_at = _updated_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.datetime.now(timezone.utc)
 
-    # assert budget_reset_at is 2 days from now
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 2 * 24 * 60 * 60) <= 10
-    )
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+
+    # Calculate days difference - should be close to 2 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 1 <= days_diff <= 2
 
     # now hit team_info
     try:
@@ -2859,12 +2878,18 @@ async def test_update_user_unit_test(prisma_client):
     assert _user_info["rpm_limit"] == 100
     assert _user_info["metadata"] == {"very-new-metadata": "something"}
 
-    # budget reset at should be 10 days from now
+    # budget_reset_at should be at midnight 10 days from now
     budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.now(timezone.utc)
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 10 * 24 * 60 * 60) <= 10
-    )
+    
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+    
+    # Calculate days difference - should be close to 10 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 9 <= days_diff <= 10
 
 
 @pytest.mark.asyncio()

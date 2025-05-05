@@ -9,4 +9,21 @@ Litellm Proxy has the following release cycle:
 In production, we recommend using the latest `v1.x.x` release.
 
 
+<<<<<<< HEAD
 Follow our release notes [here](https://github.com/BerriAI/litellm/releases).
+=======
+Follow our release notes [here](https://github.com/BerriAI/litellm/releases).
+
+
+## FAQ
+
+### Is there a release schedule for LiteLLM stable release?
+
+Stable releases come out every week (typically Sunday)
+
+### What is considered a 'minor' bump vs. 'patch' bump?
+
+- 'patch' bumps: extremely minor addition that doesn't affect any existing functionality or add any user-facing features. (e.g. a 'created_at' column in a database table)
+- 'minor' bumps: add a new feature or a new database table that is backward compatible.
+- 'major' bumps: break backward compatibility.
+>>>>>>> b1e28a3bc4451addc512f0779babe57f32d52083
