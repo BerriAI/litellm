@@ -10,6 +10,7 @@ from .guardrail_initializers import (
     initialize_hide_secrets,
     initialize_lakera,
     initialize_presidio,
+    initialize_pangea,
 )
 
 guardrail_registry = {
@@ -20,4 +21,5 @@ guardrail_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.GURDRAILS_AI.value: initialize_guardrails_ai,
+    SupportedGuardrailIntegrations.PANGEA.value: initialize_pangea,
 }
