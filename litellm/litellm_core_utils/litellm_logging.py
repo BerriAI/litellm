@@ -141,6 +141,7 @@ except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
+    GenericAPILogger = CustomLogger
 
 _in_memory_loggers: List[Any] = []
 
@@ -3034,7 +3035,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _gcs_pubsub_logger = GcsPubSubLogger()
             _in_memory_loggers.append(_gcs_pubsub_logger)
             return _gcs_pubsub_logger  # type: ignore
-        elif logging_integration == "generic":
+        elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GenericAPILogger):
                     return callback
@@ -3184,7 +3185,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
                     return callback
-        elif logging_integration == "generic":
+        elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GenericAPILogger):
                     return callback
