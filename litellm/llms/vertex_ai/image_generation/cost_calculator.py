@@ -19,5 +19,6 @@ def cost_calculator(
     )
 
     output_cost_per_image: float = _model_info.get("output_cost_per_image") or 0.0
-    num_images: int = len(image_response.data)
+    # Handle the case where data might be None
+    num_images: int = len(image_response.data or [])
     return output_cost_per_image * num_images

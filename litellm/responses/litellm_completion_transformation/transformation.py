@@ -457,8 +457,9 @@ class LiteLLMCompletionResponsesConfig:
                     function=ChatCompletionToolParamFunctionChunk(
                         name=tool["name"],
                         description=tool.get("description") or "",
-                        parameters=tool.get("parameters", {}),
-                        strict=tool.get("strict", False),
+                        parameters=tool.get("parameters") or {},
+                        # To ensure it's always a boolean:
+                        strict=bool(tool.get("strict", False)),
                     ),
                 )
             )
