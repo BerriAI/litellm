@@ -5,6 +5,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     List,
     Literal,
     Optional,
@@ -20,8 +21,7 @@ from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
-    EmbeddingResponse,
-    ImageResponse,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardCallbackDynamicParams,
@@ -31,9 +31,12 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
     Span = Union[_Span, Any]
 else:
     Span = Any
+    LiteLLMLoggingObj = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -78,9 +81,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -95,7 +100,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -223,7 +228,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponseTypes,
     ) -> Any:
         pass
 

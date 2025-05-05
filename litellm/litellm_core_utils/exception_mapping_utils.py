@@ -311,6 +311,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif (
                     "invalid_request_error" in error_str
                     and "content_policy_violation" in error_str
+                ) or (
+                    "Invalid prompt" in error_str
+                    and "violating our usage policy" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
@@ -449,6 +452,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -801,6 +805,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider == "bedrock":
                 if (
@@ -972,6 +977,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "sagemaker"
@@ -1090,6 +1096,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "vertex_ai"
@@ -1304,6 +1311,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"GeminiException - {original_exception.message}",
                         model=model,
                         llm_provider="palm",
+                        exception_status_code=original_exception.status_code,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
@@ -2047,6 +2055,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -2141,6 +2150,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True

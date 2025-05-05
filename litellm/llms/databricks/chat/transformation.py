@@ -37,6 +37,7 @@ from litellm.types.llms.databricks import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -116,6 +117,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -313,13 +315,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @staticmethod
     def extract_reasoning_content(
         content: Optional[AllDatabricksContentValues],
-    ) -> Tuple[Optional[str], Optional[List[ChatCompletionThinkingBlock]]]:
+    ) -> Tuple[
+        Optional[str],
+        Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
+    ]:
         """
         Extract and return the reasoning content and thinking blocks
         """
         if content is None:
             return None, None
-        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ] = None
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:
@@ -338,7 +351,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                         thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
 
-    def _transform_choices(
+    def _transform_dbrx_choices(
         self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
     ) -> List[Choices]:
         transformed_choices = []
@@ -449,7 +462,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
 
-        model_response.choices = self._transform_choices(  # type: ignore
+        model_response.choices = self._transform_dbrx_choices(  # type: ignore
             choices=completion_response["choices"],
             json_mode=json_mode,
         )

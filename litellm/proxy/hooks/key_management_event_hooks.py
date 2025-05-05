@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
+    Litellm_EntityType,
     LiteLLM_VerificationToken,
     LitellmTableNames,
     ProxyErrorTypes,
@@ -305,7 +306,7 @@ class KeyManagementEventHooks:
             )
         event = WebhookEvent(
             event="key_created",
-            event_group="key",
+            event_group=Litellm_EntityType.KEY,
             event_message="API Key Created",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),

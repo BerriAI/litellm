@@ -61,6 +61,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/management_client",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -69,6 +70,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/model_discovery",
           ],
         },
         {
@@ -101,9 +103,17 @@ const sidebars = {
             "proxy/admin_ui_sso",
             "proxy/self_serve",
             "proxy/public_teams",
+            "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
-            "proxy/ui_logs"
+            {
+              type: "category",
+              label: "UI Logs",
+              items: [
+                "proxy/ui_logs",
+                "proxy/ui_logs_sessions"
+              ]
+            }
           ],
         },
         {
@@ -181,14 +191,22 @@ const sidebars = {
         slug: "/providers",
       },
       items: [
-        "providers/openai",
+        {
+          type: "category",
+          label: "OpenAI",
+          items: [
+            "providers/openai",
+            "providers/openai/responses_api",
+            "providers/openai/text_to_speech",
+          ]
+        },
         "providers/text_completion_openai",
         "providers/openai_compatible",
         "providers/azure",
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-        
+
         {
           type: "category",
           label: "Google AI Studio",
@@ -199,8 +217,16 @@ const sidebars = {
         },
         "providers/anthropic",
         "providers/aws_sagemaker",
-        "providers/bedrock",
+        {
+          type: "category",
+          label: "Bedrock",
+          items: [
+            "providers/bedrock",
+            "providers/bedrock_vector_store",
+          ]
+        },
         "providers/litellm_proxy",
+        "providers/meta_llama",
         "providers/mistral",
         "providers/codestral",
         "providers/cohere",
@@ -227,6 +253,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
+        "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
         "providers/cloudflare_workers",
@@ -262,6 +289,7 @@ const sidebars = {
         "reasoning_content",
         "completion/prompt_caching",
         "completion/predict_outputs",
+        "completion/knowledgebase",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",
@@ -330,6 +358,8 @@ const sidebars = {
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
+            "pass_through/vllm",
+            "pass_through/mistral",
             "pass_through/openai_passthrough",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
@@ -340,7 +370,15 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        "files_endpoints",
+
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
         "batches",
         "realtime",
         "fine_tuning",
@@ -399,9 +437,10 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/agentops_integration",
+        "observability/langfuse_integration",
         "observability/lunary_integration",
         "observability/mlflow",
-        "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/literalai_integration",
@@ -435,6 +474,10 @@ const sidebars = {
       label: "Tutorials",
       items: [
         "tutorials/openweb_ui",
+        "tutorials/openai_codex",
+        "tutorials/msft_sso",
+        "tutorials/prompt_caching",
+        "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
         {
           type: "category",

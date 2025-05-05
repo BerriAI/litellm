@@ -156,13 +156,19 @@ print(response)
 ```python
 import os 
 os.environ["OPENAI_ORGANIZATION"] = "your-org-id"       # OPTIONAL
-os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
+os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 ```
 
 ### OpenAI Chat Completion Models
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
+| gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
+| gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
+| o4-mini | `response = completion(model="o4-mini", messages=messages)` |
+| o3-mini | `response = completion(model="o3-mini", messages=messages)` |
+| o3 | `response = completion(model="o3", messages=messages)` |
 | o1-mini | `response = completion(model="o1-mini", messages=messages)` |
 | o1-preview | `response = completion(model="o1-preview", messages=messages)` |
 | gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
@@ -188,7 +194,7 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 | gpt-4-32k-0613        | `response = completion(model="gpt-4-32k-0613", messages=messages)` |
 
 
-These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
+These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.
 
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
@@ -614,8 +620,8 @@ os.environ["OPENAI_API_KEY"] = ""
 
 # set custom api base to your proxy
 # either set .env or litellm.api_base
-# os.environ["OPENAI_API_BASE"] = ""
-litellm.api_base = "your-openai-proxy-url"
+# os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"
+litellm.api_base = "https://your_host/v1"
 
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]

@@ -1,21 +1,17 @@
 model_list:
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: openai/gpt-4o
     litellm_params:
       model: openai/gpt-4o
-      api_key: fake-key
+      api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  default_team_settings:
-      - team_id: test_dev
-        success_callback: ["langfuse", "s3"]
-        langfuse_secret: secret-test-key
-        langfuse_public_key: public-test-key
-      - team_id: my_workflows
-        success_callback: ["langfuse", "s3"]
-        langfuse_secret: secret-workflows-key
-        langfuse_public_key: public-workflows-key
+vector_store_registry:
+  - vector_store_name: "bedrock-litellm-website-knowledgebase"
+    litellm_params:
+      vector_store_id: "T37J8R4WTM"
+      custom_llm_provider: "bedrock"
+      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
+      vector_store_metadata:
+        source: "https://www.litellm.com/docs"
+
+general_settings:
+  store_prompts_in_spend_logs: true

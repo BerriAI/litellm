@@ -162,7 +162,17 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class GenericLiteLLMParams(CredentialLiteLLMParams):
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+
+
+class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -183,12 +193,6 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
-
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
 
     max_file_size_mb: Optional[float] = None
 
@@ -560,6 +564,7 @@ class ModelGroupInfo(BaseModel):
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
+    supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -704,7 +709,11 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+    ]
+]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

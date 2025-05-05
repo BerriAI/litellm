@@ -3,7 +3,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# UI Logs Page
+# Getting Started with UI Logs
 
 View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM
 
@@ -52,4 +52,3 @@ If you do not want to store spend logs in DB, you can opt out with this setting
 general_settings:
   disable_spend_logs: True   # Disable writing spend logs to DB
 ```
-

@@ -1,7 +1,6 @@
 from typing import Literal, Optional
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.exceptions import BadRequestError
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
@@ -43,13 +42,16 @@ def get_supported_openai_params(  # noqa: PLR0915
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        verbose_logger.info(
-            f"using provider_config: {provider_config} for checking supported params"
-        )
         return provider_config.get_supported_openai_params(model=model)
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "meta_llama":
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders.LLAMA
+        )
+        if provider_config:
+            return provider_config.get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama_chat":
@@ -225,6 +227,10 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "infinity":
+        return litellm.InfinityEmbeddingConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "triton":
         if request_type == "embeddings":
             return litellm.TritonEmbeddingConfig().get_supported_openai_params(

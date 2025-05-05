@@ -6,6 +6,8 @@ export interface SpendMetrics {
   api_requests: number;
   successful_requests: number;
   failed_requests: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
 }
 
 export interface DailyData {
@@ -29,13 +31,17 @@ export interface KeyMetricWithMetadata {
   metrics: SpendMetrics;
   metadata: {
     key_alias: string | null;
+    team_id?: string | null;
   };
 }
 
 export interface ModelActivityData {
+  label: string;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;
+  total_cache_read_input_tokens: number;
+  total_cache_creation_input_tokens: number;
   total_tokens: number;
   prompt_tokens: number;
   completion_tokens: number;
@@ -50,17 +56,25 @@ export interface ModelActivityData {
       spend: number;
       successful_requests: number;
       failed_requests: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
     };
   }[];
 }
 
 export interface KeyMetadata {
   key_alias: string | null;
+  team_id: string | null;
 }
 
-export interface KeyMetricWithMetadata {
+export interface EntityMetadata {
+  alias: string;
+  id: string;
+}
+
+export interface EntityMetricWithMetadata {
   metrics: SpendMetrics;
-  metadata: KeyMetadata;
+  metadata: EntityMetadata;
 }
 
 export interface MetricWithMetadata {
