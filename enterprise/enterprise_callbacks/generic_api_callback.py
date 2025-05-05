@@ -48,9 +48,9 @@ class GenericAPILogger(CustomBatchLogger):
             raise ValueError(
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
             )
-        headers = headers or litellm.generic_logger_headers
+
+        self.headers: Dict = self._get_headers(headers)
         self.endpoint: str = endpoint
-        self.headers: Dict = headers or {}
         verbose_logger.debug(
             f"in init GenericAPILogger, endpoint {self.endpoint}, headers {self.headers}"
         )
@@ -62,6 +62,44 @@ class GenericAPILogger(CustomBatchLogger):
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
         self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
+
+    def _get_headers(self, headers: Optional[dict] = None):
+        """
+        Get headers for the Generic API Logger
+
+        Returns:
+            Dict: Headers for the Generic API Logger
+
+        Args:
+            headers: Optional[dict] = None
+        """
+        # Process headers from different sources
+        headers_dict = {}
+
+        # 1. First check for headers from env var
+        env_headers = os.getenv("GENERIC_LOGGER_HEADERS")
+        if env_headers:
+            try:
+                # Parse headers in format "key1=value1,key2=value2" or "key1=value1"
+                header_items = env_headers.split(",")
+                for item in header_items:
+                    if "=" in item:
+                        key, value = item.split("=", 1)
+                        headers_dict[key.strip()] = value.strip()
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Error parsing headers from environment variables: {str(e)}"
+                )
+
+        # 2. Update with litellm generic headers if available
+        if litellm.generic_logger_headers:
+            headers_dict.update(litellm.generic_logger_headers)
+
+        # 3. Override with directly provided headers if any
+        if headers:
+            headers_dict.update(headers)
+
+        return headers_dict
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

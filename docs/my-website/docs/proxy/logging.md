@@ -1891,10 +1891,21 @@ litellm_settings:
   success_callback: ["generic_api"]
 ```
 
-2. Set `GENERIC_LOGGER_ENDPOINT` to the endpoint + route we should send callback logs to
+2. Set Environment Variables for the custom API endpoint
+
+| Environment Variable | Details | Required |
+|----------|---------|----------|
+| `GENERIC_LOGGER_ENDPOINT` | The endpoint + route we should send callback logs to | Yes |
+| `GENERIC_LOGGER_HEADERS` | Optional: Set headers to be sent to the custom API endpoint | No, this is optional |
 
 ```shell showLineNumbers title=".env"
 GENERIC_LOGGER_ENDPOINT="https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a"
+
+
+# Optional: Set headers to be sent to the custom API endpoint
+GENERIC_LOGGER_HEADERS="Authorization=Bearer <your-api-key>"
+# if multiple headers, separate by commas
+GENERIC_LOGGER_HEADERS="Authorization=Bearer <your-api-key>,X-Custom-Header=custom-header-value"
 ```
 
 3. Start the proxy
