@@ -61,6 +61,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/management_client",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -190,7 +191,15 @@ const sidebars = {
         slug: "/providers",
       },
       items: [
-        "providers/openai",
+        {
+          type: "category",
+          label: "OpenAI",
+          items: [
+            "providers/openai",
+            "providers/openai/responses_api",
+            "providers/openai/text_to_speech",
+          ]
+        },
         "providers/text_completion_openai",
         "providers/openai_compatible",
         "providers/azure",
@@ -208,8 +217,16 @@ const sidebars = {
         },
         "providers/anthropic",
         "providers/aws_sagemaker",
-        "providers/bedrock",
+        {
+          type: "category",
+          label: "Bedrock",
+          items: [
+            "providers/bedrock",
+            "providers/bedrock_vector_store",
+          ]
+        },
         "providers/litellm_proxy",
+        "providers/meta_llama",
         "providers/mistral",
         "providers/codestral",
         "providers/cohere",
@@ -236,6 +253,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
+        "providers/llamafile",
         "providers/infinity",
         "providers/xinference",
         "providers/cloudflare_workers",

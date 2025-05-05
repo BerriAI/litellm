@@ -4860,6 +4860,54 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
+    "meta_llama/Llama-4-Scout-17B-16E-Instruct-FP8": {
+        "max_tokens": 128000,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 4028,
+        "litellm_provider": "meta_llama",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "source": "https://llama.developer.meta.com/docs/models",
+        "supports_tool_choice": false,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"]
+    },
+    "meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "max_tokens": 128000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 4028,
+        "litellm_provider": "meta_llama",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "source": "https://llama.developer.meta.com/docs/models",
+        "supports_tool_choice": false,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"]
+    },
+    "meta_llama/Llama-3.3-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4028,
+        "litellm_provider": "meta_llama",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "source": "https://llama.developer.meta.com/docs/models",
+        "supports_tool_choice": false,
+        "supported_modalities": ["text"],
+        "supported_output_modalities": ["text"]
+    },
+    "meta_llama/Llama-3.3-8B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4028,
+        "litellm_provider": "meta_llama",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "source": "https://llama.developer.meta.com/docs/models",
+        "supports_tool_choice": false,
+        "supported_modalities": ["text"],
+        "supported_output_modalities": ["text"]
+    },
     "gemini-pro": {
         "max_tokens": 8192,
         "max_input_tokens": 32760,
@@ -6308,6 +6356,62 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_tool_choice": true
+    },
+    "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": {
+        "max_tokens": 10e6,
+        "max_input_tokens": 10e6,
+        "max_output_tokens": 10e6,
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 0.70e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": {
+        "max_tokens": 10e6,
+        "max_input_tokens": 10e6,
+        "max_output_tokens": 10e6,
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 0.70e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": {
+        "max_tokens": 1e6,
+        "max_input_tokens": 1e6,
+        "max_output_tokens": 1e6,
+        "input_cost_per_token": 0.35e-6,
+        "output_cost_per_token": 1.15e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
+    },
+    "vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas": {
+        "max_tokens": 1e6,
+        "max_input_tokens": 1e6,
+        "max_output_tokens": 1e6,
+        "input_cost_per_token": 0.35e-6,
+        "output_cost_per_token": 1.15e-6,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true,
+        "supports_function_calling": true,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text", "code"]
     },
     "vertex_ai/meta/llama3-70b-instruct-maas": {
         "max_tokens": 32000,
@@ -8681,6 +8785,20 @@
         "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "us.amazon.nova-premier-v1:0": {
+        "max_tokens": 4096,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.0000125,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true
+    },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
@@ -8738,6 +8856,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -8856,6 +8975,7 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
         "supports_response_schema": true,
+        "supports_pdf_input": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
@@ -10822,42 +10942,6 @@
         "mode": "chat" ,
         "deprecation_date": "2025-02-22"
     },
-    "perplexity/sonar": { 
-        "max_tokens": 127072,
-        "max_input_tokens": 127072,
-        "max_output_tokens": 127072,
-        "input_cost_per_token": 0.000001, 
-        "output_cost_per_token": 0.000001,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar-pro": { 
-        "max_tokens": 200000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8096,
-        "input_cost_per_token": 0.000003, 
-        "output_cost_per_token": 0.000015,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar": { 
-        "max_tokens": 127072,
-        "max_input_tokens": 127072,
-        "max_output_tokens": 127072,
-        "input_cost_per_token": 0.000001, 
-        "output_cost_per_token": 0.000001,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
-    "perplexity/sonar-pro": { 
-        "max_tokens": 200000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8096,
-        "input_cost_per_token": 0.000003, 
-        "output_cost_per_token": 0.000015,  
-        "litellm_provider": "perplexity", 
-        "mode": "chat" 
-    },
     "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -10960,6 +11044,23 @@
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity",
         "mode": "chat"
+    },
+    "perplexity/sonar-deep-research": {
+        "max_tokens": 12000,
+        "max_input_tokens": 12000,
+        "max_output_tokens": 12000,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "output_cost_per_reasoning_token": 3e-5,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 5e-3,
+            "search_context_size_high": 5e-3
+        },
+        "supports_reasoning": true,
+        "supports_web_search": true
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": {
         "max_tokens": 16384,
