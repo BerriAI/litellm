@@ -441,6 +441,19 @@ def _count_messages(
                     raise ValueError(
                         f"Unsupported type {type(value)} for key tool_calls in message {message}"
                     )
+            elif key == "thinking_blocks":
+                if isinstance(value, List):
+                    for thinking_block in value:
+                        if thinking_block.get('type', None) == "thinking":
+                            num_tokens += params.count_function(thinking_block.get("thinking", ""))
+                        else:
+                            raise ValueError(
+                                f"Unsupported type {type(thinking_block)} for key thinking_blocks in message {message}"
+                            )
+                else:
+                    raise ValueError(
+                        f"Unsupported type {type(value)} for key thinking_blocks in message {message}"
+                    )
             elif isinstance(value, str):
                 num_tokens += params.count_function(value)
                 if key == "name":
