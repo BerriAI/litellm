@@ -115,6 +115,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "agentops",
     "anthropic_cache_control_hook",
     "bedrock_vector_store",
+    "generic_api",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -131,6 +132,9 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 gcs_pub_sub_use_v1: Optional[bool] = (
     False  # if you want to use v1 gcs pubsub logged payload
+)
+generic_api_use_v1: Optional[bool] = (
+    False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Union[str, Callable, CustomLogger]] = (

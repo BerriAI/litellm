@@ -134,13 +134,12 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
-    from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
+    from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
+    GenericAPILogger = CustomLogger  # type: ignore
 
 _in_memory_loggers: List[Any] = []
 
@@ -165,7 +164,6 @@ dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
-genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
@@ -1564,35 +1562,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                         service_name="langfuse",
                                         trace_id=_trace_id,
                                     )
-                    if callback == "generic":
-                        global genericAPILogger
-                        verbose_logger.debug("reaches langfuse for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
-                        if genericAPILogger is None:
-                            genericAPILogger = GenericAPILogger()  # type: ignore
-                        genericAPILogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
                     if callback == "greenscale" and greenscaleLogger is not None:
                         kwargs = {}
                         for k, v in self.model_call_details.items():
@@ -3064,6 +3033,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _gcs_pubsub_logger = GcsPubSubLogger()
             _in_memory_loggers.append(_gcs_pubsub_logger)
             return _gcs_pubsub_logger  # type: ignore
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
+            generic_api_logger = GenericAPILogger()
+            _in_memory_loggers.append(generic_api_logger)
+            return generic_api_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -3207,8 +3183,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
                     return callback
-
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
         return None
+
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error getting custom logger: {e}"
