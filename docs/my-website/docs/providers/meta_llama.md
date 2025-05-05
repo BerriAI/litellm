@@ -15,6 +15,22 @@ import TabItem from '@theme/TabItem';
 ```python showLineNumbers title="Environment Variables"
 os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
 ```
+
+## Supported Models
+
+:::info
+All models listed here https://llama.developer.meta.com/docs/models/ are supported. We actively maintain the list of models, token window, etc. [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
+
+:::
+
+
+| Model ID | Input context length | Output context length | Input Modalities | Output Modalities |
+| --- | --- | --- | --- | --- |
+| `Llama-4-Scout-17B-16E-Instruct-FP8` | 128k | 4028 | Text, Image | Text |
+| `Llama-4-Maverick-17B-128E-Instruct-FP8` | 128k | 4028 | Text, Image | Text |
+| `Llama-3.3-70B-Instruct` | 128k | 4028 | Text | Text |
+| `Llama-3.3-8B-Instruct` | 128k | 4028 | Text | Text |
+
 ## Usage - LiteLLM Python SDK
 
 ### Non-streaming
