@@ -42,6 +42,7 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
+from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
 from unittest.mock import patch
 
 # clear prometheus collectors / registry
@@ -79,6 +80,7 @@ callback_class_str_to_classType = {
     "anthropic_cache_control_hook": AnthropicCacheControlHook,
     "agentops": AgentOps,
     "bedrock_vector_store": BedrockVectorStore,
+    "generic_api": GenericAPILogger,
 }
 
 expected_env_vars = {
