@@ -134,14 +134,12 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
-    from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
+    from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
-    GenericAPILogger = CustomLogger
+    GenericAPILogger = CustomLogger  # type: ignore
 
 _in_memory_loggers: List[Any] = []
 
