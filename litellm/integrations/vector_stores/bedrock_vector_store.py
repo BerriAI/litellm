@@ -6,11 +6,13 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -26,6 +28,18 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBRetrievalResult,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.utils import StandardLoggingVectorStoreRequest
+from litellm.types.vector_stores import (
+    VectorStoreResultContent,
+    VectorStoreSearchResponse,
+    VectorStoreSearchResult,
+)
+from litellm.utils import load_credentials_from_list
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -33,8 +47,9 @@ else:
     StandardCallbackDynamicParams = Any
 
 
-class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
+class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
     CONTENT_PREFIX_STRING = "Context: \n\n"
+    CUSTOM_LLM_PROVIDER = "bedrock"
 
     def __init__(
         self,
@@ -58,25 +73,99 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Retrieves the context from the Bedrock Knowledge Base and appends it to the messages.
         """
-        vector_store_ids = non_default_params.pop("vector_store_ids", None)
+        if litellm.vector_store_registry is None:
+            return model, messages, non_default_params
+
+        vector_store_ids = litellm.vector_store_registry.pop_vector_store_ids_to_run(
+            non_default_params=non_default_params, tools=tools
+        )
+        vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
         if vector_store_ids:
             for vector_store_id in vector_store_ids:
-                response = await self.make_bedrock_kb_retrieve_request(
+                start_time = datetime.now()
+                query = self._get_kb_query_from_messages(messages)
+                bedrock_kb_response = await self.make_bedrock_kb_retrieve_request(
                     knowledge_base_id=vector_store_id,
-                    query=self._get_kb_query_from_messages(messages),
+                    query=query,
+                    non_default_params=non_default_params,
                 )
-                verbose_logger.debug(f"Bedrock Knowledge Base Response: {response}")
+                verbose_logger.debug(
+                    f"Bedrock Knowledge Base Response: {bedrock_kb_response}"
+                )
 
-                context_message = (
-                    self.get_chat_completion_message_from_bedrock_kb_response(response)
+                context_message, context_string = (
+                    self.get_chat_completion_message_from_bedrock_kb_response(
+                        bedrock_kb_response
+                    )
                 )
                 if context_message is not None:
                     messages.append(context_message)
+
+                #################################################################################################
+                ########## LOGGING for Standard Logging Payload, Langfuse, s3, LiteLLM DB etc. ##################
+                #################################################################################################
+                vector_store_search_response: VectorStoreSearchResponse = (
+                    self.transform_bedrock_kb_response_to_vector_store_search_response(
+                        bedrock_kb_response=bedrock_kb_response, query=query
+                    )
+                )
+                vector_store_request_metadata.append(
+                    StandardLoggingVectorStoreRequest(
+                        vector_store_id=vector_store_id,
+                        query=query,
+                        vector_store_search_response=vector_store_search_response,
+                        custom_llm_provider=self.CUSTOM_LLM_PROVIDER,
+                        start_time=start_time.timestamp(),
+                        end_time=datetime.now().timestamp(),
+                    )
+                )
+
+            litellm_logging_obj.model_call_details["vector_store_request_metadata"] = (
+                vector_store_request_metadata
+            )
+
         return model, messages, non_default_params
+
+    def transform_bedrock_kb_response_to_vector_store_search_response(
+        self,
+        bedrock_kb_response: BedrockKBResponse,
+        query: str,
+    ) -> VectorStoreSearchResponse:
+        """
+        Transform a BedrockKBResponse to a VectorStoreSearchResponse
+        """
+        retrieval_results: Optional[List[BedrockKBRetrievalResult]] = (
+            bedrock_kb_response.get("retrievalResults", None)
+        )
+        vector_store_search_response: VectorStoreSearchResponse = (
+            VectorStoreSearchResponse(search_query=query, data=[])
+        )
+        if retrieval_results is None:
+            return vector_store_search_response
+
+        vector_search_response_data: List[VectorStoreSearchResult] = []
+        for retrieval_result in retrieval_results:
+            content: Optional[BedrockKBContent] = retrieval_result.get("content", None)
+            if content is None:
+                continue
+            content_text: Optional[str] = content.get("text", None)
+            if content_text is None:
+                continue
+            vector_store_search_result: VectorStoreSearchResult = (
+                VectorStoreSearchResult(
+                    score=retrieval_result.get("score", None),
+                    content=[VectorStoreResultContent(text=content_text, type="text")],
+                )
+            )
+            vector_search_response_data.append(vector_store_search_result)
+        vector_store_search_response["data"] = vector_search_response_data
+        return vector_store_search_response
 
     def _get_kb_query_from_messages(self, messages: List[AllMessageValues]) -> str:
         """
@@ -148,6 +237,7 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         guardrail_version: Optional[str] = None,
         next_token: Optional[str] = None,
         retrieval_configuration: Optional[BedrockKBRetrievalConfiguration] = None,
+        non_default_params: Optional[dict] = None,
     ) -> BedrockKBResponse:
         """
         Make a Bedrock Knowledge Base retrieve request.
@@ -165,7 +255,21 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
         """
         from fastapi import HTTPException
 
-        credentials = self.get_credentials()
+        non_default_params = non_default_params or {}
+        load_credentials_from_list(kwargs=non_default_params)
+        credentials = self.get_credentials(
+            aws_access_key_id=non_default_params.get("aws_access_key_id", None),
+            aws_secret_access_key=non_default_params.get("aws_secret_access_key", None),
+            aws_session_token=non_default_params.get("aws_session_token", None),
+            aws_region_name=non_default_params.get("aws_region_name", None),
+            aws_session_name=non_default_params.get("aws_session_name", None),
+            aws_profile_name=non_default_params.get("aws_profile_name", None),
+            aws_role_name=non_default_params.get("aws_role_name", None),
+            aws_web_identity_token=non_default_params.get(
+                "aws_web_identity_token", None
+            ),
+            aws_sts_endpoint=non_default_params.get("aws_sts_endpoint", None),
+        )
         aws_region_name = self._get_aws_region_name(
             optional_params=self.optional_params
         )
@@ -230,33 +334,21 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             )
 
     @staticmethod
-    def should_use_prompt_management_hook(non_default_params: Dict) -> bool:
-        if non_default_params.get("vector_store_ids", None):
-            return True
-        return False
-
-    @staticmethod
-    def get_initialized_custom_logger(
-        non_default_params: Dict,
-    ) -> Optional[CustomLogger]:
+    def get_initialized_custom_logger() -> Optional[CustomLogger]:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )
 
-        if BedrockKnowledgeBaseHook.should_use_prompt_management_hook(
-            non_default_params
-        ):
-            return _init_custom_logger_compatible_class(
-                logging_integration="bedrock_knowledgebase_hook",
-                internal_usage_cache=None,
-                llm_router=None,
-            )
-        return None
+        return _init_custom_logger_compatible_class(
+            logging_integration="bedrock_vector_store",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
 
     @staticmethod
     def get_chat_completion_message_from_bedrock_kb_response(
         response: BedrockKBResponse,
-    ) -> Optional[ChatCompletionUserMessage]:
+    ) -> Tuple[Optional[ChatCompletionUserMessage], str]:
         """
         Retrieves the context from the Bedrock Knowledge Base response and returns a ChatCompletionUserMessage object.
         """
@@ -264,10 +356,10 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             "retrievalResults", None
         )
         if retrieval_results is None:
-            return None
+            return None, ""
 
         # string to combine the context from the knowledge base
-        context_string: str = BedrockKnowledgeBaseHook.CONTENT_PREFIX_STRING
+        context_string: str = BedrockVectorStore.CONTENT_PREFIX_STRING
         for retrieval_result in retrieval_results:
             retrieval_result_content: Optional[BedrockKBContent] = (
                 retrieval_result.get("content", None) or {}
@@ -284,4 +376,4 @@ class BedrockKnowledgeBaseHook(CustomPromptManagement, BaseAWSLLM):
             role="user",
             content=context_string,
         )
-        return message
+        return message, context_string

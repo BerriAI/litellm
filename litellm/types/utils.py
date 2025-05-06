@@ -2,7 +2,17 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -40,6 +50,11 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse
+
+if TYPE_CHECKING:
+    from .vector_stores import VectorStoreSearchResponse
+else:
+    VectorStoreSearchResponse = Any
 
 
 def _generate_id():  # private helper function
@@ -1705,6 +1720,42 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     """
 
 
+class StandardLoggingVectorStoreRequest(TypedDict, total=False):
+    """
+    Logging information for a vector store request/payload
+    """
+
+    vector_store_id: Optional[str]
+    """
+    ID of the vector store
+    """
+
+    custom_llm_provider: Optional[str]
+    """
+    Custom LLM provider the vector store is associated with eg. bedrock, openai, anthropic, etc.
+    """
+
+    query: Optional[str]
+    """
+    Query to the vector store
+    """
+
+    vector_store_search_response: Optional[VectorStoreSearchResponse]
+    """
+    OpenAI format vector store search response
+    """
+
+    start_time: Optional[float]
+    """
+    Start time of the vector store request
+    """
+
+    end_time: Optional[float]
+    """
+    End time of the vector store request
+    """
+
+
 class StandardBuiltInToolsParams(TypedDict, total=False):
     """
     Standard built-in OpenAItools parameters
@@ -1736,6 +1787,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
 
@@ -2104,6 +2156,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
+    LLAMA = "meta_llama"
 
 
 # Create a set of all provider values for quick lookup

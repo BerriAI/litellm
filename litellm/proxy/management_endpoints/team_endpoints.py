@@ -29,6 +29,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
@@ -41,6 +42,7 @@ from litellm.proxy._types import (
     ProxyException,
     SpecialManagementEndpointEnums,
     SpecialModelNames,
+    SpecialProxyStrings,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -55,6 +57,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
+    can_org_access_model,
     get_team_object,
     get_user_object,
 )
@@ -313,8 +316,9 @@ async def new_team(  # noqa: PLR0915
         # If budget_duration is set, set `budget_reset_at`
         if complete_team_data.budget_duration is not None:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
             complete_team_data.budget_reset_at = get_budget_reset_time(
-                budget_duration=complete_team_data.budget_duration, 
+                budget_duration=complete_team_data.budget_duration,
             )
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
@@ -407,6 +411,95 @@ async def _update_model_table(
     return _model_id
 
 
+def validate_team_org_change(
+    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable, llm_router: Router
+) -> bool:
+    """
+    Validate that a team can be moved to an organization.
+
+    - The org must have access to the team's models
+    - The team budget cannot be greater than the org max_budget
+    - The team's user_id must be a member of the org
+    - The team's tpm/rpm limit must be less than the org's tpm/rpm limit
+    """
+
+    # Check if the org has access to the team's models
+    if len(organization.models) > 0:
+        if SpecialModelNames.all_proxy_models.value in organization.models:
+            pass
+        elif team.models is None or len(team.models) == 0:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Cannot move team to organization. Team has access to all proxy models, but the organization does not."
+                },
+            )
+        else:
+            for model in team.models:
+                can_org_access_model(
+                    model=model,
+                    org_object=organization,
+                    llm_router=llm_router,
+                )
+
+    # Check if the team's budget is less than the org's max_budget
+    if (
+        team.max_budget
+        and organization.litellm_budget_table
+        and organization.litellm_budget_table.max_budget
+        and team.max_budget > organization.litellm_budget_table.max_budget
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Cannot move team to organization. Team has max_budget {team.max_budget} that is greater than the organization's max_budget {organization.litellm_budget_table.max_budget}."
+            },
+        )
+
+    # Check if the team's user_id is a member of the org
+    team_members = [m.user_id for m in team.members_with_roles]
+    org_members = [m.user_id for m in organization.users] if organization.users else []
+    not_in_org = [
+        m
+        for m in team_members
+        if m not in org_members and m != SpecialProxyStrings.default_user_id.value
+    ]
+    if len(not_in_org) > 0:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Cannot move team to organization. Team has user_id {not_in_org} that is not a member of the organization."
+            },
+        )
+
+    # Check if the team's tpm/rpm limit is less than the org's tpm/rpm limit
+    if (
+        team.tpm_limit
+        and organization.litellm_budget_table
+        and organization.litellm_budget_table.tpm_limit
+        and team.tpm_limit > organization.litellm_budget_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Cannot move team to organization. Team has tpm_limit {team.tpm_limit} that is greater than the organization's tpm_limit {organization.litellm_budget_table.tpm_limit}."
+            },
+        )
+    if (
+        team.rpm_limit
+        and organization.litellm_budget_table
+        and organization.litellm_budget_table.rpm_limit
+        and team.rpm_limit > organization.litellm_budget_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Cannot move team to organization. Team has rpm_limit {team.rpm_limit} that is greater than the organization's rpm_limit {organization.litellm_budget_table.rpm_limit}."
+            },
+        )
+    return True
+
+
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -467,13 +560,17 @@ async def update_team(
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
@@ -489,13 +586,41 @@ async def update_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
+    if (
+        data.organization_id is not None and len(data.organization_id) > 0
+    ):  # allow unsetting the organization_id
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+            )
+        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": data.organization_id},
+            include={"litellm_budget_table": True, "users": True},
+        )
+        if organization_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Organization not found, passed organization_id={data.organization_id}"
+                },
+            )
+        validate_team_org_change(
+            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+            llm_router=llm_router,
+        )
+    elif data.organization_id is not None and len(data.organization_id) == 0:
+        # unsetting the organization_id
+        data.organization_id = None
+
     updated_kv = data.json(exclude_unset=True)
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
-        
+
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 

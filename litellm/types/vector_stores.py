@@ -61,3 +61,27 @@ class VectorStoreDeleteRequest(BaseModel):
 
 class VectorStoreInfoRequest(BaseModel):
     vector_store_id: str
+
+
+class VectorStoreResultContent(TypedDict, total=False):
+    """Content of a vector store result"""
+
+    text: Optional[str]
+    type: Optional[str]
+
+
+class VectorStoreSearchResult(TypedDict, total=False):
+    """Result of a vector store search"""
+
+    score: Optional[float]
+    content: Optional[List[VectorStoreResultContent]]
+
+
+class VectorStoreSearchResponse(TypedDict, total=False):
+    """Response after searching a vector store"""
+
+    object: Literal[
+        "vector_store.search_results.page"
+    ]  # Always "vector_store.search_results.page"
+    search_query: Optional[str]
+    data: Optional[List[VectorStoreSearchResult]]
