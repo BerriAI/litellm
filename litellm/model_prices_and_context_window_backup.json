@@ -5436,9 +5436,9 @@
         "supports_tool_choice": true
     },
     "gemini-2.5-pro-exp-03-25": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
