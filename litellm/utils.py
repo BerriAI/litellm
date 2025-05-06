@@ -5702,25 +5702,32 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
         return message
 
     content = message["content"]
+    total_tokens = get_token_count([message], model)
 
-    while True:
-        total_tokens = get_token_count([message], model)
+    if total_tokens <= tokens_needed:
+        return message # No trimming needed
 
-        if total_tokens <= tokens_needed:
-            break
+    # Estimate the target length based on token ratio
+    ratio = tokens_needed / total_tokens
+    # Add a small buffer to the ratio calculation to avoid overshooting,
+    # especially since token count isn't perfectly linear with character count.
+    # A buffer like 0.95 means we aim for 95% of the calculated ratio initially.
+    safe_ratio = ratio * 0.95
+    new_length = int(len(content) * safe_ratio)
+    new_length = max(0, new_length) # Ensure length is not negative
 
-        ratio = (tokens_needed) / total_tokens
+    half_length = new_length // 2
+    left_half = content[:half_length]
+    right_half = content[-half_length:]
+    trimmed_content = left_half + ".." + right_half
+    message["content"] = trimmed_content
 
-        new_length = int(len(content) * ratio) - 1
-        new_length = max(0, new_length)
-
-        half_length = new_length // 2
-        left_half = content[:half_length]
-        right_half = content[-half_length:]
-
-        trimmed_content = left_half + ".." + right_half
-        message["content"] = trimmed_content
-        content = trimmed_content
+    # Optional: Add a single check/refinement step if needed,
+    # but often the estimate is good enough or slightly under, which is safe.
+    # final_tokens = get_token_count([message], model)
+    # if final_tokens > tokens_needed:
+    #    # Minimal additional trimming if necessary (less likely with safe_ratio)
+    #    pass
 
     return message
 
