@@ -40,6 +40,7 @@ Sync Upstream:
     - schedules
 
 Build LiteLLM Image Dev:
+  stage: build
   environment:
     name: development
   variables:
