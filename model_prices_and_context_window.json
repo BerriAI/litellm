@@ -8235,7 +8235,7 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-		"openrouter/qwen/qwen3-235b-a22b": {
+    "openrouter/qwen/qwen3-235b-a22b": {
 			"max_tokens": 40959,
 			"max_input_tokens": 40959,
 			"max_output_tokens": 41000,
