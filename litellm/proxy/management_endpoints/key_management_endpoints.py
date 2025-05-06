@@ -568,6 +568,16 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        # --- TOKEN HANDLING LOGIC ---
+        if "token" in data_json and data_json["token"] is not None:
+            data_json["token"] = data_json["token"]
+        elif "key" in data_json and data_json["key"] is not None:
+            data_json["token"] = hash_token(data_json["key"])
+        else:
+            data_json["token"] = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+            data_json["token"] = hash_token(data_json["token"])
+        # --- END TOKEN HANDLING LOGIC ---
+
         await _enforce_unique_key_alias(
             key_alias=data_json.get("key_alias", None),
             prisma_client=prisma_client,
@@ -586,6 +596,10 @@ async def generate_key_fn(  # noqa: PLR0915
         response.token = (
             response.token_id
         )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+
+        # If a pre-hashed token was provided, set key to (Unknown)
+        if getattr(data, "token", None) is not None:
+            response.key = "(Unknown)"
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(

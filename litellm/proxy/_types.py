@@ -678,6 +678,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
+    token: Optional[str] = None  # If provided, this is the already-computed SHA256 hash to store in the token column.
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
@@ -1593,12 +1594,13 @@ class UserAPIKeyAuth(
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
-        if values.get("api_key") is not None:
-            values.update({"token": hash_token(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str) and values.get(
-                "api_key"
-            ).startswith("sk-"):
-                values.update({"api_key": hash_token(values.get("api_key"))})
+        api_key = values.get("api_key")
+        if api_key is not None:
+            if isinstance(api_key, str) and api_key.startswith("sk-"):
+                values.update({"token": hash_token(api_key)})
+            else:
+                # Assume already hashed
+                values.update({"token": api_key})
         return values
 
 
