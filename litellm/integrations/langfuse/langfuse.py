@@ -691,6 +691,18 @@ class LangFuseLogger:
                 "version": clean_metadata.pop("version", None),
             }
 
+            # Promote every metadata entry whose key starts with "generation_"
+            for key in list(
+                filter(lambda k: k.startswith("generation_"), clean_metadata.keys())
+            ):
+                stripped = key.replace("generation_", "")
+                # don’t silently overwrite an explicit field that was already set
+                if stripped not in generation_params:
+                    generation_params[stripped] = clean_metadata[key]
+                # whether or not you pop() depends on whether you still want the value
+                # inside metadata; most people pop it to avoid duplication:
+                clean_metadata.pop(key, None)
+
             parent_observation_id = metadata.get("parent_observation_id", None)
             if parent_observation_id is not None:
                 generation_params["parent_observation_id"] = parent_observation_id
