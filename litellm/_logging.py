@@ -103,36 +103,31 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
-ALL_LOGGERS = [
-    logging.getLogger(),
-    verbose_logger,
-    verbose_router_logger,
-    verbose_proxy_logger,
-]
-
-
-def _initialize_loggers_with_handler(handler: logging.Handler):
-    """
-    Initialize all loggers with a handler
-
-    - Adds a handler to each logger
-    - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
-    """
-    for lg in ALL_LOGGERS:
-        lg.handlers.clear()  # remove any existing handlers
-        lg.addHandler(handler)  # add JSON formatter handler
-        lg.propagate = False  # prevent bubbling to parent/root
+# Add the handler to the logger
+verbose_router_logger.addHandler(handler)
+verbose_proxy_logger.addHandler(handler)
+verbose_logger.addHandler(handler)
 
 
 def _turn_on_json():
-    """
-    Turn on JSON logging
-
-    - Adds a JSON formatter to all loggers
-    """
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-    _initialize_loggers_with_handler(handler)
+
+    # Define all loggers to update, including root logger
+    loggers = [logging.getLogger()] + [
+        verbose_router_logger,
+        verbose_proxy_logger,
+        verbose_logger,
+    ]
+
+    # Iterate through each logger and update its handlers
+    for logger in loggers:
+        # Remove all existing handlers
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+        # Add the new handler
+        logger.addHandler(handler)
+
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 
