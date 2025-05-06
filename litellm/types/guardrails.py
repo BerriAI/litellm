@@ -367,7 +367,8 @@ class LitellmParams(
     )
 
     # pangea params
-    pangea_recipe: Optional[str]
+    pangea_input_recipe: Optional[str]
+    pangea_output_recipe: Optional[str]
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
