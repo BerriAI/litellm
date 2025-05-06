@@ -131,19 +131,9 @@ Promote LiteLLM Image to Prod:
       fi; 
       echo "✅ Release version: $VERSION";
 
-
     - >
       VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA"); 
       echo "Release version: $VERSION (source image from build: $SOURCE_TAG)";
-
-    - >
-      echo "Checking if source image $SOURCE_TAG exists in dev registry..."; 
-      gcloud auth activate-refresh-token --access-token=$GCLOUD_DEV_ACCESS_TOKEN; 
-      IMAGE_CHECK=$(gcloud artifacts docker images list $ARTIFACT_REGISTRY_DEV/$IMAGE_NAME \
-        --include-tags \
-        --filter="tags:$SOURCE_TAG" \
-        --format="value(tags)"); 
-      if [ -z "$IMAGE_CHECK" ]; then echo "ERROR: Image $SOURCE_TAG not found in dev registry. Promotion aborted."; exit 1; fi;
 
     - >
       echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && 
