@@ -1,17 +1,9 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-import sys
-
-# Adds the parent directory to the system path to allow importing litellm modules
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)
-import json
 from typing import Any, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -50,7 +42,8 @@ class PangeaHandler(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        pangea_recipe: str,
+        pangea_input_recipe: Optional[str] = None,
+        pangea_output_recipe: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         **kwargs,
@@ -80,13 +73,14 @@ class PangeaHandler(CustomGuardrail):
             or os.environ.get("PANGEA_API_BASE")
             or "https://ai-guard.aws.us.pangea.cloud"
         )
-        self.pangea_recipe = pangea_recipe
+        self.pangea_input_recipe = pangea_input_recipe
+        self.pangea_output_recipe = pangea_output_recipe
         self.guardrail_endpoint = f"{self.api_base}/v1/text/guard"
 
         # Pass relevant kwargs to the parent class
         super().__init__(guardrail_name=guardrail_name, **kwargs)
         verbose_proxy_logger.info(
-            f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_recipe}, api_base={self.api_base}"
+            f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
         )
 
     def _prepare_payload(
@@ -94,6 +88,7 @@ class PangeaHandler(CustomGuardrail):
         messages: Optional[List[AllMessageValues]] = None,
         text_input: Optional[str] = None,
         request_data: Optional[dict] = None,
+        recipe: Optional[str] = None,
     ) -> dict:
         """
         Prepares the payload for the Pangea AI Guard API request.
@@ -107,9 +102,12 @@ class PangeaHandler(CustomGuardrail):
             dict: The payload dictionary for the API request.
         """
         payload: dict[str, Any] = {
-            "recipe": self.pangea_recipe,
             "debug": False,  # Or make this configurable if needed
         }
+
+        if recipe:
+            payload["recipe"] = recipe
+
         if messages:
             # Ensure messages are in the format Pangea expects (list of dicts with 'role' and 'content')
             payload["messages"] = [
@@ -253,7 +251,7 @@ class PangeaHandler(CustomGuardrail):
 
         try:
             payload = self._prepare_payload(
-                messages=messages, text_input=text_input, request_data=data
+                messages=messages, text_input=text_input, request_data=data, recipe=self.pangea_input_recipe
             )
             await self._call_pangea_guard(
                 payload=payload, request_data=data, hook_name="moderation_hook"
@@ -303,7 +301,7 @@ class PangeaHandler(CustomGuardrail):
         try:
             # Scan only the output text in the post-call hook
             payload = self._prepare_payload(
-                text_input=response_str, request_data=data
+                text_input=response_str, request_data=data, recipe=self.pangea_output_recipe
             )
             await self._call_pangea_guard(
                 payload=payload,
