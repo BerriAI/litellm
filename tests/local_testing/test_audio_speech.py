@@ -315,3 +315,96 @@ def test_audio_speech_cost_calc():
         ]
         print(f"standard_logging_payload: {standard_logging_payload}")
         assert standard_logging_payload["response_cost"] > 0
+
+@pytest.mark.parametrize(
+   "sync_mode",
+   [True],
+)
+@pytest.mark.parametrize(
+   "model, api_key, api_base",
+   [
+       ("openai/gpt-4o-mini-tts", os.getenv("OPENAI_API_KEY"), None),
+   ],
+)
+@pytest.mark.asyncio
+async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
+   speech_file_path = Path(__file__).parent / "speech.mp3"
+   litellm._turn_on_debug()
+   if sync_mode:
+       response = litellm.speech(
+           model=model,
+           voice="alloy",
+           instructions="speak the text as though you are like a crazy person, almost goofy and laughing at the end",
+           input="say hello to the world",
+           api_base=api_base,
+           api_key=api_key,
+           organization=None,
+           project=None,
+           max_retries=1,
+           timeout=600,
+           client=None,
+           optional_params={},
+       )
+
+
+       from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+
+       print("response", response)
+
+
+       assert isinstance(response, HttpxBinaryResponseContent)
+       with open(speech_file_path, "wb") as f:
+           f.write(response.content)
+
+
+@pytest.mark.parametrize(
+   "sync_mode",
+   [True],
+)
+@pytest.mark.parametrize(
+   "model, api_key, api_base",
+   [
+       ("openai/gpt-4o-mini-tts", os.getenv("OPENAI_API_KEY"), None),
+   ],
+)
+@pytest.mark.asyncio
+async def test_audio_speech_passes_instructions_to_openai(sync_mode, model, api_base, api_key):
+   speech_file_path = Path(__file__).parent / "speech.mp3"
+   litellm._turn_on_debug()
+   if sync_mode:
+
+        from openai import OpenAI
+        from litellm.utils import supports_system_messages
+
+        litellm.set_verbose = True
+        client = OpenAI(api_key="fake-api-key")
+        
+        test_instructions = "speak the text as though you are like a crazy person, almost goofy and laughing at the end"
+        with patch.object(
+            client.audio.speech, "create"
+        ) as mock_client:
+            try:
+                litellm.speech(
+                    model=model,
+                    voice="alloy",
+                    instructions=test_instructions,
+                    input="say hello to the world",
+                    api_base=api_base,
+                    api_key=api_key,
+                    organization=None,
+                    project=None,
+                    max_retries=1,
+                    timeout=600,
+                    client=client,
+                    optional_params={},
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+
+            print("request_body: ", request_body)
+
+            assert request_body["instructions"] == test_instructions
