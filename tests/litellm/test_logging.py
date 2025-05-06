@@ -19,7 +19,13 @@ import unittest
 from contextlib import redirect_stdout
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    ALL_LOGGERS,
+    _initialize_loggers_with_handler,
+    verbose_logger,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 
 
 def test_json_mode_emits_one_record_per_logger(capfd):
@@ -49,3 +55,17 @@ def test_json_mode_emits_one_record_per_logger(capfd):
         assert "message" in obj, "`message` key missing"
         assert "level" in obj, "`level` key missing"
         assert "timestamp" in obj, "`timestamp` key missing"
+
+
+def test_initialize_loggers_with_handler_sets_propagate_false():
+    """
+    Test that the initialize_loggers_with_handler function sets propagate to False for all loggers
+    """
+    # Initialize loggers with the test handler
+    _initialize_loggers_with_handler(logging.StreamHandler())
+
+    # Check that propagate is set to False for all loggers
+    for logger in ALL_LOGGERS:
+        assert (
+            logger.propagate is False
+        ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
