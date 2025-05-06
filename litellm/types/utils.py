@@ -842,12 +842,13 @@ class PromptTokensDetailsWrapper(
 
 
 class Usage(CompletionUsage):
-    _cache_creation_input_tokens: int = PrivateAttr(
-        0
-    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
-    _cache_read_input_tokens: int = PrivateAttr(
-        0
-    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _cache_creation_input_tokens: int = PrivateAttr(0)
+    _cache_read_input_tokens: int = PrivateAttr(0)
+    
+    # Add fields needed for image generation responses
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    input_tokens_details: Optional[Dict[str, int]] = None
 
     def __init__(
         self,
@@ -856,9 +857,7 @@ class Usage(CompletionUsage):
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
         prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
-        completion_tokens_details: Optional[
-            Union[CompletionTokensDetailsWrapper, dict]
-        ] = None,
+        completion_tokens_details: Optional[Union[CompletionTokensDetailsWrapper, dict]] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -915,7 +914,18 @@ class Usage(CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
-
+        
+        # Add OpenAI image generation compatibility fields
+        self.input_tokens = prompt_tokens
+        self.output_tokens = completion_tokens
+        
+        # Create input_tokens_details if needed
+        if prompt_tokens is not None:
+            self.input_tokens_details = {
+                "image_tokens": 0,  # Default value when not specified
+                "text_tokens": prompt_tokens
+            }
+        
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
             params["cache_creation_input_tokens"], int
@@ -1518,20 +1528,20 @@ class ImageObject(OpenAIImage):
             # if using pydantic v1
             return self.dict()
 
-
+import openai
 from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 
 class ImageResponse(OpenAIImageResponse):
     _hidden_params: dict = {}
-    usage: Usage
+    usage: Union[Usage, openai.types.images_response.Usage]  # type: ignore
 
     def __init__(
         self,
         created: Optional[int] = None,
         data: Optional[List[ImageObject]] = None,
         response_ms=None,
-        usage: Optional[Usage] = None,
+        usage: Optional[Union[Usage, openai.types.images_response.Usage]] = None,
         hidden_params: Optional[dict] = None,
     ):
         if response_ms:
@@ -1554,11 +1564,22 @@ class ImageResponse(OpenAIImageResponse):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
+        
         _usage = usage or Usage(
             prompt_tokens=0,
             completion_tokens=0,
             total_tokens=0,
         )
+        
+        # If it's a LiteLLM Usage, ensure it has the required fields
+        if isinstance(_usage, Usage):
+            # Make sure input_tokens_details exists
+            if not hasattr(_usage, 'input_tokens_details') or _usage.input_tokens_details is None:
+                _usage.input_tokens_details = {
+                    "image_tokens": 0,
+                    "text_tokens": _usage.prompt_tokens or 0
+                }
+        
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
         self._hidden_params = hidden_params or {}
 
