@@ -116,27 +116,21 @@ Promote LiteLLM Image to Prod:
       export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token');
 
     - >
-      echo "Loading built version from commit message..."; 
-      SOURCE_TAG=$(git log -1 --pretty=%B | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
-      if [ -z "$SOURCE_TAG" ]; then 
-        echo "❌ ERROR: No dev tag found in last commit. Expected 'Source: dev-YYYY.MM.DD-HHMMSS'"; 
-        exit 1; 
-      fi; 
-      echo "✅ Loaded dev build tag: $SOURCE_TAG";
-
+      echo "Extracting version from commit..."; 
       VERSION=$(git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+'); 
-      if [ -z "$VERSION" ]; then 
-        echo "❌ ERROR: No release version found. Expected 'Release: vX.Y.Z'"; 
-        exit 1; 
-      fi; 
+      if [ -z "$VERSION" ]; then echo "❌ Missing version"; exit 1; fi; 
       echo "✅ Release version: $VERSION";
 
     - >
-      VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA"); 
-      echo "Release version: $VERSION (source image from build: $SOURCE_TAG)";
+      echo "Extracting dev source tag..."; 
+      SOURCE_TAG=$(git log -1 --pretty=%B | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
+      if [ -z "$SOURCE_TAG" ]; then echo "❌ Missing dev image tag"; exit 1; fi; 
+      echo "✅ Dev image tag: $SOURCE_TAG";
 
     - >
       echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && 
+      git config --global user.email "ccoe-dis@thalesgroup.com" &&
+      git config --global user.name "Thales DIS CCoE" &&
       git tag -a "$VERSION" -m "Auto-tag from commit message" && 
       git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
 
