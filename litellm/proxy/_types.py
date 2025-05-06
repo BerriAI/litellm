@@ -679,6 +679,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     token: Optional[str] = None  # If provided, this is the already-computed SHA256 hash to store in the token column.
+    key_name: Optional[str] = None  # Optional display/abbreviation name for the key
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None

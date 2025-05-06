@@ -1189,6 +1189,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
     sso_user_id: Optional[str] = None,
+    key_name: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1298,11 +1299,10 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
         }
 
-        if (
-            get_secret("DISABLE_KEY_NAME", False) is True
-        ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
-            pass
-        else:
+        # Use user-provided key_name if present
+        if key_name is not None:
+            key_data["key_name"] = key_name
+        elif get_secret("DISABLE_KEY_NAME", False) is not True:
             key_data["key_name"] = f"sk-...{token[-4:]}"
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
