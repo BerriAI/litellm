@@ -137,9 +137,9 @@ Promote LiteLLM Image to Prod:
     - >
       echo "Promoting image $SOURCE_TAG → $VERSION to prod..."; 
       skopeo copy --src-registry-token $GCLOUD_DEV_ACCESS_TOKEN \
-        docker://$ARTIFACT_REGISTRY_DEV/$IMAGE_NAME:$SOURCE_TAG \
+        docker://$ARTIFACT_REGISTRY_DEV/ccoe/$IMAGE_NAME:$SOURCE_TAG \
         --dest-registry-token $GCLOUD_PRD_ACCESS_TOKEN \
-        docker://$ARTIFACT_REGISTRY_PROD/$IMAGE_NAME:$VERSION;
+        docker://$ARTIFACT_REGISTRY_PROD/ccoe/$IMAGE_NAME:$VERSION;
 
     - >
       if echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
