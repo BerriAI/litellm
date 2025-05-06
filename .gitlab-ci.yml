@@ -41,6 +41,8 @@ Sync Upstream:
 
 Build LiteLLM Image Dev:
   stage: build
+  extends:
+    - .vault
   environment:
     name: development
   variables:
@@ -95,6 +97,8 @@ Build LiteLLM Image Dev:
       - version.env
 
 Promote LiteLLM Image to Prod:
+  extends:
+    - .vault
   stage: promote
   tags:
     - new_photon_runners
