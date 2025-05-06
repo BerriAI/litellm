@@ -90,7 +90,7 @@ Generate Version:
       echo "Image Tag: $VERSION";
       gcloud builds submit --project=$GCP_PROJECT_ID \
         --config=cloudbuild.yaml \
-        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION},_REGISTRY=${ARTIFACT_REGISTRY_DEV};
+        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION};
   dependencies:
     - Generate Version
   needs:
