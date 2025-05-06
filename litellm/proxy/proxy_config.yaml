@@ -6,4 +6,4 @@ model_list:
 
 
 litellm_settings:
-    json_logs: true
+    callbacks: ["resend_email"]

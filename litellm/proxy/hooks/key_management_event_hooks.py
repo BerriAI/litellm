@@ -298,12 +298,11 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_created_email(response: dict):
+        from enterprise.enterprise_callbacks.send_emails.base_email import (
+            BaseEmailLogger,
+        )
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
-        if "email" not in general_settings.get("alerting", []):
-            raise ValueError(
-                "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
-            )
         event = WebhookEvent(
             event="key_created",
             event_group=Litellm_EntityType.KEY,
@@ -316,9 +315,33 @@ class KeyManagementEventHooks:
             key_alias=response.get("key_alias", None),
         )
 
-        # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                webhook_event=event,
+        ##########################
+        # v2 integration for emails
+        ##########################
+        initialized_email_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
             )
         )
+        if len(initialized_email_loggers) > 0:
+            for email_logger in initialized_email_loggers:
+                if isinstance(email_logger, BaseEmailLogger):
+                    await email_logger.send_key_created_email(
+                        webhook_event=event,
+                    )
+
+        ##########################
+        # v0 integration for emails
+        ##########################
+        else:
+            if "email" not in general_settings.get("alerting", []):
+                raise ValueError(
+                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+                )
+
+            # If user configured email alerting - send an Email letting their end-user know the key was created
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+                    webhook_event=event,
+                )
+            )
