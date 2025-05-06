@@ -427,6 +427,7 @@ databricks_models: List = []
 cloudflare_models: List = []
 codestral_models: List = []
 friendliai_models: List = []
+featherless_ai_models: List = []
 palm_models: List = []
 groq_models: List = []
 azure_models: List = []
@@ -597,6 +598,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "featherless_ai":
+            featherless_ai_models.append(key)
 
 
 add_known_models()
@@ -674,6 +677,7 @@ model_list = (
     + jina_ai_models
     + snowflake_models
     + llama_models
+    + featherless_ai_models
 )
 
 model_list_set = set(model_list)
@@ -732,6 +736,7 @@ models_by_provider: dict = {
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
     "meta_llama": llama_models,
+    "featherless_ai": featherless_ai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1000,6 +1005,7 @@ from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 nvidiaNimConfig = NvidiaNimConfig()
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
+from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig

@@ -212,6 +212,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "featherless_ai":
+        return litellm.FeatherlessAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "watsonx":
         return litellm.IBMWatsonXChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "watsonx_text":

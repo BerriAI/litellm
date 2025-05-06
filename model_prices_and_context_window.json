@@ -12079,5 +12079,19 @@
         "max_output_tokens": 8192,
         "litellm_provider": "snowflake",
         "mode": "chat"
+    },
+    "featherless_ai/featherless-ai/Qwerky-72B": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "litellm_provider": "featherless_ai",
+        "mode": "chat"
+    },
+    "featherless_ai/featherless-ai/Qwerky-QwQ-32B": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "litellm_provider": "featherless_ai",
+        "mode": "chat"
     }
 }
