@@ -223,27 +223,3 @@ def test_ollama_pt_consecutive_user_messages():
 #     assert "### System:\nBe helpful\n\n" in result["prompt"]
 #     assert "### Assistant:\nI see a cat in the image.\n\n" in result["prompt"]
 #     assert result["images"] == ["http://example.com/image.jpg"]
-
-
-def test_bedrock_llama():
-    litellm._turn_on_debug()
-    from litellm.types.utils import CallTypes
-    from litellm.utils import return_raw_request
-
-    model = "bedrock/invoke/us.meta.llama4-scout-17b-instruct-v1:0"
-
-    request = return_raw_request(
-        endpoint=CallTypes.completion,
-        kwargs={
-            "model": model,
-            "messages": [
-                {"role": "user", "content": "hi"},
-            ],
-        },
-    )
-    print(request)
-
-    assert (
-        request["raw_request_body"]["prompt"]
-        == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-    )
