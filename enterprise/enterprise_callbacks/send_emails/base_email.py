@@ -19,6 +19,7 @@ from litellm.types.enterprise.enterprise_callbacks.send_emails import (
 
 class BaseEmailLogger(CustomLogger):
     DEFAULT_LITELLM_EMAIL = "notifications@alerts.litellm.ai"
+    DEFAULT_SUPPORT_EMAIL = "support@berri.ai"
 
     async def send_key_created_email(
         self, send_key_created_email_event: SendKeyCreatedEmailEvent
@@ -29,7 +30,9 @@ class BaseEmailLogger(CustomLogger):
         email_logo_url = os.getenv(
             "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
         )
-        email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+        email_support_contact = os.getenv(
+            "EMAIL_SUPPORT_CONTACT", self.DEFAULT_SUPPORT_EMAIL
+        )
         base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
 
         recipient_email: Optional[str] = (
@@ -50,7 +53,7 @@ class BaseEmailLogger(CustomLogger):
         email_html_content = KEY_CREATED_EMAIL_TEMPLATE.format(
             email_logo_url=email_logo_url,
             recipient_email=recipient_email,
-            key_budget=send_key_created_email_event.max_budget,
+            key_budget=self._format_key_budget(send_key_created_email_event.max_budget),
             key_token=send_key_created_email_event.virtual_key,
             base_url=base_url,
             email_support_contact=email_support_contact,
@@ -63,6 +66,14 @@ class BaseEmailLogger(CustomLogger):
             html_body=email_html_content,
         )
         pass
+
+    def _format_key_budget(self, max_budget: Optional[float]) -> str:
+        """
+        Format the key budget to be displayed in the email
+        """
+        if max_budget is None:
+            return "No budget"
+        return f"${max_budget}"
 
     async def _lookup_user_email_from_db(self, user_id: Optional[str]) -> Optional[str]:
         """
