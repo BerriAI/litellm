@@ -359,7 +359,12 @@ class KeysManagementClient:
         if allowed_routes is not None:
             data["allowed_routes"] = allowed_routes
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request = requests.Request(
+            method="POST",
+            url=url,
+            headers=self._get_headers(),
+            json=data,
+        )
 
         if return_request:
             return request
