@@ -282,7 +282,7 @@ class OllamaConfig(BaseConfig):
                 message = litellm.Message(
                     content=json.dumps(response_content),
                 )
-                model_response.choices[0].message = message
+                model_response.choices[0].message = message  # type: ignore
                 model_response.choices[0].finish_reason = "stop"
         else:
             model_response.choices[0].message.content = response_json["response"]  # type: ignore
