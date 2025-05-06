@@ -118,3 +118,60 @@ async def test_router_with_tags_and_fallbacks():
             mock_testing_fallbacks=True,
             metadata={"tags": ["test"]},
         )
+
+
+def test_router_with_tags_and_fallbacks_with_image_url():
+    """
+    Test if the router 'async_function_with_fallbacks' with image_url are working correctly especially with fallbacks
+    For details, please refer to the following issue: https://github.com/BerriAI/litellm/issues/9816
+    """
+    from litellm import Router
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "azure/gpt-4o",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+            {
+                "model_name": "gemini-2.0-flash",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.0-flash",
+                    "api_key": os.getenv("GEMINI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[
+            {"gemini-2.0-flash": ["gpt-4o"]},
+        ],
+    )
+
+    data = {
+        # need a wrong model config to trigger fallbacks, but it must be gemini
+        "model": "gemini-2.0-flash",
+        "messages": [{"role": "user", "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png",
+                }
+            }
+        ]}],
+        "num_retries": 0,
+    }
+
+    # to avoid KeyError in router.py::log_retry
+    data.setdefault("metadata", {}).update({"model_group": "gemini-2.0-flash"})
+
+    response = router.function_with_fallbacks(
+        original_function=router._acompletion,
+        **data,
+    )
+
+    assert response.model is not None
+    assert response.model.startswith("gpt-4o")
+    assert response.choices[0].message.content is not None
