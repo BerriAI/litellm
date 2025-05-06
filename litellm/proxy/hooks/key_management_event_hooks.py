@@ -21,7 +21,6 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
-    WebhookEvent,
 )
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
@@ -302,8 +301,12 @@ class KeyManagementEventHooks:
             BaseEmailLogger,
         )
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+        from litellm.types.enterprise.enterprise_callbacks.send_emails import (
+            SendKeyCreatedEmailEvent,
+        )
 
-        event = WebhookEvent(
+        event = SendKeyCreatedEmailEvent(
+            virtual_key=response.get("key", ""),
             event="key_created",
             event_group=Litellm_EntityType.KEY,
             event_message="API Key Created",
@@ -327,7 +330,7 @@ class KeyManagementEventHooks:
             for email_logger in initialized_email_loggers:
                 if isinstance(email_logger, BaseEmailLogger):
                     await email_logger.send_key_created_email(
-                        webhook_event=event,
+                        send_key_created_email_event=event,
                     )
 
         ##########################
