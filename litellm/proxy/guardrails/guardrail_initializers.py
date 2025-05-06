@@ -176,7 +176,8 @@ def initialize_pangea(litellm_params, guardrail):
 
     _pangea_callback = PangeaHandler(
         guardrail_name=guardrail["guardrail_name"],
-        pangea_recipe=litellm_params["pangea_recipe"],
+        pangea_input_recipe=litellm_params["pangea_input_recipe"],
+        pangea_output_recipe=litellm_params["pangea_output_recipe"],
         api_base=litellm_params["api_base"],
         api_key=litellm_params["api_key"],
         default_on=litellm_params["default_on"],
