@@ -116,11 +116,14 @@ Promote LiteLLM Image to Prod:
       export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token');
 
     - >
-      echo "Loading built version from artifact..."; 
-      if [ ! -f version.env ]; then echo "ERROR: version.env not found. Did you build this version?"; exit 1; fi; 
-      source version.env; 
-      SOURCE_TAG=$VERSION; 
-      echo "Loaded dev build tag: $SOURCE_TAG";
+      echo "Loading built version from commit message..."; 
+      SOURCE_TAG=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
+      if [ -z "$SOURCE_TAG" ]; then 
+        echo "❌ ERROR: No dev image tag found in commit message. Expected format: 'Source: dev-YYYY.MM.DD-HHMMSS'"; 
+        exit 1; 
+      fi; 
+      echo "✅ Loaded dev build tag: $SOURCE_TAG";
+
 
     - >
       VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA"); 
