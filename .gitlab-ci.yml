@@ -140,14 +140,3 @@ Promote LiteLLM Image to Prod:
         docker://$ARTIFACT_REGISTRY_DEV/ccoe/$IMAGE_NAME:$SOURCE_TAG \
         --dest-registry-token $GCLOUD_PRD_ACCESS_TOKEN \
         docker://$ARTIFACT_REGISTRY_PROD/ccoe/$IMAGE_NAME:$VERSION;
-
-    - >
-      if echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "Extracting release notes from CHANGELOG.md..."; 
-        RELEASE_NOTES=$(awk '/^## '"$VERSION"' /{flag=1;next}/^## /{flag=0}flag' CHANGELOG.md);
-        echo "Creating GitLab Release for $VERSION..."; 
-        curl --request POST "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
-          --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
-          --header "Content-Type: application/json" \
-          --data "{\"name\": \"Release $VERSION\",\"tag_name\": \"$VERSION\",\"description\": \"LiteLLM $VERSION promoted to production.\\n\\n$RELEASE_NOTES\"}";
-      fi;
