@@ -955,6 +955,8 @@ from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
+from .llms.openai.image.dall_e_image_transformation import DallEImageConfig
+from .llms.openai.image.gpt_image_transformation import GPTImageConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from .llms.deepgram.audio_transcription.transformation import (
     DeepgramAudioTranscriptionConfig,

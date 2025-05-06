@@ -2245,7 +2245,17 @@ def get_optional_params_image_gen(
         or custom_llm_provider == "azure"
         or custom_llm_provider in litellm.openai_compatible_providers
     ):
-        optional_params = non_default_params
+        # optional_params = non_default_params
+        gpt_image_config_class = (
+            litellm.GPTImageConfig
+            if litellm.GPTImageConfig._is_gpt_image_model(model=model)
+            else litellm.DallEImageConfig
+        )
+        supported_params = gpt_image_config_class.get_supported_openai_params(model=model)
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = gpt_image_config_class.map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
     elif custom_llm_provider == "bedrock":
         # use stability3 config class if model is a stability3 model
         config_class = (
