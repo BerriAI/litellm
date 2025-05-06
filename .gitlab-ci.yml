@@ -40,7 +40,6 @@ Sync Upstream:
     - schedules
 
 Build LiteLLM Image Dev:
-  extends: .cloudbuild
   environment:
     name: development
   variables:
