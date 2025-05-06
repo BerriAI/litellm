@@ -20,15 +20,3 @@ class TestBedrockTestSuite(BaseLLMChatTest):
         }
 
 
-def test_bedrock_llama():
-    litellm._turn_on_debug()
-    model = "bedrock/invoke/us.meta.llama4-scout-17b-instruct-v1:0"
-    response = litellm.completion(
-        model=model,
-        messages=[
-            {"role": "user", "content": "hi"},
-        ],
-    )
-    print(response)
-    raise Exception("stop")
-
