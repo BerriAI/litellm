@@ -94,24 +94,6 @@ Build LiteLLM Image Dev:
     paths:
       - version.env
 
-Build LiteLLM Image Dev:
-  extends: .cloudbuild
-  environment:
-    name: development
-  variables:
-    environment: development
-    GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "review"'
-      changes:
-        - Dockerfile
-        - cloudbuild.yaml
-        - requirements.txt
-        - pyproject.toml
-        - poetry.lock
-        - litellm/**/*
-        - docker/**/*
-
 Promote LiteLLM Image to Prod:
   stage: promote
   tags:
