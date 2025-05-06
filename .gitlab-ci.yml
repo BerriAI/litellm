@@ -48,10 +48,10 @@ Generate Version:
     - VERSION=$(date +"dev-%Y.%m.%d-%H%M%S")
     - echo "Generated Version $VERSION"
     - echo "VERSION=$VERSION" > version.env
-    - git config --global user.email "ci-bot@litellm.thales"
-    - git config --global user.name "GitLab CI Bot"
+    - git config --global user.email "ccoe-dis@thalesgroup.com"
+    - git config --global user.name "Thales DIS CCoE"
     - git tag -a "$VERSION" -m "Auto-tag for dev build"
-    - git push origin "$VERSION"
+    - git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION"
   artifacts:
     reports:
       dotenv: version.env
@@ -112,6 +112,7 @@ Build LiteLLM Image Dev:
         - poetry.lock
         - litellm/**/*
         - docker/**/*
+        - .gitlab-ci.yml
 
 Promote LiteLLM Image to Prod:
   stage: promote
