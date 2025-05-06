@@ -94,7 +94,9 @@ key = client.keys.generate(
     aliases={"gpt4": "gpt-4"},
     duration="24h",
     key_alias="my-key",
-    team_id="team123"
+    team_id="team123",
+    token="60980d9c682a44cecdb4462f512b57e48fc63288680725962e87b9f764eae47a",  # (optional) Provide a pre-hashed token to use as the key's hash
+    key_name="sk-...e47a",  # (optional) Display/abbreviation name for the key (separate from key_alias)
 )
 
 # List all keys
@@ -110,6 +112,9 @@ client.keys.delete(
     key_aliases=["alias1", "alias2"]
 )
 ```
+
+- `token`: (optional) If provided, this is the already-computed SHA256 hash to store as the key's token. Use this if you want to manage the secret yourself and only store the hash in the proxy.
+- `key_name`: (optional) A display/abbreviation name for the key, shown in listings and info endpoints. This is separate from `key_alias`, which is used for lookup/aliasing.
 
 ## Credential Management
 
