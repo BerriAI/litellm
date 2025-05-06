@@ -4,6 +4,6 @@ model_list:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  success_callback: ["generic_api"]
 
+litellm_settings:
+    json_logs: true
