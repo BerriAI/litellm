@@ -4056,3 +4056,134 @@ async def test_reset_budget_job(prisma_client, entity_type):
 
     assert entity_after is not None
     assert entity_after.spend == 0.0
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_prehashed_token(prisma_client):
+    """
+    - create key with pre-hashed token
+    - get key info
+    - assert key == '(Unknown)' and token is stored as provided
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    prehashed = "deadbeef" * 8  # 64 hex chars
+    try:
+        request = GenerateKeyRequest(token=prehashed)
+        key = await generate_key_fn(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        assert key.key == "(Unknown)"
+        assert key.token == prehashed or key.token_id == prehashed
+        # Check info endpoint
+        result = await info_key_fn(
+            key=prehashed,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["info"]["token"] == prehashed
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_user_key_name(prisma_client):
+    """
+    - create key with user key_name
+    - get key info
+    - assert key_name matches user value
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest(key_name="my custom name")
+        key = await generate_key_fn(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        assert key.key_name == "my custom name"
+        # Check info endpoint
+        result = await info_key_fn(
+            key=key.token_id or key.token,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["info"]["key_name"] == "my custom name"
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_prehashed_token_and_key_name(prisma_client):
+    """
+    - create key with pre-hashed token and user key_name
+    - get key info
+    - assert key == '(Unknown)' and key_name matches user value
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    prehashed = "cafebabe" * 8
+    try:
+        request = GenerateKeyRequest(token=prehashed, key_name="special name")
+        key = await generate_key_fn(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        assert key.key == "(Unknown)"
+        assert key.key_name == "special name"
+        # Check info endpoint
+        result = await info_key_fn(
+            key=prehashed,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["info"]["key_name"] == "special name"
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_no_key_name(prisma_client):
+    """
+    - create key with no key_name
+    - get key info
+    - assert key_name is fallback abbreviation
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        # Should be sk-...<last4> or None if disabled
+        if key.key_name is not None:
+            assert key.key_name.startswith("sk-...")
+        # Check info endpoint
+        result = await info_key_fn(
+            key=key.token_id or key.token,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        if result["info"]["key_name"] is not None:
+            assert result["info"]["key_name"].startswith("sk-...")
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
