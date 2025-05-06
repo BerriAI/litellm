@@ -144,7 +144,7 @@ Promote LiteLLM Image to Prod:
     - >
       if echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
         echo "Extracting release notes from CHANGELOG.md..."; 
-        RELEASE_NOTES=$(awk "/^## $VERSION /{flag=1;next}/^## /{flag=0}flag" CHANGELOG.md"); 
+        RELEASE_NOTES=$(awk '/^## '"$VERSION"' /{flag=1;next}/^## /{flag=0}flag' CHANGELOG.md);
         echo "Creating GitLab Release for $VERSION..."; 
         curl --request POST "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
           --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
