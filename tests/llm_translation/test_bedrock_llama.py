@@ -18,3 +18,8 @@ class TestBedrockTestSuite(BaseLLMChatTest):
         return {
             "model": "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0",
         }
+
+
+def test_bedrock_llama():
+    test_bedrock_llama = TestBedrockTestSuite()
+    test_bedrock_llama.test_tool_call_no_arguments()
