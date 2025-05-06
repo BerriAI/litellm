@@ -120,38 +120,46 @@ Promote LiteLLM Image to Prod:
   rules:
     - if: '$CI_COMMIT_BRANCH == "release"'
   script:
-    - echo "Logging into Vault for dev..."
-    - vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-development-infra jwt=${VAULT_ID_TOKEN})
-    - export GCLOUD_DEV_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/development/gcp/roleset/automation-rw/token | jq -r '.data.token')
+    - >
+      echo "Logging into Vault for dev..." &&
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-development-infra jwt=${VAULT_ID_TOKEN}) &&
+      export GCLOUD_DEV_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/development/gcp/roleset/automation-rw/token | jq -r '.data.token')
 
-    - echo "Logging into Vault for prod..."
-    - vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-production-infra jwt=${VAULT_ID_TOKEN})
-    - export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token')
+    - >
+      echo "Logging into Vault for prod..." &&
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-production-infra jwt=${VAULT_ID_TOKEN}) &&
+      export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token')
 
-    - VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA")
-    - echo "Using version: $VERSION"
+    - >
+      VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA") &&
+      echo "Using version: $VERSION"
 
-    - echo "Checking if image exists in dev registry before promotion..."
-    - gcloud auth activate-refresh-token --access-token=$GCLOUD_DEV_ACCESS_TOKEN
-    - IMAGE_CHECK=$(gcloud artifacts docker images list $ARTIFACT_REGISTRY_DEV/$IMAGE_NAME \
+    - >
+      echo "Checking if image exists in dev registry before promotion..." &&
+      gcloud auth activate-refresh-token --access-token=$GCLOUD_DEV_ACCESS_TOKEN &&
+      IMAGE_CHECK=$(gcloud artifacts docker images list $ARTIFACT_REGISTRY_DEV/$IMAGE_NAME \
         --include-tags \
         --filter="tags:$VERSION" \
-        --format="value(tags)")
-    - if [ -z "$IMAGE_CHECK" ]; then echo "ERROR: Image $VERSION not found in dev registry. Promotion aborted."; exit 1; fi
+        --format="value(tags)") &&
+      if [ -z "$IMAGE_CHECK" ]; then echo "ERROR: Image $VERSION not found in dev registry. Promotion aborted."; exit 1; fi
 
-    - echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && git tag -a "$VERSION" -m "Auto-tag from commit message" && git push origin "$VERSION"
+    - >
+      echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' &&
+      git tag -a "$VERSION" -m "Auto-tag from commit message" &&
+      git push origin "$VERSION"
 
-    - echo "Promoting LiteLLM image $VERSION from dev to prod..."
-    - skopeo copy --src-registry-token $GCLOUD_DEV_ACCESS_TOKEN \
+    - >
+      echo "Promoting LiteLLM image $VERSION from dev to prod..." &&
+      skopeo copy --src-registry-token $GCLOUD_DEV_ACCESS_TOKEN \
         docker://$ARTIFACT_REGISTRY_DEV/$IMAGE_NAME:$VERSION \
         --dest-registry-token $GCLOUD_PRD_ACCESS_TOKEN \
         docker://$ARTIFACT_REGISTRY_PROD/$IMAGE_NAME:$VERSION
 
     - >
       if echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-        echo "Extracting release notes from CHANGELOG.md..."
-        RELEASE_NOTES=$(awk "/^## $VERSION /{flag=1;next}/^## /{flag=0}flag" CHANGELOG.md)
-        echo "Creating GitLab Release for $VERSION..."
+        echo "Extracting release notes from CHANGELOG.md..." &&
+        RELEASE_NOTES=$(awk "/^## $VERSION /{flag=1;next}/^## /{flag=0}flag" CHANGELOG.md") &&
+        echo "Creating GitLab Release for $VERSION..." &&
         curl --request POST "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
           --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
           --header "Content-Type: application/json" \
