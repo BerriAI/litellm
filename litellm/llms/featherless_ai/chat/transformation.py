@@ -1,7 +1,6 @@
 from typing import Optional, Tuple, Union
 
 import litellm
-from litellm.constants import MIN_NON_ZERO_TEMPERATURE
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
