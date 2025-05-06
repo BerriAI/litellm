@@ -117,12 +117,19 @@ Promote LiteLLM Image to Prod:
 
     - >
       echo "Loading built version from commit message..."; 
-      SOURCE_TAG=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
+      SOURCE_TAG=$(git log -1 --pretty=%B | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
       if [ -z "$SOURCE_TAG" ]; then 
-        echo "❌ ERROR: No dev image tag found in commit message. Expected format: 'Source: dev-YYYY.MM.DD-HHMMSS'"; 
+        echo "❌ ERROR: No dev tag found in last commit. Expected 'Source: dev-YYYY.MM.DD-HHMMSS'"; 
         exit 1; 
       fi; 
       echo "✅ Loaded dev build tag: $SOURCE_TAG";
+
+      VERSION=$(git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+'); 
+      if [ -z "$VERSION" ]; then 
+        echo "❌ ERROR: No release version found. Expected 'Release: vX.Y.Z'"; 
+        exit 1; 
+      fi; 
+      echo "✅ Release version: $VERSION";
 
 
     - >
