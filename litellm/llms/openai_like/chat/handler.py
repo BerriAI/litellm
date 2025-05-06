@@ -259,6 +259,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         optional_params.pop("max_retries", None)
         if not fake_stream:
             optional_params["stream"] = stream
+        model_id = optional_params.get("model_id", None)
 
         if messages is not None and custom_llm_provider is not None:
             provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -272,11 +273,12 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 )
 
         data = {
-            "model": model,
             "messages": messages,
             **optional_params,
             **extra_body,
         }
+        if not model_id:
+            data["model"] = model
 
         ## LOGGING
         logging_obj.pre_call(
