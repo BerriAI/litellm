@@ -210,12 +210,48 @@ Options:
 - `--user-id`: User ID to associate the key with
 - `--budget-id`: Budget ID to associate the key with
 - `--config`: JSON string of additional configuration parameters
+- `--key-name`: Display/abbreviation name for the key (advanced)
+- `--token`: Pre-hashed token to use as the key's hash (advanced)
 
-Example:
+Examples:
+
+Simple
 
 ```bash
-litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
+litellm-proxy keys generate \
+  --user-id=john \
+  --team-id=team123 \
+  --key-alias=john-key-1
 ```
+
+More complex:
+
+```bash
+litellm-proxy keys generate \
+  --models=gpt-4,gpt-3.5-turbo \
+  --user-id=me@company.com \
+  --team-id=team123 \
+  --key-alias=my-key \
+  --spend=100 \
+  --duration=24h
+```
+
+Advanced - Using a pre-hashed token:
+
+This could be useful if you have multiple LiteLLM proxy instances
+or you are migrating from one to another and want to reuse
+existing key hashes. For example in the example below, John already has a key on some LiteLLM proxy that has a SHA256 hash of `60980d9c682a44cecdb4462f512b57e48fc63288680725962e87b9f764eae47a` and we want to enable that same key to work in a new LiteLLM proxy.
+
+```bash
+litellm-proxy keys generate \
+  --user-id=john \
+  --team-id=team123 \
+  --key-alias=john-key-1
+  --token=60980d9c682a44cecdb4462f512b57e48fc63288680725962e87b9f764eae47a
+```
+
+- `--token`: (optional) If provided, this is the already-computed SHA256 hash to store as the key's token. Use this if you want to manage the secret yourself and only store the hash in the proxy.
+- `--key-name`: (optional) A display/abbreviation name for the key, shown in listings and info endpoints. This is separate from `--key-alias`, which is used for lookup/aliasing.
 
 #### Delete Keys
 

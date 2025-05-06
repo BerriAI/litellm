@@ -88,6 +88,8 @@ def list(
 @click.option("--spend", type=float, help="Maximum spend limit for this key")
 @click.option("--duration", type=str, help="Duration for which the key is valid (e.g. '24h', '7d')")
 @click.option("--key-alias", type=str, help="Alias/name for the key")
+@click.option("--key-name", type=str, help="Display/abbreviation name for the key (separate from key_alias)")
+@click.option("--token", type=str, help="Pre-hashed token to use as the key's hash (advanced)")
 @click.option("--team-id", type=str, help="Team ID to associate the key with")
 @click.option("--user-id", type=str, help="User ID to associate the key with")
 @click.option("--budget-id", type=str, help="Budget ID to associate the key with")
@@ -100,6 +102,8 @@ def generate(
     spend: Optional[float],
     duration: Optional[str],
     key_alias: Optional[str],
+    key_name: Optional[str],
+    token: Optional[str],
     team_id: Optional[str],
     user_id: Optional[str],
     budget_id: Optional[str],
@@ -120,6 +124,8 @@ def generate(
             spend=spend,
             duration=duration,
             key_alias=key_alias,
+            key_name=key_name,
+            token=token,
             team_id=team_id,
             user_id=user_id,
             budget_id=budget_id,

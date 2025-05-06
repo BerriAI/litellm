@@ -113,6 +113,8 @@ class KeysManagementClient:
         user_id: Optional[str] = None,
         budget_id: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        token: Optional[str] = None,
+        key_name: Optional[str] = None,
         return_request: bool = False,
     ) -> Union[Dict[str, Any], requests.Request]:
         """
@@ -130,6 +132,8 @@ class KeysManagementClient:
             user_id (Optional[str]): User ID to associate the key with
             budget_id (Optional[str]): Budget ID to associate the key with
             config (Optional[Dict[str, Any]]): Additional configuration parameters
+            token (Optional[str]): Pre-hashed token to use as the key's hash (advanced)
+            key_name (Optional[str]): Display/abbreviation name for the key (separate from key_alias)
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
@@ -161,6 +165,10 @@ class KeysManagementClient:
             data["budget_id"] = budget_id
         if config is not None:
             data["config"] = config
+        if token is not None:
+            data["token"] = token
+        if key_name is not None:
+            data["key_name"] = key_name
 
         request = requests.Request("POST", url, headers=self._get_headers(), json=data)
 

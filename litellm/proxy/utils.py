@@ -1780,7 +1780,11 @@ class PrismaClient:
             verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
             if table_name == "key":
                 token = data["token"]
-                hashed_token = self.hash_token(token=token)
+                # Only hash if it's a secret key, not a pre-hashed value
+                if isinstance(token, str) and token.startswith("sk-"):
+                    hashed_token = self.hash_token(token=token)
+                else:
+                    hashed_token = token
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
                 print_verbose(

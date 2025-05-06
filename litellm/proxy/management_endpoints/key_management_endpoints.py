@@ -568,6 +568,16 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        # --- TOKEN HANDLING LOGIC ---
+        if "token" in data_json and data_json["token"] is not None:
+            data_json["token"] = data_json["token"]
+        elif "key" in data_json and data_json["key"] is not None:
+            data_json["token"] = hash_token(data_json["key"])
+        else:
+            data_json["token"] = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+            data_json["token"] = hash_token(data_json["token"])
+        # --- END TOKEN HANDLING LOGIC ---
+
         await _enforce_unique_key_alias(
             key_alias=data_json.get("key_alias", None),
             prisma_client=prisma_client,
@@ -586,6 +596,10 @@ async def generate_key_fn(  # noqa: PLR0915
         response.token = (
             response.token_id
         )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+
+        # If a pre-hashed token was provided, set key to (Unknown)
+        if getattr(data, "token", None) is not None:
+            response.key = "(Unknown)"
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
@@ -1175,6 +1189,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
     sso_user_id: Optional[str] = None,
+    key_name: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1284,11 +1299,10 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
         }
 
-        if (
-            get_secret("DISABLE_KEY_NAME", False) is True
-        ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
-            pass
-        else:
+        # Use user-provided key_name if present
+        if key_name is not None:
+            key_data["key_name"] = key_name
+        elif get_secret("DISABLE_KEY_NAME", False) is not True:
             key_data["key_name"] = f"sk-...{token[-4:]}"
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
