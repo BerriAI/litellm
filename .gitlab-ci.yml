@@ -21,7 +21,6 @@ variables:
 
 stages:
   - sync
-  - version
   - build
   - promote
 
@@ -40,61 +39,60 @@ Sync Upstream:
   only:
     - schedules
 
-Generate Version:
-  stage: version
-  tags:
-    - new_photon_runners
+Build LiteLLM Image Dev:
+  extends: .cloudbuild
+  environment:
+    name: development
+  variables:
+    environment: development
+    GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "review"'
+      changes:
+        - .gitlab-ci.yml
+        - Dockerfile
+        - cloudbuild.yaml
+        - requirements.txt
+        - pyproject.toml
+        - poetry.lock
+        - litellm/**/*
+        - docker/**/*
   script:
-    - VERSION=$(date +"dev-%Y.%m.%d-%H%M%S")
-    - echo "Generated Version $VERSION"
-    - echo "VERSION=$VERSION" > version.env
-    - git config --global user.email "ccoe-dis@thalesgroup.com"
-    - git config --global user.name "Thales DIS CCoE"
-    - git tag -a "$VERSION" -m "Auto-tag for dev build"
-    - git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION"
+    - >
+      VERSION=$(date +"dev-%Y.%m.%d-%H%M%S"); 
+      echo "Generated Version: $VERSION"; 
+      echo "VERSION=$VERSION" > version.env;
+
+    - >
+      echo "Logging into Vault..."; 
+      vault_role=${BUSINESSLINE}-${APPSTACKCODE}-${environment}-infra; 
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${vault_role} jwt=${VAULT_ID_TOKEN}); 
+      echo "Vault login successful.";
+
+    - >
+      echo "Fetching GCP token from Vault..."; 
+      GCP_TOKEN_JSON=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/${environment}/gcp/roleset/automation-rw/token); 
+      export CLOUDSDK_AUTH_ACCESS_TOKEN=$(echo $GCP_TOKEN_JSON | jq -r '.data.token'); 
+      export GOOGLE_OAUTH_ACCESS_TOKEN=$CLOUDSDK_AUTH_ACCESS_TOKEN; 
+      echo "GCP token obtained.";
+
+    - >
+      echo "Submitting build to GCP Cloud Build with tag $VERSION..."; 
+      gcloud builds submit --project=$GCP_PROJECT_ID \
+        --config=cloudbuild.yaml \
+        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION};
+
+    - >
+      echo "Build successful, tagging repo with $VERSION"; 
+      git config --global user.email "ccoe-dis@thalesgroup.com"; 
+      git config --global user.name "Thales DIS CCoE"; 
+      git tag -a "$VERSION" -m "Auto-tag for successful dev build"; 
+      git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
   artifacts:
     reports:
       dotenv: version.env
     paths:
       - version.env
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "review"'
-
-.cloudbuild:
-  extends:
-    - .vault
-  stage: build
-  tags:
-    - new_photon_runners
-  id_tokens:
-    CI_JOB_JWT_V2:
-      aud: vault
-  script:
-    - >
-      vault_role=${BUSINESSLINE}-${APPSTACKCODE}-${environment}-infra;
-      echo "Logging into Vault... with role: ${vault_role}";
-      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${vault_role} jwt=${VAULT_ID_TOKEN});
-      if [ $? -ne 0 ]; then echo "Vault login failed!"; exit 1; fi;
-      echo "Vault login successful."
-    - >
-      echo "Fetching GCP token from Vault...";
-      GCP_TOKEN_JSON=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/${environment}/gcp/roleset/automation-rw/token);
-      export CLOUDSDK_AUTH_ACCESS_TOKEN=$(echo $GCP_TOKEN_JSON | jq -r '.data.token');
-      export GOOGLE_OAUTH_ACCESS_TOKEN=$CLOUDSDK_AUTH_ACCESS_TOKEN;
-      echo "GCP token obtained.";
-    - >
-      echo "Submitting build to GCP Cloud Build...";
-      echo "Project ID: $GCP_PROJECT_ID";
-      echo "Image Name: $IMAGE_NAME";
-      echo "Dockerfile: $DOCKERFILE_PATH";
-      echo "Image Tag: $VERSION";
-      gcloud builds submit --project=$GCP_PROJECT_ID \
-        --config=cloudbuild.yaml \
-        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION};
-  dependencies:
-    - Generate Version
-  needs:
-    - job: Generate Version
 
 Build LiteLLM Image Dev:
   extends: .cloudbuild
@@ -132,9 +130,15 @@ Promote LiteLLM Image to Prod:
       export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token');
 
     - >
+      # Load the dev version used in the last successful build
+      echo "Loading built version from artifact...";
+      if [ ! -f version.env ]; then echo "ERROR: version.env not found. Did you build this version?"; exit 1; fi;
+      source version.env;
+      echo "Loaded dev build tag: $VERSION";
+
+    - >
       VERSION=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "$CI_COMMIT_SHORT_SHA"); 
-      SOURCE_TAG=$(echo "$CI_COMMIT_MESSAGE" | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
-      echo "Release version: $VERSION (from: $SOURCE_TAG)";
+      echo "Release version: $VERSION (source image from build: $SOURCE_TAG)";
 
     - >
       echo "Checking if source image $SOURCE_TAG exists in dev registry..."; 
