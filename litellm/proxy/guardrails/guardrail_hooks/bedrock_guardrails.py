@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -33,13 +33,15 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret
-from litellm.types.guardrails import (
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
+    BedrockGuardrailAssessment,
+    BedrockGuardrailResponse,
     BedrockRequest,
     BedrockTextContent,
-    GuardrailEventHooks,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
@@ -74,12 +76,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                bedrock_content_item = BedrockContentItem(
-                    text=BedrockTextContent(
-                        text=convert_content_list_to_str(message=message)
-                    )
+                message_text_content: Optional[List[str]] = (
+                    self.get_content_for_message(message=message)
                 )
-                bedrock_request_content.append(bedrock_content_item)
+                if message_text_content is None:
+                    continue
+                for text_content in message_text_content:
+                    bedrock_content_item = BedrockContentItem(
+                        text=BedrockTextContent(text=text_content)
+                    )
+                    bedrock_request_content.append(bedrock_content_item)
 
             bedrock_request["content"] = bedrock_request_content
         if response:
@@ -191,12 +197,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def make_bedrock_api_request(
         self, kwargs: dict, response: Optional[Union[Any, litellm.ModelResponse]] = None
-    ):
+    ) -> BedrockGuardrailResponse:
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
                 messages=kwargs.get("messages"), response=response
             )
+        )
+        bedrock_guardrail_response: BedrockGuardrailResponse = (
+            BedrockGuardrailResponse()
         )
         bedrock_request_data.update(
             self.get_guardrail_dynamic_request_body_params(request_data=kwargs)
@@ -223,7 +232,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if response.status_code == 200:
             # check if the response was flagged
             _json_response = response.json()
-            if _json_response.get("action") == "GUARDRAIL_INTERVENED":
+            bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
+            if self._should_raise_guardrail_blocked_exception(
+                bedrock_guardrail_response
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -237,6 +249,28 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 response.status_code,
                 response.text,
             )
+
+        return bedrock_guardrail_response
+
+    def _should_raise_guardrail_blocked_exception(
+        self, response: BedrockGuardrailResponse
+    ) -> bool:
+        """
+        By default always raise an exception when a guardrail intervention is detected.
+
+        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
+        """
+
+        # if user opted into masking, return False. since we'll use the masked output from the guardrail
+        if self.mask_request_content or self.mask_response_content:
+            return False
+
+        # if intervention, return True
+        if response.get("action") == "GUARDRAIL_INTERVENED":
+            return True
+
+        # if no intervention, return False
+        return False
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -260,17 +294,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[dict]] = data.get("messages")
-        if new_messages is not None:
-            await self.make_bedrock_api_request(kwargs=data)
-            add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=self.guardrail_name
-            )
-        else:
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
             )
-            pass
+            return
+
+        #########################################################
+        ########## 1. Make the Bedrock API request ##########
+        #########################################################
+        bedrock_guardrail_response = await self.make_bedrock_api_request(kwargs=data)
+        #########################################################
+
+        #########################################################
+        ########## 2. Update the messages with the guardrail response ##########
+        #########################################################
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
+        )
+
+        #########################################################
+        ########## 3. Add the guardrail to the applied guardrails header ##########
+        #########################################################
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return data
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -293,12 +347,183 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
 
         new_messages: Optional[List[dict]] = data.get("messages")
-        if new_messages is not None:
-            await self.make_bedrock_api_request(kwargs=data, response=response)
-            add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=self.guardrail_name
-            )
-        else:
+        if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
             )
+            return
+
+        #########################################################
+        ########## 1. Make the Bedrock API request ##########
+        #########################################################
+        bedrock_guardrail_response = await self.make_bedrock_api_request(
+            kwargs=data, response=response
+        )
+        #########################################################
+
+        #########################################################
+        ########## 2. Update the messages with the guardrail response ##########
+        #########################################################
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
+        )
+
+        #########################################################
+        ########## 3. Add the guardrail to the applied guardrails header ##########
+        #########################################################
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+    ###########  HELPER FUNCTIONS for bedrock guardrails ############################
+    ##############################################################################
+    ##############################################################################
+    def _update_messages_with_updated_bedrock_guardrail_response(
+        self, messages: List[dict], bedrock_guardrail_response: BedrockGuardrailResponse
+    ) -> List[dict]:
+        """
+        Use the output from the bedrock guardrail to mask sensitive content in messages.
+
+        Args:
+            messages: Original list of messages
+            bedrock_guardrail_response: Response from Bedrock guardrail containing masked content
+
+        Returns:
+            List of messages with content masked according to guardrail response
+        """
+        # Skip processing if masking is not enabled
+        if not (self.mask_request_content or self.mask_response_content):
+            return messages
+
+        # Get masked texts from guardrail response
+        masked_texts = self._extract_masked_texts_from_response(
+            bedrock_guardrail_response
+        )
+        if not masked_texts:
+            return messages
+
+        # Apply masking to messages using index tracking
+        return self._apply_masking_to_messages(
+            messages=messages, masked_texts=masked_texts
+        )
+
+    def _extract_masked_texts_from_response(
+        self, bedrock_guardrail_response: BedrockGuardrailResponse
+    ) -> List[str]:
+        """
+        Extract all masked text outputs from the guardrail response.
+
+        Args:
+            bedrock_guardrail_response: Response from Bedrock guardrail
+
+        Returns:
+            List of masked text strings
+        """
+        masked_outputs = bedrock_guardrail_response.get("outputs", [])
+        if not masked_outputs:
+            verbose_proxy_logger.debug("No masked outputs found in guardrail response")
+            return []
+
+        return [
+            output.get("text")
+            for output in masked_outputs
+            if output.get("text") is not None
+        ]
+
+    def _apply_masking_to_messages(
+        self, messages: List[dict], masked_texts: List[str]
+    ) -> List[dict]:
+        """
+        Apply masked texts to message content using index tracking.
+
+        Args:
+            messages: Original messages
+            masked_texts: List of masked text strings from guardrail
+
+        Returns:
+            Updated messages with masked content
+        """
+        updated_messages = []
+        masking_index = 0
+
+        for message in messages:
+            new_message = message.copy()
+            content = new_message.get("content")
+
+            # Skip messages with no content
+            if content is None:
+                updated_messages.append(new_message)
+                continue
+
+            # Handle string content
+            if isinstance(content, str):
+                if masking_index < len(masked_texts):
+                    new_message["content"] = masked_texts[masking_index]
+                    masking_index += 1
+            # Handle list content
+            elif isinstance(content, list):
+                new_message["content"], masking_index = self._mask_content_list(
+                    content_list=content,
+                    masked_texts=masked_texts,
+                    masking_index=masking_index,
+                )
+
+            updated_messages.append(new_message)
+
+        return updated_messages
+
+    def _mask_content_list(
+        self, content_list: List[Any], masked_texts: List[str], masking_index: int
+    ) -> Tuple[List[Any], int]:
+        """
+        Apply masking to a list of content items.
+
+        Args:
+            content_list: List of content items
+            masked_texts: List of masked text strings
+            starting_index: Starting index in the masked_texts list
+
+        Returns:
+            Updated content list with masked items
+        """
+        new_content = []
+        for item in content_list:
+            if isinstance(item, dict) and "text" in item:
+                new_item = item.copy()
+                if masking_index < len(masked_texts):
+                    new_item["text"] = masked_texts[masking_index]
+                    masking_index += 1
+                new_content.append(new_item)
+            elif isinstance(item, str):
+                new_item = item
+                if masking_index < len(masked_texts):
+                    new_item = masked_texts[masking_index]
+                    masking_index += 1
+                new_content.append(new_item)
+
+        return new_content, masking_index
+
+    def get_content_for_message(self, message: AllMessageValues) -> Optional[List[str]]:
+        """
+        Get the content for a message.
+
+        For bedrock guardrails we create a list of all the text content in the message.
+
+        If a message has a list of content items, we flatten the list and return a list of text content.
+        """
+        message_text_content = []
+        content = message.get("content")
+        if content is None:
+            return None
+        if isinstance(content, str):
+            message_text_content.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and "text" in item:
+                    message_text_content.append(item["text"])
+                elif isinstance(item, str):
+                    message_text_content.append(item)
+        return message_text_content

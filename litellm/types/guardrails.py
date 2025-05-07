@@ -123,19 +123,6 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
 
 
-class BedrockTextContent(TypedDict, total=False):
-    text: str
-
-
-class BedrockContentItem(TypedDict, total=False):
-    text: BedrockTextContent
-
-
-class BedrockRequest(TypedDict, total=False):
-    source: Literal["INPUT", "OUTPUT"]
-    content: List[BedrockContentItem]
-
-
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
