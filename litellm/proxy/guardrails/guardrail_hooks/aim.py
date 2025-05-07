@@ -130,7 +130,9 @@ class AimGuardrail(CustomGuardrail):
             case "block_action":
                 self._handle_block_action(res["analysis_result"], required_action)
             case "anonymize_action":
-                return self._anonymize_request(res["analysis_result"], required_action, data)
+                return self._anonymize_request(
+                    res["analysis_result"], required_action, data
+                )
             case "engage_action":
                 verbose_proxy_logger.info("Aim: engage action")
             case _:
@@ -147,31 +149,34 @@ class AimGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(self, analysis_result: Any, required_action: Any, data: dict) -> dict:
+    def _anonymize_request(
+        self, analysis_result: Any, required_action: Any, data: dict
+    ) -> dict:
         try:
             verbose_proxy_logger.info("Aim: anonymize action")
-            redaction_result = required_action and required_action.get("chat_redaction_result")
+            redaction_result = required_action and required_action.get(
+                "chat_redaction_result"
+            )
             if not redaction_result:
                 return data
             if analysis_result and analysis_result.get("session_entities"):
                 self.dlp_entities = analysis_result.get("session_entities")
             data["messages"] = [
-                    {
-                        "role": redaction_result["redacted_new_message"]["role"],
-                        "content": redaction_result["redacted_new_message"]["content"],
-                    }
-                ] + [
-                    {
-                        "role": message["role"],
-                        "content": message["content"],
-                    }
-                    for message in redaction_result["all_redacted_messages"]
-                ]
+                {
+                    "role": redaction_result["redacted_new_message"]["role"],
+                    "content": redaction_result["redacted_new_message"]["content"],
+                }
+            ] + [
+                {
+                    "role": message["role"],
+                    "content": message["content"],
+                }
+                for message in redaction_result["all_redacted_messages"]
+            ]
             return data
         except Exception as e:
             verbose_proxy_logger.error(f"Aim: Error while redacting: {e}")
-            return data # todo do we want to fallback to this or raise?
-
+            return data  # todo do we want to fallback to this or raise?
 
     async def call_aim_guardrail_on_output(
         self, request_data: dict, output: str, hook: str, key_alias: Optional[str]
@@ -195,10 +200,14 @@ class AimGuardrail(CustomGuardrail):
         required_action = res.get("required_action")
         action_type = required_action and required_action.get("action_type", None)
         if action_type and action_type == "block_action":
-            return self._handle_block_action_on_output(res["analysis_result"], required_action)
+            return self._handle_block_action_on_output(
+                res["analysis_result"], required_action
+            )
         return self._deanonymize_output(output)
 
-    def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
+    def _handle_block_action_on_output(
+        self, analysis_result: Any, required_action: Any
+    ) -> dict | None:
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
@@ -265,10 +274,19 @@ class AimGuardrail(CustomGuardrail):
             aim_output_guardrail_result = await self.call_aim_guardrail_on_output(
                 data, content, hook="output", key_alias=user_api_key_dict.key_alias
             )
-            if aim_output_guardrail_result and aim_output_guardrail_result.get("detection_message"):
-                raise HTTPException(status_code=400, detail=aim_output_guardrail_result.get("detection_message"))
-            if aim_output_guardrail_result and aim_output_guardrail_result.get("redacted_output"):
-                response.choices[0].message.content = aim_output_guardrail_result.get("redacted_output")
+            if aim_output_guardrail_result and aim_output_guardrail_result.get(
+                "detection_message"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=aim_output_guardrail_result.get("detection_message"),
+                )
+            if aim_output_guardrail_result and aim_output_guardrail_result.get(
+                "redacted_output"
+            ):
+                response.choices[0].message.content = aim_output_guardrail_result.get(
+                    "redacted_output"
+                )
 
     async def async_post_call_streaming_iterator_hook(
         self,
