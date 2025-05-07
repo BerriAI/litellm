@@ -5,9 +5,9 @@ For calculating cost of fireworks ai serverless inference models.
 from typing import Tuple
 
 from litellm.constants import (
+    FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
     FIREWORKS_AI_56_B_MOE,
-    FIREWORKS_AI_80_B,
     FIREWORKS_AI_176_B_MOE,
 )
 from litellm.types.utils import Usage
@@ -43,10 +43,12 @@ def get_base_model_for_pricing(model_name: str) -> str:
         params_billion = float(params_match)
 
         # Determine the category based on the number of parameters
-        if params_billion <= FIREWORKS_AI_16_B:
-            return "fireworks-ai-up-to-16b"
-        elif params_billion <= FIREWORKS_AI_80_B:
-            return "fireworks-ai-16b-80b"
+        if params_billion <= FIREWORKS_AI_4_B:
+            return "fireworks-ai-up-to-4b"
+        elif params_billion <= FIREWORKS_AI_16_B:
+            return "fireworks-ai-4.1b-to-16b"
+        elif params_billion > FIREWORKS_AI_16_B:
+            return "fireworks-ai-above-16b"
 
     # If no matches, return the original model_name
     return "fireworks-ai-default"

@@ -1,6 +1,9 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+
+litellm_settings:
+    json_logs: true

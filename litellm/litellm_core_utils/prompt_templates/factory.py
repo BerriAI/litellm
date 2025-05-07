@@ -2258,6 +2258,14 @@ def _parse_content_type(content_type: str) -> str:
     return m.get_content_type()
 
 
+def _parse_mime_type(base64_data: str) -> Optional[str]:
+    mime_type_match = re.match(r"data:(.*?);base64", base64_data)
+    if mime_type_match:
+        return mime_type_match.group(1)
+    else:
+        return None
+
+
 class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
@@ -3625,7 +3633,7 @@ def prompt_factory(
             return mistral_instruct_pt(messages=messages)
         elif "llama2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
-        elif "llama3" in model and "instruct" in model:
+        elif ("llama3" in model or "llama4" in model) and "instruct" in model:
             return hf_chat_template(
                 model="meta-llama/Meta-Llama-3-8B-Instruct",
                 messages=messages,

@@ -198,7 +198,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         metadata: {
           ...parsedMetadata,
           guardrails: values.guardrails || []
-        }
+        },
+        organization_id: values.organization_id,
       };
       
       const response = await teamUpdateCall(accessToken, updateData);
@@ -207,7 +208,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setIsEditing(false);
       fetchTeamInfo();
     } catch (error) {
-      message.error("Failed to update team settings");
       console.error("Error updating team:", error);
     }
   };
@@ -334,6 +334,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     budget_duration: info.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata ? JSON.stringify(info.metadata, null, 2) : "",
+                    organization_id: info.organization_id,
                   }}
                   layout="vertical"
                 >
@@ -353,8 +354,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
+                      {userModels.map((model, idx) => (
+                        <Select.Option key={idx} value={model}>
                           {getModelDisplayName(model)}
                         </Select.Option>
                       ))}
@@ -405,6 +406,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select or enter guardrails"
                     />
                   </Form.Item>
+                  
+                  <Form.Item label="Organization ID" name="organization_id">
+                    <Input type=""/>
+                  </Form.Item>
+
                   <Form.Item label="Metadata" name="metadata">
                     <Input.TextArea rows={10} />
                   </Form.Item>
@@ -452,6 +458,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text className="font-medium">Budget</Text>
                       <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {info.budget_duration || 'Never'}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Organization ID</Text>
+                    <div>{info.organization_id}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Status</Text>

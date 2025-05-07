@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -83,6 +84,35 @@ class TestResponsesAPIRequestUtils:
         assert "model" not in result
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
+
+    def test_decode_previous_response_id_to_original_previous_response_id(self):
+        """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
+        # Setup
+        test_provider = "openai"
+        test_model_id = "gpt-4o"
+        original_response_id = "resp_abc123"
+
+        # Use the helper method to build an encoded response ID
+        encoded_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=test_provider,
+            model_id=test_model_id,
+            response_id=original_response_id,
+        )
+
+        # Execute
+        result = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            encoded_id
+        )
+
+        # Assert
+        assert result == original_response_id
+
+        # Test with a non-encoded ID
+        plain_id = "resp_xyz789"
+        result_plain = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            plain_id
+        )
+        assert result_plain == plain_id
 
 
 class TestResponseAPILoggingUtils:

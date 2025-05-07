@@ -39,6 +39,7 @@ class PartType(TypedDict, total=False):
     file_data: FileDataType
     function_call: FunctionCall
     function_response: FunctionResponse
+    thought: bool
 
 
 class HttpxFunctionCall(TypedDict):
@@ -69,6 +70,7 @@ class HttpxPartType(TypedDict, total=False):
     functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
+    thought: bool
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -166,6 +168,11 @@ class SafetSettingsConfig(TypedDict, total=False):
     method: HarmBlockMethod
 
 
+class GeminiThinkingConfig(TypedDict, total=False):
+    includeThoughts: bool
+    thinkingBudget: int
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -181,6 +188,7 @@ class GenerationConfig(TypedDict, total=False):
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
+    thinkingConfig: GeminiThinkingConfig
 
 
 class Tools(TypedDict, total=False):
@@ -212,6 +220,7 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    thoughtsTokenCount: int
 
 
 class CachedContent(TypedDict, total=False):

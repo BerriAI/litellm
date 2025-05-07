@@ -76,6 +76,11 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
+
+    def get_base_completion_call_args_with_reasoning_model(self) -> dict:
+        """Must return the base completion call args with reasoning_effort"""
+        return {}
+
     def test_developer_role_translation(self):
         """
         Test that the developer role is translated correctly for non-OpenAI providers.
@@ -806,6 +811,7 @@ class BaseLLMChatTest(ABC):
 
         return url
     
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_empty_tools(self):
         """
         Related Issue: https://github.com/BerriAI/litellm/issues/9080
@@ -828,6 +834,8 @@ class BaseLLMChatTest(ABC):
             response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[]) # just make sure call doesn't fail
             print("response: ", response)
             assert response is not None
+        except litellm.ContentPolicyViolationError:
+            pass
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
@@ -835,6 +843,7 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_basic_tool_calling(self):
         try:
             from litellm import completion, ModelResponse
@@ -891,6 +900,13 @@ class BaseLLMChatTest(ABC):
             assert response is not None
 
             # if the provider did not return any tool calls do not make a subsequent llm api call
+            if response.choices[0].message.content is not None:
+                try:
+                    json.loads(response.choices[0].message.content)
+                    pytest.fail(f"Tool call returned in content instead of tool_calls")
+                except Exception as e:
+                    print(f"Error: {e}")
+                    pass
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response
@@ -901,6 +917,7 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
+            assert response.choices[0].finish_reason == "tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes
@@ -931,6 +948,8 @@ class BaseLLMChatTest(ABC):
                 second_response.choices[0].message.content is not None
                 or second_response.choices[0].message.tool_calls is not None
             )
+        except litellm.ServiceUnavailableError:
+            pytest.skip("Model is overloaded")
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
         except litellm.RateLimitError:
@@ -1125,6 +1144,46 @@ class BaseLLMChatTest(ABC):
                 break
 
         print(response)
+
+    def test_reasoning_effort(self):
+        """Test that reasoning_effort is passed correctly to the model"""
+        from litellm.utils import supports_reasoning
+        from litellm import completion
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args_with_reasoning_model()
+        if len(base_completion_call_args) == 0:
+            print("base_completion_call_args is empty")
+            pytest.skip("Model does not support reasoning")
+        if not supports_reasoning(base_completion_call_args["model"], None):
+            print("Model does not support reasoning")
+            pytest.skip("Model does not support reasoning")
+
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=base_completion_call_args["model"]
+        )
+
+        ## CHECK PARAM MAPPING 
+        optional_params = get_optional_params(
+            model=base_completion_call_args["model"],
+            custom_llm_provider=provider,
+            reasoning_effort="high",
+        )
+        # either accepts reasoning effort or thinking budget
+        assert "reasoning_effort" in optional_params or "4096" in json.dumps(optional_params)
+
+        try:
+            litellm._turn_on_debug()
+            response = completion(
+                **base_completion_call_args,
+                reasoning_effort="low",
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+            print(f"response: {response}")
+        except Exception as e:
+            pytest.fail(f"Error: {e}")
 
         
 

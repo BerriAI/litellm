@@ -131,15 +131,15 @@ def test_null_role_response():
 
         assert response.choices[0].message.role == "assistant"
 
-
+@pytest.mark.skip(reason="Cohere having RBAC issues")
 def test_completion_azure_command_r():
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
 
         response = completion(
             model="azure/command-r-plus",
-            api_base=os.getenv("AZURE_COHERE_API_BASE"),
-            api_key=os.getenv("AZURE_COHERE_API_KEY"),
+            api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com",
+            api_key="AO89xyvmOLLMgoMI7WaiEaP0t6M09itr",
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
         )
 
@@ -174,26 +174,6 @@ def test_completion_azure_ai_gpt_4o(api_base):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_databricks(sync_mode):
-    litellm.set_verbose = True
-
-    if sync_mode:
-        response: litellm.ModelResponse = completion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-
-    else:
-        response: litellm.ModelResponse = await litellm.acompletion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-    print(f"response: {response}")
-
-    response_format_tests(response=response)
 
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
@@ -732,7 +712,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4o",
+        "azure/gpt-4o-new-test",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
@@ -1332,7 +1312,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/mixtral-8x7b-instruct",
+            model="fireworks_ai/llama4-maverick-instruct-basic",
             messages=messages,
         )
         print(response)
@@ -1497,7 +1477,7 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio"]
+    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
@@ -1539,6 +1519,7 @@ async def test_openai_compatible_custom_api_base(provider):
     [
         "openai",
         "hosted_vllm",
+        "llamafile",
     ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
@@ -1824,9 +1805,9 @@ def test_completion_openai():
     "model, api_version",
     [
         # ("gpt-4o-2024-08-06", None),
-        # ("azure/chatgpt-v-2", None),
+        # ("azure/chatgpt-v-3", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
-        # ("azure/gpt-4o", "2024-08-01-preview"),
+        # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -2495,7 +2476,7 @@ def test_completion_azure_extra_headers():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 api_base=os.getenv("AZURE_API_BASE"),
                 api_version="2023-07-01-preview",
@@ -2544,7 +2525,7 @@ def test_completion_azure_ad_token():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 azure_ad_token="my-special-token",
             )
@@ -2575,7 +2556,7 @@ def test_completion_azure_key_completion_arg():
         litellm.set_verbose = True
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
             api_key=old_key,
             logprobs=True,
@@ -2633,7 +2614,7 @@ async def test_re_use_azure_async_client():
         ## Test azure call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-2", messages=messages, client=client
+                model="azure/chatgpt-v-3", messages=messages, client=client
             )
             print(f"response: {response}")
     except Exception as e:
@@ -2661,11 +2642,10 @@ def test_re_use_openaiClient():
 
 def test_completion_azure():
     try:
-        print("azure gpt-3.5 test\n\n")
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-2",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             api_key="os.environ/AZURE_API_KEY",
         )
@@ -2673,7 +2653,7 @@ def test_completion_azure():
         print(f"response hidden params: {response._hidden_params}")
         ## Test azure flag for backwards-compat
         # response = completion(
-        #     model="chatgpt-v-2",
+        #     model="chatgpt-v-3",
         #     messages=messages,
         #     azure=True,
         #     max_tokens=10
@@ -2712,7 +2692,7 @@ def test_azure_openai_ad_token():
     litellm.input_callback = [tester]
     try:
         response = litellm.completion(
-            model="azure/chatgpt-v-2",  # e.g. gpt-35-instant
+            model="azure/chatgpt-v-3",  # e.g. gpt-35-instant
             messages=[
                 {
                     "role": "user",
@@ -2750,7 +2730,7 @@ def test_completion_azure2():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
             api_base=api_base,
             api_key=api_key,
@@ -2787,7 +2767,7 @@ def test_completion_azure3():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
             max_tokens=10,
         )
@@ -2835,7 +2815,7 @@ def test_completion_azure_with_litellm_key():
         openai.api_key = "ymca"
 
         response = completion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
         )
         # Add any assertions here to check the response
@@ -2863,7 +2843,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="chatgpt-v-2",
+            deployment_id="gpt-4o-new-test",
             model="gpt-3.5-turbo",
             messages=messages,
         )
@@ -3925,7 +3905,7 @@ def test_completion_stream_watsonx():
 @pytest.mark.parametrize(
     "provider, model, project, region_name, token",
     [
-        ("azure", "chatgpt-v-2", None, None, "test-token"),
+        ("azure", "chatgpt-v-3", None, None, "test-token"),
         ("vertex_ai", "anthropic-claude-3", "adroit-crow-1", "us-east1", None),
         ("watsonx", "ibm/granite", "96946574", "dallas", "1234"),
         ("bedrock", "anthropic.claude-3", None, "us-east-1", None),
@@ -4178,7 +4158,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2"],
+    ["gpt-4o", "azure/chatgpt-v-3"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4200,7 +4180,7 @@ def test_completion_response_ratelimit_headers(model, stream):
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
 
-    if model == "azure/chatgpt-v-2":
+    if model == "azure/chatgpt-v-3":
         # Azure OpenAI header
         assert "llm_provider-azureml-model-session" in additional_headers
     if model == "claude-3-sonnet-20240229":

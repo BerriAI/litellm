@@ -49,8 +49,15 @@ from openai.types.responses.response_create_params import (
     ToolChoice,
     ToolParam,
 )
-from pydantic import BaseModel, Discriminator, Field, PrivateAttr
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
+
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+)
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -461,6 +468,12 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
+    type: Required[Literal["redacted_thinking"]]
+    data: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
     city: str
     """Free text input for the city of the user, e.g. `San Francisco`."""
@@ -638,6 +651,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
+    reasoning_content: Optional[str]
 
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
@@ -676,6 +690,11 @@ class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False
 
 class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
     cache_control: ChatCompletionCachedContent
+
+
+class GenericChatCompletionMessage(TypedDict, total=False):
+    role: Required[str]
+    content: Required[Union[str, List]]
 
 
 ValidUserMessageContentTypes = [
@@ -785,13 +804,17 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
-class ChatCompletionUsageBlock(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+class ChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    prompt_tokens_details: Optional[dict]
+    completion_tokens_details: Optional[dict]
 
 
 class OpenAIChatCompletionChunk(ChatCompletionChunk):
@@ -853,8 +876,7 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
-    class Config:
-        extra = "allow"  # This allows the model to accept additional fields
+    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
@@ -872,6 +894,19 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
 
 
+class ComputerToolParam(TypedDict, total=False):
+    display_height: Required[float]
+    """The height of the computer display."""
+
+    display_width: Required[float]
+    """The width of the computer display."""
+
+    environment: Required[Union[Literal["mac", "windows", "ubuntu", "browser"], str]]
+    """The type of computer environment to control."""
+
+    type: Required[Union[Literal["computer_use_preview"], str]]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -887,7 +922,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     temperature: Optional[float]
     text: Optional[ResponseTextConfigParam]
     tool_choice: Optional[ToolChoice]
-    tools: Optional[Iterable[ToolParam]]
+    tools: Optional[List[Union[ToolParam, ComputerToolParam]]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
@@ -898,20 +933,6 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
     input: Union[str, ResponseInputParam]
     model: str
-
-
-class BaseLiteLLMOpenAIResponseObject(BaseModel):
-    def __getitem__(self, key):
-        return self.__dict__[key]
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-    def __contains__(self, key):
-        return key in self.__dict__
-
-    def items(self):
-        return self.__dict__.items()
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -958,11 +979,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: List[ResponseOutputItem]
+    output: Union[
+        List[ResponseOutputItem],
+        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+    ]
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
-    tools: List[Tool]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
     top_p: Optional[float]
     max_output_tokens: Optional[int]
     previous_response_id: Optional[str]
@@ -989,6 +1013,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     RESPONSE_COMPLETED = "response.completed"
     RESPONSE_FAILED = "response.failed"
     RESPONSE_INCOMPLETE = "response.incomplete"
+
+    # Part added
+    RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1177,6 +1204,12 @@ class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     param: Optional[str]
 
 
+class GenericEvent(BaseLiteLLMOpenAIResponseObject):
+    type: str
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
 # Union type for all possible streaming responses
 ResponsesAPIStreamingResponse = Annotated[
     Union[
@@ -1203,6 +1236,7 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
         ErrorEvent,
+        GenericEvent,
     ],
     Discriminator("type"),
 ]
@@ -1226,3 +1260,78 @@ class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
 OpenAIRealtimeStreamList = List[
     Union[OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents]
 ]
+
+
+class ImageGenerationRequestQuality(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    AUTO = "auto"
+    STANDARD = "standard"
+    HD = "hd"
+
+
+class OpenAIModerationResult(BaseLiteLLMOpenAIResponseObject):
+    categories: Optional[Dict]
+    category_applied_input_types: Optional[Dict]
+    category_scores: Optional[Dict]
+    flagged: Optional[bool]
+
+
+class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
+    """
+    Response from the OpenAI Moderation API.
+    """
+
+    id: str
+    """The unique identifier for the moderation request."""
+
+    model: str
+    """The model used to generate the moderation results."""
+
+    results: List[OpenAIModerationResult]
+    """A list of moderation objects."""
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
+
+
+class OpenAIChatCompletionLogprobs(TypedDict, total=False):
+    content: List[OpenAIChatCompletionLogprobsContent]
+    refusal: List[OpenAIChatCompletionLogprobsContent]
+
+
+class OpenAIChatCompletionChoices(TypedDict, total=False):
+    finish_reason: Required[str]
+    index: Required[int]
+    logprobs: Optional[OpenAIChatCompletionLogprobs]
+    message: Required[ChatCompletionResponseMessage]
+
+
+class OpenAIChatCompletionResponse(TypedDict, total=False):
+    id: Required[str]
+    object: Required[str]
+    created: Required[int]
+    model: Required[str]
+    choices: Required[List[OpenAIChatCompletionChoices]]
+    usage: Required[ChatCompletionUsageBlock]
+    system_fingerprint: str
+    service_tier: str
+
+OpenAIChatCompletionFinishReason = Literal[
+    "stop", "content_filter", "function_call", "tool_calls", "length"
+]
+

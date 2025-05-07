@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -147,10 +147,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[
-                Deployment
-            ] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+            deployment: Optional[Deployment] = (
+                llm_router.get_deployment_by_model_group_name(
+                    model_group_name=request_data["model"]
+                )
             )
             if (
                 deployment
@@ -185,3 +185,23 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+async def get_form_data(request: Request) -> Dict[str, Any]:
+    """
+    Read form data from request
+
+    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    """
+    form = await request.form()
+    form_data = dict(form)
+    parsed_form_data: dict[str, Any] = {}
+    for key, value in form_data.items():
+
+        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+        if key.endswith("[]"):
+            clean_key = key[:-2]
+            parsed_form_data.setdefault(clean_key, []).append(value)
+        else:
+            parsed_form_data[key] = value
+    return parsed_form_data

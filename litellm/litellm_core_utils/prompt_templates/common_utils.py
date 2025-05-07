@@ -6,12 +6,14 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -30,6 +32,35 @@ DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
+
+
+def handle_any_messages_to_chat_completion_str_messages_conversion(
+    messages: Any,
+) -> List[Dict[str, str]]:
+    """
+    Handles any messages to chat completion str messages conversion
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
+    """
+    import json
+
+    if isinstance(messages, list):
+        try:
+            return cast(
+                List[Dict[str, str]],
+                handle_messages_with_content_list_to_str_conversion(messages),
+            )
+        except Exception:
+            return [{"input": json.dumps(message, default=str)} for message in messages]
+    elif isinstance(messages, dict):
+        try:
+            return [{"input": json.dumps(messages, default=str)}]
+        except Exception:
+            return [{"input": str(messages)}]
+    elif isinstance(messages, str):
+        return [{"input": messages}]
+    else:
+        return [{"input": str(messages)}]
 
 
 def handle_messages_with_content_list_to_str_conversion(
@@ -68,7 +99,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -471,3 +504,72 @@ def unpack_defs(schema, defs):
                 unpack_defs(ref, defs)
                 value["items"] = ref
                 continue
+
+
+def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+    """
+    Get mime type for common image URLs
+    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
+
+    Supported by Gemini:
+     application/pdf
+    audio/mpeg
+    audio/mp3
+    audio/wav
+    image/png
+    image/jpeg
+    image/webp
+    text/plain
+    video/mov
+    video/mpeg
+    video/mp4
+    video/mpg
+    video/avi
+    video/wmv
+    video/mpegps
+    video/flv
+    """
+    url = url.lower()
+
+    # Map file extensions to mime types
+    mime_types = {
+        # Images
+        (".jpg", ".jpeg"): "image/jpeg",
+        (".png",): "image/png",
+        (".webp",): "image/webp",
+        # Videos
+        (".mp4",): "video/mp4",
+        (".mov",): "video/mov",
+        (".mpeg", ".mpg"): "video/mpeg",
+        (".avi",): "video/avi",
+        (".wmv",): "video/wmv",
+        (".mpegps",): "video/mpegps",
+        (".flv",): "video/flv",
+        # Audio
+        (".mp3",): "audio/mp3",
+        (".wav",): "audio/wav",
+        (".mpeg",): "audio/mpeg",
+        # Documents
+        (".pdf",): "application/pdf",
+        (".txt",): "text/plain",
+    }
+
+    # Check each extension group against the URL
+    for extensions, mime_type in mime_types.items():
+        if any(url.endswith(ext) for ext in extensions):
+            return mime_type
+
+    return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names: List[str] = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_name = tool.get("function", {}).get("name")
+            if tool_call_name:
+                tool_call_names.append(tool_call_name)
+    return tool_call_names

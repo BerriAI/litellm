@@ -185,6 +185,16 @@ def test_get_llm_provider_hosted_vllm():
     assert dynamic_api_key == "fake-api-key"
 
 
+def test_get_llm_provider_llamafile():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="llamafile/mistralai/mistral-7b-instruct-v0.2",
+    )
+    assert custom_llm_provider == "llamafile"
+    assert model == "mistralai/mistral-7b-instruct-v0.2"
+    assert dynamic_api_key == "fake-api-key"
+    assert api_base == "http://127.0.0.1:8080/v1"
+
+
 def test_get_llm_provider_watson_text():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="watsonx_text/watson-text-to-speech",

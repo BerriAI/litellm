@@ -489,6 +489,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
+                "output_cost_per_reasoning_token": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -551,7 +552,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["text", "image", "audio"],
+                        "enum": ["text", "image", "audio", "code"],
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},

@@ -226,6 +226,8 @@ model LiteLLM_SpendLogs {
   requester_ip_address String?
   messages            Json?     @default("{}")
   response            Json?     @default("{}")
+  session_id          String?
+  proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
 }
@@ -423,3 +425,14 @@ model LiteLLM_ManagedFileTable {
   @@index([unified_file_id])
 }
 
+
+model LiteLLM_ManagedVectorStoresTable {
+  vector_store_id String @id
+  custom_llm_provider String
+  vector_store_name String?
+  vector_store_description String?
+  vector_store_metadata Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  litellm_credential_name String?
+}
