@@ -96,7 +96,6 @@ model LiteLLM_TeamTable {
     max_budget Float?
     spend      Float    @default(0.0)
     models     String[]
-    mcp_servers String[] @default([])
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
@@ -189,7 +188,6 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
-    mcp_servers String[] @default([])
     organization_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?
