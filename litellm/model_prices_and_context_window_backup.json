@@ -12199,9 +12199,6 @@
         "mode": "chat"
     },
     "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 9e-8,
         "output_cost_per_token": 2.9e-7,
         "litellm_provider": "nscale",
@@ -12209,9 +12206,6 @@
         "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
     },
     "nscale/Qwen/Qwen2.5-Coder-3B-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 1e-8,
         "output_cost_per_token": 3e-8,
         "litellm_provider": "nscale",
@@ -12219,9 +12213,6 @@
         "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
     },
     "nscale/Qwen/Qwen2.5-Coder-7B-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 1e-8,
         "output_cost_per_token": 3e-8,
         "litellm_provider": "nscale",
@@ -12229,9 +12220,6 @@
         "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
     },
     "nscale/Qwen/Qwen2.5-Coder-32B-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 6e-8,
         "output_cost_per_token": 2e-7,
         "litellm_provider": "nscale",
@@ -12239,9 +12227,6 @@
         "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
     },
     "nscale/Qwen/QwQ-32B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 1.8e-7,
         "output_cost_per_token": 2e-7,
         "litellm_provider": "nscale",
@@ -12249,9 +12234,6 @@
         "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 3.75e-7,
         "output_cost_per_token": 3.75e-7,
         "litellm_provider": "nscale",
@@ -12260,9 +12242,6 @@
         "notes": "Pricing listed as $0.75/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 2.5e-8,
         "output_cost_per_token": 2.5e-8,
         "litellm_provider": "nscale",
@@ -12271,9 +12250,6 @@
         "notes": "Pricing listed as $0.05/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 9e-8,
         "output_cost_per_token": 9e-8,
         "litellm_provider": "nscale",
@@ -12282,9 +12258,6 @@
         "notes": "Pricing listed as $0.18/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 2e-7,
         "output_cost_per_token": 2e-7,
         "litellm_provider": "nscale",
@@ -12293,9 +12266,6 @@
         "notes": "Pricing listed as $0.40/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 7e-8,
         "output_cost_per_token": 7e-8,
         "litellm_provider": "nscale",
@@ -12304,9 +12274,6 @@
         "notes": "Pricing listed as $0.14/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 1.5e-7,
         "output_cost_per_token": 1.5e-7,
         "litellm_provider": "nscale",
@@ -12315,9 +12282,6 @@
         "notes": "Pricing listed as $0.30/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/mistralai/mixtral-8x22b-instruct-v0.1": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 6e-7,
         "output_cost_per_token": 6e-7,
         "litellm_provider": "nscale",
@@ -12326,9 +12290,6 @@
         "notes": "Pricing listed as $1.20/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/meta-llama/Llama-3.1-8B-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 3e-8,
         "output_cost_per_token": 3e-8,
         "litellm_provider": "nscale",
@@ -12337,9 +12298,6 @@
         "notes": "Pricing listed as $0.06/1M tokens total. Assumed 50/50 split for input/output."
     },
     "nscale/meta-llama/Llama-3.3-70B-Instruct": {
-        "max_tokens": null,
-        "max_input_tokens": null,
-        "max_output_tokens": null,
         "input_cost_per_token": 2e-7,
         "output_cost_per_token": 2e-7,
         "litellm_provider": "nscale",
