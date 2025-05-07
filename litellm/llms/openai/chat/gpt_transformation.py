@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
+from litellm.litellm_core_utils.prompt_templates.factory import convert_url_to_base64
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -196,6 +197,21 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             drop_params=drop_params,
         )
 
+    def _handle_pdf_url(
+        self, content_item: ChatCompletionFileObjectFile
+    ) -> ChatCompletionFileObjectFile:
+        potential_pdf_url_starts = ["https://", "http://", "www."]
+        content_copy = content_item.copy()
+        file_id = content_copy.get("file_id")
+        if file_id and any(
+            file_id.startswith(start) for start in potential_pdf_url_starts
+        ):
+            base64_data = convert_url_to_base64(file_id)
+            content_copy["file_data"] = base64_data
+            content_copy["filename"] = "my_file.pdf"
+            content_copy.pop("file_id")
+        return content_copy
+
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
@@ -230,7 +246,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                                 if k not in litellm_specific_params
                             }
                         )
-                        content_item["file"] = new_file_obj
+                        content_item["file"] = self._handle_pdf_url(new_file_obj)
         return messages
 
     def transform_request(
