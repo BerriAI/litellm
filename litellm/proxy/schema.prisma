@@ -126,6 +126,7 @@ model LiteLLM_UserTable {
     spend      Float    @default(0.0)
     user_email    String?
     models     String[]
+    mcp_servers String[] @default([])
     metadata  Json  @default("{}")
     max_parallel_requests Int?
     tpm_limit     BigInt?
@@ -144,6 +145,21 @@ model LiteLLM_UserTable {
     invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
+}
+
+// Holds the MCP server configuration 
+model LiteLLM_MCPServerTable {
+  server_id    String         @id @default(uuid())
+  alias        String?
+  description  String?
+  url          String
+  transport    String         @default("sse")
+  spec_version String         @default("2025-03-26")
+  auth_type    String?        
+  created_at   DateTime?      @default(now()) @map("created_at")
+  created_by   String?
+  updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
+  updated_by   String?
 }
 
 // Generate Tokens for Proxy
@@ -173,6 +189,7 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
+    mcp_servers String[] @default([])
     organization_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?
