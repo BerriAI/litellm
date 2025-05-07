@@ -304,6 +304,9 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
 
     regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
 
+    if dry_run:
+        click.echo("[DRY RUN] No changes will be made. The following models would be imported:")
+
     for model in model_list:
         model_name = model.get("model_name")
         model_params = model.get("litellm_params")
@@ -317,6 +320,7 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
         provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
         total += 1
+        click.echo(f'  Model: "{model_name}" (litellm_params.model = "{model_id}")')
         if not dry_run:
             try:
                 client.models.new(
@@ -327,8 +331,6 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
             except Exception:
                 pass  # For summary, ignore errors
 
-    if dry_run:
-        click.echo("[DRY RUN] No changes were made. The following models would be imported:")
     click.echo("Model import summary:")
     for provider, count in provider_counts.items():
         click.echo(f"  {provider}: {count}")
