@@ -1,3 +1,9 @@
+"""
+This is the litellm x resend email integration
+
+https://resend.com/docs/api-reference/emails/send-email
+"""
+
 import os
 from typing import List
 
