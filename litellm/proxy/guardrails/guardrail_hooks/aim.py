@@ -130,7 +130,6 @@ class AimGuardrail(CustomGuardrail):
             case "block_action":
                 self._handle_block_action(res["analysis_result"], required_action)
             case "anonymize_action":
-                verbose_proxy_logger.info("Aim: anonymize action")
                 return self._handle_anonymize_action(res["analysis_result"], required_action, data)
             case "engage_action":
                 verbose_proxy_logger.info("Aim: engage action")
@@ -139,19 +138,18 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
-        detected = analysis_result["detected"]
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
-                detected=detected,
-                policies=list(analysis_result["details"].keys()),
+                detected=True,
+                policies=list(analysis_result["policy_drill_down"].keys()),
             ),
         )
-        if detected:
-            raise HTTPException(status_code=400, detail=detection_message)
+        raise HTTPException(status_code=400, detail=detection_message)
 
     def _handle_anonymize_action(self, analysis_result: Any, required_action: Any, data: dict) -> dict:
         try:
+            verbose_proxy_logger.info("Aim: anonymize action")
             redaction_result = required_action and required_action.get("chat_redaction_result")
             if not redaction_result:
                 return data
@@ -213,17 +211,14 @@ class AimGuardrail(CustomGuardrail):
         return self._deanonymize_output(output)
 
     def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
-        detected = analysis_result["detected"]
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
-                detected=detected,
-                policies=list(analysis_result["details"].keys()),
+                detected=True,
+                policies=list(analysis_result["policy_drill_down"].keys()),
             ),
         )
-        if detected:
-            return {"detection_message": detection_message}
-        return None
+        return {"detection_message": detection_message}
 
     def _deanonymize_output(self, output: str) -> dict | None:
         try:
