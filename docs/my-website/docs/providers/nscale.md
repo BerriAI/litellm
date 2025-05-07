@@ -1,0 +1,85 @@
+# NScale
+https://docs.nscale.com/docs/
+
+NScale is a European-domiciled full-stack AI cloud platform that allows you to scale your workloads securely, sustainably and cost-effectively - without sacrificing control. It provides production-grade reliability for serverless deployments of LLMs with full data sovereignty and compliance baked in.
+
+## Key Features
+- **EU Sovereign**: Full data sovereignty and compliance with European regulations
+- **Low Cost**: Extremely competitive pricing for both text and image generation models
+- **Production Grade**: Reliable serverless deployments with full isolation
+- **No Setup Required**: Instant access to compute without infrastructure management
+- **Full Control**: Your data remains private and isolated
+
+## API Key
+```python
+# env variable
+os.environ['NSCALE_API_KEY']
+```
+
+## Sample Usage - Text Generation
+```python
+from litellm import completion
+import os
+
+os.environ['NSCALE_API_KEY'] = ""
+response = completion(
+    model="nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct", 
+    messages=[
+        {"role": "user", "content": "What is LiteLLM?"}
+    ]
+)
+print(response)
+```
+
+## Sample Usage - Image Generation
+```python
+from litellm import completion
+import os
+
+os.environ['NSCALE_API_KEY'] = ""
+response = completion(
+    model="nscale/stabilityai/stable-diffusion-xl-base-1.0",
+    prompt="A beautiful sunset over mountains",
+    n=1,
+    size="1024x1024"
+)
+print(response)
+```
+
+## Supported Models
+
+### Chat Models
+
+| Model Name | Description | Input Cost | Output Cost |
+|------------|-------------|------------|-------------|
+| nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct | 17B parameter model | $0.09/M tokens | $0.29/M tokens |
+| nscale/Qwen/Qwen2.5-Coder-3B-Instruct | 3B parameter coding model | $0.01/M tokens | $0.03/M tokens |
+| nscale/Qwen/Qwen2.5-Coder-7B-Instruct | 7B parameter coding model | $0.01/M tokens | $0.03/M tokens |
+| nscale/Qwen/Qwen2.5-Coder-32B-Instruct | 32B parameter coding model | $0.06/M tokens | $0.20/M tokens |
+| nscale/Qwen/QwQ-32B | 32B parameter model | $0.18/M tokens | $0.20/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B | 70B parameter distilled model | $0.375/M tokens | $0.375/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B | 8B parameter distilled model | $0.025/M tokens | $0.025/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B | 1.5B parameter distilled model | $0.09/M tokens | $0.09/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B | 7B parameter distilled model | $0.20/M tokens | $0.20/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B | 14B parameter distilled model | $0.07/M tokens | $0.07/M tokens |
+| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | 32B parameter distilled model | $0.15/M tokens | $0.15/M tokens |
+| nscale/mistralai/mixtral-8x22b-instruct-v0.1 | Mixtral 8x22B model | $0.60/M tokens | $0.60/M tokens |
+| nscale/meta-llama/Llama-3.1-8B-Instruct | 8B parameter model | $0.03/M tokens | $0.03/M tokens |
+| nscale/meta-llama/Llama-3.3-70B-Instruct | 70B parameter model | $0.20/M tokens | $0.20/M tokens |
+
+### Image Generation Models
+
+| Model Name | Description | Cost per Pixel |
+|------------|-------------|----------------|
+| nscale/black-forest-labs/FLUX.1-schnell | Fast image generation model | $0.0000000013 |
+| nscale/stabilityai/stable-diffusion-xl-base-1.0 | SDXL base model | $0.000000003 |
+
+## Getting Started
+1. Create an account at [console.nscale.com](https://console.nscale.com)
+2. Add credit to your account (minimum $5)
+3. Create an API key in settings
+4. Start making API calls using LiteLLM
+
+## Additional Resources
+- [NScale Documentation](https://docs.nscale.com/docs/getting-started/overview)
+- [Blog: Sovereign Serverless](https://www.nscale.com/blog/sovereign-serverless-how-we-designed-full-isolation-without-sacrificing-performance) 
