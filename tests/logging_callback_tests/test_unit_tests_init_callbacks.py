@@ -43,6 +43,7 @@ from litellm.integrations.agentops import AgentOps
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+from enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
 from unittest.mock import patch
 
 # clear prometheus collectors / registry
@@ -81,6 +82,7 @@ callback_class_str_to_classType = {
     "agentops": AgentOps,
     "bedrock_vector_store": BedrockVectorStore,
     "generic_api": GenericAPILogger,
+    "resend_email": ResendEmailLogger,
 }
 
 expected_env_vars = {
