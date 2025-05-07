@@ -1,4 +1,13 @@
+from pydantic import BaseModel
+
 from litellm.proxy._types import WebhookEvent
+
+
+class EmailParams(BaseModel):
+    logo_url: str
+    support_contact: str
+    base_url: str
+    recipient_email: str
 
 
 class SendKeyCreatedEmailEvent(WebhookEvent):
