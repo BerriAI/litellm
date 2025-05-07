@@ -122,7 +122,7 @@ class AimGuardrail(CustomGuardrail):
         required_action = res.get("required_action")
         action_type = required_action and required_action.get("action_type", None)
         if action_type is None:
-            verbose_proxy_logger.warning("Aim: No required action specified")
+            verbose_proxy_logger.debug("Aim: No required action specified")
             return data
         match action_type:
             case "monitor_action":
@@ -195,7 +195,7 @@ class AimGuardrail(CustomGuardrail):
         required_action = res.get("required_action")
         action_type = required_action and required_action.get("action_type", None)
         if action_type is None:
-            verbose_proxy_logger.warning("Aim: No required action specified")
+            verbose_proxy_logger.debug("Aim: No required action specified")
             return self._deanonymize_output(output)
         match action_type:
             case "monitor_action":
