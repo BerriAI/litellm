@@ -589,3 +589,19 @@ async def test_azure_embedding_max_retries_0(
         ]
         == max_retries
     )
+
+
+@pytest.mark.parametrize(
+    "optional_params, keep_stream_options",
+    [
+        ({"stream": False}, False),
+        ({"stream_options": {"key1": "value1"}, "stream": True}, True),
+        ({"stream_options": {"key1": "value1"}, "stream": False}, False), # Remove stream_options when stream is False
+        ({"stream_options": {"key1": "value1"}, "stream": None}, False),  # Remove stream_options when stream is missing
+    ],
+)
+def test_maybe_remove_stream_options(optional_params, keep_stream_options):
+    from litellm.llms.azure.azure import AzureChatCompletion
+    azure_chat_completion = AzureChatCompletion()
+    azure_chat_completion.maybe_remove_stream_options(optional_params)
+    assert ("stream_options" in optional_params) == keep_stream_options
