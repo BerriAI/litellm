@@ -2917,6 +2917,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 os.environ[
                     "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
                 ] = arize_phoenix_config.otlp_auth_headers
+                otel_config.headers = arize_phoenix_config.otlp_auth_headers
 
             for callback in _in_memory_loggers:
                 if (
