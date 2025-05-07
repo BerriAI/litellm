@@ -26,7 +26,7 @@ import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
@@ -34,6 +34,9 @@ import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import MCPToolsViewer from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
+import VectorStoreManagement from "@/components/vector_store_management";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cx } from '@/lib/cva.config';
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -79,6 +82,21 @@ interface ProxySettings {
 
 const queryClient = new QueryClient();
 
+function LoadingScreen() {
+  return (
+    <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
+      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
+        🚅 LiteLLM
+      </div>
+      
+      <div className="flex items-center justify-center gap-2">
+        <UiLoadingSpinner className="size-4" />
+        <span className="text-gray-600 text-sm">Loading...</span>
+      </div>
+    </div>
+  );
+}
+
 export default function CreateKeyPage() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
@@ -86,7 +104,7 @@ export default function CreateKeyPage() {
     useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<Team[] | null>(null);
-  const [keys, setKeys] = useState<null | any[]>(null);
+  const [keys, setKeys] = useState<null | any[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
@@ -98,8 +116,10 @@ export default function CreateKeyPage() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
+  const [createClicked, setCreateClicked] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userID, setUserID] = useState<string | null>(null);
 
-  const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
 
   // Get page from URL, default to 'api-keys' if not present
@@ -121,10 +141,23 @@ export default function CreateKeyPage() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
+  const addKey = (data: any) => {
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
+    setCreateClicked(() => !createClicked);
+  } 
+  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+
   useEffect(() => {
     const token = getCookie("token");
     setToken(token);
+    setAuthLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (redirectToLogin) {
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+    }
+  }, [redirectToLogin])
 
   useEffect(() => {
     if (!token) {
@@ -177,6 +210,10 @@ export default function CreateKeyPage() {
       if (decoded.auth_header_name) {
         setGlobalLitellmHeaderName(decoded.auth_header_name);
       }
+
+      if (decoded.user_id) {
+        setUserID(decoded.user_id);
+      }
     }
   }, [token]);
   
@@ -192,9 +229,12 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
+  if (authLoading || redirectToLogin) {
+    return <LoadingScreen />
+  }
 
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<LoadingScreen />}>
       <QueryClientProvider client={queryClient}>
         {invitation_id ? (
           <UserDashboard
@@ -209,6 +249,8 @@ export default function CreateKeyPage() {
             setTeams={setTeams}
             setKeys={setKeys}
             organizations={organizations}
+            addKey={addKey}
+            createClicked={createClicked}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -243,6 +285,8 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   setKeys={setKeys}
                   organizations={organizations}
+                  addKey={addKey}
+                  createClicked={createClicked}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -300,6 +344,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
+                  proxySettings={proxySettings}
                 />
               ) : page == "api_ref" ? (
                 <APIRef proxySettings={proxySettings} />
@@ -364,11 +409,18 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   userID={userID}
                 />
+              ) : page == "vector-stores" ? (
+                <VectorStoreManagement
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
               ) : page == "new_usage" ? (
                 <NewUsagePage
                   userID={userID}
                   userRole={userRole}
                   accessToken={accessToken}
+                  teams={teams as Team[] ?? []}
                 />
               ) : 
               (

@@ -1,6 +1,6 @@
 """
 - call /messages on Anthropic API
-- Make streaming + non-streaming request - just pass it through direct to Anthropic. No need to do anything special here 
+- Make streaming + non-streaming request - just pass it through direct to Anthropic. No need to do anything special here
 - Ensure requests are logged in the DB - stream + non-stream
 
 """
@@ -43,7 +43,9 @@ class AnthropicMessagesHandler:
         from litellm.proxy.pass_through_endpoints.success_handler import (
             PassThroughEndpointLogging,
         )
-        from litellm.proxy.pass_through_endpoints.types import EndpointType
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
 
         # Create success handler object
         passthrough_success_handler_obj = PassThroughEndpointLogging()
@@ -98,11 +100,11 @@ async def anthropic_messages(
         api_base=optional_params.api_base,
         api_key=optional_params.api_key,
     )
-    anthropic_messages_provider_config: Optional[
-        BaseAnthropicMessagesConfig
-    ] = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model=model,
-        provider=litellm.LlmProviders(_custom_llm_provider),
+    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=model,
+            provider=litellm.LlmProviders(_custom_llm_provider),
+        )
     )
     if anthropic_messages_provider_config is None:
         raise ValueError(

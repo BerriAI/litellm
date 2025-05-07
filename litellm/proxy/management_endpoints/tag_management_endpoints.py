@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import datetime
 import json
-from typing import Dict
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -20,7 +20,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+    get_daily_activity,
+)
 from litellm.types.tag_management import (
+    LiteLLM_DailyTagSpendTable,
     TagConfig,
     TagDeleteRequest,
     TagInfoRequest,
@@ -297,6 +302,7 @@ async def info_tag(
     "/tag/list",
     tags=["tag management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=List[TagConfig],
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -310,9 +316,33 @@ async def list_tags(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
+        ## QUERY STORED TAGS ##
         tags_config = await _get_tags_config(prisma_client)
         list_of_tags = list(tags_config.values())
-        return list_of_tags
+
+        ## QUERY DYNAMIC TAGS ##
+        dynamic_tags = await prisma_client.db.litellm_dailytagspend.find_many(
+            distinct=["tag"],
+        )
+
+        dynamic_tags_list = [
+            LiteLLM_DailyTagSpendTable(**dynamic_tag.model_dump())
+            for dynamic_tag in dynamic_tags
+        ]
+
+        dynamic_tag_config = [
+            TagConfig(
+                name=tag.tag,
+                description="This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
+                models=None,
+                created_at=tag.created_at.isoformat(),
+                updated_at=tag.updated_at.isoformat(),
+            )
+            for tag in dynamic_tags_list
+            if tag.tag not in tags_config
+        ]
+
+        return list_of_tags + dynamic_tag_config
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -354,3 +384,53 @@ async def delete_tag(
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/tag/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_tag_daily_activity(
+    tags: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+):
+    """
+    Get daily activity for specific tags or all tags.
+
+    Args:
+        tags (Optional[str]): Comma-separated list of tags to filter by. If not provided, returns data for all tags.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Convert comma-separated tags string to list if provided
+    tag_list = tags.split(",") if tags else None
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=tag_list,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )

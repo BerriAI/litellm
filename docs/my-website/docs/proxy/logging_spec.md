@@ -59,6 +59,20 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `spend_logs_metadata` | `Optional[dict]` | Key-value pairs for spend logging |
 | `requester_ip_address` | `Optional[str]` | Requester's IP address |
 | `requester_metadata` | `Optional[dict]` | Additional requester metadata |
+| `vector_store_request_metadata` | `Optional[List[StandardLoggingVectorStoreRequest]]` | Vector store request metadata |
+
+
+## StandardLoggingVectorStoreRequest
+
+| Field | Type | Description |
+|-------|------|-------------|
+| vector_store_id | Optional[str] | ID of the vector store |
+| custom_llm_provider | Optional[str] | Custom LLM provider the vector store is associated with (e.g., bedrock, openai, anthropic) |
+| query | Optional[str] | Query to the vector store |
+| vector_store_search_response | Optional[VectorStoreSearchResponse] | OpenAI format vector store search response |
+| start_time | Optional[float] | Start time of the vector store request |
+| end_time | Optional[float] | End time of the vector store request |
+
 
 ## StandardLoggingAdditionalHeaders
 

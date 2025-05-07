@@ -250,7 +250,7 @@ def ollama_pt(
                     f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                 )
 
-            msg_i += 1
+                msg_i += 1
 
         if assistant_content_str:
             prompt += f"### Assistant:\n{assistant_content_str}\n\n"
@@ -2256,6 +2256,14 @@ def _parse_content_type(content_type: str) -> str:
     m = Message()
     m["content-type"] = content_type
     return m.get_content_type()
+
+
+def _parse_mime_type(base64_data: str) -> Optional[str]:
+    mime_type_match = re.match(r"data:(.*?);base64", base64_data)
+    if mime_type_match:
+        return mime_type_match.group(1)
+    else:
+        return None
 
 
 class BedrockImageProcessor:

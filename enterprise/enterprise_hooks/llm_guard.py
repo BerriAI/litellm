@@ -29,7 +29,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
     ):
         self.mock_redacted_text = mock_redacted_text
         self.llm_guard_mode = litellm.llm_guard_mode
-        if mock_testing == True:  # for testing purposes only
+        if mock_testing is True:  # for testing purposes only
             return
         self.llm_guard_api_base = get_secret_str("LLM_GUARD_API_BASE", None)
         if self.llm_guard_api_base is None:
@@ -69,7 +69,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 if redacted_text is not None:
                     if (
                         redacted_text.get("is_valid", None) is not None
-                        and redacted_text["is_valid"] != True
+                        and redacted_text["is_valid"] is False
                     ):
                         raise HTTPException(
                             status_code=400,
@@ -100,7 +100,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             )
             if (
                 user_api_key_dict.permissions.get("enable_llm_guard_check", False)
-                == True
+                is True
             ):
                 return True
         elif self.llm_guard_mode == "all":
@@ -111,7 +111,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             permissions = metadata.get("permissions", {})
             if (
                 "enable_llm_guard_check" in permissions
-                and permissions["enable_llm_guard_check"] == True
+                and permissions["enable_llm_guard_check"] is True
             ):
                 return True
         return False
@@ -140,7 +140,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         )
 
         _proceed = self.should_proceed(user_api_key_dict=user_api_key_dict, data=data)
-        if _proceed == False:
+        if _proceed is False:
             return
 
         self.print_verbose("Makes LLM Guard Check")

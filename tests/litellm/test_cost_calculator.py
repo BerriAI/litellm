@@ -211,3 +211,58 @@ def test_custom_pricing_with_router_model_id():
     assert model_info["output_cost_per_token"] == 0.00003
     assert model_info["cache_creation_input_token_cost"] == 0.0000075
     assert model_info["cache_read_input_token_cost"] == 0.0000006
+
+
+def test_azure_realtime_cost_calculator():
+    from litellm import get_model_info
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=[
+            {
+                "type": "session.created",
+                "session": {"model": "gpt-4o-realtime-preview-2024-12-17"},
+            },
+        ],
+        combined_usage_object=Usage(
+            prompt_tokens=100,
+            completion_tokens=100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=10, audio_tokens=90
+            ),
+        ),
+        custom_llm_provider="azure",
+        litellm_model_name="my-custom-azure-deployment",
+    )
+
+    assert cost > 0
+
+
+def test_default_image_cost_calculator(monkeypatch):
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    temp_object = {
+        "litellm_provider": "azure",
+        "input_cost_per_pixel": 10,
+    }
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b": temp_object
+        },
+    )
+
+    args = {
+        "model": "azure/bf9001cd7209f5734ecb4ab937a5a0e2ba5f119708bd68f184db362930f9dc7b",
+        "custom_llm_provider": "azure",
+        "quality": "standard",
+        "n": 1,
+        "size": "1024-x-1024",
+        "optional_params": {},
+    }
+    cost = default_image_cost_calculator(**args)
+    assert cost == 10485760

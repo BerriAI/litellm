@@ -1,15 +1,33 @@
-from typing import List, Literal, Optional, Tuple, Union, cast
+import json
+import uuid
+from typing import Any, List, Literal, Optional, Tuple, Union, cast
+
+import httpx
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+    get_response_headers,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
+    ChatCompletionToolParam,
     OpenAIChatCompletionToolParam,
 )
-from litellm.types.utils import ProviderSpecificModelInfo
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    Message,
+    ModelResponse,
+    ProviderSpecificModelInfo,
+)
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import FireworksAIException
 
 
 class FireworksAIConfig(OpenAIGPTConfig):
@@ -218,6 +236,94 @@ class FireworksAIConfig(OpenAIGPTConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+
+    def _handle_message_content_with_tool_calls(
+        self,
+        message: Message,
+        tool_calls: Optional[List[ChatCompletionToolParam]],
+    ) -> Message:
+        """
+        Fireworks AI sends tool calls in the content field instead of tool_calls
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/7209#issuecomment-2813208780
+        """
+        if (
+            tool_calls is not None
+            and message.content is not None
+            and message.tool_calls is None
+        ):
+            try:
+                function = Function(**json.loads(message.content))
+                if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
+                    tool["function"]["name"] for tool in tool_calls
+                ]:
+                    tool_call = ChatCompletionMessageToolCall(
+                        function=function, id=str(uuid.uuid4()), type="function"
+                    )
+                    message.tool_calls = [tool_call]
+
+                    message.content = None
+            except Exception:
+                pass
+
+        return message
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise FireworksAIException(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+
+        raw_response_headers = dict(raw_response.headers)
+
+        additional_headers = get_response_headers(raw_response_headers)
+
+        response = ModelResponse(**completion_response)
+
+        if response.model is not None:
+            response.model = "fireworks_ai/" + response.model
+
+        ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
+        for choice in response.choices:
+            cast(
+                Choices, choice
+            ).message = self._handle_message_content_with_tool_calls(
+                message=cast(Choices, choice).message,
+                tool_calls=optional_params.get("tools", None),
+            )
+
+        response._hidden_params = {"additional_headers": additional_headers}
+
+        return response
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

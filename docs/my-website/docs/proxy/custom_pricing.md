@@ -56,7 +56,7 @@ model_list:
       model: azure/<your_deployment_name>
       api_key: os.environ/AZURE_API_KEY
       api_base: os.environ/AZURE_API_BASE
-      api_version: os.envrion/AZURE_API_VERSION
+      api_version: os.environ/AZURE_API_VERSION
     model_info:
       input_cost_per_token: 0.000421 # 👈 ONLY to track cost per token
       output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token
@@ -82,6 +82,28 @@ model_list:
       cache_creation_input_token_cost: 0.0000075
       cache_read_input_token_cost: 0.0000006
 ```
+
+## Set 'base_model' for Cost Tracking (e.g. Azure deployments)
+
+**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
+
+**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
+
+Get the base model name from [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+Example config with `base_model`
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4-1106-preview
+```
+
 
 ## Debugging 
 
