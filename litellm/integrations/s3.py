@@ -1,7 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, cast
 
 import litellm
@@ -23,10 +23,28 @@ class S3Logger:
         s3_aws_access_key_id=None,
         s3_aws_secret_access_key=None,
         s3_aws_session_token=None,
+        s3_aws_role_name=None,
         s3_config=None,
         **kwargs,
     ):
         import boto3
+
+        # Store AWS configuration
+        self.aws_config = {
+            's3_aws_role_name': s3_aws_role_name,
+            's3_bucket_name': s3_bucket_name,
+            's3_aws_access_key_id': s3_aws_access_key_id,
+            's3_aws_secret_access_key': s3_aws_secret_access_key,
+            's3_aws_session_token': s3_aws_session_token,
+            's3_region_name': s3_region_name,
+            's3_endpoint_url': s3_endpoint_url,
+            's3_api_version': s3_api_version,
+            's3_use_ssl': s3_use_ssl,
+            's3_verify': s3_verify,
+            's3_config': s3_config
+        }
+        self.credentials_expiry = None
+        self.s3_path = s3_path
 
         try:
             verbose_logger.debug(
@@ -56,6 +74,9 @@ class S3Logger:
                 s3_aws_session_token = litellm.s3_callback_params.get(
                     "s3_aws_session_token"
                 )
+                s3_aws_role_name = litellm.s3_callback_params.get(
+                    "s3_aws_role_name"
+                )
                 s3_config = litellm.s3_callback_params.get("s3_config")
                 s3_path = litellm.s3_callback_params.get("s3_path")
                 # done reading litellm.s3_callback_params
@@ -63,26 +84,69 @@ class S3Logger:
                     litellm.s3_callback_params.get("s3_use_team_prefix", False)
                 )
             self.s3_use_team_prefix = s3_use_team_prefix
-            self.bucket_name = s3_bucket_name
+            self.aws_config['s3_bucket_name'] = s3_bucket_name
             self.s3_path = s3_path
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
-            # Create an S3 client with custom endpoint URL
-            self.s3_client = boto3.client(
-                "s3",
-                region_name=s3_region_name,
-                endpoint_url=s3_endpoint_url,
-                api_version=s3_api_version,
-                use_ssl=s3_use_ssl,
-                verify=s3_verify,
-                aws_access_key_id=s3_aws_access_key_id,
-                aws_secret_access_key=s3_aws_secret_access_key,
-                aws_session_token=s3_aws_session_token,
-                config=s3_config,
-                **kwargs,
-            )
+            
+            if self.aws_config['s3_aws_role_name']:
+                self._refresh_credentials()
+            else:
+                self.s3_client = boto3.client(
+                    "s3",
+                    region_name=s3_region_name,
+                    endpoint_url=s3_endpoint_url,
+                    api_version=s3_api_version,
+                    use_ssl=s3_use_ssl,
+                    verify=s3_verify,
+                    aws_access_key_id=s3_aws_access_key_id,
+                    aws_secret_access_key=s3_aws_secret_access_key,
+                    aws_session_token=s3_aws_session_token,
+                    config=s3_config,
+                    **kwargs,
+                )
         except Exception as e:
             print_verbose(f"Got exception on init s3 client {str(e)}")
             raise e
+
+    def _needs_credential_refresh(self):
+        if self.credentials_expiry is None:
+            return True
+        # Refresh if less than 5 minutes until expiry
+        return (self.credentials_expiry - datetime.now(timezone.utc)).total_seconds() < 300
+
+    def _refresh_credentials(self):
+        import boto3
+        try:
+            sts_client = boto3.client(
+                "sts",
+                aws_access_key_id=self.aws_config['s3_aws_access_key_id'],
+                aws_secret_access_key=self.aws_config['s3_aws_secret_access_key'],
+                aws_session_token=self.aws_config['s3_aws_session_token'],
+            )
+
+            assumed_role = sts_client.assume_role(
+                RoleArn=self.aws_config['s3_aws_role_name'],
+                RoleSessionName="LiteLLMS3Session"
+            )
+
+            credentials = assumed_role["Credentials"]
+            self.credentials_expiry = credentials["Expiration"]
+
+            self.s3_client = boto3.client(
+                "s3",
+                region_name=self.aws_config['s3_region_name'],
+                endpoint_url=self.aws_config['s3_endpoint_url'],
+                api_version=self.aws_config['s3_api_version'],
+                use_ssl=self.aws_config['s3_use_ssl'],
+                verify=self.aws_config['s3_verify'],
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+                config=self.aws_config['s3_config']
+            )
+        except Exception as e:
+            verbose_logger.exception(f"s3 Layer Failed to refresh credentials - {str(e)}")
+            pass
 
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, print_verbose
@@ -91,6 +155,10 @@ class S3Logger:
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
+            # Check and refresh credentials if needed
+            if self.aws_config['s3_aws_role_name'] and self._needs_credential_refresh():
+                self._refresh_credentials()
+
             verbose_logger.debug(
                 f"s3 Logging - Enters logging function for model {kwargs}"
             )
@@ -161,7 +229,7 @@ class S3Logger:
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
             response = self.s3_client.put_object(
-                Bucket=self.bucket_name,
+                Bucket=self.aws_config['s3_bucket_name'],
                 Key=s3_object_key,
                 Body=payload_str,
                 ContentType="application/json",
