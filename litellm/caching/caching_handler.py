@@ -506,10 +506,10 @@ class LLMCachingHandler:
         """
         if litellm.cache is None:
             return None
-        
+
         if "litellm_params" not in kwargs:
             kwargs["litellm_params"] = {}
-        
+
         new_kwargs = kwargs.copy()
         new_kwargs.update(
             convert_args_to_kwargs(
@@ -538,8 +538,10 @@ class LLMCachingHandler:
                 cached_result = await litellm.cache.async_get_cache(**new_kwargs)
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
                 cached_result = litellm.cache.get_cache(**new_kwargs)
-        
-        if cached_result == None and list(kwargs["litellm_params"].keys()) == ["preset_cache_key"]:
+
+        if cached_result is None and list(kwargs["litellm_params"].keys()) == [
+            "preset_cache_key"
+        ]:
             del kwargs["litellm_params"]
         return cached_result
 
