@@ -20,6 +20,10 @@ from ..common_utils import SagemakerError
 
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
+    def __init__(self, **kwargs):
+        OpenAIGPTConfig.__init__(self, **kwargs)
+        BaseAWSLLM.__init__(self, **kwargs)
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
@@ -65,3 +69,24 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             api_base = sagemaker_base_url
 
         return api_base
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> dict:
+        return self._sign_request(
+            service_name="sagemaker",
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
