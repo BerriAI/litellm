@@ -26,12 +26,25 @@ The CLI provides several commands for managing models on your LiteLLM proxy serv
 View all available models:
 
 ```bash
-litellm-proxy models list [--format table|json]
+litellm-proxy models list [--format table|json] [--sort-by model_name|created] [--sort-order asc|desc]
 ```
 
 Options:
 
 - `--format`: Output format (table or json, default: table)
+- `--sort-by`: Sort models by `model_name` or `created` (creation date)
+- `--sort-order`: Sort order: `asc` (ascending, default) or `desc` (descending)
+
+Examples:
+
+- List models sorted by model name ascending:
+  ```bash
+  litellm-proxy models list --sort-by model_name --sort-order asc
+  ```
+- List models sorted by creation date descending:
+  ```bash
+  litellm-proxy models list --sort-by created --sort-order desc
+  ```
 
 #### Model Information
 
@@ -357,22 +370,22 @@ The CLI respects the following environment variables:
 litellm-proxy models list
 ```
 
-2. Add a new model with parameters:
+2. List models sorted by creation date descending:
+
+```bash
+litellm-proxy models list --sort-by created --sort-order desc
+```
+
+3. Add a new model with parameters:
 
 ```bash
 litellm-proxy models add gpt-4 -p api_key=sk-123 -p max_tokens=2048
 ```
 
-3. Get model information in JSON format:
+4. Get model information in JSON format:
 
 ```bash
 litellm-proxy models info --format json
-```
-
-4. Update model parameters:
-
-```bash
-litellm-proxy models update model-123 -p temperature=0.7 -i description="Updated model"
 ```
 
 5. List all credentials in table format:

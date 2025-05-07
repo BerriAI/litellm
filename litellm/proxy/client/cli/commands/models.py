@@ -65,12 +65,42 @@ def models() -> None:
     default="table",
     help="Output format (table or json)",
 )
+@click.option(
+    "--sort-by",
+    type=click.Choice(["model_name", "created"]),
+    default=None,
+    help="Sort models by 'model_name' or 'created' (creation date).",
+)
+@click.option(
+    "--sort-order",
+    type=click.Choice(["asc", "desc"]),
+    default="asc",
+    help="Sort order: 'asc' (ascending) or 'desc' (descending).",
+)
 @click.pass_context
-def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
+def list_models(ctx: click.Context, output_format: Literal["table", "json"], sort_by: Optional[str], sort_order: str) -> None:
     """List all available models"""
     client = create_client(ctx)
     models_list = client.models.list()
     assert isinstance(models_list, list)
+
+    # Sorting logic
+    if sort_by:
+        reverse = sort_order == "desc"
+        if sort_by == "model_name":
+            models_list = sorted(models_list, key=lambda m: str(m.get("id", "")).lower(), reverse=reverse)
+        elif sort_by == "created":
+            def parse_created(m):
+                val = m.get("created")
+                if isinstance(val, int):
+                    return val
+                if isinstance(val, str):
+                    try:
+                        return int(val)
+                    except Exception:
+                        return 0
+                return 0
+            models_list = sorted(models_list, key=parse_created, reverse=reverse)
 
     if output_format == "json":
         rich.print_json(data=models_list)
