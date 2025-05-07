@@ -1,5 +1,4 @@
 import uuid
-
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
 from litellm.integrations.deepeval.types import BaseApiSpan, SpanApiType, TraceApi, TraceSpanApiStatus
@@ -11,44 +10,69 @@ from litellm._logging import verbose_logger
 class DeepEvalLogger(CustomLogger):
     """Logs litellm traces to DeepEval's platform."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """Logs a success event to DeepEval's platform."""
+        self._sync_event_handler(kwargs, response_obj, start_time, end_time, is_success=True)
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """Logs a failure event to DeepEval's platform."""
+        self._sync_event_handler(kwargs, response_obj, start_time, end_time, is_success=False)
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Logs a failure event to DeepEval's platform."""
-        await self._event_handler(kwargs, response_obj, start_time, end_time, False)
+        await self._async_event_handler(kwargs, response_obj, start_time, end_time, is_success=False)
         
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Logs a success event to DeepEval's platform."""
-        await self._event_handler(kwargs, response_obj, start_time, end_time, True)
+        await self._async_event_handler(kwargs, response_obj, start_time, end_time, is_success=True)
+    
+    def _prepare_trace_api(self, kwargs, response_obj, start_time, end_time, is_success):
+        _start_time = to_zod_compatible_iso(start_time)
+        _end_time = to_zod_compatible_iso(end_time)
+        _standard_logging_object = kwargs.get("standard_logging_object", {})
+        base_api_span = self._create_base_api_span(kwargs, standard_logging_object = _standard_logging_object, start_time = _start_time, end_time = _end_time, is_success = is_success)
+        trace_api = self._create_trace_api(base_api_span, standard_logging_object = _standard_logging_object, start_time = _start_time, end_time = _end_time)
         
-    async def _event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
-        start_time = to_zod_compatible_iso(start_time)
-        end_time = to_zod_compatible_iso(end_time)
-        standard_logging_object = kwargs.get("standard_logging_object", None)
-        
-        if standard_logging_object:
-            base_api_span = self._create_base_api_span(kwargs, standard_logging_object, start_time, end_time, is_success)
-            trace_api = self._create_trace_api(base_api_span, standard_logging_object, start_time, end_time)
+        body = {}
 
-            try:
-                body = trace_api.model_dump(
-                    by_alias=True, exclude_none=True
-                )
-            except AttributeError:
-                # Pydantic version below 2.0
-                body = trace_api.dict(
-                    by_alias=True, exclude_none=True
-                )
-
-            # Send the async request
-            api = Api()
-            print("Debug - Request body:")
-            print(body)
-            response = await api.a_send_request(
-                method=HttpMethods.POST,
-                endpoint=Endpoints.TRACING_ENDPOINT,
-                body=body,
+        try:
+            body = trace_api.model_dump(
+                by_alias=True, exclude_none=True
             )
+        except AttributeError:
+            # Pydantic version below 2.0
+            body = trace_api.dict(
+                by_alias=True, exclude_none=True
+            )      
+        return body
+    
+    def _sync_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
+        body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
+        # Send the async request
+        api = Api()
+        response = api.send_request(
+            method=HttpMethods.POST,
+            endpoint=Endpoints.TRACING_ENDPOINT,
+            body=body,
+        )
 
-            verbose_logger.debug("DeepEvalLogger: async_log_success_event: Api response", response)
+        verbose_logger.debug("DeepEvalLogger: sync_log_failure_event: Api response", response)
+
+    async def _async_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
+        body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
+
+        # Send the async request
+        api = Api()
+        response = await api.a_send_request(
+            method=HttpMethods.POST,
+            endpoint=Endpoints.TRACING_ENDPOINT,
+            body=body,
+        )
+
+        verbose_logger.debug("DeepEvalLogger: async_event_handler: Api response", response)
 
     def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time, is_success):
         # extract usage
