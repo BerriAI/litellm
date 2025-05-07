@@ -15,6 +15,7 @@ from litellm.integrations.email_templates.key_created_email import (
 from litellm.types.enterprise.enterprise_callbacks.send_emails import (
     SendKeyCreatedEmailEvent,
 )
+from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
 class BaseEmailLogger(CustomLogger):
@@ -27,9 +28,7 @@ class BaseEmailLogger(CustomLogger):
         """
         Send email to user after creating key for the user
         """
-        email_logo_url = os.getenv(
-            "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
-        )
+        email_logo_url = os.getenv("EMAIL_LOGO_URL", None) or LITELLM_LOGO_URL
         email_support_contact = os.getenv(
             "EMAIL_SUPPORT_CONTACT", self.DEFAULT_SUPPORT_EMAIL
         )

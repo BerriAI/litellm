@@ -164,7 +164,7 @@ KEY_CREATED_EMAIL_TEMPLATE = """
             </div>
             
             <div class="message">
-                <p>Great news! Your API key is ready to use.</p>
+                <p>Great news! Your LiteLLM API key is ready to use.</p>
             </div>
             
             <div class="budget-info">
