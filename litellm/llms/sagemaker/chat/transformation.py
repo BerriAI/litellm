@@ -18,10 +18,6 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.chat.invoke_handler import (
-    AWSEventStreamDecoder,
-    MockResponseIterator,
-)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -32,7 +28,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import encoding
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import SagemakerError
+from ..common_utils import AWSEventStreamDecoder, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -157,8 +153,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
                 status_code=response.status_code, message=response.text
             )
 
-        decoder = AWSEventStreamDecoder(model=model)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+        custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
+        completion_stream = custom_stream_decoder.iter_bytes(
+            response.iter_bytes(chunk_size=1024)
+        )
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,

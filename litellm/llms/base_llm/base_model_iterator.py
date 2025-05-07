@@ -38,20 +38,23 @@ class BaseModelResponseIterator:
         return self
 
     def _handle_string_chunk(
-        self, str_line: str
+        self, str_line: Union[str, dict]
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
-
-        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
-            str_line
-        )
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk: Optional[dict] = json.loads(stripped_chunk)
-            else:
+        stripped_json_chunk: Optional[dict] = None
+        if isinstance(str_line, dict):
+            stripped_json_chunk = str_line
+        else:
+            stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
+                str_line
+            )
+            try:
+                if stripped_chunk is not None:
+                    stripped_json_chunk = json.loads(stripped_chunk)
+                else:
+                    stripped_json_chunk = None
+            except json.JSONDecodeError:
                 stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
 
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
