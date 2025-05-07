@@ -10,7 +10,6 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
-from litellm.llms.hosted_vllm.rerank.handler import HostedVLLMRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
@@ -22,7 +21,6 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 together_rerank = TogetherAIRerank()
 bedrock_rerank = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
-hosted_vllm_rerank = HostedVLLMRerank()
 #################################################
 
 
@@ -342,17 +340,19 @@ def rerank(  # noqa: PLR0915
                     "api_base must be provided for Hosted VLLM rerank. Set in call or via HOSTED_VLLM_API_BASE env var."
                 )
 
-            response = hosted_vllm_rerank.rerank(
+            response = base_llm_http_handler.rerank(
                 model=model,
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-                max_chunks_per_doc=max_chunks_per_doc,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
                 api_key=api_key,
                 api_base=api_base,
                 _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
