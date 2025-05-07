@@ -287,8 +287,13 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
     default=None,
     help="Only import models where litellm_params.model matches the given regex.",
 )
+@click.option(
+    "--only-access-groups-matching-regex",
+    default=None,
+    help="Only import models where at least one item in model_info.access_groups matches the given regex.",
+)
 @click.pass_context
-def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models_matching_regex: Optional[str]) -> None:
+def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models_matching_regex: Optional[str], only_access_groups_matching_regex: Optional[str]) -> None:
     """Import models from a YAML file and add them to the proxy."""
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
@@ -303,6 +308,7 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
     total = 0
 
     regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
+    access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
 
     if dry_run:
         click.echo("[DRY RUN] No changes will be made. The following models would be imported:")
@@ -310,13 +316,22 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
     for model in model_list:
         model_name = model.get("model_name")
         model_params = model.get("litellm_params")
+        model_info = model.get("model_info", {})
         if not model_name or not model_params:
             continue
         model_id = model_params.get("model")
         if not model_id or not isinstance(model_id, str):
             continue
+        # Filter by model regex
         if regex and not regex.search(model_id):
             continue
+        # Filter by access group regex
+        access_groups = model_info.get("access_groups", [])
+        if access_group_regex:
+            if not isinstance(access_groups, list):
+                continue
+            if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
+                continue
         provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
         total += 1
@@ -326,7 +341,7 @@ def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models
                 client.models.new(
                     model_name=model_name,
                     model_params=model_params,
-                    model_info=model.get("model_info"),
+                    model_info=model_info,
                 )
             except Exception:
                 pass  # For summary, ignore errors

@@ -293,4 +293,74 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     # Output summary should mention 2 total models
     assert "Total models: 2" in result.output
     # Output summary should mention the correct providers
+    assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
+
+
+def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, cli_runner):
+    """Test the --only-access-groups-matching-regex option for models import command"""
+    # Prepare a YAML file with a mix of models
+    yaml_content = {
+        "model_list": [
+            {
+                "model_name": "gpt-4-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "id-1", "access_groups": ["beta-models", "prod-models"]}
+            },
+            {
+                "model_name": "gpt-3.5-model",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "id-2", "access_groups": ["alpha-models"]}
+            },
+            {
+                "model_name": "llama2-model",
+                "litellm_params": {"model": "llama2"},
+                "model_info": {"id": "id-3", "access_groups": ["beta-models"]}
+            },
+            {
+                "model_name": "other-model",
+                "litellm_params": {"model": "other"},
+                "model_info": {"id": "id-4", "access_groups": ["other-group"]}
+            },
+            {
+                "model_name": "no-access-group-model",
+                "litellm_params": {"model": "no-access"},
+                "model_info": {"id": "id-5"}
+            },
+        ]
+    }
+    import yaml as pyyaml
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Only match models with access_groups containing 'beta'
+    result = cli_runner.invoke(
+        cli,
+        [
+            "models",
+            "import",
+            str(yaml_file),
+            "--only-access-groups-matching-regex",
+            "beta"
+        ]
+    )
+
+    # Should succeed
+    assert result.exit_code == 0
+    # Only the two models with 'beta-models' in access_groups should be imported
+    calls = [
+        call.kwargs["model_params"]["model"]
+        for call in mock_new.call_args_list
+    ]
+    assert set(calls) == {"gpt-4", "llama2"}
+    # Should not include gpt-3.5, other, or no-access
+    assert "gpt-3.5-turbo" not in calls
+    assert "other" not in calls
+    assert "no-access" not in calls
+    # Output summary should mention 2 total models
+    assert "Total models: 2" in result.output
+    # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output 
