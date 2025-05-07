@@ -86,6 +86,19 @@ async def test_completion_sagemaker(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
+    litellm._turn_on_debug()
+    resp = litellm.completion(
+        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+        messages=[
+            {"role": "user", "content": "hi"},
+        ],
+        temperature=0.2,
+        max_tokens=80,
+        aws_region_name="us-east-1",
+        num_retries=3,
+    )
+
 @pytest.mark.asyncio()
 @pytest.mark.parametrize(
     "sync_mode",

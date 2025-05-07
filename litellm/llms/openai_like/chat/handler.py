@@ -5,7 +5,7 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 import httpx
 

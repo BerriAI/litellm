@@ -1455,7 +1455,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 client=client,
             )
-        
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)}
@@ -1496,9 +1496,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url, headers=headers, params=data
-            )
+            response = sync_httpx_client.get(url=url, headers=headers, params=data)
         except Exception as e:
             raise self._handle_error(
                 e=e,
