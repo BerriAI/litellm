@@ -130,7 +130,7 @@ class AimGuardrail(CustomGuardrail):
             case "block_action":
                 self._handle_block_action(res["analysis_result"], required_action)
             case "anonymize_action":
-                return self._handle_anonymize_action(res["analysis_result"], required_action, data)
+                return self._anonymize_request(res["analysis_result"], required_action, data)
             case "engage_action":
                 verbose_proxy_logger.info("Aim: engage action")
             case _:
@@ -147,7 +147,7 @@ class AimGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _handle_anonymize_action(self, analysis_result: Any, required_action: Any, data: dict) -> dict:
+    def _anonymize_request(self, analysis_result: Any, required_action: Any, data: dict) -> dict:
         try:
             verbose_proxy_logger.info("Aim: anonymize action")
             redaction_result = required_action and required_action.get("chat_redaction_result")
@@ -194,20 +194,8 @@ class AimGuardrail(CustomGuardrail):
         res = response.json()
         required_action = res.get("required_action")
         action_type = required_action and required_action.get("action_type", None)
-        if action_type is None:
-            verbose_proxy_logger.debug("Aim: No required action specified")
-            return self._deanonymize_output(output)
-        match action_type:
-            case "monitor_action":
-                verbose_proxy_logger.info("Aim: monitor action")
-            case "block_action":
-                return self._handle_block_action_on_output(res["analysis_result"], required_action)
-            case "anonymize_action":
-                verbose_proxy_logger.info("Aim: anonymize action")
-            case "engage_action":
-                verbose_proxy_logger.info("Aim: engage action")
-            case _:
-                verbose_proxy_logger.error("Aim: unknown action")
+        if action_type and action_type == "block_action":
+            return self._handle_block_action_on_output(res["analysis_result"], required_action)
         return self._deanonymize_output(output)
 
     def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
