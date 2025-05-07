@@ -130,14 +130,9 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         )
 
     def is_model_o_series_model(self, model: str) -> bool:
-        if model in litellm.open_ai_chat_completion_models and (
-            "o1" in model
-            or "o3" in model
-            or "o4"
-            in model  # [TODO] make this a more generic check (e.g. using `openai-o-series` as provider like gemini)
-        ):
-            return True
-        return False
+        model = model.split("/")[-1] # could be "openai/o3" or "o3"
+        return model in litellm.open_ai_chat_completion_models and any(
+            model.startswith(pfx) for pfx in ("o1", "o3", "o4"))
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str
