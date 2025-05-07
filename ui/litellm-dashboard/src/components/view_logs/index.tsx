@@ -47,12 +47,8 @@ export default function SpendLogsTable({
   allTeams,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
-  const [showFilters, setShowFilters] = useState(false);
-  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const filtersRef = useRef<HTMLDivElement>(null);
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
@@ -66,13 +62,8 @@ export default function SpendLogsTable({
   // Add these new state variables at the top with other useState declarations
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
-  const [tempTeamId, setTempTeamId] = useState("");
-  const [tempKeyHash, setTempKeyHash] = useState("");
-  const [selectedTeamId, setSelectedTeamId] = useState("");
-  const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState("Team ID");
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
@@ -103,18 +94,6 @@ export default function SpendLogsTable({
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(event.target as Node)
-      ) {
-        setShowColumnDropdown(false);
-      }
-      if (
-        filtersRef.current &&
-        !filtersRef.current.contains(event.target as Node)
-      ) {
-        setShowFilters(false);
-      }
-      if (
         quickSelectRef.current &&
         !quickSelectRef.current.contains(event.target as Node)
       ) {
@@ -142,8 +121,6 @@ export default function SpendLogsTable({
       pageSize,
       startTime,
       endTime,
-      selectedTeamId,
-      selectedKeyHash,
       filterByCurrentUser ? userID : null,
     ],
     queryFn: async () => {
@@ -166,8 +143,8 @@ export default function SpendLogsTable({
       // Get base response from API
       const response = await uiSpendLogsCall(
         accessToken,
-        selectedKeyHash || undefined,
-        selectedTeamId || undefined,
+        undefined,
+        undefined,
         undefined,
         formattedStartTime,
         formattedEndTime,
@@ -370,10 +347,13 @@ export default function SpendLogsTable({
                     />
                   </svg>
                 </div>
-                <div className="relative" ref={filtersRef}>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative" ref={quickSelectRef}>
                   <button
+                    onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                     className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    onClick={() => setShowFilters(!showFilters)}
                   >
                     <svg
                       className="w-4 h-4"
@@ -385,305 +365,104 @@ export default function SpendLogsTable({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeWidth={2}
-                        d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                       />
                     </svg>
-                    Filter
+                    {getTimeRangeDisplay()}
                   </button>
 
-                  {showFilters && (
-                    <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
-                      <div className="flex flex-col gap-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">Where</span>
-                          <div className="relative">
-                            <button
-                              onClick={() => setShowColumnDropdown(!showColumnDropdown)}
-                              className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
-                            >
-                              {selectedFilter}
-                              <svg
-                                className="h-4 w-4 text-gray-500"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M19 9l-7 7-7-7"
-                                />
-                              </svg>
-                            </button>
-                            {showColumnDropdown && (
-                              <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
-                                {["Team ID", "Key Hash"].map((option) => (
-                                  <button
-                                    key={option}
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
-                                      selectedFilter === option
-                                        ? "bg-blue-50 text-blue-600"
-                                        : ""
-                                    }`}
-                                    onClick={() => {
-                                      setSelectedFilter(option);
-                                      setShowColumnDropdown(false);
-                                      if (option === "Team ID") {
-                                        setTempKeyHash("");
-                                      } else {
-                                        setTempTeamId("");
-                                      }
-                                    }}
-                                  >
-                                    {selectedFilter === option && (
-                                      <svg
-                                        className="h-4 w-4 text-blue-600"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        stroke="currentColor"
-                                      >
-                                        <path
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                          strokeWidth={2}
-                                          d="M5 13l4 4L19 7"
-                                        />
-                                      </svg>
-                                    )}
-                                    {option}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <input
-                            type="text"
-                            placeholder="Enter value..."
-                            className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            value={selectedFilter === "Team ID" ? tempTeamId : tempKeyHash}
-                            onChange={(e) => {
-                              if (selectedFilter === "Team ID") {
-                                setTempTeamId(e.target.value);
-                              } else {
-                                setTempKeyHash(e.target.value);
-                              }
-                            }}
-                          />
+                  {quickSelectOpen && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                      <div className="space-y-1">
+                        {[
+                          { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+                          { label: "Last Hour", value: 1, unit: "hours" },
+                          { label: "Last 4 Hours", value: 4, unit: "hours" },
+                          { label: "Last 24 Hours", value: 24, unit: "hours" },
+                          { label: "Last 7 Days", value: 7, unit: "days" },
+                        ].map((option) => (
                           <button
-                            className="p-1 hover:bg-gray-100 rounded-md"
+                            key={option.label}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                              getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
+                            }`}
                             onClick={() => {
-                              setTempTeamId("");
-                              setTempKeyHash("");
+                              setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                              setStartTime(
+                                moment()
+                                  .subtract(option.value, option.unit as any)
+                                  .format("YYYY-MM-DDTHH:mm")
+                              );
+                              setQuickSelectOpen(false);
+                              setIsCustomDate(false);
                             }}
                           >
-                            <span className="text-gray-500">×</span>
+                            {option.label}
                           </button>
-                        </div>
-                        
-                        <div className="flex justify-end gap-2">
-                          <button
-                            className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50"
-                            onClick={() => {
-                              setTempTeamId("");
-                              setTempKeyHash("");
-                              setShowFilters(false);
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                            onClick={() => {
-                              setSelectedTeamId(tempTeamId);
-                              setSelectedKeyHash(tempKeyHash);
-                              setCurrentPage(1); // Reset to first page when applying new filters
-                              setShowFilters(false);
-                            }}
-                          >
-                            Apply Filters
-                          </button>
-                        </div>
+                        ))}
+                        <div className="border-t my-2" />
+                        <button
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                            isCustomDate ? 'bg-blue-50 text-blue-600' : ''
+                          }`}
+                          onClick={() => setIsCustomDate(!isCustomDate)}
+                        >
+                          Custom Range
+                        </button>
                       </div>
                     </div>
                   )}
                 </div>
+                
+                <button
+                  onClick={handleRefresh}
+                  className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                  title="Refresh data"
+                >
+                  <svg
+                    className={`w-4 h-4 ${logs.isFetching ? 'animate-spin' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                  <span>Refresh</span>
+                </button>
+              </div>
 
+              {isCustomDate && (
                 <div className="flex items-center gap-2">
-                  <div className="relative" ref={quickSelectRef}>
-                    <button
-                      onClick={() => setQuickSelectOpen(!quickSelectOpen)}
-                      className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                        />
-                      </svg>
-                      {getTimeRangeDisplay()}
-                    </button>
-
-                    {quickSelectOpen && (
-                      <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
-                        <div className="space-y-1">
-                          {[
-                            { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                            { label: "Last Hour", value: 1, unit: "hours" },
-                            { label: "Last 4 Hours", value: 4, unit: "hours" },
-                            { label: "Last 24 Hours", value: 24, unit: "hours" },
-                            { label: "Last 7 Days", value: 7, unit: "days" },
-                          ].map((option) => (
-                            <button
-                              key={option.label}
-                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
-                              }`}
-                              onClick={() => {
-                                setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
-                                setStartTime(
-                                  moment()
-                                    .subtract(option.value, option.unit as any)
-                                    .format("YYYY-MM-DDTHH:mm")
-                                );
-                                setQuickSelectOpen(false);
-                                setIsCustomDate(false);
-                              }}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                          <div className="border-t my-2" />
-                          <button
-                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                              isCustomDate ? 'bg-blue-50 text-blue-600' : ''
-                            }`}
-                            onClick={() => setIsCustomDate(!isCustomDate)}
-                          >
-                            Custom Range
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={startTime}
+                      onChange={(e) => {
+                        setStartTime(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
                   </div>
-                  
-                  <button
-                    onClick={handleRefresh}
-                    className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    title="Refresh data"
-                  >
-                    <svg
-                      className={`w-4 h-4 ${logs.isFetching ? 'animate-spin' : ''}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                      />
-                    </svg>
-                    <span>Refresh</span>
-                  </button>
-                </div>
-
-                {isCustomDate && (
-                  <div className="flex items-center gap-2">
-                    <div>
-                      <input
-                        type="datetime-local"
-                        value={startTime}
-                        onChange={(e) => {
-                          setStartTime(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
-                    </div>
-                    <span className="text-gray-500">to</span>
-                    <div>
-                      <input
-                        type="datetime-local"
-                        value={endTime}
-                        onChange={(e) => {
-                          setEndTime(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
-                    </div>
+                  <span className="text-gray-500">to</span>
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={endTime}
+                      onChange={(e) => {
+                        setEndTime(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
                   </div>
-                )}
-              </div>
-
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-700">
-                  Showing{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : logs.data
-                    ? (currentPage - 1) * pageSize + 1
-                    : 0}{" "}
-                  -{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : logs.data
-                    ? Math.min(currentPage * pageSize, logs.data.total)
-                    : 0}{" "}
-                  of{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : logs.data
-                    ? logs.data.total
-                    : 0}{" "}
-                  results
-                </span>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-700">
-                    Page {logs.isLoading ? "..." : currentPage} of{" "}
-                    {logs.isLoading
-                      ? "..."
-                      : logs.data
-                      ? logs.data.total_pages
-                      : 1}
-                  </span>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((p) => Math.max(1, p - 1))
-                    }
-                    disabled={logs.isLoading || currentPage === 1}
-                    className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((p) =>
-                        Math.min(
-                          logs.data?.total_pages || 1,
-                          p + 1,
-                        ),
-                      )
-                    }
-                    disabled={
-                      logs.isLoading ||
-                      currentPage === (logs.data?.total_pages || 1)
-                    }
-                    className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
                 </div>
-              </div>
+              )}
             </div>
           </div>
           <DataTable
