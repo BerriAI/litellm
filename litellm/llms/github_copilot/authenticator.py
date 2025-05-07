@@ -298,7 +298,7 @@ class Authenticator:
         user_code = device_code_info["user_code"]
         verification_uri = device_code_info["verification_uri"]
 
-        print(
+        verbose_logger.info(
             f"Please visit {verification_uri} and enter code {user_code} to authenticate."
         )
 
