@@ -65,8 +65,11 @@ class DallEImageConfig:
     @classmethod
     def map_openai_params(cls, non_default_params: dict, optional_params: dict) -> dict:
         """Map openai params"""
-        optional_params.update(non_default_params)
-        return optional_params
+        supported_openai_params = cls.get_supported_openai_params()  
+        for param, value in non_default_params.items():  
+            if param in supported_openai_params:  
+                optional_params[param] = value  
+        return optional_params 
     
     @classmethod
     def transform_response_dict_to_openai_response(
