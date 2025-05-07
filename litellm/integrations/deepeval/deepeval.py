@@ -13,15 +13,19 @@ class DeepEvalLogger(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Logs a failure event to DeepEval's platform."""
+        await self._event_handler(kwargs, response_obj, start_time, end_time, False)
         
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Logs a success event to DeepEval's platform."""
+        await self._event_handler(kwargs, response_obj, start_time, end_time, True)
+        
+    async def _event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
         start_time = to_zod_compatible_iso(start_time)
         end_time = to_zod_compatible_iso(end_time)
         standard_logging_object = kwargs.get("standard_logging_object", None)
         
         if standard_logging_object:
-            base_api_span = self._create_base_api_span(kwargs, standard_logging_object, start_time, end_time)
+            base_api_span = self._create_base_api_span(kwargs, standard_logging_object, start_time, end_time, is_success)
             trace_api = self._create_trace_api(base_api_span, standard_logging_object, start_time, end_time)
 
             try:
@@ -36,6 +40,8 @@ class DeepEvalLogger(CustomLogger):
 
             # Send the async request
             api = Api()
+            print("Debug - Request body:")
+            print(body)
             response = await api.a_send_request(
                 method=HttpMethods.POST,
                 endpoint=Endpoints.TRACING_ENDPOINT,
@@ -44,23 +50,26 @@ class DeepEvalLogger(CustomLogger):
 
             verbose_logger.debug("DeepEvalLogger: async_log_success_event: Api response", response)
 
-    
-    def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time):
+    def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time, is_success):
         # extract usage
         usage = standard_logging_object.get("response", {}).get("usage", {})
+        if is_success:
+            output = standard_logging_object.get("response", {}).get("choices", [{}])[0].get("message", {}).get("content", "NO_OUTPUT")
+        else:
+            output = str(standard_logging_object.get("error_string", ""))
         return BaseApiSpan(
             uuid = standard_logging_object.get("id", uuid.uuid4()),
             name = "litellm_success_callback",
-            status = TraceSpanApiStatus.SUCCESS,
+            status = TraceSpanApiStatus.SUCCESS if is_success else TraceSpanApiStatus.ERRORED,
             type = SpanApiType.LLM,
             traceUuid = standard_logging_object.get("trace_id", uuid.uuid4()),
             startTime = str(start_time),
             endTime = str(end_time),
             input = kwargs.get("input", "NO_INPUT"),
-            output = standard_logging_object.get("response", {}).get("choices", [{}])[0].get("message", {}).get("content", "NO_OUTPUT"),
+            output = output,
             model=standard_logging_object.get("model", None),
-            inputTokenCount=usage.get("prompt_tokens", None),
-            outputTokenCount=usage.get("completion_tokens", None),
+            inputTokenCount=usage.get("prompt_tokens", None) if is_success else None,
+            outputTokenCount=usage.get("completion_tokens", None) if is_success else None,
         )
 
     def _create_trace_api(self, base_api_span, standard_logging_object, start_time, end_time):
