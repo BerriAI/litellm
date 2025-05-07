@@ -1,6 +1,7 @@
 import requests
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from .exceptions import UnauthorizedError, NotFoundError
+
 
 class UsersManagementClient:
     def __init__(self, base_url: str, api_key: Optional[str] = None):
@@ -50,4 +51,4 @@ class UsersManagementClient:
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        return response.json() 
+        return response.json()
