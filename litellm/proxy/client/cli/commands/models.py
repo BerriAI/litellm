@@ -316,9 +316,7 @@ def import_models(
     regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
 
-    if dry_run:
-        click.echo("[DRY RUN] No changes will be made. The following models would be imported:")
-
+    added_models = []
     for model in model_list:
         model_name = model.get("model_name")
         model_params = model.get("litellm_params")
@@ -341,7 +339,11 @@ def import_models(
         provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
         total += 1
-        click.echo(f'  Model: "{model_name}" (litellm_params.model = "{model_id}")')
+        added_models.append({
+            "model_name": model_name,
+            "upstream_model": model_id,
+            "access_groups": ", ".join(access_groups) if access_groups else ""
+        })
         if not dry_run:
             try:
                 client.models.new(
@@ -351,8 +353,28 @@ def import_models(
                 )
             except Exception:
                 pass  # For summary, ignore errors
-
-    click.echo("Model import summary:")
+    # Output table of models
+    if added_models:
+        from rich.table import Table
+        from rich.console import Console
+        if dry_run:
+            table_title = "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
+        else:
+            table_title = "Models Imported"
+        table = Table(title=table_title)
+        table.add_column("Model Name", style="cyan")
+        table.add_column("Upstream Model", style="green")
+        table.add_column("Access Groups", style="magenta")
+        for m in added_models:
+            table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
+        console = Console()
+        console.print(table)
+    # Output summary as a rich table
+    from rich.table import Table as RichTable
+    summary_table = RichTable(title="Model Import Summary")
+    summary_table.add_column("Provider", style="cyan")
+    summary_table.add_column("Count", style="green")
     for provider, count in provider_counts.items():
-        click.echo(f"  {provider}: {count}")
-    click.echo(f"Total models: {total}")
+        summary_table.add_row(str(provider), str(count))
+    summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
+    console.print(summary_table)
