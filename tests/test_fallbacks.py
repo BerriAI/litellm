@@ -3,7 +3,6 @@
 import pytest
 import asyncio
 import aiohttp
-from large_text import text
 import time
 from typing import Optional
 

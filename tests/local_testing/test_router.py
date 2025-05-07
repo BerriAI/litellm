@@ -683,7 +683,7 @@ def test_router_azure_acompletion():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_async_router_context_window_fallback(sync_mode):
+async def test_async_router_context_window_fallback(sync_mode, large_text):
     """
     - Give a gpt-4 model group with different context windows (8192k vs. 128k)
     - Send a 10k prompt
@@ -691,7 +691,7 @@ async def test_async_router_context_window_fallback(sync_mode):
     """
     import os
 
-    from large_text import text
+    text = large_text
 
     litellm.set_verbose = False
     litellm._turn_on_debug()
@@ -775,7 +775,9 @@ def test_router_rpm_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check_in_group_custom_model_info():
+def test_router_context_window_check_pre_call_check_in_group_custom_model_info(
+    large_text,
+):
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -783,7 +785,7 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
     """
     import os
 
-    from large_text import text
+    text = large_text
 
     litellm.set_verbose = False
 
@@ -829,7 +831,7 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check():
+def test_router_context_window_check_pre_call_check(large_text):
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -837,7 +839,7 @@ def test_router_context_window_check_pre_call_check():
     """
     import os
 
-    from large_text import text
+    text = large_text
 
     litellm.set_verbose = False
 
@@ -883,7 +885,7 @@ def test_router_context_window_check_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check_out_group():
+def test_router_context_window_check_pre_call_check_out_group(large_text):
     """
     - Give 2 gpt-3.5-turbo model groups with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -891,7 +893,7 @@ def test_router_context_window_check_pre_call_check_out_group():
     """
     import os
 
-    from large_text import text
+    text = large_text
 
     litellm.set_verbose = False
 
@@ -1136,7 +1138,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            }
+            },
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(

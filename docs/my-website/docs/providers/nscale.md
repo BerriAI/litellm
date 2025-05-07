@@ -1,11 +1,11 @@
 # NScale
-https://docs.nscale.com/docs/
+[NScale docs](https://docs.nscale.com/docs/getting-started/overview)
 
 NScale is a European-domiciled full-stack AI cloud platform that allows you to scale your workloads securely, sustainably and cost-effectively - without sacrificing control. It provides production-grade reliability for serverless deployments of LLMs with full data sovereignty and compliance baked in.
 
 ## Key Features
 - **EU Sovereign**: Full data sovereignty and compliance with European regulations
-- **Low Cost**: Extremely competitive pricing for both text and image generation models
+- **Ultra-Low Cost (starting at $0.01 / M tokens)**: Extremely competitive pricing for both text and image generation models
 - **Production Grade**: Reliable serverless deployments with full isolation
 - **No Setup Required**: Instant access to compute without infrastructure management
 - **Full Control**: Your data remains private and isolated
@@ -33,11 +33,11 @@ print(response)
 
 ## Sample Usage - Image Generation
 ```python
-from litellm import completion
+from litellm import image_generation
 import os
 
 os.environ['NSCALE_API_KEY'] = ""
-response = completion(
+response = image_generation(
     model="nscale/stabilityai/stable-diffusion-xl-base-1.0",
     prompt="A beautiful sunset over mountains",
     n=1,

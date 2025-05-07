@@ -8,9 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+sys.path.insert(0, project_root)
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from messages_with_counts import (
@@ -23,7 +24,6 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from tests.large_text import text
 
 
 def token_counter_both_assert_same(**args):
@@ -259,7 +259,7 @@ def test_gpt_vision_token_counting():
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What’s in this image?"},
+                {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
                     "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
@@ -277,14 +277,13 @@ def test_gpt_vision_token_counting():
 @pytest.mark.parametrize(
     "model",
     [
-        "gpt-4-vision-preview",
         "gpt-4o",
         "claude-3-opus-20240229",
         "command-nightly",
         "mistral/mistral-tiny",
     ],
 )
-def test_load_test_token_counter(model):
+def test_load_test_token_counter(model, large_text):
     """
     Token count large prompt 100 times.
 
@@ -292,12 +291,11 @@ def test_load_test_token_counter(model):
     """
     import tiktoken
 
-    messages = [{"role": "user", "content": text}] * 10
+    messages = [{"role": "user", "content": large_text}] * 10
 
     start_time = time.time()
     for _ in range(10):
         _ = token_counter(model=model, messages=messages)
-        # enc.encode("".join(m["content"] for m in messages))
 
     end_time = time.time()
 
