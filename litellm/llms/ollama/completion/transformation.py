@@ -256,22 +256,34 @@ class OllamaConfig(BaseConfig):
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
-            function_call = json.loads(response_json["response"])
-            message = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{str(uuid.uuid4())}",
-                        "function": {
-                            "name": function_call["name"],
-                            "arguments": json.dumps(function_call["arguments"]),
-                        },
-                        "type": "function",
-                    }
-                ],
-            )
-            model_response.choices[0].message = message  # type: ignore
-            model_response.choices[0].finish_reason = "tool_calls"
+            response_content = json.loads(response_json["response"])
+            
+            # Check if this is a function call format with name/arguments structure
+            if isinstance(response_content, dict) and "name" in response_content and "arguments" in response_content:
+                # Handle as function call (original behavior)
+                function_call = response_content
+                message = litellm.Message(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{str(uuid.uuid4())}",
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                )
+                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].finish_reason = "tool_calls"
+            else:
+                # Handle as regular JSON (new behavior)
+                message = litellm.Message(
+                    content=json.dumps(response_content),
+                )
+                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].finish_reason = "stop"
         else:
             model_response.choices[0].message.content = response_json["response"]  # type: ignore
         model_response.created = int(time.time())
