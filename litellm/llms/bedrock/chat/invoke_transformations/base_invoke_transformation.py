@@ -121,7 +121,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -456,6 +456,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -467,6 +468,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 api_base=api_base,
                 headers=headers,
                 data=json.dumps(data),
+                signed_json_body=signed_json_body,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,

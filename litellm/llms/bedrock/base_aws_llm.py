@@ -646,7 +646,13 @@ class BaseAWSLLM:
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
+        """
+        Sign a request for Bedrock or Sagemaker
+
+        Returns:
+            Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
+        """
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
@@ -699,4 +705,4 @@ class BaseAWSLLM:
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header
             request_headers_dict["Authorization"] = headers["Authorization"]
-        return request_headers_dict
+        return request_headers_dict, request.body

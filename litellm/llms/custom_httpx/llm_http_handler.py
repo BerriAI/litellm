@@ -116,6 +116,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
@@ -128,7 +129,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=signed_json_body if signed_json_body is not None else data,
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -278,7 +279,7 @@ class BaseLLMHTTPHandler:
         if extra_body is not None:
             data = {**data, **extra_body}
 
-        headers = provider_config.sign_request(
+        headers, signed_json_body = provider_config.sign_request(
             headers=headers,
             optional_params=optional_params,
             request_data=data,
@@ -365,6 +366,7 @@ class BaseLLMHTTPHandler:
                     api_base=api_base,
                     headers=headers,
                     data=data,
+                    signed_json_body=signed_json_body,
                     messages=messages,
                     client=client,
                     json_mode=json_mode,
@@ -374,6 +376,8 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 headers=headers,  # type: ignore
                 data=data,
+                signed_json_body=signed_json_body,
+                original_data=data,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -408,6 +412,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
@@ -432,6 +437,8 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
+        signed_json_body: Optional[bytes],
+        original_data: dict,
         model: str,
         messages: list,
         logging_obj,
@@ -460,6 +467,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
@@ -472,7 +480,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 model_response=litellm.ModelResponse(),
                 logging_obj=logging_obj,
-                request_data=data,
+                request_data=original_data,
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,

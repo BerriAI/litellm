@@ -11,6 +11,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Tuple,
     Type,
     Union,
     cast,
@@ -277,7 +278,7 @@ class BaseConfig(ABC):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
         """
         Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
         Args:
@@ -290,7 +291,7 @@ class BaseConfig(ABC):
 
         Update the headers with the signed headers in this function. The return values will be sent as headers in the http request.
         """
-        return headers
+        return headers, None
 
     def get_complete_url(
         self,
@@ -379,6 +380,7 @@ class BaseConfig(ABC):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 

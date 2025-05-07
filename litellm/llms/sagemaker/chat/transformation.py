@@ -9,7 +9,7 @@ Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messa
 
 import json
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import httpx
 from httpx._models import Headers
@@ -102,7 +102,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,
@@ -134,6 +134,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -142,7 +143,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             response = client.post(
                 api_base,
                 headers=headers,
-                data=data,
+                data=signed_json_body if signed_json_body is not None else data,
                 stream=True,
                 logging_obj=logging_obj,
             )
