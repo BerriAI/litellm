@@ -3,7 +3,11 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
+from .openai import (
+    ChatCompletionCachedContent,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
+)
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
@@ -64,6 +68,7 @@ AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
     ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
 ]
 
 
