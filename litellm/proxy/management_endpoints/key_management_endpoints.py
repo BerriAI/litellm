@@ -1486,6 +1486,12 @@ async def delete_verification_tokens(
                 where={"token": {"in": tokens}}
             )
 
+            if len(_keys_being_deleted) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "No keys found"},
+                )
+
             # Assuming 'db' is your Prisma Client instance
             # check if admin making request - don't filter by user-id
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
