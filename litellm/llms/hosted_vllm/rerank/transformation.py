@@ -24,6 +24,16 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
 
 
+class HostedVLLMRerankError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
+    ):
+        super().__init__(status_code=status_code, message=message, headers=headers)
+
+
 class HostedVLLMRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
@@ -143,13 +153,13 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return ValueError(f"Hosted VLLM error: {error_message}, status_code={status_code}")
+        return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
         usage_data = response.get("usage", {})
         _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
-        _tokens = RerankTokens(total_tokens=usage_data.get("total_tokens", 0))
+        _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results
