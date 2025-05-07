@@ -444,8 +444,15 @@ def _count_messages(
             elif key == "thinking_blocks":
                 if isinstance(value, List):
                     for thinking_block in value:
-                        if thinking_block.get('type', None) == "thinking":
-                            num_tokens += params.count_function(thinking_block.get("thinking", ""))
+                        if thinking_block.get("type", None) == "thinking":
+                            num_tokens += params.count_function(
+                                thinking_block.get("thinking", "")
+                            )
+                        elif thinking_block.get("type") == "redacted_thinking":
+                            verbose_logger.debug(
+                                "Skipping counting tokens for redacted_thinking. The response is just a hash, not actual llm api response. "
+                            )
+                            pass
                         else:
                             raise ValueError(
                                 f"Unsupported type {type(thinking_block)} for key thinking_blocks in message {message}"

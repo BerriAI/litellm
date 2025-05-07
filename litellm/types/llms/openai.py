@@ -656,7 +656,9 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -876,7 +878,9 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
-    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
+    model_config = {
+        "extra": "allow"
+    }  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
@@ -1331,7 +1335,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
     system_fingerprint: str
     service_tier: str
 
+
 OpenAIChatCompletionFinishReason = Literal[
     "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
-

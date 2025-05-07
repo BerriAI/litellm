@@ -622,3 +622,23 @@ def test_bad_input_token_counter(model, messages):
         messages=messages,
         default_token_count=1000,
     )
+
+
+def test_token_counter_with_thinking_blocks():
+    messages = [
+        {"role": "assistant"},
+    ]
+    just_assistant_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+
+    messages = [
+        {
+            "role": "assistant",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "I'm thinking..."},
+                {"type": "redacted_thinking", "redacted_thinking": "I'm thinking..."},
+            ],
+        },
+    ]
+    total_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    print(total_tokens)
+    assert total_tokens > just_assistant_tokens
