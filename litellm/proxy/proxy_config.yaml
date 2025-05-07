@@ -16,6 +16,7 @@ guardrails:
       guardrailIdentifier: wf0hkdb5x07f # your guardrail ID on bedrock
       guardrailVersion: "DRAFT"         # your guardrail version on bedrock
       mask_request_content: true
+      mask_response_content: true
   
 general_settings:
   store_model_in_db: true
