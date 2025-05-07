@@ -473,9 +473,10 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
         return litellm.LlmProviders.OPENAI
 
 
-def test_openai_pdf_url():
+@pytest.mark.asyncio
+async def test_openai_pdf_url():
     litellm._turn_on_debug()
-    response = litellm.completion(
+    response = await litellm.acompletion(
         model="gpt-4o",
         messages=[{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
     )
