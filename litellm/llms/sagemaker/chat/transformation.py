@@ -7,16 +7,39 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-from typing import List, Optional, Union, cast
+import json
+from functools import partial
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
+import httpx
 from httpx._models import Headers
 
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat.invoke_handler import (
+    AWSEventStreamDecoder,
+    MockResponseIterator,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+)
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+from litellm.utils import encoding
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import SagemakerError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
@@ -90,3 +113,56 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             stream=stream,
             fake_stream=fake_stream,
         )
+
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        return False
+
+    @track_llm_api_timing()
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
+    ) -> CustomStreamWrapper:
+        if client is None or isinstance(client, AsyncHTTPHandler):
+            client = _get_httpx_client(params={})
+
+        try:
+            response = client.post(
+                api_base,
+                headers=headers,
+                data=data,
+                stream=True,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPStatusError as e:
+            raise SagemakerError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+
+        if response.status_code != 200:
+            raise SagemakerError(
+                status_code=response.status_code, message=response.text
+            )
+
+        decoder = AWSEventStreamDecoder(model=model)
+        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="sagemaker",
+            logging_obj=logging_obj,
+        )
+        return streaming_response

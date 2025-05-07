@@ -88,8 +88,9 @@ async def test_completion_sagemaker(sync_mode):
 
 def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
     litellm._turn_on_debug()
+    litellm.set_verbose = True
     resp = litellm.completion(
-        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+        model="sagemaker_chat/jumpstart-dft-meta-textgeneration-l-20250507-003700",
         messages=[
             {"role": "user", "content": "hi"},
         ],
@@ -97,7 +98,11 @@ def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
         max_tokens=80,
         aws_region_name="us-east-1",
         num_retries=3,
+        stream=True,
     )
+
+    for chunk in resp:
+        print(chunk)
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize(
