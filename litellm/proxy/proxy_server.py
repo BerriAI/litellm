@@ -3814,6 +3814,7 @@ async def embeddings(  # noqa: PLR0915
                     if m["model_name"] == data["model"] and (
                         m["litellm_params"]["model"] in litellm.open_ai_embedding_models
                         or m["litellm_params"]["model"].startswith("azure/")
+                        or m["litellm_params"]["model"].startswith("hosted_vllm/")
                     ):
                         pass
                     else:
