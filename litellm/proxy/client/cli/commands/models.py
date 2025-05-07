@@ -293,7 +293,13 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
     help="Only import models where at least one item in model_info.access_groups matches the given regex.",
 )
 @click.pass_context
-def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models_matching_regex: Optional[str], only_access_groups_matching_regex: Optional[str]) -> None:
+def import_models(
+    ctx: click.Context,
+    yaml_file: str,
+    dry_run: bool,
+    only_models_matching_regex: Optional[str],
+    only_access_groups_matching_regex: Optional[str],
+) -> None:
     """Import models from a YAML file and add them to the proxy."""
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
