@@ -19,6 +19,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
+    Choices,
     GenericStreamingChunk,
     ModelInfoBase,
     ModelResponse,
@@ -256,29 +257,51 @@ class OllamaConfig(BaseConfig):
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
-            function_call = json.loads(response_json["response"])
-            message = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{str(uuid.uuid4())}",
-                        "function": {
-                            "name": function_call["name"],
-                            "arguments": json.dumps(function_call["arguments"]),
-                        },
-                        "type": "function",
-                    }
-                ],
-            )
-            model_response.choices[0].message = message  # type: ignore
-            model_response.choices[0].finish_reason = "tool_calls"
+            try:
+                parsed_response_content = json.loads(response_json["response"])
+
+                if isinstance(parsed_response_content, dict) and "name" in parsed_response_content and "arguments" in parsed_response_content:
+                    function_call = parsed_response_content
+                    message = litellm.Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": f"call_{str(uuid.uuid4())}",
+                                "function": {
+                                    "name": function_call["name"],
+                                    "arguments": json.dumps(function_call["arguments"]),
+                                },
+                                "type": "function",
+                            }
+                        ],
+                    )
+                    choice = model_response.choices[0]
+                    if isinstance(choice, Choices):
+                        choice.message = message  # type: ignore[attr-defined]
+                        choice.finish_reason = "tool_calls"
+                    else:
+                        choice.message.content = response_json["response"]  # type: ignore[attr-defined]
+                        choice.finish_reason = "stop"
+
+                else:
+                    choice = model_response.choices[0]
+                    if isinstance(choice, Choices):
+                        choice.message.content = response_json["response"]  # type: ignore[attr-defined]
+                        choice.finish_reason = "stop"
+            except json.JSONDecodeError:
+                choice = model_response.choices[0]
+                if isinstance(choice, Choices):
+                    choice.message.content = response_json["response"]  # type: ignore[attr-defined]
+                    choice.finish_reason = "stop"
         else:
-            model_response.choices[0].message.content = response_json["response"]  # type: ignore
+            choice = model_response.choices[0]
+            if isinstance(choice, Choices):
+                choice.message.content = response_json["response"]  # type: ignore[attr-defined]
         model_response.created = int(time.time())
         model_response.model = "ollama/" + model
         _prompt = request_data.get("prompt", "")
         prompt_tokens = response_json.get(
-            "prompt_eval_count", len(encoding.encode(_prompt, disallowed_special=()))  # type: ignore
+            "prompt_eval_count", len(encoding.encode(_prompt))
         )
         completion_tokens = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
