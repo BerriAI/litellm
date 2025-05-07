@@ -4788,7 +4788,7 @@ def image_generation(  # noqa: PLR0915
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
-                api_key=api_key,
+                api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
