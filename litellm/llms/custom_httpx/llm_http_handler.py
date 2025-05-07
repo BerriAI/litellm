@@ -534,7 +534,7 @@ class BaseLLMHTTPHandler:
         signed_json_body: Optional[bytes] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
-            return provider_config.get_async_custom_stream_wrapper(
+            return await provider_config.get_async_custom_stream_wrapper(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,

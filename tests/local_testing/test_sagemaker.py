@@ -88,7 +88,8 @@ async def test_completion_sagemaker(sync_mode):
 @pytest.mark.asyncio()
 async def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
     litellm._turn_on_debug()
-    litellm.set_verbose = True
+    # litellm.set_verbose = True
+    from litellm import stream_chunk_builder
     resp = await litellm.acompletion(
         model="sagemaker_chat/jumpstart-dft-meta-textgeneration-l-20250507-003700",
         messages=[
@@ -101,13 +102,20 @@ async def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
         stream=True,
     )
 
-    # Get the streaming iterator by awaiting the coroutine
-    stream = await resp
-    print(stream)
+    print(f"resp: {resp}")
+
+    # # Get the streaming iterator by awaiting the coroutine
+    # stream = await resp
+    # print(stream)
 
     # Now we can iterate over the stream
-    async for chunk in stream:
+    chunks = []
+    async for chunk in resp:  
         print(chunk)
+        chunks.append(chunk)
+    response = stream_chunk_builder(chunks)
+    print(response)
+
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize(
