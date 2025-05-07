@@ -229,4 +229,68 @@ def test_models_info_table_format(mock_models_info, cli_runner):
         base_url="http://localhost:4000",
         api_key="sk-test"
     )
-    mock_models_info.return_value.models.info.assert_called_once() 
+    mock_models_info.return_value.models.info.assert_called_once()
+
+
+def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_runner):
+    """Test the --only-models-matching-regex option for models import command"""
+    # Prepare a YAML file with a mix of models
+    yaml_content = {
+        "model_list": [
+            {
+                "model_name": "gpt-4-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "id-1"}
+            },
+            {
+                "model_name": "gpt-3.5-model",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "id-2"}
+            },
+            {
+                "model_name": "llama2-model",
+                "litellm_params": {"model": "llama2"},
+                "model_info": {"id": "id-3"}
+            },
+            {
+                "model_name": "other-model",
+                "litellm_params": {"model": "other"},
+                "model_info": {"id": "id-4"}
+            },
+        ]
+    }
+    import yaml as pyyaml
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Only match models containing 'gpt' in their litellm_params.model
+    result = cli_runner.invoke(
+        cli,
+        [
+            "models",
+            "import",
+            str(yaml_file),
+            "--only-models-matching-regex",
+            "gpt"
+        ]
+    )
+
+    # Should succeed
+    assert result.exit_code == 0
+    # Only the two gpt models should be imported
+    calls = [
+        call.kwargs["model_params"]["model"]
+        for call in mock_new.call_args_list
+    ]
+    assert set(calls) == {"gpt-4", "gpt-3.5-turbo"}
+    # Should not include llama2 or other
+    assert "llama2" not in calls
+    assert "other" not in calls
+    # Output summary should mention 2 total models
+    assert "Total models: 2" in result.output
+    # Output summary should mention the correct providers
+    assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output 
