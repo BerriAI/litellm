@@ -1,5 +1,5 @@
-# NScale
-[NScale docs](https://docs.nscale.com/docs/getting-started/overview)
+# NScale (EU Sovereign)
+**[NScale docs](https://docs.nscale.com/docs/getting-started/overview)**
 
 NScale is a European-domiciled full-stack AI cloud platform that allows you to scale your workloads securely, sustainably and cost-effectively - without sacrificing control. It provides production-grade reliability for serverless deployments of LLMs with full data sovereignty and compliance baked in.
 

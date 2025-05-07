@@ -8,10 +8,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Add project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, project_root)
-
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from messages_with_counts import (
@@ -259,7 +258,7 @@ def test_gpt_vision_token_counting():
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What's in this image?"},
+                {"type": "text", "text": "What’s in this image?"},
                 {
                     "type": "image_url",
                     "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
@@ -296,6 +295,7 @@ def test_load_test_token_counter(model, large_text):
     start_time = time.time()
     for _ in range(10):
         _ = token_counter(model=model, messages=messages)
+        # enc.encode("".join(m["content"] for m in messages))
 
     end_time = time.time()
 

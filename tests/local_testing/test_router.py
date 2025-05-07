@@ -2789,4 +2789,5 @@ def test_router_get_model_group_info():
     assert model_group_info is not None
     assert model_group_info.model_group == "gpt-4"
     assert model_group_info.input_cost_per_token > 0
+
     assert model_group_info.output_cost_per_token > 0
