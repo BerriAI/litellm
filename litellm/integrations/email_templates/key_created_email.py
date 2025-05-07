@@ -205,14 +205,7 @@ response = client.chat.completions.create(<br>
             <h2>Need Help?</h2>
             <p>If you have any questions or need assistance, please contact us at {email_support_contact}.</p>
         </div>
-        <div class="footer">
-            <p>© 2023 LiteLLM. All rights reserved.</p>
-            <div class="social-links">
-                <a href="https://twitter.com/litellm">Twitter</a> • 
-                <a href="https://github.com/BerriAI/litellm">GitHub</a> • 
-                <a href="https://litellm.ai">Website</a>
-            </div>
-        </div>
+        {email_footer}
     </div>
 </body>
 </html>

@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.integrations.email_templates.key_created_email import (
     KEY_CREATED_EMAIL_TEMPLATE,
 )
@@ -45,6 +46,7 @@ class BaseEmailLogger(CustomLogger):
             recipient_email=email_params.recipient_email,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=EMAIL_FOOTER,
         )
 
         await self.send_email(
@@ -78,6 +80,7 @@ class BaseEmailLogger(CustomLogger):
             key_token=send_key_created_email_event.virtual_key,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=EMAIL_FOOTER,
         )
 
         await self.send_email(

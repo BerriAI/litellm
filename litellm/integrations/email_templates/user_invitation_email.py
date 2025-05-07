@@ -8,14 +8,14 @@ USER_INVITATION_EMAIL_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invitation to LiteLLM</title>
+    <title>Welcome to LiteLLM</title>
     <style>
         body, html {{
             margin: 0;
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             color: #333333;
-            background-color: #f8fafc;
+            background-color: #f8f8f8;
             line-height: 1.5;
         }}
         .container {{
@@ -26,173 +26,149 @@ USER_INVITATION_EMAIL_TEMPLATE = """
             overflow: hidden;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }}
-        .header {{
-            padding: 24px 0;
-            text-align: center;
-            border-bottom: 1px solid #f1f5f9;
-        }}
-        .content {{
-            padding: 32px 40px;
+        .logo {{
+            padding: 24px 0 0 24px;
+            text-align: left;
         }}
         .greeting {{
             font-size: 16px;
             margin-bottom: 20px;
             color: #333333;
         }}
-        .message {{
-            font-size: 16px;
-            color: #333333;
-            margin-bottom: 20px;
+        .content {{
+            padding: 24px 40px 32px;
         }}
-        h2 {{
-            font-size: 18px;
+        h1 {{
+            font-size: 24px;
             font-weight: 600;
-            margin-top: 36px;
+            margin-top: 24px;
             margin-bottom: 16px;
             color: #333333;
+        }}
+        p {{
+            font-size: 16px;
+            color: #333333;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }}
+        .intro-text {{
+            margin-bottom: 24px;
+        }}
+        .link {{
+            color: #6366f1;
+            text-decoration: none;
+            font-weight: 500;
+        }}
+        .link:hover {{
+            text-decoration: underline;
+        }}
+        .link-with-arrow {{
+            display: inline-flex;
+            align-items: center;
+            color: #6366f1;
+            text-decoration: none;
+            font-weight: 500;
+            margin-bottom: 20px;
+        }}
+        .link-with-arrow:hover {{
+            text-decoration: underline;
+        }}
+        .arrow {{
+            margin-left: 6px;
+        }}
+        .divider {{
+            height: 1px;
+            background-color: #f1f1f1;
+            margin: 24px 0;
         }}
         .btn {{
             display: inline-block;
             padding: 12px 24px;
-            background-color: #6366f1;
+            background-color: #5c5ce0;
             color: #ffffff !important;
             text-decoration: none;
             border-radius: 6px;
             font-weight: 500;
-            margin-top: 24px;
+            margin-top: 12px;
             text-align: center;
             font-size: 15px;
-            transition: background-color 0.2s;
+            transition: background-color 0.2s ease;
         }}
         .btn:hover {{
-            background-color: #4f46e5;
-            color: #ffffff !important;
+            background-color: #4b4bb3;
         }}
-        .highlight-box {{
-            background-color: #f0f9ff;
-            border-radius: 6px;
-            padding: 16px;
+        .btn-container {{
+            text-align: center;
             margin: 24px 0;
-            font-size: 14px;
-            border: 1px solid #bae6fd;
-        }}
-        .separator {{
-            height: 1px;
-            background-color: #f1f5f9;
-            margin: 40px 0 30px;
-        }}
-        .features {{
-            margin: 30px 0;
-        }}
-        .feature {{
-            display: flex;
-            margin-bottom: 16px;
-            align-items: flex-start;
-        }}
-        .feature-icon {{
-            width: 24px;
-            height: 24px;
-            background-color: #e0f2fe;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 12px;
-            flex-shrink: 0;
-            color: #0284c7;
-            font-weight: bold;
-        }}
-        .feature-text {{
-            font-size: 14px;
         }}
         .footer {{
             padding: 24px 40px 32px;
-            text-align: center;
-            color: #64748b;
-            font-size: 13px;
-            background-color: #f8fafc;
-            border-top: 1px solid #f1f5f9;
+            text-align: left;
+            color: #666;
+            font-size: 14px;
         }}
-        .social-links {{
-            margin-top: 12px;
-        }}
-        .social-links a {{
-            display: inline-block;
-            margin: 0 8px;
-            color: #64748b;
-            text-decoration: none;
-        }}
-        @media only screen and (max-width: 620px) {{
-            .container {{
-                width: 100%;
-                margin: 0;
-                border-radius: 0;
-            }}
-            .content {{
-                padding: 24px 20px;
-            }}
-            .footer {{
-                padding: 20px;
-            }}
+        .quickstart {{
+            margin-top: 32px;
         }}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
+        <div class="logo">
             <img src="{email_logo_url}" alt="LiteLLM Logo" style="height: 32px; width: auto;">
         </div>
         <div class="content">
+            <h1>Welcome to LiteLLM</h1>
+
             <div class="greeting">
                 <p>Hi {recipient_email},</p>
             </div>
             
-            <div class="message">
-                <p>You've been invited to join LiteLLM! We're excited to have you onboard our platform for unified API access to all LLM providers.</p>
+            <div class="intro-text">
+                <p>LiteLLM allows you to call 100+ LLM providers in the OpenAI API format. Get started by accepting your invitation.</p>
+            </div>
+
+            <div class="btn-container">
+                <a href="{base_url}" class="btn">Accept Invitation</a>
             </div>
             
-            <div class="highlight-box">
-                <p style="margin: 0;"><strong>Get Started:</strong> Click the button below to set up your account and start using LiteLLM.</p>
+            <div class="quickstart">
+                <p>Here's a quickstart guide to get you started:</p>
             </div>
             
-            <div style="text-align: center; margin: 36px 0;">
-                <a href="{base_url}" class="btn" style="color: #ffffff;">Accept Invitation</a>
-            </div>
+            <div class="divider"></div>
             
-            <h2>Why use LiteLLM?</h2>
+            <a href="https://docs.litellm.ai/docs/proxy/user_keys" class="link-with-arrow">
+                Make your first LLM request →
+                <span class="arrow"></span>
+            </a>
             
-            <div class="features">
-                <div class="feature">
-                    <div class="feature-icon">✓</div>
-                    <div class="feature-text">Single API for all LLM providers (OpenAI, Anthropic, Cohere, etc.)</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">✓</div>
-                    <div class="feature-text">Automatic fallbacks between models and providers</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">✓</div>
-                    <div class="feature-text">Detailed usage tracking and analytics</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">✓</div>
-                    <div class="feature-text">Cost management and budget controls</div>
-                </div>
-            </div>
+            <p>Making LLM requests with OpenAI SDK, Langchain, LlamaIndex, and more.</p>
             
-            <div class="separator"></div>
+            <div class="divider"></div>
             
-            <h2>Need Help?</h2>
-            <p>If you have any questions or need assistance, please contact us at {email_support_contact}.</p>
+            <a href="https://docs.litellm.ai/docs/supported_endpoints" class="link-with-arrow">
+                Supported Endpoints →
+                <span class="arrow"></span>
+            </a>
+            
+            <p>View all supported LLM endpoints on LiteLLM (/chat/completions, /embeddings, /responses etc.)</p>
+            
+            <div class="divider"></div>
+            
+            <a href="https://docs.litellm.ai/docs/pass_through/vertex_ai" class="link-with-arrow">
+                Passthrough Endpoints →
+                <span class="arrow"></span>
+            </a>
+            
+            <p>We support calling VertexAI, Anthropic, and other providers in their native API format.</p>
+            
+            <div class="divider"></div>
+            
+            <p>Thanks for signing up. We're here to help you and your team. If you have any questions, contact us at {email_support_contact}</p>
+
         </div>
-        <div class="footer">
-            <p>© 2023 LiteLLM. All rights reserved.</p>
-            <div class="social-links">
-                <a href="https://twitter.com/litellm">Twitter</a> • 
-                <a href="https://github.com/BerriAI/litellm">GitHub</a> • 
-                <a href="https://litellm.ai">Website</a>
-            </div>
-        </div>
+        {email_footer}
     </div>
 </body>
 </html>
