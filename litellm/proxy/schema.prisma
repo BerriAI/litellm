@@ -96,6 +96,7 @@ model LiteLLM_TeamTable {
     max_budget Float?
     spend      Float    @default(0.0)
     models     String[]
+    mcp_servers String[] @default([])
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
@@ -126,7 +127,6 @@ model LiteLLM_UserTable {
     spend      Float    @default(0.0)
     user_email    String?
     models     String[]
-    mcp_servers String[] @default([])
     metadata  Json  @default("{}")
     max_parallel_requests Int?
     tpm_limit     BigInt?
