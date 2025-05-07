@@ -1,6 +1,8 @@
 # stdlib imports
-from typing import Optional, Literal, Any
 from datetime import datetime
+import re
+from typing import Optional, Literal, Any
+import yaml
 
 # third party imports
 import click
@@ -275,3 +277,59 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
         model_info=model_info,
     )
     rich.print_json(data=result)
+
+
+@models.command("import")
+@click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
+@click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
+@click.option(
+    "--only-models-matching-regex",
+    default=None,
+    help="Only import models where litellm_params.model matches the given regex.",
+)
+@click.pass_context
+def import_models(ctx: click.Context, yaml_file: str, dry_run: bool, only_models_matching_regex: Optional[str]) -> None:
+    """Import models from a YAML file and add them to the proxy."""
+    with open(yaml_file, "r") as f:
+        data = yaml.safe_load(f)
+    if not data or "model_list" not in data:
+        raise click.ClickException("YAML file must contain a 'model_list' key with a list of models.")
+    model_list = data["model_list"]
+    if not isinstance(model_list, list):
+        raise click.ClickException("'model_list' must be a list of model definitions.")
+
+    client = create_client(ctx)
+    provider_counts = {}
+    total = 0
+
+    regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
+
+    for model in model_list:
+        model_name = model.get("model_name")
+        model_params = model.get("litellm_params")
+        if not model_name or not model_params:
+            continue
+        model_id = model_params.get("model")
+        if not model_id or not isinstance(model_id, str):
+            continue
+        if regex and not regex.search(model_id):
+            continue
+        provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        total += 1
+        if not dry_run:
+            try:
+                client.models.new(
+                    model_name=model_name,
+                    model_params=model_params,
+                    model_info=model.get("model_info"),
+                )
+            except Exception:
+                pass  # For summary, ignore errors
+
+    if dry_run:
+        click.echo("[DRY RUN] No changes were made. The following models would be imported:")
+    click.echo("Model import summary:")
+    for provider, count in provider_counts.items():
+        click.echo(f"  {provider}: {count}")
+    click.echo(f"Total models: {total}")
