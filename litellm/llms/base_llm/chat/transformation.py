@@ -355,7 +355,7 @@ class BaseConfig(ABC):
     ) -> Any:
         pass
 
-    def get_async_custom_stream_wrapper(
+    async def get_async_custom_stream_wrapper(
         self,
         model: str,
         custom_llm_provider: str,
@@ -366,6 +366,7 @@ class BaseConfig(ABC):
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         raise NotImplementedError
 

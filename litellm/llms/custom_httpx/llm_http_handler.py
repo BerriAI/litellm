@@ -61,6 +61,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
         max_retry_on_unprocessable_entity_error = (
@@ -73,7 +74,9 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -179,6 +182,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
@@ -198,6 +202,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
             logging_obj=logging_obj,
+            signed_json_body=signed_json_body,
         )
         return provider_config.transform_response(
             model=model,
@@ -326,6 +331,7 @@ class BaseLLMHTTPHandler:
                     litellm_params=litellm_params,
                     json_mode=json_mode,
                     optional_params=optional_params,
+                    signed_json_body=signed_json_body,
                 )
 
             else:
@@ -350,6 +356,7 @@ class BaseLLMHTTPHandler:
                         else None
                     ),
                     json_mode=json_mode,
+                    signed_json_body=signed_json_body,
                 )
 
         if stream is True:
@@ -524,6 +531,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
             return provider_config.get_async_custom_stream_wrapper(
@@ -536,6 +544,7 @@ class BaseLLMHTTPHandler:
                 messages=messages,
                 client=client,
                 json_mode=json_mode,
+                signed_json_body=signed_json_body,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
@@ -553,6 +562,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params=optional_params,
             json_mode=json_mode,
+            signed_json_body=signed_json_body,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -578,6 +588,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> Tuple[Any, httpx.Headers]:
         """
         Helper function for making an async call with stream.
@@ -601,6 +612,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,

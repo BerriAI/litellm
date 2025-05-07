@@ -22,9 +22,10 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import encoding
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -161,7 +162,57 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
-            custom_llm_provider="sagemaker",
+            custom_llm_provider="sagemaker_chat",
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
+    @track_llm_api_timing()
+    async def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        if client is None or isinstance(client, HTTPHandler):
+            client = get_async_httpx_client(
+                llm_provider=LlmProviders.SAGEMAKER_CHAT, params={}
+            )
+
+        try:
+            response = await client.post(
+                api_base,
+                headers=headers,
+                data=signed_json_body if signed_json_body is not None else data,
+                stream=True,
+                logging_obj=logging_obj,
+            )
+        except httpx.HTTPStatusError as e:
+            raise SagemakerError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+
+        if response.status_code != 200:
+            raise SagemakerError(
+                status_code=response.status_code, message=response.text
+            )
+
+        custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
+        completion_stream = custom_stream_decoder.aiter_bytes(
+            response.aiter_bytes(chunk_size=1024)
+        )
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="sagemaker_chat",
             logging_obj=logging_obj,
         )
         return streaming_response

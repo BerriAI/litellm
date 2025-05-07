@@ -411,7 +411,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return BedrockError(status_code=status_code, message=error_message)
 
     @track_llm_api_timing()
-    def get_async_custom_stream_wrapper(
+    async def get_async_custom_stream_wrapper(
         self,
         model: str,
         custom_llm_provider: str,
@@ -422,6 +422,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
