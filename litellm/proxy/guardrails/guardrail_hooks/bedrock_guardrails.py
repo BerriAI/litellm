@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -271,6 +272,65 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # if no intervention, return False
         return False
+
+    @log_guardrail_information
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+        ],
+    ) -> Union[Exception, str, dict, None]:
+        verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            verbose_proxy_logger.warning(
+                "Bedrock AI: not running guardrail. No messages in data"
+            )
+            return
+
+        #########################################################
+        ########## 1. Make the Bedrock API request ##########
+        #########################################################
+        bedrock_guardrail_response = await self.make_bedrock_api_request(kwargs=data)
+        #########################################################
+
+        #########################################################
+        ########## 2. Update the messages with the guardrail response ##########
+        #########################################################
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
+        )
+
+        #########################################################
+        ########## 3. Add the guardrail to the applied guardrails header ##########
+        #########################################################
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return data
 
     @log_guardrail_information
     async def async_moderation_hook(
