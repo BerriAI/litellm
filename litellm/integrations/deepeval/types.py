@@ -22,7 +22,7 @@ class TraceSpanApiStatus(Enum):
 
 class BaseApiSpan(BaseModel):
     uuid: str
-    name: str = None
+    name: Optional[str] = None
     status: TraceSpanApiStatus
     type: SpanApiType
     trace_uuid: str = Field(alias="traceUuid")
