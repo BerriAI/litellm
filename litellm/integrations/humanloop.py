@@ -153,9 +153,9 @@ class HumanloopLogger(CustomLogger):
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[
         str,
@@ -175,6 +175,8 @@ class HumanloopLogger(CustomLogger):
                 messages=messages,
                 non_default_params=non_default_params,
                 prompt_id=prompt_id,
+                prompt_version=prompt_version,
+                prompt_label=prompt_label,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=dynamic_callback_params,
             )

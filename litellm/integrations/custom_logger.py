@@ -83,9 +83,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
@@ -104,9 +104,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """

@@ -510,9 +510,9 @@ class Logging(LiteLLMLoggingBaseClass):
         messages: List[AllMessageValues],
         non_default_params: Dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
@@ -546,9 +546,9 @@ class Logging(LiteLLMLoggingBaseClass):
         messages: List[AllMessageValues],
         non_default_params: Dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
