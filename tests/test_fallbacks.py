@@ -3,7 +3,6 @@
 import pytest
 import asyncio
 import aiohttp
-from large_text import text
 import time
 from typing import Optional
 
@@ -77,14 +76,14 @@ async def chat_completion(
 
 
 @pytest.mark.asyncio
-async def test_chat_completion():
+async def test_chat_completion(large_text):
     """
     make chat completion call with prompt > context window. expect it to work with fallback
     """
     async with aiohttp.ClientSession() as session:
         model = "gpt-3.5-turbo"
         messages = [
-            {"role": "system", "content": text},
+            {"role": "system", "content": large_text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
         await chat_completion(
@@ -133,14 +132,14 @@ async def test_chat_completion_client_fallbacks(has_access):
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_retries():
+async def test_chat_completion_with_retries(large_text):
     """
     make chat completion call with prompt > context window. expect it to work with fallback
     """
     async with aiohttp.ClientSession() as session:
         model = "fake-openai-endpoint-4"
         messages = [
-            {"role": "system", "content": text},
+            {"role": "system", "content": large_text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
         response, headers = await chat_completion(
@@ -157,14 +156,14 @@ async def test_chat_completion_with_retries():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_fallbacks():
+async def test_chat_completion_with_fallbacks(large_text):
     """
     make chat completion call with prompt > context window. expect it to work with fallback
     """
     async with aiohttp.ClientSession() as session:
         model = "badly-configured-openai-endpoint"
         messages = [
-            {"role": "system", "content": text},
+            {"role": "system", "content": large_text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
         response, headers = await chat_completion(
@@ -180,14 +179,14 @@ async def test_chat_completion_with_fallbacks():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_timeout():
+async def test_chat_completion_with_timeout(large_text):
     """
     make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
     """
     async with aiohttp.ClientSession() as session:
         model = "fake-openai-endpoint-5"
         messages = [
-            {"role": "system", "content": text},
+            {"role": "system", "content": large_text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
         start_time = time.time()
@@ -208,14 +207,14 @@ async def test_chat_completion_with_timeout():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_timeout_from_request():
+async def test_chat_completion_with_timeout_from_request(large_text):
     """
     make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
     """
     async with aiohttp.ClientSession() as session:
         model = "fake-openai-endpoint-5"
         messages = [
-            {"role": "system", "content": text},
+            {"role": "system", "content": large_text},
             {"role": "user", "content": "Who was Alexander?"},
         ]
         extra_headers = {
