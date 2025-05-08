@@ -11,7 +11,11 @@ from litellm import Router, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
@@ -36,29 +40,7 @@ else:
     PrismaClient = Any
 
 
-class BaseFileEndpoints(ABC):
-    @abstractmethod
-    async def afile_retrieve(
-        self,
-        file_id: str,
-        litellm_parent_otel_span: Optional[Span],
-    ) -> OpenAIFileObject:
-        pass
-
-    @abstractmethod
-    async def afile_list(
-        self, custom_llm_provider: str, **data: dict
-    ) -> List[OpenAIFileObject]:
-        pass
-
-    @abstractmethod
-    async def afile_delete(
-        self, custom_llm_provider: str, file_id: str, **data: dict
-    ) -> OpenAIFileObject:
-        pass
-
-
-class _PROXY_LiteLLMManagedFiles(CustomLogger):
+class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(
         self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient
@@ -194,30 +176,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
     @staticmethod
     def _convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
-        is_base64_unified_file_id = (
-            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(b64_uid)
-        )
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(b64_uid)
         if is_base64_unified_file_id:
             return is_base64_unified_file_id
         else:
             return b64_uid
 
-    @staticmethod
-    def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
-        # Add padding back if needed
-        padded = b64_uid + "=" * (-len(b64_uid) % 4)
-        # Decode from base64
-        try:
-            decoded = base64.urlsafe_b64decode(padded).decode()
-            if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-                return decoded
-            else:
-                return False
-        except Exception:
-            return False
-
     def convert_b64_uid_to_unified_uid(self, b64_uid: str) -> str:
-        is_base64_unified_file_id = self._is_base64_encoded_unified_file_id(b64_uid)
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(b64_uid)
         if is_base64_unified_file_id:
             return is_base64_unified_file_id
         else:
@@ -247,7 +213,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger):
 
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
-            is_base64_unified_file_id = self._is_base64_encoded_unified_file_id(file_id)
+            is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
 
             if is_base64_unified_file_id:
                 litellm_managed_file_ids.append(file_id)
