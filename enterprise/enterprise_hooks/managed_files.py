@@ -135,12 +135,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "acreate_batch",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
+        print("REACHES async_pre_call_hook, call_type:", call_type)
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
@@ -151,8 +153,40 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
 
                     data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.acreate_batch.value:
+            input_file_id = cast(Optional[str], data.get("input_file_id"))
+            if input_file_id:
+                model_file_id_mapping = await self.get_model_file_id_mapping(
+                    [input_file_id], user_api_key_dict.parent_otel_span
+                )
 
+                data["model_file_id_mapping"] = model_file_id_mapping
         return data
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+    ) -> Optional[dict]:
+        """
+        Allow modifying the request just before it's sent to the deployment.
+        """
+        import traceback
+
+        traceback.print_stack()
+        print("REACHES HERE, call_type:", call_type)
+        if call_type and call_type == CallTypes.acreate_batch:
+            input_file_id = cast(Optional[str], kwargs.get("input_file_id"))
+            model_file_id_mapping = cast(
+                Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping")
+            )
+            model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+            mapped_file_id: Optional[str] = None
+            if input_file_id and model_file_id_mapping and model_id:
+                mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(
+                    model_id, None
+                )
+            if mapped_file_id:
+                kwargs["input_file_id"] = mapped_file_id
+        return kwargs
 
     def get_file_ids_from_messages(self, messages: List[AllMessageValues]) -> List[str]:
         """
@@ -251,6 +285,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             create_file_request=create_file_request,
             internal_usage_cache=self.internal_usage_cache,
             litellm_parent_otel_span=litellm_parent_otel_span,
+            target_model_names_list=target_model_names_list,
         )
 
         ## STORE MODEL MAPPINGS IN DB
@@ -279,6 +314,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         create_file_request: CreateFileRequest,
         internal_usage_cache: InternalUsageCache,
         litellm_parent_otel_span: Span,
+        target_model_names_list: List[str],
     ) -> OpenAIFileObject:
         ## GET THE FILE TYPE FROM THE CREATE FILE REQUEST
         file_data = extract_file_data(create_file_request["file"])
@@ -286,7 +322,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_type = file_data["content_type"]
 
         unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-            file_type, str(uuid.uuid4())
+            file_type, str(uuid.uuid4()), ",".join(target_model_names_list)
         )
 
         # Convert to URL-safe base64 and strip padding
