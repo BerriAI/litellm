@@ -8,9 +8,9 @@ export class LoginPage {
 
   //Initialize locators in constructor
   constructor(private readonly page: Page) {
-    this.usernameInput = this.page.getByPlaceholder("Enter your username");
-    this.passwordInput = this.page.getByPlaceholder("Enter your password");
-    this.loginSubmit = this.page.getByRole("button", { name: "Login" });
+    this.usernameInput = this.page.locator('input[name="username"]');
+    this.passwordInput = this.page.locator('input[name="password"]');
+    this.loginSubmit = this.page.locator('input[type="submit"]');
   }
 
   async goto() {

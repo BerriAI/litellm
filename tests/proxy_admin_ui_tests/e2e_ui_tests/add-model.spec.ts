@@ -76,8 +76,8 @@ providersAndModels["OpenAI"].forEach((model: string) => {
 
       // console.log("Clean Up - Delete Model Created");
       const modelID = await page
-        .locator("tr.tremor-TableRow-row.h-8")
-        .first()
+        .locator("tr.tremor-TableRow-row")
+        .nth(2)
         .locator("td")
         .first()
         .locator("div")
