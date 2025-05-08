@@ -154,7 +154,7 @@ AllAnthropicMessageValues = Union[
 
 
 class AnthropicMessageRequestBase(TypedDict, total=False):
-    messages: Required[List[Union[AllAnthropicMessageValues, Dict]]]
+    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
     max_tokens: Required[int]
     metadata: Optional[Union[AnthropicMetadata, Dict]]
     stop_sequences: Optional[List[str]]

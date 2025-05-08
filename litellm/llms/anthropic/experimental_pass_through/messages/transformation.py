@@ -70,7 +70,30 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         This takes in a request in the Anthropic /v1/messages API spec -> transforms it to /v1/messages API spec (i.e) no transformation is needed
         """
+        ####### get required params for all anthropic messages requests ######
+        messages = anthropic_messages_optional_request_params.pop("messages", [])
+        max_tokens = anthropic_messages_optional_request_params.pop("max_tokens", None)
+        model = anthropic_messages_optional_request_params.pop("model", None)
+        if model is None:
+            raise AnthropicError(
+                message="model is required for Anthropic /v1/messages API",
+                status_code=400,
+            )
+        if max_tokens is None:
+            raise AnthropicError(
+                message="max_tokens is required for Anthropic /v1/messages API",
+                status_code=400,
+            )
+        if messages is None:
+            raise AnthropicError(
+                message="messages is required for Anthropic /v1/messages API",
+                status_code=400,
+            )
+
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
+            messages=messages,
+            max_tokens=max_tokens,
+            model=model,
             **anthropic_messages_optional_request_params,
         )
         return dict(anthropic_messages_request)
