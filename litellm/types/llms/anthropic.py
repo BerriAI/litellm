@@ -153,9 +153,8 @@ AllAnthropicMessageValues = Union[
 ]
 
 
-class AnthropicMessageRequestBase(TypedDict, total=False):
-    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
-    max_tokens: Required[int]
+class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
+    max_tokens: Optional[int]
     metadata: Optional[Union[AnthropicMetadata, Dict]]
     stop_sequences: Optional[List[str]]
     stream: Optional[bool]
@@ -168,8 +167,9 @@ class AnthropicMessageRequestBase(TypedDict, total=False):
     top_p: Optional[float]
 
 
-class AnthropicMessagesRequest(AnthropicMessageRequestBase, total=False):
+class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
     model: Required[str]
+    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
     # litellm param - used for tracking litellm proxy metadata in the request
     litellm_metadata: dict
 
