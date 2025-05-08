@@ -46,6 +46,12 @@ def get_supported_openai_params(  # noqa: PLR0915
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "meta_llama":
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders.LLAMA
+        )
+        if provider_config:
+            return provider_config.get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama_chat":
@@ -222,7 +228,9 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "voyage":
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "infinity":
-        return litellm.InfinityEmbeddingConfig().get_supported_openai_params(model=model)
+        return litellm.InfinityEmbeddingConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "triton":
         if request_type == "embeddings":
             return litellm.TritonEmbeddingConfig().get_supported_openai_params(

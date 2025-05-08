@@ -43,6 +43,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -59,6 +60,7 @@ from litellm.types.llms.openai import (
     FineTuningJob,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
+    OpenAIModerationResponse,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -66,6 +68,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
@@ -86,6 +89,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardLoggingPromptManagementMetadata,
+    StandardLoggingVectorStoreRequest,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -130,13 +134,16 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
-    from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
+    from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+    from enterprise.enterprise_callbacks.send_emails.resend_email import (
+        ResendEmailLogger,
     )
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
+    GenericAPILogger = CustomLogger  # type: ignore
+    ResendEmailLogger = CustomLogger  # type: ignore
 
 _in_memory_loggers: List[Any] = []
 
@@ -161,7 +168,6 @@ dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
-genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
@@ -458,16 +464,44 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         non_default_params: Dict,
         prompt_id: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> bool:
         """
         Return True if prompt management hooks should be run
         """
         if prompt_id:
             return True
-        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
-            non_default_params
+
+        if self._should_run_prompt_management_hooks_without_prompt_id(
+            non_default_params=non_default_params,
+            tools=tools,
         ):
             return True
+
+        return False
+
+    def _should_run_prompt_management_hooks_without_prompt_id(
+        self,
+        non_default_params: Dict,
+        tools: Optional[List[Dict]] = None,
+    ) -> bool:
+        """
+        Certain prompt management hooks don't need a `prompt_id` to be passed in, they are triggered by dynamic params
+
+        eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
+        """
+        for param in non_default_params:
+            if param in DynamicPromptManagementParamLiteral.list_all_params():
+                return True
+
+        #############################################################################
+        # Check if Vector Store / Knowledge Base hooks should be applied to the prompt
+        #############################################################################
+        if litellm.vector_store_registry is not None:
+            if litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params, tools=tools
+            ):
+                return True
         return False
 
     def get_chat_completion_prompt(
@@ -498,6 +532,41 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
+            )
+        self.messages = messages
+        return model, messages, non_default_params
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: Dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
+        tools: Optional[List[Dict]] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(
+                model=model, non_default_params=non_default_params
+            )
+        )
+
+        if custom_logger:
+            (
+                model,
+                messages,
+                non_default_params,
+            ) = await custom_logger.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params or {},
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
+                litellm_logging_obj=self,
+                tools=tools,
             )
         self.messages = messages
         return model, messages, non_default_params
@@ -545,6 +614,26 @@ class Logging(LiteLLMLoggingBaseClass):
                 anthropic_cache_control_logger.__class__.__name__
             )
             return anthropic_cache_control_logger
+
+        #########################################################
+        # Vector Store / Knowledge Base hooks
+        #########################################################
+        if litellm.vector_store_registry is not None:
+            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params
+            ):
+                vector_store_custom_logger = (
+                    litellm.ProviderConfigManager.get_provider_vector_store_config(
+                        provider=cast(
+                            litellm.LlmProviders,
+                            vector_store_to_run.get("custom_llm_provider"),
+                        ),
+                    )
+                )
+                self.model_call_details["prompt_integration"] = (
+                    vector_store_custom_logger.__class__.__name__
+                )
+                return vector_store_custom_logger
 
         return None
 
@@ -943,6 +1032,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
             OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
+            OpenAIModerationResponse,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1137,6 +1227,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(logging_result, ResponsesAPIResponse)
                     or isinstance(logging_result, OpenAIFileObject)
                     or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
+                    or isinstance(logging_result, OpenAIModerationResponse)
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(logging_result, "_hidden_params", {})
@@ -1475,35 +1566,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                         service_name="langfuse",
                                         trace_id=_trace_id,
                                     )
-                    if callback == "generic":
-                        global genericAPILogger
-                        verbose_logger.debug("reaches langfuse for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
-                        if genericAPILogger is None:
-                            genericAPILogger = GenericAPILogger()  # type: ignore
-                        genericAPILogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
                     if callback == "greenscale" and greenscaleLogger is not None:
                         kwargs = {}
                         for k, v in self.model_call_details.items():
@@ -2961,6 +3023,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
+        elif logging_integration == "bedrock_vector_store":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockVectorStore):
+                    return callback
+            bedrock_vector_store = BedrockVectorStore()
+            _in_memory_loggers.append(bedrock_vector_store)
+            return bedrock_vector_store  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -2968,6 +3037,20 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _gcs_pubsub_logger = GcsPubSubLogger()
             _in_memory_loggers.append(_gcs_pubsub_logger)
             return _gcs_pubsub_logger  # type: ignore
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
+            generic_api_logger = GenericAPILogger()
+            _in_memory_loggers.append(generic_api_logger)
+            return generic_api_logger  # type: ignore
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
+                    return callback
+            resend_email_logger = ResendEmailLogger()
+            _in_memory_loggers.append(resend_email_logger)
+            return resend_email_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -3103,12 +3186,24 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
                     return callback
+        elif logging_integration == "bedrock_vector_store":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockVectorStore):
+                    return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
                     return callback
-
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
+                    return callback
         return None
+
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error getting custom logger: {e}"
@@ -3213,6 +3308,9 @@ class StandardLoggingPayloadSetup:
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
         mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+        vector_store_request_metadata: Optional[
+            List[StandardLoggingVectorStoreRequest]
+        ] = None,
         usage_object: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
@@ -3261,6 +3359,7 @@ class StandardLoggingPayloadSetup:
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
+            vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
         )
         if isinstance(metadata, dict):
@@ -3621,6 +3720,9 @@ def get_standard_logging_object_payload(
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
             mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
+            vector_store_request_metadata=kwargs.get(
+                "vector_store_request_metadata", None
+            ),
             usage_object=usage.model_dump(),
         )
 
@@ -3765,6 +3867,7 @@ def get_standard_logging_metadata(
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,
+        vector_store_request_metadata=None,
         usage_object=None,
     )
     if isinstance(metadata, dict):

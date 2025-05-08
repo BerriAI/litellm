@@ -2,6 +2,7 @@ version: 2.1
 orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0  # Add this line to declare the node orb
+  win: circleci/windows@5.0  # Add Windows orb
 
 commands:
   setup_google_dns:
@@ -17,6 +18,31 @@ commands:
             echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
 jobs:
+  # Add Windows testing job
+  using_litellm_on_windows:
+    executor:
+      name: win/default
+      shell: powershell.exe
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Python
+          command: |
+            choco install python --version=3.11.0 -y
+            refreshenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install pytest
+            pip install .
+      - run:
+          name: Run Windows-specific test
+          command: |
+            python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
+    
   local_testing:
     docker:
       - image: cimg/python:3.11
@@ -562,6 +588,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "pytest-postgresql==7.0.1"
+            pip install "fakeredis==2.28.1"
       - save_cache:
           paths:
             - ./venv
@@ -832,13 +859,16 @@ jobs:
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
+            pip install "requests-mock>=1.12.1"
+            pip install "responses==0.25.7"
+
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -2676,6 +2706,12 @@ workflows:
   version: 2
   build_and_test:
     jobs:
+      - using_litellm_on_windows:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing:
           filters:
             branches:
@@ -2933,4 +2969,4 @@ workflows:
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
             - publish_proxy_extras
-      
+
