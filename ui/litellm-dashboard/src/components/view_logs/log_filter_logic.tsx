@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { LogEntry } from "./columns"; 
-import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall } from "../networking"; 
+import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall, modelAvailableCall } from "../networking"; 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Setter } from "@/types";
@@ -37,7 +37,9 @@ export function useLogFilterLogic({
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
   initialPage = 1,
-  initialFilters = {}
+  initialFilters = {},
+  userID,  
+  userRole 
 }: {
   accessToken: string | null;
   startTime: string;
@@ -45,6 +47,8 @@ export function useLogFilterLogic({
   pageSize?: number;
   initialPage?: number;
   initialFilters?: Partial<LogFilterState>;
+  userID: string | null; 
+  userRole: string | null; 
 }) {
   const defaultFilters: LogFilterState = {
     'Team ID': '',
@@ -109,6 +113,24 @@ export function useLogFilterLogic({
     },
     enabled: !!accessToken,
   });
+
+  const { data: allModels = [] } = useQuery<string[], Error>({
+    queryKey: ['allModels', accessToken, userID, userRole],
+    queryFn: async () => {
+      if (!accessToken || !userID || !userRole) return [];
+
+      const response = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole,
+        false, // return_wildcard_routes
+        null // teamID
+      );
+
+      return response.data.map((model: { id: string }) => model.id);
+    },
+    enabled: !!accessToken && !!userID && !!userRole,
+  });
   
   // Debounced API call
   const debouncedSearch = useCallback(
@@ -134,7 +156,8 @@ export function useLogFilterLogic({
         const teamIdParam = currentFilters['Team ID'] || undefined;
         const requestIdParam = currentFilters['Request ID'] || undefined;
         const userIdParam = currentFilters['User'] || undefined;
-        // const modelParam = currentFilters['Model'] || undefined; // Prepared if uiSpendLogsCall is updated
+        const statusParam = currentFilters['Status'] || undefined;
+        const modelParam = currentFilters['Model'] || undefined;
 
         const response = await uiSpendLogsCall(
           accessToken,
@@ -145,9 +168,9 @@ export function useLogFilterLogic({
           formattedEndTime,
           pageToFetch,
           pageSize,
-          userIdParam
-          // If uiSpendLogsCall is updated to accept more params (e.g., model), pass them here:
-          // modelParam, 
+          userIdParam,
+          statusParam, 
+          modelParam, 
         );
 
         if (currentTimestamp === lastSearchTimestamp.current) {
@@ -226,6 +249,13 @@ export function useLogFilterLogic({
     pageSize: paginationDetails.pageSize,
   };
 
+  const handleRefresh = () => {
+    // Reset to first page
+    setCurrentPage(1);
+    // The useEffect in useLogFilterLogic will automatically trigger a refetch
+    // when currentPage changes
+  };
+
   return {
     filters,
     filteredLogs: logEntries,
@@ -233,11 +263,13 @@ export function useLogFilterLogic({
     allTeams: allTeams || [],
     allUsers: allUsers || [],
     allOrganizations: [], // Placeholder for now, can be fetched if needed
+    allModels: allModels || [],
     handleFilterChange,
     handleFilterReset,
     isLoading: isLoadingLogs,
     pagination,
     setCurrentPage,
-    error: logsError
+    error: logsError,
+    handleRefresh
   };
 } 
