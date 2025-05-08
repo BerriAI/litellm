@@ -458,6 +458,12 @@ class ProxyInitializationHelpers:
     help="Use prisma migrate instead of prisma db push for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option(
+    "--skip_server_startup",
+    is_flag=True,
+    default=False,
+    help="Skip starting the server after setup (useful for migrations only)",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -493,6 +499,7 @@ def run_server(  # noqa: PLR0915
     ssl_certfile_path,
     log_config,
     use_prisma_migrate,
+    skip_server_startup,
 ):
     args = locals()
     if local:
@@ -750,6 +757,11 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
+
+        # Skip server startup if requested (after all setup is done)
+        if skip_server_startup:
+            print("LiteLLM: Setup complete. Skipping server startup as requested.")
+            return
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
