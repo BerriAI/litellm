@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+
 def to_zod_compatible_iso(dt: datetime) -> str:
     return (
         dt.astimezone(timezone.utc)

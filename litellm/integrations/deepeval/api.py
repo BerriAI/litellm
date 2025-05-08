@@ -19,6 +19,7 @@ API_BASE_URL = "https://api.confident-ai.com"
 API_BASE_URL_EU = "https://eu.api.confident-ai.com"
 retryable_exceptions = requests.exceptions.SSLError
 
+
 def log_retry_error(retry_state: RetryCallState):
     exception = retry_state.outcome.exception()
     logging.error(
@@ -49,7 +50,6 @@ class Endpoints(Enum):
 
 class Api:
     def __init__(self, api_key: str, base_url=None):
-
         self.api_key = api_key
         self._headers = {
             "Content-Type": "application/json",
@@ -65,9 +65,7 @@ class Api:
         retry=retry_if_exception_type(retryable_exceptions),
         after=log_retry_error,
     )
-    def _http_request(
-        method: str, url: str, headers=None, json=None, params=None
-    ):
+    def _http_request(method: str, url: str, headers=None, json=None, params=None):
         session = requests.Session()
         return session.request(
             method=method,
@@ -140,9 +138,7 @@ class Api:
                     except aiohttp.ContentTypeError:
                         return await res.text()
                 elif res.status == 409 and body:
-                    message = (await res.json()).get(
-                        "message", "Conflict occurred."
-                    )
+                    message = (await res.json()).get("message", "Conflict occurred.")
 
                     user_input = (
                         input(
@@ -165,9 +161,7 @@ class Api:
                 else:
                     try:
                         error_data = await res.json()
-                        error_message = error_data.get(
-                            "error", await res.text()
-                        )
+                        error_message = error_data.get("error", await res.text())
                     except aiohttp.ContentTypeError:
                         error_message = await res.text()
                     raise Exception(error_message)
