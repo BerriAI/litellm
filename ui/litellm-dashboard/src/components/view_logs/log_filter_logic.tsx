@@ -249,6 +249,13 @@ export function useLogFilterLogic({
     pageSize: paginationDetails.pageSize,
   };
 
+  const handleRefresh = () => {
+    // Reset to first page
+    setCurrentPage(1);
+    // The useEffect in useLogFilterLogic will automatically trigger a refetch
+    // when currentPage changes
+  };
+
   return {
     filters,
     filteredLogs: logEntries,
@@ -262,6 +269,7 @@ export function useLogFilterLogic({
     isLoading: isLoadingLogs,
     pagination,
     setCurrentPage,
-    error: logsError
+    error: logsError,
+    handleRefresh
   };
 } 

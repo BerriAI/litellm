@@ -80,6 +80,7 @@ export default function SpendLogsTable({
     isLoading,
     pagination,
     setCurrentPage,
+    handleRefresh,
   } = useLogFilterLogic({
     accessToken,
     startTime,
@@ -172,10 +173,6 @@ export default function SpendLogsTable({
       onSessionClick: (sessionId: string) => {},
     })) || [];
 
-  const handleRefresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['logs', 'table', accessToken, startTime, endTime, filters] });
-  };
-
   const getTimeRangeDisplay = () => {
     if (isCustomDate) {
       return `${moment(startTime).format('MMM D, h:mm A')} - ${moment(endTime).format('MMM D, h:mm A')}`;
@@ -229,10 +226,11 @@ export default function SpendLogsTable({
     {
       name: 'Model',
       label: 'Model',
-      isSearchable: true, 
+      isSearchable: true,
       searchFn: async (searchText: string) => {
-        console.log("allModels", allModels);
-        const filteredModels = allModels.filter(model => 
+        // Get unique models from the current logs
+        const uniqueModels = new Set(filteredLogs.map((log: LogEntry) => log.model));
+        const filteredModels = Array.from(uniqueModels).filter(model => 
           model.toLowerCase().includes(searchText.toLowerCase())
         );
         return filteredModels.map(model => ({
@@ -240,56 +238,7 @@ export default function SpendLogsTable({
           value: model
         }));
       }
-    }
-    // {
-    //   name: 'Key Alias',
-    //   label: 'Key Alias',
-    //   isSearchable: true,
-    //   searchFn: async (searchText: string) => {
-    //     const filteredKeyAliases = allKeyAliases.filter(key => {
-    //       console.log("key", searchText);
-    //       return key.toLowerCase().includes(searchText.toLowerCase())
-    //     });
-
-    //     return filteredKeyAliases.map((key) => {
-    //       return {
-    //         label: key,
-    //         value: key
-    //       }
-    //     });
-    //   }
-    // },
-    // {
-    //   name: 'Key Hash',
-    //   label: 'Key Hash',
-    //   isSearchable: false, 
-    // },
-    // {
-    //   name: 'Request ID',
-    //   label: 'Request ID',
-    //   isSearchable: false,
-    // },
-    // {
-    //   name: 'Model',
-    //   label: 'Model',
-    //   isSearchable: false, 
-    // },
-    // {
-    //     name: 'User',
-    //     label: 'User',
-    //     isSearchable: true,
-    //     searchFn: async (searchText: string) => {
-    //         if (!allUsers || allUsers.length === 0) return [];
-    //         const filtered = allUsers.filter((user: UserInfo) => 
-    //           (user.user_id && user.user_id.toLowerCase().includes(searchText.toLowerCase())) ||
-    //           (user.user_email && user.user_email.toLowerCase().includes(searchText.toLowerCase()))
-    //         );
-    //         return filtered.map((user: UserInfo) => ({
-    //           label: `${user.user_email || user.user_id} (${user.user_id})`,
-    //           value: user.user_id
-    //         }));
-    //     }
-    // },
+    },
   ];
 
   if (selectedSessionId && sessionLogs.data) {
