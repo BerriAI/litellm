@@ -1,3 +1,4 @@
+import os
 import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
@@ -11,6 +12,10 @@ class DeepEvalLogger(CustomLogger):
     """Logs litellm traces to DeepEval's platform."""
 
     def __init__(self, *args, **kwargs):
+        api_key = os.getenv("CONFIDENT_API_KEY")
+        if not api_key:
+            raise ValueError("Please set 'CONFIDENT_API_KEY=<>' in your environment variables.")
+        self.api = Api(api_key=api_key)
         super().__init__(*args, **kwargs)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -51,9 +56,7 @@ class DeepEvalLogger(CustomLogger):
     
     def _sync_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
         body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
-        # Send the async request
-        api = Api()
-        response = api.send_request(
+        response = self.api.send_request(
             method=HttpMethods.POST,
             endpoint=Endpoints.TRACING_ENDPOINT,
             body=body,
@@ -63,10 +66,7 @@ class DeepEvalLogger(CustomLogger):
 
     async def _async_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
         body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
-
-        # Send the async request
-        api = Api()
-        response = await api.a_send_request(
+        response = await self.api.a_send_request(
             method=HttpMethods.POST,
             endpoint=Endpoints.TRACING_ENDPOINT,
             body=body,

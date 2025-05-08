@@ -1,5 +1,6 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
+import os
 from typing import Optional
 import aiohttp
 import requests
@@ -12,30 +13,11 @@ from tenacity import (
     RetryCallState,
 )
 
-from deepeval.key_handler import KEY_FILE_HANDLER, KeyValues
-
 DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"
 DEEPEVAL_BASE_URL_EU = "https://eu.deepeval.confident-ai.com"
 API_BASE_URL = "https://api.confident-ai.com"
 API_BASE_URL_EU = "https://eu.api.confident-ai.com"
 retryable_exceptions = requests.exceptions.SSLError
-
-
-def get_base_api_url():
-    region = KEY_FILE_HANDLER.fetch_data(KeyValues.CONFIDENT_REGION)
-    if region == "EU":
-        return API_BASE_URL_EU
-    else:
-        return API_BASE_URL
-
-
-def get_deepeval_base_url():
-    region = KEY_FILE_HANDLER.fetch_data(KeyValues.CONFIDENT_REGION)
-    if region == "EU":
-        return DEEPEVAL_BASE_URL_EU
-    else:
-        return DEEPEVAL_BASE_URL
-
 
 def log_retry_error(retry_state: RetryCallState):
     exception = retry_state.outcome.exception()
@@ -66,13 +48,7 @@ class Endpoints(Enum):
 
 
 class Api:
-    def __init__(self, api_key: Optional[str] = None, base_url=None):
-        if api_key is None:
-            # get API key if none is supplied after you log in
-            api_key = KEY_FILE_HANDLER.fetch_data(KeyValues.API_KEY)
-
-        if not api_key:
-            raise ValueError("Please provide a valid Confident AI API Key.")
+    def __init__(self, api_key: str, base_url=None):
 
         self.api_key = api_key
         self._headers = {
@@ -80,7 +56,8 @@ class Api:
             # "User-Agent": "Python/Requests",
             "CONFIDENT_API_KEY": api_key,
         }
-        self.base_api_url = base_url or get_base_api_url()
+        # using the global non-eu variable for base url
+        self.base_api_url = base_url or API_BASE_URL
 
     @staticmethod
     @retry(
