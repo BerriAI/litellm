@@ -1676,7 +1676,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         }
     """
     from litellm.proxy.proxy_server import prisma_client
-    import json
 
     if prisma_client is None:
         raise ProxyException(
