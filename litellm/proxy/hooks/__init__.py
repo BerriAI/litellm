@@ -13,21 +13,6 @@ try:
 except ImportError:
     ENTERPRISE_PROXY_HOOKS = {}
 
-# try:
-#         from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
-#             _PROXY_MaxParallelRequestsHandler as _PROXY_MaxParallelRequestsHandlerV2,
-#         )
-
-#         max_parallel_request_handler: Type[
-#             Union[
-#                 _PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandlerV2
-#             ]
-#         ] = _PROXY_MaxParallelRequestsHandlerV2
-#     else:
-#         max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
-# except ImportError:
-#     max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
-
 # List of all available hooks that can be enabled
 PROXY_HOOKS = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
