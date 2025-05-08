@@ -19,11 +19,11 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
 
   // console.log("1. Navigating to 'Login' page and logging in");
   await loginPage.goto();
-  // await page.screenshot({path: `./test-results/4644_test_adding_a_model/openai/${model}/00_go-to-login-page.png`,});
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/00_go-to-login-page.png`,});
 
   await loginPage.login(username, password);
   await expect(page.getByRole("button", { name: "User" })).toBeVisible();
-  // await page.screenshot({path: `./test-results/4644_test_adding_a_model/openai/${model}/01_dashboard.png`,});
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/01_dashboard.png`,});
 
   // console.log("2. Clicking the '+ Create New Key' button");
   await virtualKeysPage.getCreateNewKeyButton().click();
@@ -33,16 +33,19 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
 
   // console.log("4. Entering a key name in the 'Key Name' input.");
   await virtualKeysPage.getKeyNameInput().fill(keyName);
-  // await page.screenshot({path: `./test-results/4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models/04_enter-key-name.png`,});
+  // await page.waitForTimeout(500);
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/04_enter-key-name.png`,});
 
   // console.log("5. Selecting All Team Models");
   await virtualKeysPage.getModelInput().click();
   await page.getByText("All Team Models").click();
-  // await page.screenshot({path: `./test-results/4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models/05_select-all-team-models.png`,});
+  // await page.waitForTimeout(500);
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/05_select-all-team-models.png`,});
 
   // console.log("6. Clicking 'Create Key'");
   await virtualKeysPage.getCreateKeyButton().click();
-  // await page.screenshot({path: `./test-results/4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models/06_create-api-key.png`,});
+  // await page.waitForTimeout(500);
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/06_create-api-key.png`,});
 
   // console.log("7. Copying the API key to clipboard");
   /*
@@ -53,15 +56,19 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
   */
 
   // console.log("8. Exiting Modal Window");
+
+  await page.waitForTimeout(500);
   await page
     .getByRole("dialog")
     .filter({ hasText: "Save your KeyPlease save this" })
     .getByLabel("Close", { exact: true })
     .click();
+  // await page.keyboard.press("Escape");
   await expect(
     virtualKeysPage.getVirtualKeysTableCellValue(keyName)
   ).toBeVisible();
-  // await page.screenshot({path: `./test-results/4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models/08_check-api-key-created.png`,});
+  // await page.waitForTimeout(500);
+  // await page.screenshot({path: `./test-results/4644_test_create_api_key/08_check-api-key-created.png`,});
 
   apiKeyID = await page
     .locator("tr.tremor-TableRow-row.h-8")
@@ -72,5 +79,7 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
   await page.getByRole("button", { name: "Delete", exact: true }).click();
 
   // console.log("9. Logging out");
-  await page.getByRole("link", { name: "LiteLLM Brand" }).click();
+  // await page.getByRole("button", { name: "User" }).click();
+  // await page.getByText("Logout").click();
+  // await expect(page.getByRole("heading", { name: "Login" })).toBeVisible();
 });

@@ -6,10 +6,10 @@
     "omni-moderation-latest-intents",
     "omni-moderation-2024-09-26",
     "gpt-4",
-    "gpt-4o",
-    "gpt-4o-search-preview-2025-03-11",
-    "gpt-4o-search-preview",
-    "gpt-4.5-preview"
+    "gpt-4.1",
+    "gpt-4.1-2025-04-14",
+    "gpt-4.1-mini",
+    "gpt-4.1-mini-2025-04-14"
   ],
   "Anthropic": [
     "Custom Model Name (Enter below)",
