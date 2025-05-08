@@ -89,7 +89,7 @@ model LiteLLM_TeamTable {
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?
-    permission_id String?
+    object_permission_id String?
     admins String[]
     members String[]
     members_with_roles Json @default("{}")
@@ -111,7 +111,7 @@ model LiteLLM_TeamTable {
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
-    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [permission_id], references: [permission_id])
+    object_permission_id LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 // Track spend, rate limit, budget Users
@@ -149,7 +149,7 @@ model LiteLLM_UserTable {
 }
 
 model LiteLLM_ObjectPermissionTable {
-  permission_id  String         @id @default(uuid())
+  object_permission_id  String         @id @default(uuid())
   mcp_servers    String[]       @default([])
   
   LiteLLM_TeamTable         LiteLLM_TeamTable[]
@@ -199,14 +199,14 @@ model LiteLLM_VerificationToken {
     model_max_budget Json @default("{}")
     budget_id String?
     organization_id String?
-    permission_id String?
+    object_permission_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
-    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [permission_id], references: [permission_id])
+    object_permission_id LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 model LiteLLM_EndUserTable {
