@@ -2307,7 +2307,9 @@ class ExtractedFileData(TypedDict):
 
 class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
-    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+    LITELLM_MANAGED_FILE_COMPLETE_STR = (
+        "litellm_proxy:{};unified_id,{};target_model_names,{}"
+    )
 
     LITELLM_MANAGED_RESPONSE_COMPLETE_STR = (
         "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
