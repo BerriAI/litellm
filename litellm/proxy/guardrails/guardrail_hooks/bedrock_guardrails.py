@@ -39,6 +39,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailAssessment,
+    BedrockGuardrailOutput,
     BedrockGuardrailResponse,
     BedrockRequest,
     BedrockTextContent,
@@ -298,14 +299,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+            return data
 
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
             )
-            return
+            return data
 
         #########################################################
         ########## 1. Make the Bedrock API request ##########
@@ -406,7 +407,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ):
             return
 
-        new_messages: Optional[List[dict]] = data.get("messages")
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
@@ -442,8 +443,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ##############################################################################
     ##############################################################################
     def _update_messages_with_updated_bedrock_guardrail_response(
-        self, messages: List[dict], bedrock_guardrail_response: BedrockGuardrailResponse
-    ) -> List[dict]:
+        self,
+        messages: List[AllMessageValues],
+        bedrock_guardrail_response: BedrockGuardrailResponse,
+    ) -> List[AllMessageValues]:
         """
         Use the output from the bedrock guardrail to mask sensitive content in messages.
 
@@ -482,20 +485,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             List of masked text strings
         """
-        masked_outputs = bedrock_guardrail_response.get("outputs", [])
+        masked_output_text: List[str] = []
+        masked_outputs: Optional[List[BedrockGuardrailOutput]] = (
+            bedrock_guardrail_response.get("outputs", []) or []
+        )
         if not masked_outputs:
             verbose_proxy_logger.debug("No masked outputs found in guardrail response")
             return []
 
-        return [
-            output.get("text")
-            for output in masked_outputs
-            if output.get("text") is not None
-        ]
+        for output in masked_outputs:
+            text_content: Optional[str] = output.get("text")
+            if text_content is not None:
+                masked_output_text.append(text_content)
+
+        return masked_output_text
 
     def _apply_masking_to_messages(
-        self, messages: List[dict], masked_texts: List[str]
-    ) -> List[dict]:
+        self, messages: List[AllMessageValues], masked_texts: List[str]
+    ) -> List[AllMessageValues]:
         """
         Apply masked texts to message content using index tracking.
 
@@ -549,7 +556,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content = []
+        new_content: List[Union[dict, str]] = []
         for item in content_list:
             if isinstance(item, dict) and "text" in item:
                 new_item = item.copy()
@@ -558,11 +565,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     masking_index += 1
                 new_content.append(new_item)
             elif isinstance(item, str):
-                new_item = item
                 if masking_index < len(masked_texts):
-                    new_item = masked_texts[masking_index]
+                    item = masked_texts[masking_index]
                     masking_index += 1
-                new_content.append(new_item)
+                if item is not None:
+                    new_content.append(item)
 
         return new_content, masking_index
 

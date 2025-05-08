@@ -117,4 +117,5 @@ class BedrockGuardrailResponse(TypedDict, total=False):
     usage: Optional[BedrockGuardrailUsage]
     action: Optional[str]
     output: Optional[List[BedrockGuardrailOutput]]
+    outputs: Optional[List[BedrockGuardrailOutput]]
     assessments: Optional[List[BedrockGuardrailAssessment]]
