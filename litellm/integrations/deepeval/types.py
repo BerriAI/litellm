@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field
 
+
 class SpanApiType(Enum):
     BASE = "base"
     AGENT = "agent"
@@ -17,6 +18,7 @@ span_api_type_literals = Literal["base", "agent", "llm", "retriever", "tool"]
 class TraceSpanApiStatus(Enum):
     SUCCESS = "SUCCESS"
     ERRORED = "ERRORED"
+
 
 class BaseApiSpan(BaseModel):
     uuid: str
@@ -35,12 +37,8 @@ class BaseApiSpan(BaseModel):
     model: Optional[str] = None
     input_token_count: Optional[int] = Field(None, alias="inputTokenCount")
     output_token_count: Optional[int] = Field(None, alias="outputTokenCount")
-    cost_per_input_token: Optional[float] = Field(
-        None, alias="costPerInputToken"
-    )
-    cost_per_output_token: Optional[float] = Field(
-        None, alias="costPerOutputToken"
-    )
+    cost_per_input_token: Optional[float] = Field(None, alias="costPerInputToken")
+    cost_per_output_token: Optional[float] = Field(None, alias="costPerOutputToken")
 
     class Config:
         use_enum_values = True
