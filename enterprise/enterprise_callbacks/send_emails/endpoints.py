@@ -55,45 +55,78 @@ class DefaultEmailSettings(BaseModel):
 
 
 async def _get_email_settings(prisma_client) -> Dict[str, bool]:
-    """Helper function to get email settings from db"""
+    """Helper function to get email settings from general_settings in db"""
     try:
-        email_settings = await prisma_client.db.litellm_config.find_unique(
-            where={"param_name": "email_event_settings"}
+        # Get general settings from db
+        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "general_settings"}
         )
-        if email_settings is None:
-            # Return default settings if none exist
-            return DefaultEmailSettings.get_defaults()
 
-        # Convert from JSON if needed
-        if isinstance(email_settings.param_value, str):
-            settings_dict = json.loads(email_settings.param_value)
-        else:
-            settings_dict = email_settings.param_value or {}
+        # Initialize with default email settings
+        settings_dict = DefaultEmailSettings.get_defaults()
 
-        # Apply defaults for any missing settings
-        defaults = DefaultEmailSettings.get_defaults()
-        for event_name, default_value in defaults.items():
-            if event_name not in settings_dict:
-                settings_dict[event_name] = default_value
+        if (
+            general_settings_entry is not None
+            and general_settings_entry.param_value is not None
+        ):
+            # Get general settings value
+            if isinstance(general_settings_entry.param_value, str):
+                general_settings = json.loads(general_settings_entry.param_value)
+            else:
+                general_settings = general_settings_entry.param_value
+
+            # Extract email_settings from general settings if it exists
+            if general_settings and "email_settings" in general_settings:
+                email_settings = general_settings["email_settings"]
+                # Update settings_dict with values from general_settings
+                for event_name, enabled in email_settings.items():
+                    settings_dict[event_name] = enabled
 
         return settings_dict
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting email settings: {str(e)}")
+        verbose_proxy_logger.error(
+            f"Error getting email settings from general_settings: {str(e)}"
+        )
         # Return default settings in case of error
         return DefaultEmailSettings.get_defaults()
 
 
 async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
-    """Helper function to save email settings to db"""
+    """Helper function to save email settings to general_settings in db"""
     try:
-        verbose_proxy_logger.debug(f"Saving email settings: {settings}")
-        json_settings = json.dumps(settings, default=str)
+        verbose_proxy_logger.debug(
+            f"Saving email settings to general_settings: {settings}"
+        )
 
+        # Get current general settings
+        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "general_settings"}
+        )
+
+        # Initialize general settings dict
+        if (
+            general_settings_entry is not None
+            and general_settings_entry.param_value is not None
+        ):
+            if isinstance(general_settings_entry.param_value, str):
+                general_settings = json.loads(general_settings_entry.param_value)
+            else:
+                general_settings = dict(general_settings_entry.param_value)
+        else:
+            general_settings = {}
+
+        # Update email_settings in general_settings
+        general_settings["email_settings"] = settings
+
+        # Convert to JSON for storage
+        json_settings = json.dumps(general_settings, default=str)
+
+        # Save updated general settings
         await prisma_client.db.litellm_config.upsert(
-            where={"param_name": "email_event_settings"},
+            where={"param_name": "general_settings"},
             data={
                 "create": {
-                    "param_name": "email_event_settings",
+                    "param_name": "general_settings",
                     "param_value": json_settings,
                 },
                 "update": {"param_value": json_settings},
@@ -101,7 +134,8 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Error saving email settings: {str(e)}"
+            status_code=500,
+            detail=f"Error saving email settings to general_settings: {str(e)}",
         )
 
 
