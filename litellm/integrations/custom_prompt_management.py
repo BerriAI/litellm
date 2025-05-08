@@ -16,6 +16,8 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -34,6 +36,8 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
     def should_run_prompt_management(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         return True

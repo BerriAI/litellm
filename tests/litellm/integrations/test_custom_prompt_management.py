@@ -31,24 +31,33 @@ class TestCustomPromptManagement(CustomPromptManagement):
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         print(
-            "TestCustomPromptManagement: running get_chat_completion_prompt for prompt_id: ",
+            "TestCustomPromptManagement: running get_chat_completion_prompt for prompt_id:",
             prompt_id,
+            f"label={getattr(dynamic_callback_params, 'label', None)} version={getattr(dynamic_callback_params, 'version', None)}",
         )
+
         if prompt_id == "test_prompt_id":
-            messages = [
-                {"role": "user", "content": "This is the prompt for test_prompt_id"},
-            ]
+            msg = "This is the prompt for test_prompt_id"
+            if prompt_version is not None:
+                msg += f" [version={prompt_version}]"
+            if prompt_label is not None:
+                msg += f" [label={prompt_label}]"
+            messages = [{"role": "user", "content": msg}]
             return model, messages, non_default_params
         elif prompt_id == "prompt_with_variables":
             content = "Hello, {name}! You are {age} years old and live in {city}."
             content_with_variables = content.format(**(prompt_variables or {}))
-            messages = [
-                {"role": "user", "content": content_with_variables},
-            ]
+            if prompt_version is not None:
+                content_with_variables += f" [version={prompt_version}]"
+            if prompt_label is not None:
+                content_with_variables += f" [label={prompt_label}]"
+            messages = [{"role": "user", "content": content_with_variables}]
             return model, messages, non_default_params
         else:
             return model, messages, non_default_params
@@ -108,6 +117,66 @@ async def test_custom_prompt_management_with_prompt_id_and_prompt_variables():
         assert (
             request_body["messages"][0]["content"][0]["text"]
             == "Hello, John! You are 30 years old and live in New York."
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_prompt_management_with_prompt_id_and_prompt_variables_and_prompt_version():
+    custom_prompt_management = TestCustomPromptManagement()
+    litellm.callbacks = [custom_prompt_management]
+
+    # Mock AsyncHTTPHandler.post method
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-3-5-sonnet",
+            messages=[],
+            client=client,
+            prompt_id="prompt_with_variables",
+            prompt_version="4",
+            prompt_variables={"name": "John", "age": 30, "city": "New York"},
+        )
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body: ", json.dumps(request_body, indent=4))
+
+        assert request_body["model"] == "claude-3-5-sonnet"
+        # the message gets applied to the prompt from the custom prompt management callback
+        assert (
+            request_body["messages"][0]["content"][0]["text"]
+            == "Hello, John! You are 30 years old and live in New York. [version=4]"
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_prompt_management_with_prompt_id_and_prompt_variables_and_prompt_label():
+    custom_prompt_management = TestCustomPromptManagement()
+    litellm.callbacks = [custom_prompt_management]
+
+    # Mock AsyncHTTPHandler.post method
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-3-5-sonnet",
+            messages=[],
+            client=client,
+            prompt_id="prompt_with_variables",
+            prompt_label="staging",
+            prompt_variables={"name": "John", "age": 30, "city": "New York"},
+        )
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body: ", json.dumps(request_body, indent=4))
+
+        assert request_body["model"] == "claude-3-5-sonnet"
+        # the message gets applied to the prompt from the custom prompt management callback
+        assert (
+            request_body["messages"][0]["content"][0]["text"]
+            == "Hello, John! You are 30 years old and live in New York. [label=staging]"
         )
 
 

@@ -1696,6 +1696,12 @@ class Router:
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
         ].get("prompt_id", None)
+        prompt_label = kwargs.get("prompt_label") or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_label", None)
+        prompt_version = kwargs.get("prompt_version") or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_version", None)
         prompt_variables = kwargs.get(
             "prompt_variables"
         ) or prompt_management_deployment["litellm_params"].get(
@@ -1720,6 +1726,8 @@ class Router:
             messages=messages,
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
             prompt_variables=prompt_variables,
         )
 
@@ -1728,6 +1736,8 @@ class Router:
         kwargs["messages"] = messages
         kwargs["litellm_logging_obj"] = litellm_logging_object
         kwargs["prompt_id"] = prompt_id
+        kwargs["prompt_label"] = prompt_label
+        kwargs["prompt_version"] = prompt_version
         kwargs["prompt_variables"] = prompt_variables
 
         _model_list = self.get_model_list(model_name=model)
