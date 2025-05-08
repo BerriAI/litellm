@@ -7,8 +7,9 @@ import {
   TextInput,
   TableCell,
 } from "@tremor/react";
-import { Typography, message } from "antd";
+import { Typography, message, Divider } from "antd";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
+import { EmailEventSettings } from "./email_events";
 
 const { Title } = Typography;
 
@@ -60,11 +61,12 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
   }
 
   return (
-    <Card>
-      <Title level={4}>Email Settings</Title>
-      <Text>
-      <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: email alerts</a> <br/>        
-      </Text>
+    <>
+      <Card>
+        <Title level={4}>Email Server Settings</Title>
+        <Text>
+        <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: email alerts</a> <br/>        
+        </Text>
 <div className="flex w-full">
   {alerts
     .filter((alert) => alert.name === "email")
@@ -186,13 +188,18 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
             </Button>
             <Button
               onClick={() =>
-                serviceHealthCheck(accessToken, "email")
+                accessToken && serviceHealthCheck(accessToken, "email")
               }
               className="mx-2"
             >
               Test Email Alerts
             </Button>
-    </Card>
+      </Card>
+
+      <div className="mt-6">
+        <EmailEventSettings accessToken={accessToken} />
+      </div>
+    </>
   );
 };
 
