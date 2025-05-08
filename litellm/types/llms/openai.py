@@ -378,7 +378,7 @@ class CreateBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
-class LiteLLMBatchCreateRequest(CreateBatchRequest):
+class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
 
 
