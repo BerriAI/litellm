@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 from pydantic import BaseModel
 
@@ -65,7 +65,24 @@ class GroqChatConfig(OpenAILikeChatConfig):
             pass
         return base_params
 
-    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List:
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839

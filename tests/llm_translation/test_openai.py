@@ -472,12 +472,11 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.OPENAI
 
-
 @pytest.mark.asyncio
-async def test_openai_pdf_url():
-    litellm._turn_on_debug()
+@pytest.mark.parametrize("model", ["gpt-4o", "anthropic/claude-3-5-sonnet-latest", "gemini/gemini-1.5-flash", "anthropic.claude-3-5-sonnet-20240620-v1:0"])
+async def test_openai_pdf_url(model):
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model=model,
         messages=[{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
     )
     print("litellm response: ", response.model_dump_json(indent=4))
