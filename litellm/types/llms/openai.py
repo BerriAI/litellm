@@ -378,6 +378,10 @@ class CreateBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
+    model: str
+
+
 class RetrieveBatchRequest(TypedDict, total=False):
     """
     RetrieveBatchRequest
@@ -876,7 +880,9 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
-    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
+    model_config = {
+        "extra": "allow"
+    }  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
@@ -1331,7 +1337,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
     system_fingerprint: str
     service_tier: str
 
+
 OpenAIChatCompletionFinishReason = Literal[
     "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
-

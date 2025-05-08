@@ -4257,7 +4257,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
-    "cerebras/llama3.3-70b": {
+    "cerebras/llama-3.3-70b": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,

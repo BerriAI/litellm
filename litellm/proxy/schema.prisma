@@ -61,6 +61,7 @@ model LiteLLM_OrganizationTable {
     models     String[]
     spend      Float    @default(0.0)
     model_spend      Json @default("{}")
+    object_permission_id String?
     created_at    DateTime               @default(now()) @map("created_at")
     created_by String
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -70,6 +71,7 @@ model LiteLLM_OrganizationTable {
     users LiteLLM_UserTable[]
     keys LiteLLM_VerificationToken[]
     members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
+    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 // Model info for teams, just has model aliases for now.
@@ -89,6 +91,7 @@ model LiteLLM_TeamTable {
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?
+    object_permission_id String?
     admins String[]
     members String[]
     members_with_roles Json @default("{}")
@@ -110,6 +113,7 @@ model LiteLLM_TeamTable {
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
+    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 // Track spend, rate limit, budget Users
@@ -119,6 +123,7 @@ model LiteLLM_UserTable {
     team_id    String?
     sso_user_id String? @unique
     organization_id String?
+    object_permission_id String?
     password  String?
     teams    String[] @default([])
     user_role  String?
@@ -144,6 +149,32 @@ model LiteLLM_UserTable {
     invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
+    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+}
+
+model LiteLLM_ObjectPermissionTable {
+  object_permission_id  String         @id @default(uuid())
+  mcp_servers           String[]       @default([])
+  
+  teams                 LiteLLM_TeamTable[]
+  verification_tokens   LiteLLM_VerificationToken[]
+  organizations         LiteLLM_OrganizationTable[]
+  users                 LiteLLM_UserTable[]
+}
+
+// Holds the MCP server configuration 
+model LiteLLM_MCPServerTable {
+  server_id    String         @id @default(uuid())
+  alias        String?
+  description  String?
+  url          String
+  transport    String         @default("sse")
+  spec_version String         @default("2025-03-26")
+  auth_type    String?        
+  created_at   DateTime?      @default(now()) @map("created_at")
+  created_by   String?
+  updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
+  updated_by   String?
 }
 
 // Generate Tokens for Proxy
@@ -174,12 +205,14 @@ model LiteLLM_VerificationToken {
     model_max_budget Json @default("{}")
     budget_id String?
     organization_id String?
+    object_permission_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
 
 model LiteLLM_EndUserTable {
