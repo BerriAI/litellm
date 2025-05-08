@@ -127,7 +127,9 @@ class DeepEvalLogger(CustomLogger):
             output = str(standard_logging_object.get("error_string", ""))
         return BaseApiSpan(
             uuid=standard_logging_object.get("id", uuid.uuid4()),
-            name="litellm_success_callback",
+            name="litellm_success_callback"
+            if is_success
+            else "litellm_failure_callback",
             status=TraceSpanApiStatus.SUCCESS
             if is_success
             else TraceSpanApiStatus.ERRORED,

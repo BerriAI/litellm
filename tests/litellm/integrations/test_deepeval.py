@@ -13,11 +13,11 @@ class TestDeepEvalLogger(unittest.TestCase):
     @patch.dict(os.environ, {"CONFIDENT_API_KEY": "test-api-key"})
     def setUp(self):
         # Mock the Api class before initializing DeepEvalLogger
-        self.api_patcher = patch('litellm.integrations.deepeval.deepeval.Api')
+        self.api_patcher = patch("litellm.integrations.deepeval.deepeval.Api")
         self.mock_api_class = self.api_patcher.start()
         self.mock_api_instance = MagicMock()
         self.mock_api_class.return_value = self.mock_api_instance
-        
+
         self.logger = DeepEvalLogger()
         self.start_time = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         self.end_time = datetime(2023, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
@@ -30,26 +30,35 @@ class TestDeepEvalLogger(unittest.TestCase):
     def tearDown(self):
         self.api_patcher.stop()
 
-    def _common_assertions(self, expected_status: TraceSpanApiStatus, expected_output: str):
+    def _common_assertions(
+        self, expected_status: TraceSpanApiStatus, expected_output: str
+    ):
         self.mock_api_instance.send_request.assert_called_once()
         call_args = self.mock_api_instance.send_request.call_args
-        
+
         self.assertEqual(call_args.kwargs["method"], HttpMethods.POST)
         self.assertEqual(call_args.kwargs["endpoint"], Endpoints.TRACING_ENDPOINT)
-        
+
         body = call_args.kwargs["body"]
-        
+
         self.assertIsInstance(body, dict)
         self.assertEqual(body["uuid"], self.trace_id)
         self.assertIn("startTime", body)
         self.assertIn("endTime", body)
-        
+
         self.assertIsInstance(body["llmSpans"], list)
         self.assertEqual(len(body["llmSpans"]), 1)
-        
+
         llm_span = body["llmSpans"][0]
         self.assertEqual(llm_span["uuid"], self.span_id)
-        self.assertEqual(llm_span["name"], "litellm_success_callback") # This name is static in the code for both success/failure
+
+        expected_name = (
+            "litellm_success_callback"
+            if expected_status == TraceSpanApiStatus.SUCCESS
+            else "litellm_failure_callback"
+        )
+        self.assertEqual(llm_span["name"], expected_name)
+
         self.assertEqual(llm_span["status"], expected_status.value)
         self.assertEqual(llm_span["type"], SpanApiType.LLM.value)
         self.assertEqual(llm_span["traceUuid"], self.trace_id)
@@ -79,7 +88,9 @@ class TestDeepEvalLogger(unittest.TestCase):
             kwargs, self.mock_response_obj, self.start_time, self.end_time
         )
 
-        llm_span = self._common_assertions(TraceSpanApiStatus.SUCCESS, "This is a success.")
+        llm_span = self._common_assertions(
+            TraceSpanApiStatus.SUCCESS, "This is a success."
+        )
         self.assertEqual(llm_span["inputTokenCount"], 10)
         self.assertEqual(llm_span["outputTokenCount"], 20)
 
@@ -92,14 +103,14 @@ class TestDeepEvalLogger(unittest.TestCase):
                 "trace_id": self.trace_id,
                 "model": self.model,
                 "error_string": error_message,
-                "response": {} 
+                "response": {},
             },
         }
 
         self.logger.log_failure_event(
             kwargs, self.mock_response_obj, self.start_time, self.end_time
         )
-        
+
         llm_span = self._common_assertions(TraceSpanApiStatus.ERRORED, error_message)
         self.assertIsNone(llm_span.get("inputTokenCount"))
         self.assertIsNone(llm_span.get("outputTokenCount"))
