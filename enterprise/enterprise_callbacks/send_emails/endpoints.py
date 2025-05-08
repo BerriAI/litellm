@@ -2,56 +2,23 @@
 Endpoints for managing email alerts on litellm
 """
 
-import enum
 import json
-from typing import Dict, List
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.enterprise.enterprise_callbacks.send_emails import (
+    DefaultEmailSettings,
+    EmailEvent,
+    EmailEventSettings,
+    EmailEventSettingsResponse,
+    EmailEventSettingsUpdateRequest,
+)
 
 router = APIRouter()
-
-
-class EmailEvent(str, enum.Enum):
-    virtual_key_created = "Virtual Key Created"
-    new_user_invitation = "New User Invitation"
-
-
-class EmailEventSettings(BaseModel):
-    event: EmailEvent
-    enabled: bool
-
-
-class EmailEventSettingsUpdateRequest(BaseModel):
-    settings: List[EmailEventSettings]
-
-
-class EmailEventSettingsResponse(BaseModel):
-    settings: List[EmailEventSettings]
-
-
-class DefaultEmailSettings(BaseModel):
-    """Default settings for email events"""
-
-    settings: Dict[EmailEvent, bool] = Field(
-        default_factory=lambda: {
-            EmailEvent.virtual_key_created: False,  # Off by default
-            EmailEvent.new_user_invitation: True,  # On by default
-        }
-    )
-
-    def to_dict(self) -> Dict[str, bool]:
-        """Convert to dictionary with string keys for storage"""
-        return {event.value: enabled for event, enabled in self.settings.items()}
-
-    @classmethod
-    def get_defaults(cls) -> Dict[str, bool]:
-        """Get the default settings as a dictionary with string keys"""
-        return cls().to_dict()
 
 
 async def _get_email_settings(prisma_client) -> Dict[str, bool]:
