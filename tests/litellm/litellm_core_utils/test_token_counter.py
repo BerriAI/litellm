@@ -23,6 +23,7 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from tests.large_text import text
 
 
 def token_counter_both_assert_same(**args):
@@ -276,13 +277,14 @@ def test_gpt_vision_token_counting():
 @pytest.mark.parametrize(
     "model",
     [
+        "gpt-4-vision-preview",
         "gpt-4o",
         "claude-3-opus-20240229",
         "command-nightly",
         "mistral/mistral-tiny",
     ],
 )
-def test_load_test_token_counter(model, large_text):
+def test_load_test_token_counter(model):
     """
     Token count large prompt 100 times.
 
@@ -290,7 +292,7 @@ def test_load_test_token_counter(model, large_text):
     """
     import tiktoken
 
-    messages = [{"role": "user", "content": large_text}] * 10
+    messages = [{"role": "user", "content": text}] * 10
 
     start_time = time.time()
     for _ in range(10):
