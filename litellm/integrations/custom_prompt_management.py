@@ -45,6 +45,8 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
     def _compile_prompt_helper(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:

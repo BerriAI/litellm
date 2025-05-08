@@ -38,7 +38,11 @@ class HumanLoopPromptManager(DualCache):
         )
 
     def _compile_prompt_helper(
-        self, prompt_template: List[AllMessageValues], prompt_variables: Dict[str, Any]
+        self,
+        prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
+        prompt_variables: Optional[dict],
     ) -> List[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.
