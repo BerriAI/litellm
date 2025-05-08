@@ -997,7 +997,7 @@ class CustomStreamWrapper:
                             reasoning_tokens=reasoning_tokens
                         )
                     else:
-                        model_response.usage = litellm.Usage(**generic_response_obj.usage)
+                        model_response.usage = litellm.Usage(**generic_response_obj["usage"])
 
                 if (
                     "tool_use" in generic_response_obj
