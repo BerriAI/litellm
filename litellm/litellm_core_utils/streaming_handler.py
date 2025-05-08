@@ -965,39 +965,56 @@ class CustomStreamWrapper:
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
                         raise StopIteration
-                anthropic_response_obj: GChunk = cast(GChunk, chunk)
-                completion_obj["content"] = anthropic_response_obj["text"]
-                if anthropic_response_obj["is_finished"]:
-                    self.received_finish_reason = anthropic_response_obj[
+
+                # This variable used to be called anthropic_response_obj but we are actually in the generic chunk handling path
+                generic_response_obj: GChunk = cast(GChunk, chunk)
+                completion_obj["content"] = generic_response_obj["text"]
+                if generic_response_obj["is_finished"]:
+                    self.received_finish_reason = generic_response_obj[
                         "finish_reason"
                     ]
 
-                if anthropic_response_obj["finish_reason"]:
-                    self.intermittent_finish_reason = anthropic_response_obj[
+                if generic_response_obj["finish_reason"]:
+                    self.intermittent_finish_reason = generic_response_obj[
                         "finish_reason"
                     ]
+                
+                if "usage" in generic_response_obj and generic_response_obj["usage"] is not None: 
 
-                if anthropic_response_obj["usage"] is not None:
-                    model_response.usage = litellm.Usage(
-                        **anthropic_response_obj["usage"]
-                    )
+                    if self.custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+
+                        prompt_tokens = generic_response_obj["usage"].get("prompt_tokens")
+                        completion_tokens = generic_response_obj["usage"].get("completion_tokens")
+                        total_tokens = generic_response_obj["usage"].get("total_tokens")
+                                                                           
+                        # Gemini may not return reasoning_tokens in stream mode separately but it includes them in total_tokens                                                                           )
+                        reasoning_tokens = total_tokens - (prompt_tokens + completion_tokens) if total_tokens and prompt_tokens and completion_tokens else 0
+
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total_tokens, 
+                            reasoning_tokens=reasoning_tokens
+                        )
+                    else:
+                        model_response.usage = litellm.Usage(**generic_response_obj.usage)
 
                 if (
-                    "tool_use" in anthropic_response_obj
-                    and anthropic_response_obj["tool_use"] is not None
+                    "tool_use" in generic_response_obj
+                    and generic_response_obj["tool_use"] is not None
                 ):
-                    completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+                    completion_obj["tool_calls"] = [generic_response_obj["tool_use"]]
 
                 if (
-                    "provider_specific_fields" in anthropic_response_obj
-                    and anthropic_response_obj["provider_specific_fields"] is not None
+                    "provider_specific_fields" in generic_response_obj
+                    and generic_response_obj["provider_specific_fields"] is not None
                 ):
-                    for key, value in anthropic_response_obj[
+                    for key, value in generic_response_obj[
                         "provider_specific_fields"
                     ].items():
                         setattr(model_response, key, value)
 
-                response_obj = cast(Dict[str, Any], anthropic_response_obj)
+                response_obj = cast(Dict[str, Any], generic_response_obj)
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1046,7 +1063,9 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             raise Exception("An unknown error occurred with the stream")
                         self.received_finish_reason = "stop"
-            elif self.custom_llm_provider == "vertex_ai":
+            elif self.custom_llm_provider == "vertex_ai" or self.custom_llm_provider == "vertex_ai_beta":  
+                # Note: as of 2025/05/08, this path is not normally reached as responses from vertex_ai satisfies "general" chunk handling criteria above
+
                 import proto  # type: ignore
 
                 if hasattr(chunk, "candidates") is True:
