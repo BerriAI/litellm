@@ -8,12 +8,6 @@ echo
 pwd
 
 
-# only run this step for litellm enterprise, we run this if enterprise/enterprise_ui/_enterprise.json exists
-if [ ! -f "enterprise/enterprise_ui/enterprise_colors.json" ]; then
-    echo "Admin UI - using default LiteLLM UI"
-    exit 0
-fi
-
 echo "Building Custom Admin UI..."
 
 # Install dependencies
