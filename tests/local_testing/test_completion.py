@@ -4140,7 +4140,7 @@ async def test_completion_ai21_chat():
     litellm.set_verbose = True
     try:
         response = await litellm.acompletion(
-            model="jamba-mini",
+            model="ai21_chat/jamba-mini",
             user="ishaan",
             tool_choice="auto",
             seed=123,
