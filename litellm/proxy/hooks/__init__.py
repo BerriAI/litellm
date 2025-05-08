@@ -1,5 +1,4 @@
-import os
-from typing import Literal, Type, Union
+from typing import Literal, Union
 
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
