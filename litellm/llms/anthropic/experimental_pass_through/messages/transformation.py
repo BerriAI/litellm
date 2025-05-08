@@ -1,8 +1,14 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
+import httpx
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -45,3 +51,67 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
         return headers
+
+    def map_openai_params(self, model: str, optional_params: dict) -> dict:
+        supported_params = self.get_supported_anthropic_messages_params(model)
+        mapped_params = {}
+        for key, value in optional_params.items():
+            if key in supported_params:
+                mapped_params[key] = value
+        return mapped_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        mapped_params = self.map_openai_params(model, optional_params)
+        # Combine the request data
+        data = {
+            "model": model,
+            "messages": messages,
+            **mapped_params,
+        }
+
+        return data
+    
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: Any,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: str,
+        request_data: dict,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding=None,
+        json_mode: bool = False,
+    ) -> AnthropicMessagesResponse:
+        """
+        Transform the raw response to match the expected format
+        """
+        # For Anthropic Messages, the response is already in the correct format
+        # Just parse the JSON response
+        response_json = raw_response.json()
+
+        # Return the parsed response
+        return response_json
+
+    def transform_streaming_response(
+        self,
+        streaming_response: httpx.Response,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        request_body: Dict[str, Any]
+    ) -> Any:
+        """
+        Transform a streaming response from Anthropic
+        """
+        # The streaming response processing is handled in the handler.py file
+        # This function is a placeholder for completeness
+        return streaming_response
