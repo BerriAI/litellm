@@ -76,12 +76,12 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   const orderedFilters = [
     'Team ID',
     'Status',
+    'Model',
     'Organization ID',
     'Key Alias',
     'User ID',
     'Key Hash'
   ];
-
   return (
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">

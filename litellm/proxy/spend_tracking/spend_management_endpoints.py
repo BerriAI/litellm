@@ -1657,6 +1657,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Filter logs by status (e.g., success, failure)"
     ),
+    model: Optional[str] = fastapi.Query(  # Add this new parameter
+        default=None,
+        description="Filter logs by model name"
+    ),
+    get_all_models: Optional[bool] = fastapi.Query(
+        default=False,
+        description="If true, returns all unique models instead of spend logs"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1682,15 +1690,22 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    if start_date is None or end_date is None:
-        raise ProxyException(
-            message="Start date and end date are required",
-            type="bad_request",
-            param="None",
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
     try:
+        if get_all_models:
+            # Get all unique models without date filtering
+            models = await prisma_client.db.litellm_spendlogs.find_many(
+                where={},
+                distinct=["model"]
+            )
+            return {"models": [m.model for m in models if getattr(m, "model", None)]}
+        
+        if start_date is None or end_date is None:
+            raise ProxyException(
+                message="Start date and end date are required",
+                type="bad_request",
+                param="None",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -1715,7 +1730,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             where_conditions["request_id"] = request_id
         if team_id:
             where_conditions["team_id"] = team_id
-
+        if model:
+            where_conditions["model"] = model
         if status:
             status_lower = status.strip().lower()
             if status_lower not in {"success", "failure"}:
@@ -1725,7 +1741,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     param="status",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-        
+
         if min_spend is not None:
             where_conditions.setdefault("spend", {}).update({"gte": min_spend})
         if max_spend is not None: # Add max_spend filter

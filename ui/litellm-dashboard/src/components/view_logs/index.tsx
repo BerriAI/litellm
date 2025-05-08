@@ -73,6 +73,7 @@ export default function SpendLogsTable({
     allOrganizations,
     allUsers,
     allKeyAliases,
+    allModels,
     handleFilterChange,
     handleFilterReset,
     isLoading,
@@ -203,7 +204,6 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!hookAllTeams || hookAllTeams.length === 0) return [];
         const filtered = hookAllTeams.filter((team: Team) =>{
-          console.log("team", searchText)
           return team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
           (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
       });
@@ -223,6 +223,21 @@ export default function SpendLogsTable({
         { label: 'Failure', value: 'failure' },
       ],
     },
+    {
+      name: 'Model',
+      label: 'Model',
+      isSearchable: true, 
+      searchFn: async (searchText: string) => {
+        console.log("allModels", allModels);
+        const filteredModels = allModels.filter(model => 
+          model.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filteredModels.map(model => ({
+          label: model,
+          value: model
+        }));
+      }
+    }
     // {
     //   name: 'Key Alias',
     //   label: 'Key Alias',
