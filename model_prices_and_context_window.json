@@ -11163,6 +11163,65 @@
         "litellm_provider": "perplexity",
         "mode": "chat"
     },
+    "perplexity/sonar": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 8e-3,
+            "search_context_size_high": 12e-3
+        },
+        "supports_web_search": true
+    },
+    "perplexity/sonar-pro": {
+        "max_tokens": 8000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 6e-3,
+            "search_context_size_medium": 10e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true
+    },
+    "perplexity/sonar-reasoning": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 8e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
+    "perplexity/sonar-reasoning-pro": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 6e-3,
+            "search_context_size_medium": 10e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
     "perplexity/sonar-deep-research": {
         "max_tokens": 12000,
         "max_input_tokens": 12000,
