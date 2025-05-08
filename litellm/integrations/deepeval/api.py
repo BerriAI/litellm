@@ -1,11 +1,9 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import os
-from typing import Optional
 import aiohttp
 import requests
 from enum import Enum
-
+from litellm._logging import verbose_logger
 from tenacity import (
     retry,
     wait_exponential_jitter,
@@ -113,10 +111,10 @@ class Api:
                 body["alias"] = new_alias
                 return self.send_request(method, endpoint, body)
             else:
-                print("Aborted.")
+                verbose_logger.debug("Aborted.")
                 return None
         else:
-            print(res.json())
+            verbose_logger.debug(res.json())
             raise Exception(res.json().get("error", res.text))
 
     async def a_send_request(
@@ -156,7 +154,7 @@ class Api:
                         body["alias"] = new_alias
                         return await self.a_send_request(method, endpoint, body)
                     else:
-                        print("Aborted.")
+                        verbose_logger.debug("Aborted.")
                         return None
                 else:
                     try:
