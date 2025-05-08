@@ -555,7 +555,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
                 try:
-                    max_retries = optional_params.pop("max_retries", 2)
+                    max_retries = inference_params.pop("max_retries", 2)
                     if acompletion is True:
                         if stream is True and fake_stream is False:
                             return self.async_streaming(
