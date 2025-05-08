@@ -1,0 +1,58 @@
+from enum import Enum
+
+
+class PiiAction(str, Enum):
+    BLOCK = "BLOCK"
+    MASK = "MASK"
+
+
+class PiiEntityType(str, Enum):
+    # General
+    CREDIT_CARD = "CREDIT_CARD"
+    CRYPTO = "CRYPTO"
+    DATE_TIME = "DATE_TIME"
+    EMAIL_ADDRESS = "EMAIL_ADDRESS"
+    IBAN_CODE = "IBAN_CODE"
+    IP_ADDRESS = "IP_ADDRESS"
+    NRP = "NRP"
+    LOCATION = "LOCATION"
+    PERSON = "PERSON"
+    PHONE_NUMBER = "PHONE_NUMBER"
+    MEDICAL_LICENSE = "MEDICAL_LICENSE"
+    URL = "URL"
+    # USA
+    US_BANK_NUMBER = "US_BANK_NUMBER"
+    US_DRIVER_LICENSE = "US_DRIVER_LICENSE"
+    US_ITIN = "US_ITIN"
+    US_PASSPORT = "US_PASSPORT"
+    US_SSN = "US_SSN"
+    # UK
+    UK_NHS = "UK_NHS"
+    UK_NINO = "UK_NINO"
+    # Spain
+    ES_NIF = "ES_NIF"
+    ES_NIE = "ES_NIE"
+    # Italy
+    IT_FISCAL_CODE = "IT_FISCAL_CODE"
+    IT_DRIVER_LICENSE = "IT_DRIVER_LICENSE"
+    IT_VAT_CODE = "IT_VAT_CODE"
+    IT_PASSPORT = "IT_PASSPORT"
+    IT_IDENTITY_CARD = "IT_IDENTITY_CARD"
+    # Poland
+    PL_PESEL = "PL_PESEL"
+    # Singapore
+    SG_NRIC_FIN = "SG_NRIC_FIN"
+    SG_UEN = "SG_UEN"
+    # Australia
+    AU_ABN = "AU_ABN"
+    AU_ACN = "AU_ACN"
+    AU_TFN = "AU_TFN"
+    AU_MEDICARE = "AU_MEDICARE"
+    # India
+    IN_PAN = "IN_PAN"
+    IN_AADHAAR = "IN_AADHAAR"
+    IN_VEHICLE_REGISTRATION = "IN_VEHICLE_REGISTRATION"
+    IN_VOTER = "IN_VOTER"
+    IN_PASSPORT = "IN_PASSPORT"
+    # Finland
+    FI_PERSONAL_IDENTITY_CODE = "FI_PERSONAL_IDENTITY_CODE"
