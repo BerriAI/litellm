@@ -10,6 +10,7 @@ from .commands.credentials import credentials
 from .commands.chat import chat
 from .commands.http import http
 from .commands.keys import keys
+from .commands.users import users
 
 
 @click.group()
@@ -44,6 +45,8 @@ cli.add_command(chat)
 cli.add_command(http)
 # Add the keys command group
 cli.add_command(keys)
+# Add the users command group
+cli.add_command(users)
 
 
 if __name__ == "__main__":
