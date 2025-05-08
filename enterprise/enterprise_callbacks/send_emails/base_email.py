@@ -64,6 +64,7 @@ class BaseEmailLogger(CustomLogger):
         """
         Send email to user after creating key for the user
         """
+
         email_params = await self._get_email_params(
             user_id=send_key_created_email_event.user_id,
             user_email=send_key_created_email_event.user_email,
