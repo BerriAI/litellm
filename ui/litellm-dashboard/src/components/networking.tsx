@@ -2146,6 +2146,7 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
+  status?: string,
 ) => {
   try {
     // Construct base URL
@@ -2161,6 +2162,7 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append('page', page.toString());
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
+    if (status) queryParams.append('status', status); 
 
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();

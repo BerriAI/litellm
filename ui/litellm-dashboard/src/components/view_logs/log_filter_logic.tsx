@@ -134,6 +134,7 @@ export function useLogFilterLogic({
         const teamIdParam = currentFilters['Team ID'] || undefined;
         const requestIdParam = currentFilters['Request ID'] || undefined;
         const userIdParam = currentFilters['User'] || undefined;
+        const statusParam = currentFilters['Status'] || undefined;
         // const modelParam = currentFilters['Model'] || undefined; // Prepared if uiSpendLogsCall is updated
 
         const response = await uiSpendLogsCall(
@@ -145,9 +146,8 @@ export function useLogFilterLogic({
           formattedEndTime,
           pageToFetch,
           pageSize,
-          userIdParam
-          // If uiSpendLogsCall is updated to accept more params (e.g., model), pass them here:
-          // modelParam, 
+          userIdParam,
+          statusParam // Pass statusParam as the 9th optional arg
         );
 
         if (currentTimestamp === lastSearchTimestamp.current) {

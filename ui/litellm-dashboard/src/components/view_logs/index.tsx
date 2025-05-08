@@ -214,6 +214,16 @@ export default function SpendLogsTable({
         }));
       }
     },
+    {
+      name: 'Status',
+      label: 'Status',
+      isSearchable: false,
+      options: [
+        { label: 'All', value: '' },
+        { label: 'Success', value: 'success' },
+        { label: 'Failure', value: 'failure' },
+      ],
+    },
     // {
     //   name: 'Key Alias',
     //   label: 'Key Alias',
@@ -501,7 +511,7 @@ export default function SpendLogsTable({
   }
 
   return (
-    <div className="w-full p-6">
+    <div className="w-full p-6 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">
           Request Logs
@@ -625,6 +635,62 @@ export default function SpendLogsTable({
                   </svg>
                   <span>Refresh</span>
                 </button>
+
+                <div className="flex items-center space-x-4">
+                  <span className="text-sm text-gray-700">
+                    Showing{" "}
+                    {isLoading
+                      ? "..."
+                      : pagination.totalCount > 0
+                      ? (pagination.currentPage - 1) * pagination.pageSize + 1
+                      : 0}{" "}
+                    -{" "}
+                    {isLoading
+                      ? "..."
+                      : pagination.totalCount > 0
+                      ? Math.min(pagination.currentPage * pagination.pageSize, pagination.totalCount)
+                      : 0}{" "}
+                    of{" "}
+                    {isLoading
+                      ? "..."
+                      : pagination.totalCount ?? 0}{" "}
+                    results
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-700">
+                      Page {isLoading ? "..." : pagination.currentPage} of{" "}
+                      {isLoading
+                        ? "..."
+                        : pagination.totalPages ?? 1}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setCurrentPage((p) => Math.max(1, p - 1))
+                      }
+                      disabled={isLoading || pagination.currentPage === 1}
+                      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() =>
+                        setCurrentPage((p) =>
+                          Math.min(
+                            pagination.totalPages || 1,
+                            p + 1,
+                          ),
+                        )
+                      }
+                      disabled={
+                        isLoading ||
+                        pagination.currentPage === (pagination.totalPages || 1)
+                      }
+                      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {isCustomDate && (
