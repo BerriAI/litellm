@@ -169,10 +169,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
-        import traceback
-
-        traceback.print_stack()
-        print("REACHES HERE, call_type:", call_type)
         if call_type and call_type == CallTypes.acreate_batch:
             input_file_id = cast(Optional[str], kwargs.get("input_file_id"))
             model_file_id_mapping = cast(

@@ -1,5 +1,6 @@
 import base64
-from typing import Literal, Union
+import re
+from typing import List, Literal, Union
 
 from litellm.types.utils import SpecialEnums
 
@@ -24,3 +25,21 @@ def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
         return is_base64_unified_file_id
     else:
         return b64_uid
+
+
+def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
+    """
+    Extract model names from unified file ID.
+
+    Example:
+    unified_file_id = "litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini,gemini-2.0-flash"
+    returns: ["gpt-4o-mini", "gemini-2.0-flash"]
+    """
+    try:
+        match = re.search(r"target_model_names,([^;]+)", unified_file_id)
+        if match:
+            # Split on comma and strip whitespace from each model name
+            return [model.strip() for model in match.group(1).split(",")]
+        return []
+    except Exception:
+        return []
