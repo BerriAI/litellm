@@ -543,7 +543,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     reasoning_content,
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(
-                    choice["delta"]["content"]
+                    choice["delta"].get("content")
                 )
 
                 choice["delta"]["content"] = content_str

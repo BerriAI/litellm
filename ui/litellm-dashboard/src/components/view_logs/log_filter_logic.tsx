@@ -148,6 +148,8 @@ export function useLogFilterLogic({
           pageSize,
           userIdParam,
           statusParam // Pass statusParam as the 9th optional arg
+          // If uiSpendLogsCall is updated to accept more params (e.g., model), pass them here:
+          // modelParam, 
         );
 
         if (currentTimestamp === lastSearchTimestamp.current) {
