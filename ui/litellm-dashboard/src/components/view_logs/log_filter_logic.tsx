@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { LogEntry } from "./columns"; 
-import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall, getAllModelsCall } from "../networking"; 
+import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall, modelAvailableCall } from "../networking"; 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Setter } from "@/types";
@@ -37,7 +37,9 @@ export function useLogFilterLogic({
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
   initialPage = 1,
-  initialFilters = {}
+  initialFilters = {},
+  userID,  
+  userRole 
 }: {
   accessToken: string | null;
   startTime: string;
@@ -45,6 +47,8 @@ export function useLogFilterLogic({
   pageSize?: number;
   initialPage?: number;
   initialFilters?: Partial<LogFilterState>;
+  userID: string | null; 
+  userRole: string | null; 
 }) {
   const defaultFilters: LogFilterState = {
     'Team ID': '',
@@ -111,14 +115,21 @@ export function useLogFilterLogic({
   });
 
   const { data: allModels = [] } = useQuery<string[], Error>({
-    queryKey: ['allModels', accessToken],
+    queryKey: ['allModels', accessToken, userID, userRole],
     queryFn: async () => {
-      if (!accessToken) return [];
-      const response = await getAllModelsCall(accessToken);
-      console.log("response", response);
-      return await response;
+      if (!accessToken || !userID || !userRole) return [];
+
+      const response = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole,
+        false, // return_wildcard_routes
+        null // teamID
+      );
+
+      return response.data.map((model: { id: string }) => model.id);
     },
-    enabled: !!accessToken,
+    enabled: !!accessToken && !!userID && !!userRole,
   });
   
   // Debounced API call

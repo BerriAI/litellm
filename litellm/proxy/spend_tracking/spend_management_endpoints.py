@@ -1661,10 +1661,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Filter logs by model name"
     ),
-    get_all_models: Optional[bool] = fastapi.Query(
-        default=False,
-        description="If true, returns all unique models instead of spend logs"
-    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1690,22 +1686,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     try:
-        if get_all_models:
-            # Get all unique models without date filtering
-            models = await prisma_client.db.litellm_spendlogs.find_many(
-                where={},
-                distinct=["model"]
-            )
-            return {"models": [m.model for m in models if getattr(m, "model", None)]}
-        
-        if start_date is None or end_date is None:
-            raise ProxyException(
-                message="Start date and end date are required",
-                type="bad_request",
-                param="None",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -1732,19 +1720,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             where_conditions["team_id"] = team_id
         if model:
             where_conditions["model"] = model
-        if status:
-            status_lower = status.strip().lower()
-            if status_lower not in {"success", "failure"}:
-                raise ProxyException(
-                    message=f"Invalid status filter: {status}",
-                    type="bad_request",
-                    param="status",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-
         if min_spend is not None:
             where_conditions.setdefault("spend", {}).update({"gte": min_spend})
-        if max_spend is not None: # Add max_spend filter
+        if max_spend is not None:
             where_conditions.setdefault("spend", {}).update({"lte": max_spend})
 
         # Calculate skip value for pagination
@@ -1764,22 +1742,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             skip=skip,
             take=page_size,
         )
-
-        if status_filter:
-            status_lower = status_filter.strip().lower()
-
-            def status_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                status_val = metadata.get("status") if isinstance(metadata, dict) else None
-                if status_lower == "failure":
-                    return status_val == "failure"
-                elif status_lower == "success":
-                    return status_val != "failure"
-                return True
-
-            data = list(filter(status_filter_fn, data))
-            total_records = len(data)
-            total_pages = (total_records + page_size - 1) // page_size
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
