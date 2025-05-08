@@ -1120,7 +1120,11 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
             )
         else:
-            return response.json()
+            return anthropic_messages_provider_config.transform_anthropic_messages_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
 
     def anthropic_messages_handler(
         self,

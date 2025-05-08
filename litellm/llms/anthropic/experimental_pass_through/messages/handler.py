@@ -203,6 +203,7 @@ def anthropic_messages_handler(
             anthropic_messages_optional_request_params
         ),
         _is_async=True,
+        client=client,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
