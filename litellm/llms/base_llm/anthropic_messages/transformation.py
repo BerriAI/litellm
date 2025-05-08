@@ -1,6 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import httpx
+
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -45,4 +50,13 @@ class BaseAnthropicMessagesConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        pass
+
+    @abstractmethod
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
         pass
