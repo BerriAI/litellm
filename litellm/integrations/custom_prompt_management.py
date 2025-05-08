@@ -16,9 +16,9 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         messages: List[AllMessageValues],
         non_default_params: dict,
         prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         prompt_version: Optional[str],
         prompt_label: Optional[str],
-        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
