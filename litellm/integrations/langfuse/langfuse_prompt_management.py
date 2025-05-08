@@ -260,8 +260,6 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         return PromptManagementClient(
             prompt_id=prompt_id,
-            prompt_version=prompt_version,
-            prompt_label=prompt_label,
             prompt_template=compiled_prompt,
             prompt_template_model=template_model,
             prompt_template_optional_params=template_optional_params,
