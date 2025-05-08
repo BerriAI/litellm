@@ -1653,7 +1653,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     page_size: int = fastapi.Query(
         default=50, description="Number of items per page", ge=1, le=100
     ),
-    status: Optional[str] = fastapi.Query(
+    status_filter: Optional[str] = fastapi.Query(
         default=None,
         description="Filter logs by status (e.g., success, failure)"
     ),
@@ -1765,10 +1765,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             take=page_size,
         )
 
-        if status:
-            status_lower = status.strip().lower()
+        if status_filter:
+            status_lower = status_filter.strip().lower()
 
-            def status_filter(row):
+            def status_filter_fn(row):
                 metadata = getattr(row, "metadata", {}) or {}
                 status_val = metadata.get("status") if isinstance(metadata, dict) else None
                 if status_lower == "failure":
@@ -1777,7 +1777,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     return status_val != "failure"
                 return True
 
-            data = list(filter(status_filter, data))
+            data = list(filter(status_filter_fn, data))
             total_records = len(data)
             total_pages = (total_records + page_size - 1) // page_size
 
