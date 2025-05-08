@@ -5015,33 +5015,5 @@ export const resetEmailEventSettings = async (accessToken: string) => {
   }
 };
 
-export const getAllModelsCall = async (accessToken: String) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/ui` : `/spend/logs/ui`;
-    // Add a special parameter to indicate we want all models
-    url += '?get_all_models=true';
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
-    }
-
-    const data = await response.json();
-    return data.models || [];
-  } catch (error) {
-    console.error("Failed to fetch models:", error);
-    throw error;
-  }
-};
-
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team

@@ -84,6 +84,8 @@ export default function SpendLogsTable({
     startTime,
     endTime,
     pageSize,
+    userID,
+    userRole,
   });
 
   const sessionLogs = useQuery<{data: LogEntry[]}>({
