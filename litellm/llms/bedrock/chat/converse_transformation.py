@@ -12,6 +12,9 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _parse_content_for_reasoning,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
@@ -838,8 +841,14 @@ class AmazonConverseConfig(BaseConfig):
                 """
                 - Content is either a tool response or text
                 """
+                extracted_reasoning_content_str: Optional[str] = None
                 if "text" in content:
-                    content_str += content["text"]
+                    (
+                        extracted_reasoning_content_str,
+                        _content_str,
+                    ) = _parse_content_for_reasoning(content["text"])
+                    if _content_str is not None:
+                        content_str += _content_str
                 if "toolUse" in content:
                     ## check tool name was formatted by litellm
                     _response_tool_name = content["toolUse"]["name"]
@@ -858,6 +867,16 @@ class AmazonConverseConfig(BaseConfig):
                         index=idx,
                     )
                     tools.append(_tool_response_chunk)
+                if extracted_reasoning_content_str is not None:
+                    if reasoningContentBlocks is None:
+                        reasoningContentBlocks = []
+                    reasoningContentBlocks.append(
+                        BedrockConverseReasoningContentBlock(
+                            reasoningText=BedrockConverseReasoningTextBlock(
+                                text=extracted_reasoning_content_str,
+                            )
+                        )
+                    )
                 if "reasoningContent" in content:
                     if reasoningContentBlocks is None:
                         reasoningContentBlocks = []
