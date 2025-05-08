@@ -132,16 +132,25 @@ if MCP_AVAILABLE:
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """
         Call a specific tool with the provided arguments
+        
+        Args:
+            name: Name of the tool to call
+            arguments: Arguments to pass to the tool
+            mcp_server: Optional server name to specify which MCP server to use
         """
         if arguments is None:
             raise HTTPException(
                 status_code=400, detail="Request arguments are required"
             )
 
+        # Get the MCP server name if specified
+        mcp_server = kwargs.get("mcp_server", None)
+        
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
                 name=name,
                 arguments=arguments,
+                mcp_server_name=mcp_server,
             )
         )
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
@@ -158,7 +167,18 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call.get("mcp_server_name")
             )
 
-        # Try managed server tool first
+        # If a specific MCP server was specified, try that first
+        if mcp_server:
+            try:
+                return await _handle_managed_mcp_tool(name, arguments, mcp_server)
+            except Exception as e:
+                verbose_logger.exception(f"Error calling tool {name} on server {mcp_server}: {e}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Error calling tool {name} on server {mcp_server}: {str(e)}"
+                )
+        
+        # Otherwise, try the default behavior: managed server tool first, then local tool
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
             return await _handle_managed_mcp_tool(name, arguments)
 
@@ -168,6 +188,7 @@ if MCP_AVAILABLE:
     def _get_standard_logging_mcp_tool_call(
         name: str,
         arguments: Dict[str, Any],
+        mcp_server_name: Optional[str] = None,
     ) -> StandardLoggingMCPToolCall:
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
         if mcp_server:
@@ -175,22 +196,24 @@ if MCP_AVAILABLE:
             return StandardLoggingMCPToolCall(
                 name=name,
                 arguments=arguments,
-                mcp_server_name=mcp_info.get("server_name"),
+                mcp_server_name=mcp_server_name or mcp_info.get("server_name"),
                 mcp_server_logo_url=mcp_info.get("logo_url"),
             )
         else:
             return StandardLoggingMCPToolCall(
                 name=name,
                 arguments=arguments,
+                mcp_server_name=mcp_server_name,
             )
 
     async def _handle_managed_mcp_tool(
-        name: str, arguments: Dict[str, Any]
+        name: str, arguments: Dict[str, Any], mcp_server: Optional[str] = None
     ) -> List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
             arguments=arguments,
+            mcp_server=mcp_server,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result.content
