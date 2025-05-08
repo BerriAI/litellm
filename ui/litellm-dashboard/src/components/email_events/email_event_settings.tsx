@@ -74,9 +74,9 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({
   const getEventDescription = (event: EmailEvent): string => {
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
-      return "Receive an email notification when a new virtual key is created";
+      return "An email will be sent to the user when a new virtual key is created with their user ID";
     } else if (event.includes("New User Invitation")) {
-      return "Receive an email notification when a new user is invited";
+      return "An email will be sent to the email address of the user when a new user is created";
     } else {
       // Handle any other event type from the API
       const words = event.split(/(?=[A-Z])/).join(' ').toLowerCase();

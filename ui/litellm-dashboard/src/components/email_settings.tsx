@@ -62,11 +62,15 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
 
   return (
     <>
+    <div className="mt-6 mb-6">
+        <EmailEventSettings accessToken={accessToken} />
+      </div>
       <Card>
         <Title level={4}>Email Server Settings</Title>
         <Text>
         <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: email alerts</a> <br/>        
         </Text>
+        
 <div className="flex w-full">
   {alerts
     .filter((alert) => alert.name === "email")
@@ -196,9 +200,6 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
             </Button>
       </Card>
 
-      <div className="mt-6">
-        <EmailEventSettings accessToken={accessToken} />
-      </div>
     </>
   );
 };
