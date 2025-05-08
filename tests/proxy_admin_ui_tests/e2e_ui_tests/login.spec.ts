@@ -7,6 +7,7 @@ test("4644_Test_Basic_Sign_in_Flow", async ({
   virtualKeysPage,
   page,
 }) => {
+  test.setTimeout(5_000);
   let username = "admin";
   let password = "sk-1234";
   if (loginDetailsSet()) {
@@ -22,8 +23,6 @@ test("4644_Test_Basic_Sign_in_Flow", async ({
   // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/dashboard.png",});
 
   await virtualKeysPage.logout();
-  await expect(
-    page.getByRole("heading", { name: "LiteLLM Login" })
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Login" })).toBeVisible();
   // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/logout.png",});
 });
