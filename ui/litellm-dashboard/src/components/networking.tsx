@@ -2148,6 +2148,7 @@ export const uiSpendLogsCall = async (
   page_size?: number,
   user_id?: string,
   status?: string,
+  model?: string,
 ) => {
   try {
     // Construct base URL
@@ -2164,6 +2165,7 @@ export const uiSpendLogsCall = async (
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
     if (status) queryParams.append('status', status); 
+    if (model) queryParams.append('model', model);
 
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
@@ -5009,6 +5011,34 @@ export const resetEmailEventSettings = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to reset email event settings:", error);
+    throw error;
+  }
+};
+
+export const getAllModelsCall = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/ui` : `/spend/logs/ui`;
+    // Add a special parameter to indicate we want all models
+    url += '?get_all_models=true';
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data.models || [];
+  } catch (error) {
+    console.error("Failed to fetch models:", error);
     throw error;
   }
 };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { LogEntry } from "./columns"; 
-import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall } from "../networking"; 
+import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall, getAllModelsCall } from "../networking"; 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Setter } from "@/types";
@@ -109,6 +109,17 @@ export function useLogFilterLogic({
     },
     enabled: !!accessToken,
   });
+
+  const { data: allModels = [] } = useQuery<string[], Error>({
+    queryKey: ['allModels', accessToken],
+    queryFn: async () => {
+      if (!accessToken) return [];
+      const response = await getAllModelsCall(accessToken);
+      console.log("response", response);
+      return await response;
+    },
+    enabled: !!accessToken,
+  });
   
   // Debounced API call
   const debouncedSearch = useCallback(
@@ -135,7 +146,7 @@ export function useLogFilterLogic({
         const requestIdParam = currentFilters['Request ID'] || undefined;
         const userIdParam = currentFilters['User'] || undefined;
         const statusParam = currentFilters['Status'] || undefined;
-        // const modelParam = currentFilters['Model'] || undefined; // Prepared if uiSpendLogsCall is updated
+        const modelParam = currentFilters['Model'] || undefined;
 
         const response = await uiSpendLogsCall(
           accessToken,
@@ -147,7 +158,8 @@ export function useLogFilterLogic({
           pageToFetch,
           pageSize,
           userIdParam,
-          statusParam // Pass statusParam as the 9th optional arg
+          statusParam, 
+          modelParam, 
         );
 
         if (currentTimestamp === lastSearchTimestamp.current) {
@@ -233,6 +245,7 @@ export function useLogFilterLogic({
     allTeams: allTeams || [],
     allUsers: allUsers || [],
     allOrganizations: [], // Placeholder for now, can be fetched if needed
+    allModels: allModels || [],
     handleFilterChange,
     handleFilterReset,
     isLoading: isLoadingLogs,
