@@ -69,7 +69,6 @@ async def create_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
         llm_router,
         proxy_config,
