@@ -11,8 +11,8 @@ sys.path.insert(
 
 from unittest.mock import MagicMock
 
+from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
-from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.types.utils import SpecialEnums
 
 

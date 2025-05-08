@@ -23,6 +23,7 @@ from fastapi import (
 )
 
 import litellm
+from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
@@ -31,7 +32,6 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
-from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import (

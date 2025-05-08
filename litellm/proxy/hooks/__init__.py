@@ -1,9 +1,9 @@
 import os
 from typing import Literal, Type, Union
 
+from ....enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
-from .managed_files import _PROXY_LiteLLMManagedFiles
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 
