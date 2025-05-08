@@ -237,7 +237,7 @@ const sidebars = {
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim",
-        { type: "doc", id: "providers/nscale", label: "NScale (EU Sovereign)" },
+        { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
         "providers/lm_studio",
         "providers/cerebras",
