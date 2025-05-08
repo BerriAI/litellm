@@ -19,10 +19,13 @@ retryable_exceptions = requests.exceptions.SSLError
 
 
 def log_retry_error(retry_state: RetryCallState):
-    exception = retry_state.outcome.exception()
-    logging.error(
-        f"Confident AI Error: {exception}. Retrying: {retry_state.attempt_number} time(s)..."
-    )
+    if retry_state.outcome is not None:
+        exception = retry_state.outcome.exception()
+        logging.error(
+            f"Confident AI Error: {exception}. Retrying: {retry_state.attempt_number} time(s)..."
+        )
+    else:
+        logging.error(f"Retrying: {retry_state.attempt_number} time(s)...")
 
 
 class HttpMethods(Enum):
