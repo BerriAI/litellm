@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(
-    0, os.path.abspath("../../../..")
+    0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock

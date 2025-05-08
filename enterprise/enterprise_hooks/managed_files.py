@@ -15,6 +15,7 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    convert_b64_uid_to_unified_uid,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -173,21 +174,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             if file_id:
                                 file_ids.append(file_id)
         return file_ids
-
-    @staticmethod
-    def _convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
-        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(b64_uid)
-        if is_base64_unified_file_id:
-            return is_base64_unified_file_id
-        else:
-            return b64_uid
-
-    def convert_b64_uid_to_unified_uid(self, b64_uid: str) -> str:
-        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(b64_uid)
-        if is_base64_unified_file_id:
-            return is_base64_unified_file_id
-        else:
-            return b64_uid
 
     async def get_model_file_id_mapping(
         self, file_ids: List[str], litellm_parent_otel_span: Span
@@ -349,7 +335,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-        file_id = self.convert_b64_uid_to_unified_uid(file_id)
+        file_id = convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
         )
