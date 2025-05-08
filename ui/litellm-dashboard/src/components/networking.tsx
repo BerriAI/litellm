@@ -4925,6 +4925,7 @@ export const vectorStoreInfoCall = async (
   }
 };
 
+
 export const getEmailEventSettings = async (accessToken: string): Promise<EmailEventSettingsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
@@ -5009,3 +5010,6 @@ export const resetEmailEventSettings = async (accessToken: string) => {
     throw error;
   }
 };
+
+export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
+export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
