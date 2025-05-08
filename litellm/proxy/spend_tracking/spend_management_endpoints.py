@@ -17,6 +17,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from fastapi import status
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
