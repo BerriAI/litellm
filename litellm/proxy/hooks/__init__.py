@@ -1,38 +1,43 @@
 import os
 from typing import Literal, Type, Union
 
-from ....enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 
-try:
-    if (
-        os.getenv("EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING", "false").lower()
-        == "true"
-    ):  # FEATURE FLAG as it's still in development
-        from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
-            _PROXY_MaxParallelRequestsHandler as _PROXY_MaxParallelRequestsHandlerV2,
-        )
+### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
 
-        max_parallel_request_handler: Type[
-            Union[
-                _PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandlerV2
-            ]
-        ] = _PROXY_MaxParallelRequestsHandlerV2
-    else:
-        max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+try:
+    from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
 except ImportError:
-    max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+    ENTERPRISE_PROXY_HOOKS = {}
+
+# try:
+#         from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
+#             _PROXY_MaxParallelRequestsHandler as _PROXY_MaxParallelRequestsHandlerV2,
+#         )
+
+#         max_parallel_request_handler: Type[
+#             Union[
+#                 _PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandlerV2
+#             ]
+#         ] = _PROXY_MaxParallelRequestsHandlerV2
+#     else:
+#         max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
+# except ImportError:
+#     max_parallel_request_handler = _PROXY_MaxParallelRequestsHandler
 
 # List of all available hooks that can be enabled
 PROXY_HOOKS = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
-    "managed_files": _PROXY_LiteLLMManagedFiles,
-    "parallel_request_limiter": max_parallel_request_handler,
+    "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler,
     "cache_control_check": _PROXY_CacheControlCheck,
 }
+
+### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
+
+PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
 
 
 def get_proxy_hook(
