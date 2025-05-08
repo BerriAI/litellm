@@ -1721,6 +1721,16 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             where_conditions["team_id"] = team_id
         if model:
             where_conditions["model"] = model
+        if status_filter:
+            status_lower = status_filter.strip().lower()
+            if status_lower not in {"success", "failure"}:
+                raise ProxyException(
+                    message=f"Invalid status filter: {status_filter}",
+                    type="bad_request",
+                    param="status",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            where_conditions["status"] = status_lower
 
         if min_spend is not None:
             where_conditions.setdefault("spend", {}).update({"gte": min_spend})
@@ -1745,32 +1755,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             take=page_size,
         )
 
-        # Apply status filter if provided
-        if status_filter:
-            status_lower = status_filter.strip().lower()
-            if status_lower not in {"success", "failure"}:
-                raise ProxyException(
-                    message=f"Invalid status filter: {status_filter}",
-                    type="bad_request",
-                    param="status",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-
-            def status_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                status_val = metadata.get("status") if isinstance(metadata, dict) else None
-                if status_lower == "failure":
-                    return status_val == "failure"
-                elif status_lower == "success":
-                    return status_val != "failure"
-                return True
-
-            data = list(filter(status_filter_fn, data))
-            total_records = len(data)
-            total_pages = (total_records + page_size - 1) // page_size
-        else:
-            # Calculate total pages if no status filter
-            total_pages = (total_records + page_size - 1) // page_size
+        # Calculate total pages
+        total_pages = (total_records + page_size - 1) // page_size
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 

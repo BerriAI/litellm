@@ -2147,7 +2147,7 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
-  status?: string,
+  status_filter?: string,
   model?: string,
 ) => {
   try {
@@ -2164,7 +2164,7 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append('page', page.toString());
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
-    if (status) queryParams.append('status', status); 
+    if (status_filter) queryParams.append('status_filter', status_filter); 
     if (model) queryParams.append('model', model);
 
     // Append query parameters to URL if any exist
