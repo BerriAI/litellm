@@ -5,7 +5,7 @@ from litellm.types.llms.anthropic import AnthropicMessageRequestBase
 
 class AnthropicMessagesRequestUtils:
     @staticmethod
-    def get_requested_response_api_optional_param(
+    def get_requested_anthropic_messages_optional_param(
         params: Dict[str, Any],
     ) -> AnthropicMessageRequestBase:
         """

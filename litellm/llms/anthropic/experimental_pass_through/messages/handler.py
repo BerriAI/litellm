@@ -187,7 +187,7 @@ def anthropic_messages_handler(
 
     local_vars.update(kwargs)
     anthropic_messages_optional_request_params = (
-        AnthropicMessagesRequestUtils.get_requested_response_api_optional_param(
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars
         )
     )
