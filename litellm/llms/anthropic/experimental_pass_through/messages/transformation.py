@@ -1,5 +1,8 @@
 from typing import Dict, List, Optional
 
+import httpx
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -7,7 +10,12 @@ from litellm.types.llms.anthropic import (
     AnthropicMessageRequestBase,
     AnthropicMessagesRequest,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
+
+from ...common_utils import AnthropicError
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -69,3 +77,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             **anthropic_messages_optional_request_params,
         )
         return dict(anthropic_messages_request)
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        """
+        No transformation is needed for Anthropic messages, since we want the response in the Anthropic /v1/messages API spec
+        """
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise AnthropicError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return AnthropicMessagesResponse(**raw_response_json)
