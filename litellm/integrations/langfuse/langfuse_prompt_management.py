@@ -197,9 +197,9 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             messages,
             non_default_params,
             prompt_id,
+            prompt_variables,
             prompt_version,
             prompt_label,
-            prompt_variables,
             dynamic_callback_params,
         )
 
