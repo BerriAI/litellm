@@ -142,13 +142,12 @@ class OllamaChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        if "response_format" in non_default_params:
-            value = non_default_params["response_format"]
-            if inspect.isclass(value) and issubclass(value, BaseModel):
-                non_default_params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {"schema": value.model_json_schema()}
-                }
+        value = non_default_params["response_format"]
+        if inspect.isclass(value) and issubclass(value, BaseModel):
+            non_default_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"schema": value.model_json_schema()}
+            }
 
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
