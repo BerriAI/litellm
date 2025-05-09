@@ -76,6 +76,24 @@ def mock_models_info(mock_client):
     return mock_client
 
 
+@pytest.fixture
+def force_utc_tz():
+    """Fixture to force UTC timezone for tests that depend on system TZ."""
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    if hasattr(time, "tzset"):
+        time.tzset()
+    yield
+    # Restore previous TZ
+    if old_tz is not None:
+        os.environ["TZ"] = old_tz
+    else:
+        if "TZ" in os.environ:
+            del os.environ["TZ"]
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+
 def test_models_list_json_format(mock_models_list, cli_runner):
     """Test the models list command with JSON output format"""
     # Run the command
@@ -320,13 +338,13 @@ def test_format_iso_datetime_str(input_str, expected):
     "input_val,expected",
     [
         (None, ""),
-        (1699848889, "2023-11-12 20:14"),
-        (1699848889.0, "2023-11-12 20:14"),
+        (1699848889, "2023-11-13 04:14"),
+        (1699848889.0, "2023-11-13 04:14"),
         ("not-a-timestamp", "not-a-timestamp"),
         ([1, 2, 3], "[1, 2, 3]"),
     ],
 )
-def test_format_timestamp(input_val, expected):
+def test_format_timestamp(input_val, expected, force_utc_tz):
     actual = format_timestamp(input_val)
     if actual != expected:
         print(f"input: {input_val}, expected: {expected}, actual: {actual}")
