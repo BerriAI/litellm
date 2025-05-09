@@ -25,13 +25,13 @@ from fastapi import (
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
 )
-from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import (
@@ -39,6 +39,8 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+
+from .common_utils import _is_base64_encoded_unified_file_id
 
 router = APIRouter()
 
@@ -150,10 +152,7 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     elif target_model_names_list:
-        managed_files_obj = cast(
-            Optional[_PROXY_LiteLLMManagedFiles],
-            proxy_logging_obj.get_proxy_hook("managed_files"),
-        )
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(
                 message="Managed files hook not found",
@@ -164,6 +163,13 @@ async def route_create_file(
         if llm_router is None:
             raise ProxyException(
                 message="LLM Router not found",
+                type="None",
+                param="None",
+                code=500,
+            )
+        if not isinstance(managed_files_obj, BaseFileEndpoints):
+            raise ProxyException(
+                message="Managed files hook is not a BaseFileEndpoints",
                 type="None",
                 param="None",
                 code=500,
@@ -434,14 +440,9 @@ async def get_file_content(
         )
 
         ## check if file_id is a litellm managed file
-        is_base64_unified_file_id = (
-            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
-        )
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
-            managed_files_obj = cast(
-                Optional[_PROXY_LiteLLMManagedFiles],
-                proxy_logging_obj.get_proxy_hook("managed_files"),
-            )
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
@@ -452,6 +453,13 @@ async def get_file_content(
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if not isinstance(managed_files_obj, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Managed files hook is not a BaseFileEndpoints",
                     type="None",
                     param="None",
                     code=500,
@@ -590,18 +598,20 @@ async def get_file(
         )
 
         ## check if file_id is a litellm managed file
-        is_base64_unified_file_id = (
-            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
-        )
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
 
         if is_base64_unified_file_id:
-            managed_files_obj = cast(
-                Optional[_PROXY_LiteLLMManagedFiles],
-                proxy_logging_obj.get_proxy_hook("managed_files"),
-            )
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if not isinstance(managed_files_obj, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Managed files hook is not a BaseFileEndpoints",
                     type="None",
                     param="None",
                     code=500,
@@ -730,15 +740,10 @@ async def delete_file(
         )
 
         ## check if file_id is a litellm managed file
-        is_base64_unified_file_id = (
-            _PROXY_LiteLLMManagedFiles._is_base64_encoded_unified_file_id(file_id)
-        )
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
 
         if is_base64_unified_file_id:
-            managed_files_obj = cast(
-                Optional[_PROXY_LiteLLMManagedFiles],
-                proxy_logging_obj.get_proxy_hook("managed_files"),
-            )
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
@@ -749,6 +754,13 @@ async def delete_file(
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if not isinstance(managed_files_obj, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Managed files hook is not a BaseFileEndpoints",
                     type="None",
                     param="None",
                     code=500,

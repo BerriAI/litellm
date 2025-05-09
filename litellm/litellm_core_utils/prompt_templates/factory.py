@@ -55,6 +55,11 @@ DEFAULT_USER_CONTINUE_MESSAGE = {
     "content": "Please continue.",
 }  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+DEFAULT_USER_CONTINUE_MESSAGE_TYPED = ChatCompletionUserMessage(
+    role="user",
+    content="Please continue.",
+)
+
 # used to interweave assistant messages, to ensure user/assistant alternating
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     role="assistant",
@@ -1408,6 +1413,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
             AnthopicMessagesAssistantMessageParam,
         ]
     ] = []
+
+    if len(messages) == 0:
+        if not litellm.modify_params:
+            raise litellm.BadRequestError(
+                message=f"Anthropic requires at least one non-system message. Either provide one, or set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add the dummy user message - {DEFAULT_USER_CONTINUE_MESSAGE_TYPED}.",
+                model=model,
+                llm_provider=llm_provider,
+            )
+        else:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -1613,7 +1629,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    if new_messages[-1]["role"] == "assistant":
+    if len(new_messages) > 0 and new_messages[-1]["role"] == "assistant":
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
@@ -3142,6 +3158,37 @@ class BedrockConverseMessagesProcessor:
             image_url=cast(str, file_id or file_data), format=format
         )
 
+    @staticmethod
+    def add_thinking_blocks_to_assistant_content(
+        thinking_blocks: List[BedrockContentBlock],
+        assistant_parts: List[BedrockContentBlock],
+    ) -> List[BedrockContentBlock]:
+        """
+        If contains 'signature', it is a thinking block.
+        If missing 'signature', it is a text block - e.g. when using a non-anthropic model.
+
+        Handle error raised by bedrock if thinking blocks are provided for a non-thinking model (e.g. nova with tool use)
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
+        """
+        filtered_thinking_blocks = []
+        for block in thinking_blocks:
+            reasoning_content = block.get("reasoningContent", None)
+            reasoning_text = (
+                reasoning_content.get("reasoningText", None)
+                if reasoning_content is not None
+                else None
+            )
+            if reasoning_text and not reasoning_text.get("signature"):
+                reasoning_text_text = reasoning_text["text"]
+                assistants_part = BedrockContentBlock(text=reasoning_text_text)
+                assistant_parts.append(assistants_part)
+            else:
+                filtered_thinking_blocks.append(block)
+        if len(filtered_thinking_blocks) > 0:
+            assistant_parts.extend(filtered_thinking_blocks)
+        return assistant_parts
+
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
@@ -3309,10 +3356,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             )
 
             if thinking_blocks is not None:
-                assistant_content.extend(
-                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks
-                    )
+                converted_thinking_blocks = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                    thinking_blocks
+                )
+                assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                    thinking_blocks=converted_thinking_blocks,
+                    assistant_parts=assistant_content,
                 )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
@@ -3325,7 +3374,10 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     cast(ChatCompletionThinkingBlock, element)
                                 ]
                             )
-                            assistants_parts.extend(thinking_block)
+                            assistants_parts = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                                thinking_blocks=thinking_block,
+                                assistant_parts=assistants_parts,
+                            )
                         elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
