@@ -26,6 +26,12 @@ class TestBedrockNovaJson(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
+    def test_prompt_caching(self):
+        """
+        Remove override once we have access to Bedrock prompt caching
+        """
+        pass
+
     # @pytest.fixture(autouse=True)
     # def skip_non_json_tests(self, request):
     #     if not "json" in request.function.__name__.lower():
