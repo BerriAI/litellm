@@ -34,6 +34,7 @@ from typing import (
     Type,
     Union,
     cast,
+    get_args,
 )
 
 import dotenv
@@ -73,7 +74,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
@@ -2722,9 +2723,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -4448,9 +4449,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -4661,6 +4662,7 @@ def image_generation(  # noqa: PLR0915
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        dynamic_api_key: Optional[str] = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,  # type: ignore
@@ -4694,6 +4696,18 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
+        image_generation_config: Optional[BaseImageGenerationConfig] = None
+        if (
+            custom_llm_provider is not None
+            and custom_llm_provider in LlmProviders._member_map_.values()
+        ):
+            image_generation_config = (
+                ProviderConfigManager.get_provider_image_generation_config(
+                    model=model,
+                    provider=LlmProviders(custom_llm_provider),
+                )
+            )
+
         optional_params = get_optional_params_image_gen(
             model=model,
             n=n,
@@ -4703,6 +4717,7 @@ def image_generation(  # noqa: PLR0915
             style=style,
             user=user,
             custom_llm_provider=custom_llm_provider,
+            provider_config=image_generation_config,
             **non_default_params,
         )
 
@@ -4788,7 +4803,7 @@ def image_generation(  # noqa: PLR0915
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
-                api_key=api_key,
+                api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
@@ -5372,6 +5387,7 @@ def speech(  # noqa: PLR0915
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     response_format: Optional[str] = None,
     speed: Optional[int] = None,
+    instructions: Optional[str] = None,
     client=None,
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5393,7 +5409,8 @@ def speech(  # noqa: PLR0915
         optional_params["response_format"] = response_format
     if speed is not None:
         optional_params["speed"] = speed  # type: ignore
-
+    if instructions is not None:
+        optional_params["instructions"] = instructions
     if timeout is None:
         timeout = litellm.request_timeout
 
@@ -5901,9 +5918,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         reasoning_chunks = [
             chunk
@@ -5914,9 +5931,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk

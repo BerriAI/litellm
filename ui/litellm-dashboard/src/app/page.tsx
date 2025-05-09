@@ -342,6 +342,7 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   searchParams={searchParams}
                   accessToken={accessToken}
+                  userID={userID}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
                   proxySettings={proxySettings}

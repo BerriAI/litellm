@@ -1653,6 +1653,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     page_size: int = fastapi.Query(
         default=50, description="Number of items per page", ge=1, le=100
     ),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(  # Add this new parameter
+        default=None,
+        description="Filter logs by model name"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1684,7 +1692,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             param="None",
             code=status.HTTP_400_BAD_REQUEST,
         )
-
     try:
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
@@ -1699,28 +1706,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
         # Build where conditions
-        where_conditions: dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        where_conditions: Dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
         }
-
-        if team_id is not None:
-            where_conditions["team_id"] = team_id
-
-        if api_key is not None:
+        if api_key:
             where_conditions["api_key"] = api_key
-
-        if user_id is not None:
-            where_conditions["user"] = user_id
-
-        if request_id is not None:
+        if user_id: 
+            where_conditions["user"] = user_id 
+        if request_id:
             where_conditions["request_id"] = request_id
+        if team_id:
+            where_conditions["team_id"] = team_id
+        if model:
+            where_conditions["model"] = model
+        if min_spend is not None:
+            where_conditions.setdefault("spend", {}).update({"gte": min_spend})
+        if max_spend is not None:
+            where_conditions.setdefault("spend", {}).update({"lte": max_spend})
 
-        if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 

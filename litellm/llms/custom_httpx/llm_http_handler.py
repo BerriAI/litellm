@@ -1,5 +1,16 @@
 import json
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -8,6 +19,9 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -28,6 +42,9 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import (
     CreateFileRequest,
@@ -1001,6 +1018,171 @@ class BaseLLMHTTPHandler:
             return returned_response
         return model_response
 
+    async def async_anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        stream: Optional[bool] = False,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            AnthropicMessagesHandler,
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC
+            )
+        else:
+            async_httpx_client = client
+
+        # Prepare headers
+        kwargs = kwargs or {}
+        provider_specific_header = cast(
+            Optional[litellm.types.utils.ProviderSpecificHeader],
+            kwargs.get("provider_specific_header", None),
+        )
+        extra_headers = (
+            provider_specific_header.get("extra_headers", {})
+            if provider_specific_header
+            else {}
+        )
+        headers = anthropic_messages_provider_config.validate_environment(
+            headers=extra_headers or {},
+            model=model,
+            messages=messages,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+        logging_obj.update_environment_variables(
+            model=model,
+            optional_params=dict(anthropic_messages_optional_request_params),
+            litellm_params={
+                "metadata": kwargs.get("metadata", {}),
+                "preset_cache_key": None,
+                "stream_response": {},
+                **anthropic_messages_optional_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+        # Prepare request body
+        request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        logging_obj.stream = stream
+        logging_obj.model_call_details.update(request_body)
+
+        # Make the request
+        request_url = anthropic_messages_provider_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+        )
+
+        headers = anthropic_messages_provider_config.sign_request(
+            headers=headers,
+            optional_params=anthropic_messages_optional_request_params,
+            request_data=request_body,
+            api_base=request_url,
+            stream=stream,
+            fake_stream=False,
+            model=model,
+        )
+
+        logging_obj.pre_call(
+            input=[{"role": "user", "content": json.dumps(request_body)}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": str(request_url),
+                "headers": headers,
+            },
+        )
+
+        response = await async_httpx_client.post(
+            url=request_url,
+            headers=headers,
+            data=json.dumps(request_body),
+            stream=stream or False,
+            logging_obj=logging_obj,
+        )
+        response.raise_for_status()
+
+        # used for logging + cost tracking
+        logging_obj.model_call_details["httpx_response"] = response
+
+        if stream:
+            return await AnthropicMessagesHandler._handle_anthropic_streaming(
+                response=response,
+                request_body=request_body,
+                litellm_logging_obj=logging_obj,
+            )
+        else:
+            return anthropic_messages_provider_config.transform_anthropic_messages_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+    def anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: Dict,
+        custom_llm_provider: str,
+        _is_async: bool,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        stream: Optional[bool] = False,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        AnthropicMessagesResponse,
+        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator]],
+    ]:
+        """
+        LLM HTTP Handler for Anthropic Messages
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_anthropic_messages_handler(
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                stream=stream,
+                kwargs=kwargs,
+            )
+        raise ValueError("anthropic_messages_handler is not implemented for sync calls")
+
     def response_api_handler(
         self,
         model: str,
@@ -1455,7 +1637,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 client=client,
             )
-        
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)}
@@ -1496,9 +1678,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url, headers=headers, params=data
-            )
+            response = sync_httpx_client.get(url=url, headers=headers, params=data)
         except Exception as e:
             raise self._handle_error(
                 e=e,
