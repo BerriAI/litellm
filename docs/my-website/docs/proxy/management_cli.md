@@ -2,6 +2,15 @@
 
 The `litellm-proxy` CLI is a command-line tool for managing your LiteLLM proxy server. It provides commands for managing models, credentials, API keys, users, and more, as well as making chat and HTTP requests to the proxy server.
 
+| Feature                | What you can do                                 |
+|------------------------|-------------------------------------------------|
+| Models Management      | List, add, update, and delete models            |
+| Credentials Management | Manage provider credentials                     |
+| Keys Management        | Generate, list, and delete API keys             |
+| User Management        | Create, list, and delete users                  |
+| Chat Completions       | Run chat completions                            |
+| HTTP Requests          | Make custom HTTP requests to the proxy server   |
+
 ## Installation
 
 ```bash
