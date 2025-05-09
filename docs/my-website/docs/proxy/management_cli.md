@@ -114,8 +114,10 @@ You can configure the CLI using environment variables or command-line options:
 ## Main Commands
 
 ### Models Management
+
 - List, add, update, get, and delete models on the proxy.
 - Example:
+
   ```bash
   litellm-proxy models list
   litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.com
@@ -124,8 +126,10 @@ You can configure the CLI using environment variables or command-line options:
   ```
 
 ### Credentials Management
+
 - List, create, get, and delete credentials for LLM providers.
 - Example:
+
   ```bash
   litellm-proxy credentials list
   litellm-proxy credentials create azure-cred --info '{"custom_llm_provider": "azure"}' --values '{"api_key": "sk-123", "api_base": "https://example.azure.openai.com"}'
@@ -134,8 +138,10 @@ You can configure the CLI using environment variables or command-line options:
   ```
 
 ### Keys Management
+
 - List, generate, get info, and delete API keys.
 - Example:
+
   ```bash
   litellm-proxy keys list
   litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key
@@ -144,8 +150,10 @@ You can configure the CLI using environment variables or command-line options:
   ```
 
 ### User Management
+
 - List, create, get info, and delete users.
 - Example:
+
   ```bash
   litellm-proxy users list
   litellm-proxy users create --email user@example.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
@@ -154,8 +162,10 @@ You can configure the CLI using environment variables or command-line options:
   ```
 
 ### Chat & HTTP Requests
+
 - Make chat completions or direct HTTP requests to the proxy server.
 - Example:
+
   ```bash
   litellm-proxy chat completions gpt-4 -m "user:Hello, how are you?"
   litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
