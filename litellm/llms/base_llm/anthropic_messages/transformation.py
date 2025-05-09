@@ -27,7 +27,15 @@ class BaseAnthropicMessagesConfig(ABC):
         pass
 
     @abstractmethod
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         """
         OPTIONAL
 
@@ -60,3 +68,20 @@ class BaseAnthropicMessagesConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         pass
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> dict:
+        """
+        OPTIONAL
+
+        Sign the request, providers like Bedrock need to sign the request before sending it to the API
+        """
+        return request_data

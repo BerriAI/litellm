@@ -36,7 +36,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base}/v1/messages"
