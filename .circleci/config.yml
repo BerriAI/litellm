@@ -342,6 +342,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -870,7 +871,7 @@ jobs:
             pip install "mcp==1.5.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
-
+      - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1097,6 +1098,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -1144,6 +1146,7 @@ jobs:
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
             pip install jsonschema
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
