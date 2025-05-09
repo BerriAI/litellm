@@ -3028,3 +3028,5 @@ def test_bedrock_application_inference_profile():
             "https://bedrock-runtime.eu-central-1.amazonaws.com/"
         )
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
+
+
