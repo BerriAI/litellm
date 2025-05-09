@@ -759,6 +759,73 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
+        str,
+        List[ChatCompletionToolCallChunk],
+        Optional[List[BedrockConverseReasoningContentBlock]],
+    ]:
+        """
+        Translate the message content to a string and a list of tool calls and reasoning content blocks
+
+        Returns:
+            content_str: str
+            tools: List[ChatCompletionToolCallChunk]
+            reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]]
+        """
+        content_str = ""
+        tools: List[ChatCompletionToolCallChunk] = []
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
+        for idx, content in enumerate(content_blocks):
+            """
+            - Content is either a tool response or text
+            """
+            extracted_reasoning_content_str: Optional[str] = None
+            if "text" in content:
+                (
+                    extracted_reasoning_content_str,
+                    _content_str,
+                ) = _parse_content_for_reasoning(content["text"])
+                if _content_str is not None:
+                    content_str += _content_str
+            if "toolUse" in content:
+                ## check tool name was formatted by litellm
+                _response_tool_name = content["toolUse"]["name"]
+                response_tool_name = get_bedrock_tool_name(
+                    response_tool_name=_response_tool_name
+                )
+                _function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=response_tool_name,
+                    arguments=json.dumps(content["toolUse"]["input"]),
+                )
+
+                _tool_response_chunk = ChatCompletionToolCallChunk(
+                    id=content["toolUse"]["toolUseId"],
+                    type="function",
+                    function=_function_chunk,
+                    index=idx,
+                )
+                tools.append(_tool_response_chunk)
+            if extracted_reasoning_content_str is not None:
+                if reasoningContentBlocks is None:
+                    reasoningContentBlocks = []
+                reasoningContentBlocks.append(
+                    BedrockConverseReasoningContentBlock(
+                        reasoningText=BedrockConverseReasoningTextBlock(
+                            text=extracted_reasoning_content_str,
+                        )
+                    )
+                )
+            if "reasoningContent" in content:
+                if reasoningContentBlocks is None:
+                    reasoningContentBlocks = []
+                reasoningContentBlocks.append(content["reasoningContent"])
+
+        return content_str, tools, reasoningContentBlocks
+
     def _transform_response(
         self,
         model: str,
@@ -837,50 +904,11 @@ class AmazonConverseConfig(BaseConfig):
         ] = None
 
         if message is not None:
-            for idx, content in enumerate(message["content"]):
-                """
-                - Content is either a tool response or text
-                """
-                extracted_reasoning_content_str: Optional[str] = None
-                if "text" in content:
-                    (
-                        extracted_reasoning_content_str,
-                        _content_str,
-                    ) = _parse_content_for_reasoning(content["text"])
-                    if _content_str is not None:
-                        content_str += _content_str
-                if "toolUse" in content:
-                    ## check tool name was formatted by litellm
-                    _response_tool_name = content["toolUse"]["name"]
-                    response_tool_name = get_bedrock_tool_name(
-                        response_tool_name=_response_tool_name
-                    )
-                    _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=response_tool_name,
-                        arguments=json.dumps(content["toolUse"]["input"]),
-                    )
-
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=content["toolUse"]["toolUseId"],
-                        type="function",
-                        function=_function_chunk,
-                        index=idx,
-                    )
-                    tools.append(_tool_response_chunk)
-                if extracted_reasoning_content_str is not None:
-                    if reasoningContentBlocks is None:
-                        reasoningContentBlocks = []
-                    reasoningContentBlocks.append(
-                        BedrockConverseReasoningContentBlock(
-                            reasoningText=BedrockConverseReasoningTextBlock(
-                                text=extracted_reasoning_content_str,
-                            )
-                        )
-                    )
-                if "reasoningContent" in content:
-                    if reasoningContentBlocks is None:
-                        reasoningContentBlocks = []
-                    reasoningContentBlocks.append(content["reasoningContent"])
+            (
+                content_str,
+                tools,
+                reasoningContentBlocks,
+            ) = self._translate_message_content(message["content"])
 
         if reasoningContentBlocks is not None:
             chat_completion_message["provider_specific_fields"] = {
