@@ -3033,6 +3033,18 @@
         "supports_tool_choice": true,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438"
     },
+    "azure_ai/deepseek-v3-0324": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000114,
+        "output_cost_per_token": 0.00000456,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438"
+    },
     "azure_ai/jamba-instruct": {
         "max_tokens": 4096,
         "max_input_tokens": 70000,
@@ -3147,6 +3159,32 @@
         "supports_function_calling": true,
         "mode": "chat",
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
+        "supports_tool_choice": true
+    },
+    "azure_ai/Llama-4-Scout-17B-16E-Instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.00000078,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
+        "supports_tool_choice": true
+    },
+    "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "max_tokens": 16384,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000141,
+        "output_cost_per_token": 0.00000035,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_tool_choice": true
     },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
@@ -4257,7 +4295,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
-    "cerebras/llama3.3-70b": {
+    "cerebras/llama-3.3-70b": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
@@ -10691,7 +10729,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mistral": {
         "max_tokens": 8192,
@@ -10700,7 +10739,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "completion"
+        "mode": "completion",
+        "supports_function_calling": true
     },
     "ollama/mistral-7B-Instruct-v0.1": {
         "max_tokens": 8192,
@@ -10709,7 +10749,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mistral-7B-Instruct-v0.2": {
         "max_tokens": 32768,
@@ -10718,7 +10759,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mixtral-8x7B-Instruct-v0.1": {
         "max_tokens": 32768,
@@ -10727,7 +10769,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mixtral-8x22B-Instruct-v0.1": {
         "max_tokens": 65536,
@@ -10736,7 +10779,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/codellama": {
         "max_tokens": 4096, 
@@ -11163,13 +11207,71 @@
         "litellm_provider": "perplexity",
         "mode": "chat"
     },
-    "perplexity/sonar-deep-research": {
-        "max_tokens": 12000,
-        "max_input_tokens": 12000,
-        "max_output_tokens": 12000,
+    "perplexity/sonar": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 1e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 8e-3,
+            "search_context_size_high": 12e-3
+        },
+        "supports_web_search": true
+    },
+    "perplexity/sonar-pro": {
+        "max_tokens": 8000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 6e-3,
+            "search_context_size_medium": 10e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true
+    },
+    "perplexity/sonar-reasoning": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 5e-3,
+            "search_context_size_medium": 8e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
+    "perplexity/sonar-reasoning-pro": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
         "input_cost_per_token": 2e-6,
         "output_cost_per_token": 8e-6,
-        "output_cost_per_reasoning_token": 3e-5,
+        "litellm_provider": "perplexity",
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_low": 6e-3,
+            "search_context_size_medium": 10e-3,
+            "search_context_size_high": 14e-3
+        },
+        "supports_web_search": true,
+        "supports_reasoning": true
+    },
+    "perplexity/sonar-deep-research": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "output_cost_per_reasoning_token": 3e-6,
         "litellm_provider": "perplexity",
         "mode": "chat",
         "search_context_cost_per_query": {
@@ -12197,5 +12299,150 @@
         "max_output_tokens": 8192,
         "litellm_provider": "snowflake",
         "mode": "chat"
+    },
+    "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 9e-8,
+        "output_cost_per_token": 2.9e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
+    },
+    "nscale/Qwen/Qwen2.5-Coder-3B-Instruct": {
+        "input_cost_per_token": 1e-8,
+        "output_cost_per_token": 3e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
+    },
+    "nscale/Qwen/Qwen2.5-Coder-7B-Instruct": {
+        "input_cost_per_token": 1e-8,
+        "output_cost_per_token": 3e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
+    },
+    "nscale/Qwen/Qwen2.5-Coder-32B-Instruct": {
+        "input_cost_per_token": 6e-8,
+        "output_cost_per_token": 2e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
+    },
+    "nscale/Qwen/QwQ-32B": {
+        "input_cost_per_token": 1.8e-7,
+        "output_cost_per_token": 2e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models"
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "input_cost_per_token": 3.75e-7,
+        "output_cost_per_token": 3.75e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.75/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
+        "input_cost_per_token": 2.5e-8,
+        "output_cost_per_token": 2.5e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.05/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+        "input_cost_per_token": 9e-8,
+        "output_cost_per_token": 9e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.18/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 2e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.40/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+        "input_cost_per_token": 7e-8,
+        "output_cost_per_token": 7e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.14/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 1.5e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.30/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/mistralai/mixtral-8x22b-instruct-v0.1": {
+        "input_cost_per_token": 6e-7,
+        "output_cost_per_token": 6e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $1.20/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/meta-llama/Llama-3.1-8B-Instruct": {
+        "input_cost_per_token": 3e-8,
+        "output_cost_per_token": 3e-8,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.06/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/meta-llama/Llama-3.3-70B-Instruct": {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 2e-7,
+        "litellm_provider": "nscale",
+        "mode": "chat",
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#chat-models",
+        "metadata": {
+            "notes": "Pricing listed as $0.40/1M tokens total. Assumed 50/50 split for input/output."
+        }
+    },
+    "nscale/black-forest-labs/FLUX.1-schnell": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 1.3e-9,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "nscale",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#image-models"
+    },
+    "nscale/stabilityai/stable-diffusion-xl-base-1.0": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 3e-9,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "nscale",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.nscale.com/docs/inference/serverless-models/current#image-models"
     }
 }

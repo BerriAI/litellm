@@ -907,6 +907,8 @@ class BaseLLMChatTest(ABC):
                 except Exception as e:
                     print(f"Error: {e}")
                     pass
+                if "<thinking>" in response.choices[0].message.content and "</thinking>" in response.choices[0].message.content:
+                    pytest.fail("Thinking block returned in content instead of separate reasoning_content")
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response
