@@ -2752,15 +2752,18 @@ class Router:
             )
 
             async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
+                kwargs_copy = copy.deepcopy(kwargs)
                 self._update_kwargs_with_deployment(
-                    deployment=deployment, kwargs=kwargs
+                    deployment=deployment,
+                    kwargs=kwargs_copy,
+                    function_name="acreate_file",
                 )
                 data = deployment["litellm_params"].copy()
                 model_name = data["model"]
 
                 model_client = self._get_async_openai_model_client(
                     deployment=deployment,
-                    kwargs=kwargs,
+                    kwargs=kwargs_copy,
                 )
                 self.total_calls[model_name] += 1
 
@@ -2768,20 +2771,19 @@ class Router:
                 stripped_model, custom_llm_provider, _, _ = get_llm_provider(
                     model=data["model"]
                 )
-
                 response = litellm.acreate_file(
                     **{
                         **data,
                         "custom_llm_provider": custom_llm_provider,
                         "caching": self.cache_responses,
                         "client": model_client,
-                        **kwargs,
+                        **kwargs_copy,
                     }
                 )
 
                 rpm_semaphore = self._get_client(
                     deployment=deployment,
-                    kwargs=kwargs,
+                    kwargs=kwargs_copy,
                     client_type="max_parallel_requests",
                 )
 

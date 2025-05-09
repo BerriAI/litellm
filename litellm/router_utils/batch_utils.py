@@ -57,7 +57,7 @@ def _get_router_metadata_variable_name(function_name) -> str:
     For ALL other endpoints we call this "metadata
     """
     ROUTER_METHODS_USING_LITELLM_METADATA = set(
-        ["batch", "generic_api_call", "_acreate_batch"]
+        ["batch", "generic_api_call", "_acreate_batch", "acreate_file"]
     )
     if function_name in ROUTER_METHODS_USING_LITELLM_METADATA:
         return "litellm_metadata"

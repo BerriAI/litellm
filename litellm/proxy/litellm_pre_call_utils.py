@@ -67,7 +67,9 @@ def _get_metadata_variable_name(request: Request) -> str:
         "batches",
         "/v1/messages",
         "responses",
+        "files",
     ]
+
     if any(
         [
             litellm_metadata_route in request.url.path

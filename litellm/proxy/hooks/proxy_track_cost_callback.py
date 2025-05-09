@@ -134,7 +134,7 @@ class _ProxyDBLogger(CustomLogger):
                     )
 
                 verbose_proxy_logger.debug(
-                    f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
+                    f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,
