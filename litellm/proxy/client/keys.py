@@ -220,3 +220,34 @@ class KeysManagementClient:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
+
+    def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
+        """
+        Get information about API keys.
+
+        Args:
+            key (str): The key hash to get information about
+            return_request (bool): If True, returns the prepared request object instead of executing it
+
+        Returns:
+            Union[Dict[str, Any], requests.Request]: Either the response from the server or a prepared request object if return_request is True
+
+        Raises:
+            UnauthorizedError: If the request fails with a 401 status code
+            requests.exceptions.RequestException: If the request fails with any other error
+        """
+        url = f"{self._base_url}/keys/info?key={key}"
+        request = requests.Request("GET", url, headers=self._get_headers())
+
+        if return_request:
+            return request
+
+        session = requests.Session()
+        try:
+            response = session.send(request.prepare())
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise UnauthorizedError(e)
+            raise

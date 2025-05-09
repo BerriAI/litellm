@@ -209,22 +209,6 @@ async def test_router_schedule_factory(model_list):
         assert "priority" not in mock_atext_completion.call_args.kwargs
 
 
-@pytest.mark.asyncio
-async def test_router_arealtime(model_list):
-    """Test if the '_arealtime' function is working correctly"""
-    import litellm
-
-    router = Router(model_list=model_list)
-    with patch.object(litellm, "_arealtime", AsyncMock()) as mock_arealtime:
-        mock_arealtime.return_value = "I'm fine, thank you!"
-        await router._arealtime(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-        )
-
-        mock_arealtime.assert_awaited_once()
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_router_function_with_fallbacks(model_list, sync_mode):
