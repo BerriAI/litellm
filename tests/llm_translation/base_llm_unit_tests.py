@@ -959,8 +959,6 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
-        raise Exception("Test failed")
-
     @pytest.mark.flaky(retries=3, delay=1)
     @pytest.mark.asyncio
     async def test_completion_cost(self):
