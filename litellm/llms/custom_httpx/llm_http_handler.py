@@ -1081,14 +1081,27 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        request_body["stream"] = stream
-        request_body["model"] = model
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
 
         # Make the request
         request_url = anthropic_messages_provider_config.get_complete_url(
-            api_base=api_base, model=model
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+        )
+
+        headers = anthropic_messages_provider_config.sign_request(
+            headers=headers,
+            optional_params=anthropic_messages_optional_request_params,
+            request_data=request_body,
+            api_base=request_url,
+            stream=stream,
+            fake_stream=False,
+            model=model,
         )
 
         logging_obj.pre_call(
