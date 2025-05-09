@@ -120,7 +120,9 @@ You can configure the CLI using environment variables or command-line options:
 
   ```bash
   litellm-proxy models list
-  litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.com
+  litellm-proxy models add gpt-4 \
+    --param api_key=sk-123 \
+    --param max_tokens=2048
   litellm-proxy models update <model-id> -p temperature=0.7
   litellm-proxy models delete <model-id>
   ```
@@ -134,7 +136,9 @@ You can configure the CLI using environment variables or command-line options:
 
   ```bash
   litellm-proxy credentials list
-  litellm-proxy credentials create azure-cred --info '{"custom_llm_provider": "azure"}' --values '{"api_key": "sk-123", "api_base": "https://example.azure.openai.com"}'
+  litellm-proxy credentials create azure-prod \
+    --info='{"custom_llm_provider": "azure"}' \
+    --values='{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
   litellm-proxy credentials get azure-cred
   litellm-proxy credentials delete azure-cred
   ```
@@ -148,7 +152,11 @@ You can configure the CLI using environment variables or command-line options:
 
   ```bash
   litellm-proxy keys list
-  litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key
+  litellm-proxy keys generate \
+    --models=gpt-4 \
+    --spend=100 \
+    --duration=24h \
+    --key-alias=my-key
   litellm-proxy keys info --key sk-key1
   litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
   ```
@@ -162,7 +170,12 @@ You can configure the CLI using environment variables or command-line options:
 
   ```bash
   litellm-proxy users list
-  litellm-proxy users create --email user@example.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
+  litellm-proxy users create \
+    --email=user@example.com \
+    --role=internal_user \
+    --alias="Alice" \
+    --team=team1 \
+    --max-budget=100.0
   litellm-proxy users get --id <user-id>
   litellm-proxy users delete <user-id>
   ```
