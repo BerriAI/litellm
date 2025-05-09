@@ -3,6 +3,7 @@ from litellm.proxy.client.cli import cli
 from litellm._version import version as litellm_version
 from click.testing import CliRunner
 import pytest
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -11,7 +12,10 @@ def cli_runner():
 
 
 def test_cli_version_flag(cli_runner):
-    """Test that --version prints the correct version and exits successfully"""
-    result = cli_runner.invoke(cli, ["--version"])
+    """Test that --version prints the correct version, server URL, and server version, and exits successfully"""
+    with patch("litellm.proxy.client.health.HealthManagementClient.get_server_version", return_value="1.2.3"):
+        result = cli_runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert f"litellm-proxy version: {litellm_version}" in result.output
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
