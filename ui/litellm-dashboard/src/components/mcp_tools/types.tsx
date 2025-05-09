@@ -3,15 +3,15 @@ export const TRANSPORT = {
   HTTP: "http",
 };
 
-export const handleTransport = (transport?: string) => {
-  if (transport == null || transport == undefined) {
+export const handleTransport = (transport?: string): string => {
+  if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
   }
 
   return transport;
 };
 
-export const handleAuth = (authType?: string) => {
+export const handleAuth = (authType?: string): string => {
   if (authType === null || authType === undefined) {
     return "none";
   }

@@ -26,9 +26,6 @@ import {
   Col,
   Title,
   TextInput,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
 } from "@tremor/react";
 
 import {
@@ -376,7 +373,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
                           overflow: "hidden",
                         }}
                       >
-                        {handleAuth(mcpServer.auth_type )}
+                        {handleAuth(mcpServer.auth_type)}
                       </TableCell>
                       <TableCell>
                         <div className="overflow-hidden">
