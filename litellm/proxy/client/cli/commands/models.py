@@ -322,7 +322,7 @@ def _print_summary_table(provider_counts, total):
     summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
     rich.print(summary_table)
 
-def get_model_list_from_yaml_file(yaml_file: str) -> list:
+def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
     """Load and validate the model list from a YAML file."""
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
@@ -362,16 +362,16 @@ def import_models(
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
 
     provider_counts: dict[str, int] = {}
-    added_models = []
+    added_models: list[dict[str, str]] = []
     total = 0
 
     for model in model_list:
         if not _filter_model(model, model_regex, access_group_regex):
             continue
-        model_name = model["model_name"]
-        model_params = model["litellm_params"]
-        model_info = model.get("model_info", {})
-        model_id = model_params["model"]
+        model_name: str = model["model_name"]
+        model_params: dict[str, Any] = model["litellm_params"]
+        model_info: dict[str, Any] = model.get("model_info", {})
+        model_id: str = model_params["model"]
         access_groups = model_info.get("access_groups", [])
         provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
