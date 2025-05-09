@@ -769,6 +769,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span>{row.original.model_id}</span>
             </div>
             <div className="flex">
+              <span className="font-medium w-1/3">Call Type:</span>
+              <span>{row.original.call_type}</span>
+            </div>
+            <div className="flex">
               <span className="font-medium w-1/3">Provider:</span>
               <span>{row.original.custom_llm_provider || "-"}</span>
             </div>
@@ -778,10 +782,12 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
               </Tooltip>
             </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">Start Time:</span>
-              <span>{row.original.startTime}</span>
-            </div>
+            {row?.original?.requester_ip_address && (
+              <div className="flex">
+                <span className="font-medium w-1/3">IP Address:</span>
+                <span>{row?.original?.requester_ip_address}</span>
+              </div>
+            )}
 
           </div>
           <div className="space-y-2">
@@ -797,12 +803,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Cache Hit:</span>
               <span>{row.original.cache_hit}</span>
             </div>
-            {row?.original?.requester_ip_address && (
-              <div className="flex">
-                <span className="font-medium w-1/3">IP Address:</span>
-                <span>{row?.original?.requester_ip_address}</span>
-              </div>
-            )}
+            
             <div className="flex">
               <span className="font-medium w-1/3">Status:</span>
               <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${ 
@@ -813,6 +814,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
               
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Start Time:</span>
+              <span>{row.original.startTime}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
