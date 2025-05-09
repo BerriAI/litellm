@@ -1,6 +1,7 @@
 # stdlib imports
 import json
 import os
+import time
 from unittest.mock import patch
 
 # third party imports
@@ -9,7 +10,7 @@ import pytest
 
 # local imports
 from litellm.proxy.client.cli import cli
-from litellm.proxy.client.cli.commands.models import format_timestamp, format_iso_datetime_str
+from litellm.proxy.client.cli.commands.models import format_timestamp, format_iso_datetime_str, format_cost_per_1k_tokens
 
 
 @pytest.fixture
@@ -374,3 +375,35 @@ def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, 
 ])
 def test_format_iso_datetime_str(input_str, expected):
     assert format_iso_datetime_str(input_str) == expected 
+
+@pytest.mark.parametrize("input_val,expected", [
+    (None, ""),
+    (1699848889, "2023-11-12 20:14"),
+    (1699848889.0, "2023-11-12 20:14"),
+    ("not-a-timestamp", "not-a-timestamp"),
+    ([1,2,3], "[1, 2, 3]"),
+])
+def test_format_timestamp(input_val, expected):
+    actual = format_timestamp(input_val)
+    if actual != expected:
+        print(f"input: {input_val}, expected: {expected}, actual: {actual}")
+    assert actual == expected 
+
+@pytest.mark.parametrize("input_val,expected", [
+    (None, ""),
+    (0, "$0.0000"),
+    (0.0, "$0.0000"),
+    (0.00001, "$0.0100"),
+    (0.00002, "$0.0200"),
+    (1, "$1000.0000"),
+    (1.5, "$1500.0000"),
+    ("0.00001", "$0.0100"),
+    ("1.5", "$1500.0000"),
+    ("not-a-number", "not-a-number"),
+    (1e-10, "$0.0000"),
+])
+def test_format_cost_per_1k_tokens(input_val, expected):
+    actual = format_cost_per_1k_tokens(input_val)
+    if actual != expected:
+        print(f"input: {input_val}, expected: {expected}, actual: {actual}")
+    assert actual == expected 
