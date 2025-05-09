@@ -32,5 +32,5 @@ jobs:
 
     - name: Run tests
       run: |
-        prisma generate
+        poetry run prisma generate
         poetry run pytest tests/litellm -x -vv -n 4 
