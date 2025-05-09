@@ -64,6 +64,18 @@ and more, as well as making chat and HTTP requests to the proxy server.
    litellm-proxy
    ```
 
+   In the future if you want to upgrade, you can do so with:
+
+   ```shell
+   uv tool upgrade litellm[proxy]
+   ```
+
+   or if you want to uninstall, you can do so with:
+
+   ```shell
+   uv tool uninstall litellm
+   ```
+
    If you don't have uv or otherwise want to use pip, you can activate a virtual
    environment and install the package manually:
 
