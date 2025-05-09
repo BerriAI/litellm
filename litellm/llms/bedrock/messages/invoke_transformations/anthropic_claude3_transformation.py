@@ -54,7 +54,7 @@ class AmazonAnthropicClaude3MessagesConfig(
             fake_stream=fake_stream,
         )
 
-    def validate_environment(  # pyright: ignore[reportIncompatibleMethodOverride]
+    def validate_environment(  # pyright: ignore[reportIncompatibleMethodOverride] # type: ignore
         self,
         headers: dict,
         model: str,
