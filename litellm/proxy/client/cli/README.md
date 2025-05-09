@@ -17,11 +17,13 @@ The CLI can be configured using environment variables or command-line options:
 
 ## Global Options
 
-- `--version`, `-v`: Print the LiteLLM Proxy CLI version and exit.
+- `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.
 
 Example:
 
 ```bash
+litellm-proxy version
+# or
 litellm-proxy --version
 # or
 litellm-proxy -v
