@@ -1,101 +1,43 @@
-import React, { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+
+import { Modal, Tooltip } from "antd";
 
 import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  RefreshIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
-
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  Select as Select2,
-  message,
-  Tooltip,
-} from "antd";
-
-import {
-  Title,
-  Button as TremorButton,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  TextInput,
-  Card,
   Icon,
   Button,
-  Badge,
-  Col,
-  Text,
   Grid,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Tab,
+  Col,
+  Title,
 } from "@tremor/react";
 
 import { deleteMCPServer, fetchMCPServers } from "../networking";
-import {
-  MCPServer,
-  MCPServerProps,
-  MCPTool,
-  MCPToolsViewerProps,
-  CallMCPToolResponse,
-} from "./types";
+import { MCPServer, MCPServerProps } from "./types";
 import { isAdminRole } from "@/utils/roles";
-
-const TRANSPORT = {
-  SSE: "sse",
-  HTTP: "http",
-};
-
-const handleTransport = (transport?: string) => {
-  if (transport === null || transport === undefined) {
-    return TRANSPORT.SSE;
-  }
-
-  return transport;
-};
+import { MCPServerView } from "./mcp_server_view";
 
 const displayFriendlyId = (id: string) => {
   return `${id.slice(0, 7)}...`;
 };
 
-const createMCPServer = (server: MCPServer) => {
-  return {
-    server_id: server.server_id,
-    alias: server.alias,
-    transport: server.transport,
-    sort_by: "created_at",
-    sort_order: "desc",
-  };
-};
-
-const handleEdit = (server_id: string) => {};
-
 interface CreateMCPServerProps {
   userRole: string;
-  setServerCreate: (value: boolean) => void;
+  onCreateSuccess: () => MCPServer;
 }
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
-  setServerCreate,
+  onCreateSuccess,
 }) => {
-  const [isModalAddVisible, setModalAddVisible] = useState(false);
+  const [isModalVisible, setModalVisible] = useState(false);
 
   if (!isAdminRole(userRole)) {
     return null;
@@ -103,9 +45,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setServerCreate(true)}>
+      <Button className="mx-auto" onClick={() => setModalVisible(true)}>
         + Add New MCP Server
       </Button>
+
+      <Modal
+        title="Create MCP Server"
+        open={isModalVisible}
+        okType="primary"
+        onCancel={() => setModalVisible(false)}
+        onOk={() => setModalVisible(false)}
+      >
+        <div>Hi</div>
+      </Modal>
     </div>
   );
 };
@@ -126,73 +78,22 @@ const DeleteModal: React.FC<DeleteModalProps> = ({
   if (!isModalOpen) return null;
 
   return (
-    <div className="fixed z-10 inset-0 overflow-y-auto">
-      <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-        <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-          <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-        </div>
+    <Modal
+                open={isModalOpen}
+                onOk={confirmDelete}
+                okType="danger"
+                onCancel={cancelDelete}
+            >
+                <Grid numItems={1} className="gap-2 w-full">
 
-        {/* Modal Panel */}
-        <span
-          className="hidden sm:inline-block sm:align-middle sm:h-screen"
-          aria-hidden="true"
-        >
-          &#8203;
-        </span>
-
-        {/* Confirmation Modal Content */}
-        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-          <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-            <div className="sm:flex sm:items-start">
-              <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                <h3 className="text-lg leading-6 font-medium text-gray-900">
-                  {title}
-                </h3>
-                <div className="mt-2">
-                  <p className="text-sm text-gray-500">
-                    Are you sure you want to delete this MCP Server?
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-            <Button onClick={confirmDelete} color="red" className="ml-2">
-              Delete
-            </Button>
-            <Button onClick={cancelDelete}>Cancel</Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-interface MCPServerViewProps {
-  mcpServer: MCPServer;
-  onBack: () => void;
-  isProxyAdmin: boolean;
-  isEditing: boolean;
-}
-
-const MCPServerView: React.FC<MCPServerViewProps> = ({
-  mcpServer,
-  onBack,
-  isEditing,
-  isProxyAdmin,
-}) => {
-  return (
-    <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button onClick={onBack} className="mb-4">
-            ← Back
-          </Button>
-          <Title>{mcpServer.alias}</Title>
-          <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
-        </div>
-      </div>
-    </div>
+                    <Title>{title}</Title>
+                    <Col numColSpan={1}>
+                        <p>
+                            Are you sure you want to delete this MCP Server?
+                        </p>
+                    </Col>
+                </Grid>
+            </Modal>
   );
 };
 
@@ -208,7 +109,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
   accessToken,
   userRole,
   userID,
-  mcp_servers,
 }) => {
   const [filters, setFilters] = useState<FilterState>({
     server_id: "",
@@ -217,7 +117,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
     sort_by: "created_at",
     sort_order: "desc",
   });
-  const [lastRefreshed, setLastRefreshed] = useState("");
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -284,6 +183,9 @@ const MCPServers: React.FC<MCPServerProps> = ({
           onBack={() => setSelectedServerId(null)}
           isProxyAdmin={isAdminRole(userRole)}
           isEditing={editServer}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
         />
       ) : (
         <div className="w-full p-6">
@@ -399,12 +301,7 @@ const MCPServers: React.FC<MCPServerProps> = ({
             confirmDelete={confirmDelete}
             cancelDelete={cancelDelete}
           />
-          <CreateMCPServer
-            userRole={userRole}
-            setServerCreate={(value) => {
-              setEditServer(value);
-            }}
-          />
+          <CreateMCPServer userRole={userRole} />
         </div>
       )}
     </div>
