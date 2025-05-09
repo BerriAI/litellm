@@ -13,11 +13,84 @@ and more, as well as making chat and HTTP requests to the proxy server.
 | Chat Completions       | Run chat completions                            |
 | HTTP Requests          | Make custom HTTP requests to the proxy server   |
 
-## Installation
+## Quick Start
 
-```bash
-pip install 'litellm[proxy]'
-```
+1. **Install the CLI**
+
+   If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
+
+   ```shell
+   uvx --from=litellm[proxy] litellm-proxy
+   ```
+
+   and if things are working, you should see something like this:
+
+   ```shell
+   Usage: litellm-proxy [OPTIONS] COMMAND [ARGS]...
+
+   LiteLLM Proxy CLI - Manage your LiteLLM proxy server
+
+   Options:
+   --base-url TEXT  Base URL of the LiteLLM proxy server  [env var:
+                     LITELLM_PROXY_URL]
+   --api-key TEXT   API key for authentication  [env var:
+                     LITELLM_PROXY_API_KEY]
+   --help           Show this message and exit.
+
+   Commands:
+   chat         Chat with models through the LiteLLM proxy server
+   credentials  Manage credentials for the LiteLLM proxy server
+   http         Make HTTP requests to the LiteLLM proxy server
+   keys         Manage API keys for the LiteLLM proxy server
+   models       Manage models on your LiteLLM proxy server
+   ```
+
+   If this works, you can make use of the tool more convenient by doing:
+
+   ```shell
+   uv tool install litellm[proxy]
+   ```
+
+   If that works, you'll see something like this:
+
+   ```shell
+   ...
+   Installed 2 executables: litellm, litellm-proxy
+   ```
+
+   and now you can use the tool by just typing `litellm-proxy` in your terminal:
+
+   ```shell
+   litellm-proxy
+   ```
+
+   If you don't have uv or otherwise want to use pip, you can activate a virtual
+   environment and install the package manually:
+
+   ```bash
+   pip install 'litellm[proxy]'
+   ```
+
+2. **Set up environment variables**
+
+   ```bash
+   export LITELLM_PROXY_URL=http://localhost:4000
+   export LITELLM_PROXY_API_KEY=sk-your-key
+   ```
+
+   *(Replace with your actual proxy URL and API key)*
+
+3. **Make your first request (list models)**
+
+   ```bash
+   litellm-proxy models list
+   ```
+
+   If the CLI is set up correctly, you should see a list of available models or a table output.
+
+4. **Troubleshooting**
+
+   - If you see an error, check your environment variables and proxy server status.
 
 ## Configuration
 
