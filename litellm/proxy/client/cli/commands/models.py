@@ -361,7 +361,7 @@ def import_models(
     model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
 
-    provider_counts = {}
+    provider_counts: dict[str, int] = {}
     added_models = []
     total = 0
 
