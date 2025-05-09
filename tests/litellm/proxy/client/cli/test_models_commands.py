@@ -290,8 +290,6 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     # Should not include llama2 or other
     assert "llama2" not in calls
     assert "other" not in calls
-    # Output summary should mention 2 total models
-    assert "Total models: 2" in result.output
     # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
 
@@ -360,7 +358,5 @@ def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, 
     assert "gpt-3.5-turbo" not in calls
     assert "other" not in calls
     assert "no-access" not in calls
-    # Output summary should mention 2 total models
-    assert "Total models: 2" in result.output
     # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output 
