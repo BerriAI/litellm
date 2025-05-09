@@ -983,13 +983,16 @@ class CustomStreamWrapper:
 
                     if self.custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
 
-                        prompt_tokens = generic_response_obj["usage"].get("prompt_tokens")
-                        completion_tokens = generic_response_obj["usage"].get("completion_tokens")
-                        total_tokens = generic_response_obj["usage"].get("total_tokens")
-                                                                           
-                        # Gemini may not return reasoning_tokens in stream mode separately but it includes them in total_tokens                                                                           )
-                        reasoning_tokens = total_tokens - (prompt_tokens + completion_tokens) if total_tokens and prompt_tokens and completion_tokens else 0
+                        prompt_tokens = generic_response_obj["usage"].get("prompt_tokens") or 0
+                        completion_tokens = generic_response_obj["usage"].get("completion_tokens") or 0
+                        total_tokens = generic_response_obj["usage"].get("total_tokens") or 0
 
+                        if total_tokens > prompt_tokens + completion_tokens:
+                            reasoning_tokens = total_tokens - (prompt_tokens + completion_tokens)
+                            completion_tokens = completion_tokens + reasoning_tokens
+                        else:
+                            reasoning_tokens = 0
+                                                                           
                         model_response.usage = litellm.Usage(
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
