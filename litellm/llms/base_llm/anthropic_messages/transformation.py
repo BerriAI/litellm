@@ -83,5 +83,7 @@ class BaseAnthropicMessagesConfig(ABC):
         OPTIONAL
 
         Sign the request, providers like Bedrock need to sign the request before sending it to the API
+
+        For all other providers, this is a no-op and we just return the headers
         """
-        return request_data
+        return headers
