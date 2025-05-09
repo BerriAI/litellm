@@ -14,6 +14,36 @@ import rich
 from ... import Client
 
 
+@dataclass
+class ModelYamlInfo:
+    model_name: str
+    model_params: dict[str, Any]
+    model_info: dict[str, Any]
+    model_id: str
+    access_groups: list[str]
+    provider: str
+
+    @property
+    def access_groups_str(self) -> str:
+        return ", ".join(self.access_groups) if self.access_groups else ""
+
+def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+    """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
+    model_name: str = model["model_name"]
+    model_params: dict[str, Any] = model["litellm_params"]
+    model_info: dict[str, Any] = model.get("model_info", {})
+    model_id: str = model_params["model"]
+    access_groups = model_info.get("access_groups", [])
+    provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    return ModelYamlInfo(
+        model_name=model_name,
+        model_params=model_params,
+        model_info=model_info,
+        model_id=model_id,
+        access_groups=access_groups,
+        provider=provider,
+    )
+
 def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
     if not iso_datetime_str:
@@ -300,7 +330,7 @@ def _filter_model(model, model_regex, access_group_regex):
             return False
     return True
 
-def _print_models_table(added_models, table_title):
+def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
     if not added_models:
         return
     table = rich.table.Table(title=table_title)
@@ -308,7 +338,7 @@ def _print_models_table(added_models, table_title):
     table.add_column("Upstream Model", style="green")
     table.add_column("Access Groups", style="magenta")
     for m in added_models:
-        table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
+        table.add_row(m.model_name, m.model_id, m.access_groups_str)
     rich.print(table)
 
 def _print_summary_table(provider_counts):
@@ -344,36 +374,6 @@ def _get_filtered_model_list(model_list, only_models_matching_regex, only_access
         if _filter_model(model, model_regex, access_group_regex)
     ]
 
-@dataclass
-class ModelYamlInfo:
-    model_name: str
-    model_params: dict[str, Any]
-    model_info: dict[str, Any]
-    model_id: str
-    access_groups: list[str]
-    provider: str
-
-    @property
-    def access_groups_str(self) -> str:
-        return ", ".join(self.access_groups) if self.access_groups else ""
-
-def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
-    """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
-    model_name: str = model["model_name"]
-    model_params: dict[str, Any] = model["litellm_params"]
-    model_info: dict[str, Any] = model.get("model_info", {})
-    model_id: str = model_params["model"]
-    access_groups = model_info.get("access_groups", [])
-    provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
-    return ModelYamlInfo(
-        model_name=model_name,
-        model_params=model_params,
-        model_info=model_info,
-        model_id=model_id,
-        access_groups=access_groups,
-        provider=provider,
-    )
-
 def _import_models_get_table_title(dry_run: bool) -> str:
     if dry_run:
         return "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
@@ -403,7 +403,7 @@ def import_models(
 ) -> None:
     """Import models from a YAML file and add them to the proxy."""
     provider_counts: dict[str, int] = defaultdict(int)
-    added_models: list[dict[str, str]] = []
+    added_models: list[ModelYamlInfo] = []
     model_list = get_model_list_from_yaml_file(yaml_file)
     filtered_model_list = _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex)
 
@@ -412,11 +412,6 @@ def import_models(
 
     for model in filtered_model_list:
         model_info_obj = _get_model_info_obj_from_yaml(model)
-        added_models.append({
-            "model_name": model_info_obj.model_name,
-            "upstream_model": model_info_obj.model_id,
-            "access_groups": model_info_obj.access_groups_str
-        })
         if not dry_run:
             try:
                 client.models.new(
@@ -426,6 +421,7 @@ def import_models(
                 )
             except Exception:
                 pass  # For summary, ignore errors
+        added_models.append(model_info_obj)
         provider_counts[model_info_obj.provider] += 1
 
     table_title = _import_models_get_table_title(dry_run)
