@@ -199,7 +199,9 @@ You can configure the CLI using environment variables or command-line options:
 - Example:
 
   ```bash
-  litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+  litellm-proxy http request \
+    POST /chat/completions \
+    --json '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
   ```
 
   [All APIs (OpenAPI)](https://litellm-api.up.railway.app/#/)
