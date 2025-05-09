@@ -22,9 +22,18 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,
         model: str,
+        messages: List[Any],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        pass
+        """
+        OPTIONAL
+
+        Validate the environment for the request
+        """
+        return headers
 
     @abstractmethod
     def get_complete_url(

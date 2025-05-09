@@ -1059,7 +1059,11 @@ class BaseLLMHTTPHandler:
         headers = anthropic_messages_provider_config.validate_environment(
             headers=extra_headers or {},
             model=model,
+            messages=messages,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
             api_key=api_key,
+            api_base=api_base,
         )
 
         logging_obj.update_environment_variables(
