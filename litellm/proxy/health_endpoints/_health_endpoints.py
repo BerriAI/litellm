@@ -72,6 +72,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "email",
             "braintrust",
             "datadog",
+            "generic_api",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
@@ -109,6 +110,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "generic_api",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -120,6 +122,7 @@ async def health_services_endpoint(  # noqa: PLR0915
         if (
             service == "openmeter"
             or service == "braintrust"
+            or service == "generic_api"
             or (service in litellm.success_callback and service != "langfuse")
         ):
             _ = await litellm.acompletion(

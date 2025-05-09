@@ -337,21 +337,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+        new_value = deepcopy(value)
         # remove 'additionalProperties' from json schema
-        value = _remove_additional_properties(value)
+        new_value = _remove_additional_properties(new_value)
         # remove 'strict' from json schema
-        value = _remove_strict_from_schema(value)
-        if value["type"] == "json_object":
+        new_value = _remove_strict_from_schema(new_value)
+        if new_value["type"] == "json_object":
             optional_params["response_mime_type"] = "application/json"
-        elif value["type"] == "text":
+        elif new_value["type"] == "text":
             optional_params["response_mime_type"] = "text/plain"
-        if "response_schema" in value:
+        if "response_schema" in new_value:
             optional_params["response_mime_type"] = "application/json"
-            optional_params["response_schema"] = value["response_schema"]
-        elif value["type"] == "json_schema":  # type: ignore
-            if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+            optional_params["response_schema"] = new_value["response_schema"]
+        elif new_value["type"] == "json_schema":  # type: ignore
+            if "json_schema" in new_value and "schema" in new_value["json_schema"]:  # type: ignore
                 optional_params["response_mime_type"] = "application/json"
-                optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
+                optional_params["response_schema"] = new_value["json_schema"]["schema"]  # type: ignore
 
         if "response_schema" in optional_params and isinstance(
             optional_params["response_schema"], dict

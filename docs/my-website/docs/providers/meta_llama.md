@@ -8,13 +8,29 @@ import TabItem from '@theme/TabItem';
 | Description | Meta's Llama API provides access to Meta's family of large language models. |
 | Provider Route on LiteLLM | `meta_llama/` |
 | Supported Endpoints | `/chat/completions`, `/completions`, `/responses` |
-| API Reference | [Llama API Reference ↗](https://www.llama.com/products/llama-api/) |
+| API Reference | [Llama API Reference ↗](https://llama.developer.meta.com?utm_source=partner-litellm&utm_medium=website) |
 
 ## Required Variables
 
 ```python showLineNumbers title="Environment Variables"
 os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
 ```
+
+## Supported Models
+
+:::info
+All models listed here https://llama.developer.meta.com/docs/models/ are supported. We actively maintain the list of models, token window, etc. [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
+
+:::
+
+
+| Model ID | Input context length | Output context length | Input Modalities | Output Modalities |
+| --- | --- | --- | --- | --- |
+| `Llama-4-Scout-17B-16E-Instruct-FP8` | 128k | 4028 | Text, Image | Text |
+| `Llama-4-Maverick-17B-128E-Instruct-FP8` | 128k | 4028 | Text, Image | Text |
+| `Llama-3.3-70B-Instruct` | 128k | 4028 | Text | Text |
+| `Llama-3.3-8B-Instruct` | 128k | 4028 | Text | Text |
+
 ## Usage - LiteLLM Python SDK
 
 ### Non-streaming
@@ -45,7 +61,7 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Meta Llama call with streaming
 response = completion(
-    model="meta_llama/Llama-3.3-70B-Instruct", 
+    model="meta_llama/Llama-3.3-70B-Instruct",
     messages=messages,
     stream=True
 )
@@ -66,7 +82,7 @@ model_list:
     litellm_params:
       model: meta_llama/Llama-3.3-70B-Instruct
       api_key: os.environ/LLAMA_API_KEY
-      
+
   - model_name: meta_llama/Llama-3.3-8B-Instruct
     litellm_params:
       model: meta_llama/Llama-3.3-8B-Instruct

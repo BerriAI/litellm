@@ -342,9 +342,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -565,9 +565,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -744,6 +744,9 @@ class Router:
         )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
+        )
+        self._arealtime = self.factory_function(
+            litellm._arealtime, call_type="_arealtime"
         )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
@@ -1099,7 +1102,12 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    def _update_kwargs_before_fallbacks(self, model: str, kwargs: dict) -> None:
+    def _update_kwargs_before_fallbacks(
+        self,
+        model: str,
+        kwargs: dict,
+        metadata_variable_name: Optional[str] = "metadata",
+    ) -> None:
         """
         Adds/updates to kwargs:
         - num_retries
@@ -1108,7 +1116,7 @@ class Router:
         """
         kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
-        kwargs.setdefault("metadata", {}).update({"model_group": model})
+        kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
@@ -1185,6 +1193,7 @@ class Router:
         metadata_variable_name = _get_router_metadata_variable_name(
             function_name=function_name,
         )
+
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
                 "deployment": deployment_model_name,
@@ -2145,40 +2154,6 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def _arealtime(self, model: str, **kwargs):
-        messages = [{"role": "user", "content": "dummy-text"}]
-        try:
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-
-            # pick the one that is available (lowest TPM/RPM)
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
-
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-
-            return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
-        except Exception as e:
-            if self.num_retries > 0:
-                kwargs["model"] = model
-                kwargs["messages"] = messages
-                kwargs["original_function"] = self._arealtime
-                return await self.async_function_with_retries(**kwargs)
-            else:
-                raise e
-
     def text_completion(
         self,
         model: str,
@@ -2847,7 +2822,14 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            metadata_variable_name = _get_router_metadata_variable_name(
+                function_name="_acreate_batch"
+            )
+            self._update_kwargs_before_fallbacks(
+                model=model,
+                kwargs=kwargs,
+                metadata_variable_name=metadata_variable_name,
+            )
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2878,21 +2860,13 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            metadata_variable_name = _get_router_metadata_variable_name(
-                function_name="_acreate_batch"
-            )
 
-            kwargs.setdefault(metadata_variable_name, {}).update(
-                {
-                    "deployment": deployment["litellm_params"]["model"],
-                    "model_info": deployment.get("model_info", {}),
-                    "api_base": deployment.get("litellm_params", {}).get("api_base"),
-                }
-            )
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="_acreate_batch"
+            )
 
             model_client = self._get_async_openai_model_client(
                 deployment=deployment,
@@ -3091,6 +3065,7 @@ class Router:
             "adelete_responses",
             "afile_delete",
             "afile_content",
+            "_arealtime",
         ] = "assistants",
     ):
         """
@@ -3138,6 +3113,7 @@ class Router:
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
+                "_arealtime",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -3287,11 +3263,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=context_window_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=context_window_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3323,11 +3299,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=content_policy_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3489,7 +3465,7 @@ class Router:
         num_retries = kwargs.pop("num_retries")
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-        _metadata: dict = kwargs.get("metadata") or {}
+        _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
         if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
             model_list = self.get_model_list(model_name=_metadata["model_group"])
             if model_list is not None:
