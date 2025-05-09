@@ -3,9 +3,8 @@ Base class across routing strategies to abstract commmon functions like batch in
 """
 
 import asyncio
-import threading
 from abc import ABC
-from typing import List, Optional, Set, Union
+from typing import List, Optional, Set, Tuple, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -22,25 +21,50 @@ class BaseRoutingStrategy(ABC):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
+        self._sync_task: Optional[asyncio.Task[None]] = None
         if should_batch_redis_writes:
-            try:
-                # Try to get existing event loop
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If loop exists and is running, create task in existing loop
-                    loop.create_task(
-                        self.periodic_sync_in_memory_spend_with_redis(
-                            default_sync_interval=default_sync_interval
-                        )
-                    )
-                else:
-                    self._create_sync_thread(default_sync_interval)
-            except RuntimeError:  # No event loop in current thread
-                self._create_sync_thread(default_sync_interval)
+            self.setup_sync_task(default_sync_interval)
 
         self.in_memory_keys_to_update: set[
             str
         ] = set()  # Set with max size of 1000 keys
+
+    def setup_sync_task(self, default_sync_interval: Optional[Union[int, float]]):
+        """Setup the sync task in a way that's compatible with FastAPI"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        self._sync_task = loop.create_task(
+            self.periodic_sync_in_memory_spend_with_redis(
+                default_sync_interval=default_sync_interval
+            )
+        )
+
+    async def cleanup(self):
+        """Cleanup method to be called when shutting down"""
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+            try:
+                await self._sync_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _increment_value_list_in_current_window(
+        self, increment_list: List[Tuple[str, int]], ttl: int
+    ) -> List[float]:
+        """
+        Increment a list of values in the current window
+        """
+        results = []
+        for key, value in increment_list:
+            result = await self._increment_value_in_current_window(
+                key=key, value=value, ttl=ttl
+            )
+            results.append(result)
+        return results
 
     async def _increment_value_in_current_window(
         self, key: str, value: Union[int, float], ttl: int
@@ -105,10 +129,8 @@ class BaseRoutingStrategy(ABC):
                 self.redis_increment_operation_queue,
             )
             if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=self.redis_increment_operation_queue,
                 )
 
             self.redis_increment_operation_queue = []
@@ -121,6 +143,12 @@ class BaseRoutingStrategy(ABC):
 
     def add_to_in_memory_keys_to_update(self, key: str):
         self.in_memory_keys_to_update.add(key)
+
+    def get_key_pattern_to_sync(self) -> Optional[str]:
+        """
+        Get the key pattern to sync
+        """
+        return None
 
     def get_in_memory_keys_to_update(self) -> Set[str]:
         return self.in_memory_keys_to_update
@@ -150,9 +178,22 @@ class BaseRoutingStrategy(ABC):
             await self._push_in_memory_increments_to_redis()
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = self.get_in_memory_keys_to_update()
+            pattern = self.get_key_pattern_to_sync()
+            cache_keys: Optional[Union[Set[str], List[str]]] = None
+            if pattern:
+                cache_keys = await self.dual_cache.redis_cache.async_scan_iter(
+                    pattern=pattern
+                )
 
-            cache_keys_list = list(cache_keys)
+            if cache_keys is None:
+                cache_keys = (
+                    self.get_in_memory_keys_to_update()
+                )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
+
+            if isinstance(cache_keys, set):
+                cache_keys_list = list(cache_keys)
+            else:
+                cache_keys_list = cache_keys
 
             # Batch fetch current spend values from Redis
             redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
@@ -175,16 +216,3 @@ class BaseRoutingStrategy(ABC):
             verbose_router_logger.exception(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
-
-    def _create_sync_thread(self, default_sync_interval):
-        """Helper method to create a new thread for periodic sync"""
-        thread = threading.Thread(
-            target=asyncio.run,
-            args=(
-                self.periodic_sync_in_memory_spend_with_redis(
-                    default_sync_interval=default_sync_interval
-                ),
-            ),
-            daemon=True,
-        )
-        thread.start()

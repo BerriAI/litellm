@@ -73,7 +73,7 @@ def validate_stream_chunk(chunk):
 def test_basic_response():
     client = get_test_client()
     response = client.responses.create(
-        model="gpt-4.0", input="just respond with the word 'ping'"
+        model="gpt-4o", input="just respond with the word 'ping'"
     )
     print("basic response=", response)
 
@@ -86,10 +86,7 @@ def test_basic_response():
     delete_response = client.responses.delete(response.id)
     print("DELETE response=", delete_response)
 
-    # try getting the response again, we should not get it back 
-    get_response = client.responses.retrieve(response.id)
-    print("GET response after delete=", get_response)
-
+    # expect an error when getting the response again since it was deleted
     with pytest.raises(Exception):
         get_response = client.responses.retrieve(response.id)
 
@@ -97,7 +94,7 @@ def test_basic_response():
 def test_streaming_response():
     client = get_test_client()
     stream = client.responses.create(
-        model="gpt-4.0", input="just respond with the word 'ping'", stream=True
+        model="gpt-4o", input="just respond with the word 'ping'", stream=True
     )
 
     collected_chunks = []
@@ -120,5 +117,5 @@ def test_bad_request_bad_param_error():
     with pytest.raises(BadRequestError):
         # Trigger error with invalid model name
         client.responses.create(
-            model="gpt-4.0", input="This should fail", temperature=2000
+            model="gpt-4o", input="This should fail", temperature=2000
         )

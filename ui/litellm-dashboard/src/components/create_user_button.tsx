@@ -24,6 +24,7 @@ const { Option } = Select;
 import { Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface CreateuserProps {
   userID: string;
@@ -50,6 +51,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   onUserCreated,
   isEmbedded = false,
 }) => {
+  const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -130,6 +132,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
+      await queryClient.invalidateQueries({ queryKey: ['userList'] })
       console.log("user create Response:", response);
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;

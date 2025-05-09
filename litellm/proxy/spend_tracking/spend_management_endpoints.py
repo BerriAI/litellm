@@ -1653,6 +1653,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     page_size: int = fastapi.Query(
         default=50, description="Number of items per page", ge=1, le=100
     ),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(  # Add this new parameter
+        default=None,
+        description="Filter logs by model name"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1684,7 +1692,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             param="None",
             code=status.HTTP_400_BAD_REQUEST,
         )
-
     try:
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
@@ -1699,28 +1706,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
         # Build where conditions
-        where_conditions: dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        where_conditions: Dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
         }
-
-        if team_id is not None:
-            where_conditions["team_id"] = team_id
-
-        if api_key is not None:
+        if api_key:
             where_conditions["api_key"] = api_key
-
-        if user_id is not None:
-            where_conditions["user"] = user_id
-
-        if request_id is not None:
+        if user_id: 
+            where_conditions["user"] = user_id 
+        if request_id:
             where_conditions["request_id"] = request_id
+        if team_id:
+            where_conditions["team_id"] = team_id
+        if model:
+            where_conditions["model"] = model
+        if min_spend is not None:
+            where_conditions.setdefault("spend", {}).update({"gte": min_spend})
+        if max_spend is not None:
+            where_conditions.setdefault("spend", {}).update({"lte": max_spend})
 
-        if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
@@ -2858,3 +2861,47 @@ async def ui_get_spend_by_tags(
         )
 
     return {"spend_per_tag": ui_tags}
+
+
+@router.get(
+    "/spend/logs/session/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_session_spend_logs(
+    session_id: str = fastapi.Query(
+        description="Get all spend logs for a particular session",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all spend logs for a particular session
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database not connected",
+            )
+
+        # Build query conditions
+        where_conditions = {"session_id": session_id}
+        # Query the database
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions, order={"startTime": "asc"}
+        )
+        return result
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )

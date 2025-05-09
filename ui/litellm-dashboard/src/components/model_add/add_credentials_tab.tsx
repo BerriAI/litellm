@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { 
   Card, 
   Form, 
@@ -41,8 +41,6 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
-  console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
-
   const handleSubmit = (values: any) => {
     if (addOrEdit === "add") {
       onAddCredential(values);
@@ -51,6 +49,20 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
     }
     form.resetFields();
   };
+
+  useEffect(() => {
+    if (existingCredential) {
+      form.setFieldsValue({
+        credential_name: existingCredential.credential_name,
+        custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
+        api_base: existingCredential.credential_values.api_base,
+        api_version: existingCredential.credential_values.api_version,
+        base_model: existingCredential.credential_values.base_model,
+        api_key: existingCredential.credential_values.api_key,
+      });
+      setSelectedProvider(existingCredential.credential_info.custom_llm_provider as Providers);
+    }
+  }, [existingCredential]);
 
   return (
     <Modal
@@ -89,9 +101,9 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           tooltip="Helper to auto-populate provider specific fields"
         >
           <AntdSelect
-            value={existingCredential?.credential_info.custom_llm_provider || selectedProvider}
             onChange={(value) => {
               setSelectedProvider(value as Providers);
+              form.setFieldValue("custom_llm_provider", value);
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
@@ -108,8 +120,9 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
                       const target = e.target as HTMLImageElement;
                       const parent = target.parentElement;
                       if (parent) {
-                        const fallbackDiv = document.createElement('div');
-                        fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                        const fallbackDiv = document.createElement("div");
+                        fallbackDiv.className =
+                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                         fallbackDiv.textContent = providerDisplayName.charAt(0);
                         parent.replaceChild(fallbackDiv, target);
                       }

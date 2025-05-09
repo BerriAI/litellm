@@ -12,7 +12,9 @@ export async function makeOpenAIResponsesRequest(
   signal?: AbortSignal,
   onReasoningContent?: (content: string) => void,
   onTimingData?: (timeToFirstToken: number) => void,
-  onUsageData?: (usage: TokenUsage) => void
+  onUsageData?: (usage: TokenUsage) => void,
+  traceId?: string,
+  vector_store_ids?: string[]
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -28,11 +30,17 @@ export async function makeOpenAIResponsesRequest(
     ? "http://localhost:4000"
     : window.location.origin;
   
+  // Prepare headers with tags and trace ID
+  const headers: Record<string, string> = {};
+  if (tags && tags.length > 0) {
+    headers['x-litellm-tags'] = tags.join(',');
+  }
+  
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
+    defaultHeaders: headers,
   });
 
   try {
@@ -52,6 +60,8 @@ export async function makeOpenAIResponsesRequest(
       model: selectedModel,
       input: formattedInput,
       stream: true,
+      litellm_trace_id: traceId,
+      ...(vector_store_ids ? { vector_store_ids } : {}),
     }, { signal });
 
     for await (const event of response) {
@@ -60,7 +70,7 @@ export async function makeOpenAIResponsesRequest(
       // Use a type-safe approach to handle events
       if (typeof event === 'object' && event !== null) {
         // Handle output text delta
-        // 1) drop any “role” streams
+        // 1) drop any "role" streams
         if (event.type === "response.role.delta") {
             continue;
         }

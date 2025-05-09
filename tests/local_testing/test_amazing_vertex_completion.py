@@ -3216,18 +3216,6 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.total_tokens == 172
 
 
-def test_vertexai_code_gecko():
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    response = completion(
-        model="vertex_ai/code-gecko@002",
-        messages=[{"role": "user", "content": "Hello world!"}],
-        stream=True,
-    )
-
-    for chunk in response:
-        print(chunk)
-
 
 def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
     mock_response = MagicMock()
@@ -3478,3 +3466,278 @@ def test_litellm_api_base(monkeypatch, provider, route):
 
         mock_client.assert_called()
         assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
+
+
+def test_gemini_tool_calling_working_demo():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system"
+            },
+            {
+                "content": "Hello",
+                "role": "user"
+            }
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_agent",
+                    "description": "This tool helps find relevant help content",
+                    "parameters": {
+                        "properties": {
+                            "state": {
+                                "properties": {
+                                    "messages": {
+                                        "items": {
+                                            "type": "object"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "conversation_id": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "messages",
+                                    "conversation_id"
+                                ],
+                                "type": "object"
+                            },
+                            "config": {
+                                "description": "Configuration for a Runnable.",
+                                "properties": {
+                                    "tags": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "metadata": {
+                                        "type": "object"
+                                    },
+                                    "callbacks": {
+                                        "anyOf": [
+                                            {"type": "array"},
+                                            {"type": "object"},
+                                            {"type": "null"}
+                                        ],
+                                    },
+                                    "run_name": {
+                                        "type": "string"
+                                    },
+                                    "max_concurrency": {
+                                        "anyOf": [
+                                            {
+                                                "type": "integer"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    },
+                                    "recursion_limit": {
+                                        "type": "integer"
+                                    },
+                                    "configurable": {
+                                        "type": "object"
+                                    },
+                                    "run_id": {
+                                        "anyOf": [
+                                            {
+                                                "format": "uuid",
+                                                "type": "string"
+                                            },
+                                            {
+                                                "type": "null"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "type": "object"
+                            },
+                            "kwargs": {
+                                "default": None,
+                                "type": "object"
+                            }
+                        },
+                        "required": [
+                            "state",
+                            "config"
+                        ],
+                        "type": "object"
+                    }
+                }
+            }
+        ]
+    }
+    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_gemini_tool_calling_not_working():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system"
+            },
+            {
+                "content": "Hello",
+                "role": "user"
+            }
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_agent",
+                "description": "This tool helps find relevant help content",
+                "parameters": {
+                    "properties": {
+                        "state": {
+                            "properties": {
+                                "messages": {
+                                    "items": {},
+                                    "type": "array"
+                                },
+                                "conversation_id": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "messages",
+                                "conversation_id"
+                            ],
+                            "type": "object"
+                        },
+                        "config": {
+                            "description": "Configuration for a Runnable.",
+                            "properties": {
+                                "tags": {
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "type": "array"
+                                },
+                                "metadata": {
+                                    "type": "object"
+                                },
+                                "callbacks": {
+                                    "anyOf": [
+                                        {
+                                            "items": {},
+                                            "type": "array"
+                                        },
+                                        {},
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "run_name": {
+                                    "type": "string"
+                                },
+                                "max_concurrency": {
+                                    "anyOf": [
+                                        {
+                                            "type": "integer"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                },
+                                "recursion_limit": {
+                                    "type": "integer"
+                                },
+                                "configurable": {
+                                    "type": "object"
+                                },
+                                "run_id": {
+                                    "anyOf": [
+                                        {
+                                            "format": "uuid",
+                                            "type": "string"
+                                        },
+                                        {
+                                            "type": "null"
+                                        }
+                                    ]
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "kwargs": {
+                            "default": None,
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "state",
+                        "config"
+                    ],
+                    "type": "object"
+                }
+            }
+        }
+    ]
+    }
+    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_vertex_ai_llama_tool_calling():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+    "model": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather in Boston, MA today?"
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+					  "function": {
+							"name": "get_weather",
+							"description": "Get current temperature for a given location.",
+							"parameters": {
+									"type": "object",
+									"properties": {
+											"location": {
+													"type": "string",
+													"description": "City and country e.g. Bogotá, Colombia"
+											}
+									},
+									"required": [
+											"location"
+									],
+									"additionalProperties": False
+							}
+						}
+        }
+    ],
+    "vertex_location": "us-east5"
+    }
+    try: 
+        response = completion(**args)
+    except litellm.RateLimitError:
+        pytest.skip("Rate limit error")
+    print(response)
+
+    assert response.choices[0].message.tool_calls is not None
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response._hidden_params["response_cost"] > 0

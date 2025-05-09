@@ -44,6 +44,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
+    OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -336,21 +337,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+        new_value = deepcopy(value)
         # remove 'additionalProperties' from json schema
-        value = _remove_additional_properties(value)
+        new_value = _remove_additional_properties(new_value)
         # remove 'strict' from json schema
-        value = _remove_strict_from_schema(value)
-        if value["type"] == "json_object":
+        new_value = _remove_strict_from_schema(new_value)
+        if new_value["type"] == "json_object":
             optional_params["response_mime_type"] = "application/json"
-        elif value["type"] == "text":
+        elif new_value["type"] == "text":
             optional_params["response_mime_type"] = "text/plain"
-        if "response_schema" in value:
+        if "response_schema" in new_value:
             optional_params["response_mime_type"] = "application/json"
-            optional_params["response_schema"] = value["response_schema"]
-        elif value["type"] == "json_schema":  # type: ignore
-            if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+            optional_params["response_schema"] = new_value["response_schema"]
+        elif new_value["type"] == "json_schema":  # type: ignore
+            if "json_schema" in new_value and "schema" in new_value["json_schema"]:  # type: ignore
                 optional_params["response_mime_type"] = "application/json"
-                optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
+                optional_params["response_schema"] = new_value["json_schema"]["schema"]  # type: ignore
 
         if "response_schema" in optional_params and isinstance(
             optional_params["response_schema"], dict
@@ -810,6 +812,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return usage
 
+    def _check_finish_reason(
+        self,
+        chat_completion_message: ChatCompletionResponseMessage,
+        finish_reason: Optional[str],
+    ) -> OpenAIChatCompletionFinishReason:
+        if chat_completion_message.get("function_call"):
+            return "function_call"
+        elif chat_completion_message.get("tool_calls"):
+            return "tool_calls"
+        elif finish_reason and (
+            finish_reason == "SAFETY" or finish_reason == "RECITATION"
+        ):  # vertex ai
+            return "content_filter"
+        else:
+            return "stop"
+
     def _process_candidates(self, _candidates, model_response, litellm_params):
         """Helper method to process candidates and extract metadata"""
         grounding_metadata: List[dict] = []
@@ -865,7 +883,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_message["function_call"] = functions
 
             choice = litellm.Choices(
-                finish_reason=candidate.get("finishReason", "stop"),
+                finish_reason=self._check_finish_reason(
+                    chat_completion_message, candidate.get("finishReason")
+                ),
                 index=candidate.get("index", idx),
                 message=chat_completion_message,  # type: ignore
                 logprobs=chat_completion_logprobs,

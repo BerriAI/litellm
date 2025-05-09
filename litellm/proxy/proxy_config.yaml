@@ -1,8 +1,23 @@
 model_list:
-  - model_name: openai/*
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: openai/*
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
-router_settings:
-  optional_pre_call_checks: ["responses_api_deployment_check"]
+
+litellm_settings:
+    callbacks: ["resend_email"]
+  
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "pre_call"
+      guardrailIdentifier: wf0hkdb5x07f # your guardrail ID on bedrock
+      guardrailVersion: "DRAFT"         # your guardrail version on bedrock
+      mask_request_content: true
+      mask_response_content: true
+  
+general_settings:
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true

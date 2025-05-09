@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -610,6 +611,7 @@ async def _get_fuzzy_user_object(
     - Check if user_email is user_email in db
     - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
     """
+
     response = None
     if sso_user_id is not None:
         response = await prisma_client.db.litellm_usertable.find_unique(
@@ -952,6 +954,62 @@ async def get_team_object(
         )
 
 
+class ExperimentalUIJWTToken:
+    @staticmethod
+    def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
+
+        if user_info.user_role is None:
+            raise Exception("User role is required for experimental UI login")
+
+        # Calculate expiration time (10 minutes from now)
+        expiration_time = datetime.now(UTC) + timedelta(minutes=10)
+
+        # Format the expiration time as ISO 8601 string
+        expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
+
+        valid_token = UserAPIKeyAuth(
+            token="ui-token",
+            key_name="ui-token",
+            key_alias="ui-token",
+            max_budget=litellm.max_ui_session_budget,
+            rpm_limit=100,  # allow user to have a conversation on test key pane of UI
+            expires=expires,
+            user_id=user_info.user_id,
+            team_id="litellm-dashboard",
+            models=user_info.models,
+            max_parallel_requests=None,
+            user_role=LitellmUserRoles(user_info.user_role),
+        )
+
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+
+    @staticmethod
+    def get_key_object_from_ui_hash_key(
+        hashed_token: str,
+    ) -> Optional[UserAPIKeyAuth]:
+        import json
+
+        from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
+
+        decrypted_token = decrypt_value_helper(hashed_token, exception_type="debug")
+        if decrypted_token is None:
+            return None
+        try:
+            return UserAPIKeyAuth(**json.loads(decrypted_token))
+        except Exception as e:
+            raise Exception(
+                f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}"
+            )
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -1061,12 +1119,12 @@ async def get_org_object(
         )
 
 
-async def _can_object_call_model(
+def _can_object_call_model(
     model: str,
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
-    object_type: Literal["user", "team", "key"] = "user",
+    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1076,7 +1134,7 @@ async def _can_object_call_model(
         - llm_router: Optional[Router]
         - models: List[str]
         - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key"]. We use the object type to raise the correct exception type
+        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
 
     Returns:
         - True: if token allowed to call model
@@ -1175,12 +1233,31 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
         object_type="key",
+    )
+
+
+def can_org_access_model(
+    model: str,
+    org_object: Optional[LiteLLM_OrganizationTable],
+    llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+) -> Literal[True]:
+    """
+    Returns True if the team can access a specific model.
+
+    """
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=org_object.models if org_object else [],
+        team_model_aliases=team_model_aliases,
+        object_type="org",
     )
 
 
@@ -1194,7 +1271,7 @@ async def can_team_access_model(
     Returns True if the team can access a specific model.
 
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=team_object.models if team_object else [],
@@ -1219,7 +1296,7 @@ async def can_user_call_model(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
@@ -1281,6 +1358,7 @@ async def _virtual_key_max_budget_check(
             team_id=valid_token.team_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1326,6 +1404,7 @@ async def _virtual_key_soft_budget_check(
             team_alias=valid_token.team_alias,
             user_email=None,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1361,6 +1440,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(

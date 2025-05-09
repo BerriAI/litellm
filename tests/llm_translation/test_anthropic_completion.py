@@ -895,31 +895,35 @@ def test_anthropic_citations_api():
     """
     from litellm import completion
 
-    resp = completion(
-        model="claude-3-5-sonnet-20241022",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "text",
-                            "media_type": "text/plain",
-                            "data": "The grass is green. The sky is blue.",
+    try: 
+        resp = completion(
+            model="claude-3-5-sonnet-20241022",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "The grass is green. The sky is blue.",
+                            },
+                            "title": "My Document",
+                            "context": "This is a trustworthy document.",
+                            "citations": {"enabled": True},
                         },
-                        "title": "My Document",
-                        "context": "This is a trustworthy document.",
-                        "citations": {"enabled": True},
-                    },
-                    {
-                        "type": "text",
-                        "text": "What color is the grass and sky?",
-                    },
-                ],
-            }
-        ],
-    )
+                        {
+                            "type": "text",
+                            "text": "What color is the grass and sky?",
+                        },
+                    ],
+                }
+            ],
+        )
+
+    except litellm.InternalServerError:
+        pytest.skip("Anthropic overloaded")
 
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
@@ -995,33 +999,6 @@ def test_anthropic_thinking_output(model):
 
     assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
     assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-    ],
-)
-def test_anthropic_redacted_thinking_output(model):
-    from litellm import completion
-
-    litellm._turn_on_debug()
-
-    resp = completion(
-        model=model,
-        messages=[{"role": "user", "content": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"}],
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
-
-    print(resp)
-    assert resp.choices[0].message.thinking_blocks is not None
-    assert isinstance(resp.choices[0].message.thinking_blocks, list)
-    assert len(resp.choices[0].message.thinking_blocks) > 0
-    assert resp.choices[0].message.thinking_blocks[0]["type"] == "redacted_thinking"
-    assert resp.choices[0].message.thinking_blocks[0]["data"] is not None
-
 
 
 

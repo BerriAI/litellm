@@ -989,6 +989,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 2, "Should return exactly 2 keys"
@@ -1004,6 +1005,7 @@ async def test_list_key_helper(prisma_client):
         user_id=test_user_id,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
@@ -1016,6 +1018,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=test_team_id,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
@@ -1028,6 +1031,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=None,
         key_alias=test_key_alias,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
@@ -1040,6 +1044,7 @@ async def test_list_key_helper(prisma_client):
         user_id=test_user_id,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         return_full_object=True,
         organization_id=None,
     )
@@ -1141,6 +1146,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
                 user_id=None,
                 team_id=None,
                 key_alias=None,
+                key_hash=None,
                 return_full_object=True,
                 organization_id=None,
             )

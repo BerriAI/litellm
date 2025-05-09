@@ -66,6 +66,8 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   premiumUser: boolean;
   organizations: Organization[] | null;
+  addKey: (data: any) => void;
+  createClicked: boolean
 }
 
 type TeamInterface = {
@@ -85,7 +87,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setTeams,
   setKeys,
   premiumUser,
-  organizations
+  organizations,
+  addKey,
+  createClicked
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
@@ -417,7 +421,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userRole={userRole}
             accessToken={accessToken}
             data={keys}
-            setData={setKeys}
+            addKey={addKey}
           />
 
           <ViewKeyTable
@@ -435,6 +439,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             currentOrg={currentOrg}
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
+            createClicked={createClicked}
           />
         </Col>
       </Grid>
