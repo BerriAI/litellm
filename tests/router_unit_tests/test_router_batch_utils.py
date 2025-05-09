@@ -82,3 +82,9 @@ def test_router_metadata_variable_name():
     assert (
         _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
     )
+    assert (
+        _get_router_metadata_variable_name(function_name="acreate_file") == "litellm_metadata"
+    )
+    assert (
+        _get_router_metadata_variable_name(function_name="aget_file") == "litellm_metadata"
+    )
