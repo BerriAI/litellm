@@ -236,6 +236,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -599,6 +600,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-postgresql==7.0.1"
             pip install "fakeredis==2.28.1"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
