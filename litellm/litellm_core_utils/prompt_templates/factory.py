@@ -3040,18 +3040,19 @@ class BedrockConverseMessagesProcessor:
                     )
                 )
                 _assistant_content = assistant_message_block.get("content", None)
-                if _assistant_content is None:
-                    thinking_blocks = assistant_message_block.get("thinking_blocks", None)
-                    if (
-                            thinking_blocks is not None
-                    ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                        for block in thinking_blocks:
-                            thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                thinking_blocks=[
-                                    cast(ChatCompletionThinkingBlock, block)
-                                ]
-                            )
-                            assistant_content.extend(thinking_block)
+                thinking_blocks = cast(
+                    Optional[List[ChatCompletionThinkingBlock]],
+                    assistant_message_block.get("thinking_blocks"),
+                )
+
+                if thinking_blocks is not None:
+                    converted_thinking_blocks = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                        thinking_blocks
+                    )
+                    assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                        thinking_blocks=converted_thinking_blocks,
+                        assistant_parts=assistant_content,
+                    )
 
                 if _assistant_content is not None and isinstance(
                     _assistant_content, list
@@ -3065,7 +3066,10 @@ class BedrockConverseMessagesProcessor:
                                         cast(ChatCompletionThinkingBlock, element)
                                     ]
                                 )
-                                assistants_parts.extend(thinking_block)
+                                assistants_parts = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                                    thinking_blocks=thinking_block,
+                                    assistant_parts=assistants_parts,
+                                )
                             elif element["type"] == "text":
                                 assistants_part = BedrockContentBlock(
                                     text=element["text"]
