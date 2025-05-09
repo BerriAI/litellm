@@ -9,7 +9,7 @@ import pytest
 
 # local imports
 from litellm.proxy.client.cli import cli
-from litellm.proxy.client.cli.commands.models import format_timestamp
+from litellm.proxy.client.cli.commands.models import format_timestamp, format_iso_datetime_str
 
 
 @pytest.fixture
@@ -360,3 +360,17 @@ def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, 
     assert "no-access" not in calls
     # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output 
+
+@pytest.mark.parametrize("input_str,expected", [
+    (None, ""),
+    ("", ""),
+    ("2024-05-01T12:34:56Z", "2024-05-01 12:34"),
+    ("2024-05-01T12:34:56+00:00", "2024-05-01 12:34"),
+    ("2024-05-01T12:34:56.123456+00:00", "2024-05-01 12:34"),
+    ("2024-05-01T12:34:56.123456Z", "2024-05-01 12:34"),
+    ("2024-05-01T12:34:56-04:00", "2024-05-01 12:34"),
+    ("2024-05-01", "2024-05-01 00:00"),
+    ("not-a-date", "not-a-date"),
+])
+def test_format_iso_datetime_str(input_str, expected):
+    assert format_iso_datetime_str(input_str) == expected 
