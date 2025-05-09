@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
@@ -49,7 +49,7 @@ const displayFriendlyId = (id: string) => {
 interface CreateMCPServerProps {
   userRole: string;
   accessToken: string | null;
-  onCreateSuccess: () => MCPServer;
+  onCreateSuccess: (newMcpServer: MCPServer) => void;
 }
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
@@ -64,11 +64,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       if (accessToken != null) {
-        const response: any = await createMCPServer(accessToken, formValues);
+        const response: MCPServer = await createMCPServer(
+          accessToken,
+          formValues
+        );
 
         message.success("MCP Server created successfully");
         form.resetFields();
         setModalVisible(false);
+        onCreateSuccess(response);
       }
     } catch (error) {
       message.error("Error creating the team: " + error, 20);
@@ -143,7 +147,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Select.Option value="http">http</Select.Option>
               </Select>
             </Form.Item>
-            <Form.Item label="MCP Server Auth Type" name="auth_type">
+            <Form.Item
+              label="MCP Server Auth Type"
+              name="auth_type"
+              rules={[{ required: true, message: "Please enter an auth type" }]}
+            >
               <Select placeholder="MCP Auth Type">
                 <Select.Option value="none">None</Select.Option>
                 <Select.Option value="api_key">api_key</Select.Option>
@@ -161,6 +169,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </span>
               }
               name="spec_version"
+              rules={[
+                { required: true, message: "Please enter a spec version" },
+              ]}
             >
               <Select placeholder="MCP Version">
                 <Select.Option value="2025-03-26">2025-03-26</Select.Option>
@@ -215,19 +226,30 @@ const DeleteModal: React.FC<DeleteModalProps> = ({
   );
 };
 
-interface FilterState {
-  server_id: string;
-  alias: string;
-  transport: string;
-  sort_by: string;
-  sort_order: "asc" | "desc";
-}
-
 const MCPServers: React.FC<MCPServerProps> = ({
   accessToken,
   userRole,
   userID,
 }) => {
+  // Query to fetch MCP tools
+  const {
+    data: mcpServers,
+    isLoading: isLoadingServers,
+    refetch,
+  } = useQuery({
+    queryKey: ["mcpServers"],
+    queryFn: () => {
+      if (!accessToken) throw new Error("Access Token required");
+      return fetchMCPServers(accessToken);
+    },
+    enabled: !!accessToken,
+  });
+
+  const createMCPServer = (newMcpServer: MCPServer) => {
+    refetch();
+  };
+
+  // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -247,7 +269,8 @@ const MCPServers: React.FC<MCPServerProps> = ({
     try {
       await deleteMCPServer(accessToken, serverIdToDelete);
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      fetchMCPServers(accessToken);
+      message.success("Deleted MCP Server successfully");
+      refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
       // Handle any error situations, such as displaying an error message to the user.
@@ -263,16 +286,6 @@ const MCPServers: React.FC<MCPServerProps> = ({
     setIsDeleteModalOpen(false);
     setServerToDelete(null);
   };
-
-  // Query to fetch MCP tools
-  const { data: mcpServers, isLoading: isLoadingServers } = useQuery({
-    queryKey: ["mcpServers"],
-    queryFn: () => {
-      if (!accessToken) throw new Error("Access Token required");
-      return fetchMCPServers(accessToken);
-    },
-    enabled: !!accessToken,
-  });
 
   if (!accessToken || !userRole || !userID) {
     return (
@@ -422,7 +435,11 @@ const MCPServers: React.FC<MCPServerProps> = ({
             confirmDelete={confirmDelete}
             cancelDelete={cancelDelete}
           />
-          <CreateMCPServer userRole={userRole} accessToken={accessToken} />
+          <CreateMCPServer
+            userRole={userRole}
+            accessToken={accessToken}
+            onCreateSuccess={createMCPServer}
+          />
         </div>
       )}
     </div>

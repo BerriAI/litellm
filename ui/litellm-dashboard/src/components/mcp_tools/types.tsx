@@ -4,6 +4,7 @@ export const TRANSPORT = {
 };
 
 export const handleTransport = (transport?: string): string => {
+  console.log(transport)
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
   }
