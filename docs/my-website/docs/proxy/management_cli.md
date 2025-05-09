@@ -2,15 +2,11 @@
 
 The `litellm-proxy` CLI is a command-line tool for managing your LiteLLM proxy server. It provides commands for managing models, credentials, API keys, users, and more, as well as making chat and HTTP requests to the proxy server.
 
----
-
 ## Installation
 
 ```bash
 pip install 'litellm[proxy]'
 ```
-
----
 
 ## Configuration
 
@@ -18,8 +14,6 @@ You can configure the CLI using environment variables or command-line options:
 
 - `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
 - `LITELLM_PROXY_API_KEY`: API key for authentication
-
----
 
 ## Main Commands
 
@@ -71,47 +65,53 @@ You can configure the CLI using environment variables or command-line options:
   litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
   ```
 
----
-
 ## Environment Variables
 
 - `LITELLM_PROXY_URL`: Base URL of the proxy server
 - `LITELLM_PROXY_API_KEY`: API key for authentication
 
----
-
 ## Examples
 
 1. **List all models:**
+
    ```bash
    litellm-proxy models list
    ```
+
 2. **Add a new model:**
+
    ```bash
    litellm-proxy models add gpt-4 -p api_key=sk-123 -p max_tokens=2048
    ```
+
 3. **Create a credential:**
+
    ```bash
    litellm-proxy credentials create azure-prod --info '{"custom_llm_provider": "azure"}' --values '{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
    ```
+
 4. **Generate an API key:**
+
    ```bash
    litellm-proxy keys generate --models gpt-4 --spend 100 --duration 24h --key-alias my-key
    ```
+
 5. **Chat completion:**
+
    ```bash
    litellm-proxy chat completions gpt-4 -m "user:Write a story"
    ```
+
 6. **Custom HTTP request:**
+
    ```bash
    litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
    ```
 
----
-
 ## Error Handling
 
 The CLI will display error messages for:
+
 - Server not accessible
 - Authentication failures
 - Invalid parameters or JSON
@@ -120,6 +120,4 @@ The CLI will display error messages for:
 
 Use the `--debug` flag for detailed debugging output.
 
----
-
-For full command reference and advanced usage, see the [CLI README](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/client/cli/README.md). 
+For full command reference and advanced usage, see the [CLI README](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/client/cli/README.md).
