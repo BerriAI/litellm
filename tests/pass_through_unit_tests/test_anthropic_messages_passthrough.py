@@ -117,6 +117,8 @@ async def test_anthropic_messages_non_streaming_bedrock_invoke():
         max_tokens=100,
     )
 
+    print("non-streaming bedrock invoke response: ", response)
+
     # Verify response
     assert "id" in response
     assert "content" in response
