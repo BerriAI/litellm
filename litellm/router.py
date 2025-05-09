@@ -745,6 +745,9 @@ class Router:
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
         )
+        self._arealtime = self.factory_function(
+            litellm._arealtime, call_type="_arealtime"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -2151,40 +2154,6 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def _arealtime(self, model: str, **kwargs):
-        messages = [{"role": "user", "content": "dummy-text"}]
-        try:
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-
-            # pick the one that is available (lowest TPM/RPM)
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
-
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-
-            return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
-        except Exception as e:
-            if self.num_retries > 0:
-                kwargs["model"] = model
-                kwargs["messages"] = messages
-                kwargs["original_function"] = self._arealtime
-                return await self.async_function_with_retries(**kwargs)
-            else:
-                raise e
-
     def text_completion(
         self,
         model: str,
@@ -3096,6 +3065,7 @@ class Router:
             "adelete_responses",
             "afile_delete",
             "afile_content",
+            "_arealtime",
         ] = "assistants",
     ):
         """
@@ -3143,6 +3113,7 @@ class Router:
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
+                "_arealtime",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

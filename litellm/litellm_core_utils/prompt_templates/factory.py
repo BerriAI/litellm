@@ -55,6 +55,11 @@ DEFAULT_USER_CONTINUE_MESSAGE = {
     "content": "Please continue.",
 }  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+DEFAULT_USER_CONTINUE_MESSAGE_TYPED = ChatCompletionUserMessage(
+    role="user",
+    content="Please continue.",
+)
+
 # used to interweave assistant messages, to ensure user/assistant alternating
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     role="assistant",
@@ -1408,6 +1413,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
             AnthopicMessagesAssistantMessageParam,
         ]
     ] = []
+
+    if len(messages) == 0:
+        if not litellm.modify_params:
+            raise litellm.BadRequestError(
+                message=f"Anthropic requires at least one non-system message. Either provide one, or set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add the dummy user message - {DEFAULT_USER_CONTINUE_MESSAGE_TYPED}.",
+                model=model,
+                llm_provider=llm_provider,
+            )
+        else:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -1613,7 +1629,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    if new_messages[-1]["role"] == "assistant":
+    if len(new_messages) > 0 and new_messages[-1]["role"] == "assistant":
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
