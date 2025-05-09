@@ -4,7 +4,7 @@ export const TRANSPORT = {
 };
 
 export const handleTransport = (transport?: string) => {
-  if (transport === null || transport === undefined) {
+  if (transport == null || transport == undefined) {
     return TRANSPORT.SSE;
   }
 
@@ -13,7 +13,7 @@ export const handleTransport = (transport?: string) => {
 
 export const handleAuth = (authType?: string) => {
   if (authType === null || authType === undefined) {
-    return "-";
+    return "none";
   }
 
   return authType;

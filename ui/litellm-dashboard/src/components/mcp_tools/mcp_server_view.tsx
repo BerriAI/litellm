@@ -14,6 +14,7 @@ import {
 } from "@tremor/react";
 
 import { MCPServer, handleTransport, handleAuth } from "./types";
+// TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 
 interface MCPServerViewProps {
