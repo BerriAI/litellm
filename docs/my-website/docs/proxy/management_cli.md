@@ -81,31 +81,42 @@ You can configure the CLI using environment variables or command-line options:
 2. **Add a new model:**
 
    ```bash
-   litellm-proxy models add gpt-4 -p api_key=sk-123 -p max_tokens=2048
+   litellm-proxy models add gpt-4 \
+     --param api_key=sk-123 \
+     --param max_tokens=2048
    ```
 
 3. **Create a credential:**
 
    ```bash
-   litellm-proxy credentials create azure-prod --info '{"custom_llm_provider": "azure"}' --values '{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
+   litellm-proxy credentials create azure-prod \
+     --info='{"custom_llm_provider": "azure"}' \
+     --values='{"api_key": "sk-123", "api_base": "https://prod.azure.openai.com"}'
    ```
 
 4. **Generate an API key:**
 
    ```bash
-   litellm-proxy keys generate --models gpt-4 --spend 100 --duration 24h --key-alias my-key
+   litellm-proxy keys generate \
+     --models=gpt-4 \
+     --spend=100 \
+     --duration=24h \
+     --key-alias=my-key
    ```
 
 5. **Chat completion:**
 
    ```bash
-   litellm-proxy chat completions gpt-4 -m "user:Write a story"
+   litellm-proxy chat completions gpt-4 \
+     -m "user:Write a story"
    ```
 
 6. **Custom HTTP request:**
 
    ```bash
-   litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+   litellm-proxy http request \
+     POST /chat/completions \
+     --json '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
    ```
 
 ## Error Handling
