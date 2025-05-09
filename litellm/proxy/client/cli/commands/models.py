@@ -3,6 +3,8 @@ from datetime import datetime
 import re
 from typing import Optional, Literal, Any
 import yaml
+from dataclasses import dataclass
+from collections import defaultdict
 
 # third party imports
 import click
@@ -298,13 +300,9 @@ def _filter_model(model, model_regex, access_group_regex):
             return False
     return True
 
-def _print_models_table(added_models, dry_run):
+def _print_models_table(added_models, table_title):
     if not added_models:
         return
-    table_title = (
-        "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
-        if dry_run else "Models Imported"
-    )
     table = rich.table.Table(title=table_title)
     table.add_column("Model Name", style="cyan")
     table.add_column("Upstream Model", style="green")
@@ -313,13 +311,17 @@ def _print_models_table(added_models, dry_run):
         table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
     rich.print(table)
 
-def _print_summary_table(provider_counts, total):
+def _print_summary_table(provider_counts):
     summary_table = rich.table.Table(title="Model Import Summary")
     summary_table.add_column("Provider", style="cyan")
     summary_table.add_column("Count", style="green")
+
     for provider, count in provider_counts.items():
         summary_table.add_row(str(provider), str(count))
+
+    total = sum(provider_counts.values())
     summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
+
     rich.print(summary_table)
 
 def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
@@ -333,12 +335,50 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list
 
-def _get_filtered_model_list(model_list, model_regex, access_group_regex):
+def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
     """Return a list of models that pass the filter criteria."""
+    model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
+    access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
     return [
         model for model in model_list
         if _filter_model(model, model_regex, access_group_regex)
     ]
+
+@dataclass
+class ModelYamlInfo:
+    model_name: str
+    model_params: dict[str, Any]
+    model_info: dict[str, Any]
+    model_id: str
+    access_groups: list[str]
+    provider: str
+
+    @property
+    def access_groups_str(self) -> str:
+        return ", ".join(self.access_groups) if self.access_groups else ""
+
+def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+    """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
+    model_name: str = model["model_name"]
+    model_params: dict[str, Any] = model["litellm_params"]
+    model_info: dict[str, Any] = model.get("model_info", {})
+    model_id: str = model_params["model"]
+    access_groups = model_info.get("access_groups", [])
+    provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    return ModelYamlInfo(
+        model_name=model_name,
+        model_params=model_params,
+        model_info=model_info,
+        model_id=model_id,
+        access_groups=access_groups,
+        provider=provider,
+    )
+
+def _import_models_get_table_title(dry_run: bool) -> str:
+    if dry_run:
+        return "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
+    else:
+        return "Models Imported"
 
 @models.command("import")
 @click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
@@ -362,42 +402,32 @@ def import_models(
     only_access_groups_matching_regex: Optional[str],
 ) -> None:
     """Import models from a YAML file and add them to the proxy."""
-
-    model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
-    access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
-    model_list = get_model_list_from_yaml_file(yaml_file)
-    filtered_model_list = _get_filtered_model_list(model_list, model_regex, access_group_regex)
-
-    provider_counts: dict[str, int] = {}
+    provider_counts: dict[str, int] = defaultdict(int)
     added_models: list[dict[str, str]] = []
-    total = 0
+    model_list = get_model_list_from_yaml_file(yaml_file)
+    filtered_model_list = _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex)
 
     if not dry_run:
         client = create_client(ctx)
 
     for model in filtered_model_list:
-        model_name: str = model["model_name"]
-        model_params: dict[str, Any] = model["litellm_params"]
-        model_info: dict[str, Any] = model.get("model_info", {})
-        model_id: str = model_params["model"]
-        access_groups = model_info.get("access_groups", [])
-        provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
-        provider_counts[provider] = provider_counts.get(provider, 0) + 1
-        total += 1
+        model_info_obj = _get_model_info_obj_from_yaml(model)
         added_models.append({
-            "model_name": model_name,
-            "upstream_model": model_id,
-            "access_groups": ", ".join(access_groups) if access_groups else ""
+            "model_name": model_info_obj.model_name,
+            "upstream_model": model_info_obj.model_id,
+            "access_groups": model_info_obj.access_groups_str
         })
         if not dry_run:
             try:
                 client.models.new(
-                    model_name=model_name,
-                    model_params=model_params,
-                    model_info=model_info,
+                    model_name=model_info_obj.model_name,
+                    model_params=model_info_obj.model_params,
+                    model_info=model_info_obj.model_info,
                 )
             except Exception:
                 pass  # For summary, ignore errors
+        provider_counts[model_info_obj.provider] += 1
 
-    _print_models_table(added_models, dry_run)
-    _print_summary_table(provider_counts, total)
+    table_title = _import_models_get_table_title(dry_run)
+    _print_models_table(added_models, table_title)
+    _print_summary_table(provider_counts)
