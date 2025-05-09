@@ -355,26 +355,22 @@ def import_models(
                 pass  # For summary, ignore errors
     # Output table of models
     if added_models:
-        from rich.table import Table
-        from rich.console import Console
         if dry_run:
             table_title = "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
         else:
             table_title = "Models Imported"
-        table = Table(title=table_title)
+        table = rich.table.Table(title=table_title)
         table.add_column("Model Name", style="cyan")
         table.add_column("Upstream Model", style="green")
         table.add_column("Access Groups", style="magenta")
         for m in added_models:
             table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
-        console = Console()
-        console.print(table)
+        rich.print(table)
     # Output summary as a rich table
-    from rich.table import Table as RichTable
-    summary_table = RichTable(title="Model Import Summary")
+    summary_table = rich.table.Table(title="Model Import Summary")
     summary_table.add_column("Provider", style="cyan")
     summary_table.add_column("Count", style="green")
     for provider, count in provider_counts.items():
         summary_table.add_row(str(provider), str(count))
     summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
-    console.print(summary_table)
+    rich.print(summary_table)
