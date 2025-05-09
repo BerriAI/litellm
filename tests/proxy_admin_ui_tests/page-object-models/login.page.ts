@@ -17,6 +17,10 @@ export class LoginPage {
     await this.page.goto("/ui");
   }
 
+  getPasswordInput(): Locator {
+    return this.passwordInput;
+  }
+
   async login(username: string, password: string) {
     await this.usernameInput.click();
     await this.usernameInput.fill(username);

@@ -10,6 +10,8 @@ test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
 }) => {
   let username = "admin";
   let password = "sk-1234";
+  let teamID = "team_1";
+  let invitationLink = "";
 
   if (loginDetailsSet()) {
     console.log("Login details exist in .env file.");
@@ -85,7 +87,7 @@ test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
   // 9. Enter team id in 'Team ID' field.
   console.log("9. Entering team id in 'Team ID' field.");
   await internalUsersPage.getInviteUserFormTeamIdField().click();
-  await page.getByText("team_1").click();
+  await page.getByText(teamID).click();
   await page.screenshot({
     path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/09_team_id.png`,
   });
@@ -109,7 +111,7 @@ test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
 
   // 12. Copy invitation link.
   console.log("12. Copying invitation link.");
-  let invitationLink = await page
+  invitationLink = await page
     .getByText("http://localhost:3000/ui?invitation_id")
     .innerText();
   console.log("Invitation Link Text: " + invitationLink);
@@ -118,9 +120,18 @@ test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
   });
 
   // 13. Open new tab.
+  await page.context().newPage();
+
   // 14. Navigate to inviation link.
+  await page.goto(invitationLink);
+
   // 15. Enter password.
+  await loginPage.getPasswordInput().fill("password");
+  await page.getByRole("button", { name: "Sign Up" }).click();
+
   // 16. Go to 'Team' page.
+  await dashboardLinks.getTeamsPageLink().click();
+
   // 17. Verify user is a member of team created.
 });
 
