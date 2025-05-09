@@ -100,6 +100,33 @@ async def test_anthropic_messages_non_streaming():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_streaming_bedrock_invoke():
+    """
+    Test the anthropic_messages with non-streaming request
+    """
+    litellm._turn_on_debug()
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    response = await litellm.anthropic.messages.acreate(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        max_tokens=100,
+    )
+
+    print("non-streaming bedrock invoke response: ", response)
+
+    # Verify response
+    assert "id" in response
+    assert "content" in response
+    assert "model" in response
+    assert response["role"] == "assistant"
+
+    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    return response
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming():
