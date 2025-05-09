@@ -255,7 +255,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
-    "netmind"
+    "netmind",
     "meta_llama",
     "nscale",
 ]
