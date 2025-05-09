@@ -2157,6 +2157,7 @@ class LlmProviders(str, Enum):
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
+    NSCALE = "nscale"
 
 
 # Create a set of all provider values for quick lookup

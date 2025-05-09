@@ -1,14 +1,18 @@
-from typing import Any, Dict, Optional
+from typing import Dict, List, Optional
 
 import httpx
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.types.router import GenericLiteLLMParams
+
+from ...common_utils import AnthropicError
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -52,66 +56,48 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             headers["content-type"] = "application/json"
         return headers
 
-    def map_openai_params(self, model: str, optional_params: dict) -> dict:
-        supported_params = self.get_supported_anthropic_messages_params(model)
-        mapped_params = {}
-        for key, value in optional_params.items():
-            if key in supported_params:
-                mapped_params[key] = value
-        return mapped_params
-
-    def transform_request(
+    def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
-        mapped_params = self.map_openai_params(model, optional_params)
-        # Combine the request data
-        data = {
-            "model": model,
-            "messages": messages,
-            **mapped_params,
-        }
+    ) -> Dict:
+        """
+        No transformation is needed for Anthropic messages
 
-        return data
-    
-    def transform_response(
+
+        This takes in a request in the Anthropic /v1/messages API spec -> transforms it to /v1/messages API spec (i.e) no transformation is needed
+        """
+        max_tokens = anthropic_messages_optional_request_params.pop("max_tokens", None)
+        if max_tokens is None:
+            raise AnthropicError(
+                message="max_tokens is required for Anthropic /v1/messages API",
+                status_code=400,
+            )
+        ####### get required params for all anthropic messages requests ######
+        anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
+            messages=messages,
+            max_tokens=max_tokens,
+            model=model,
+            **anthropic_messages_optional_request_params,
+        )
+        return dict(anthropic_messages_request)
+
+    def transform_anthropic_messages_response(
         self,
         model: str,
         raw_response: httpx.Response,
-        model_response: Any,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str,
-        request_data: dict,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding=None,
-        json_mode: bool = False,
     ) -> AnthropicMessagesResponse:
         """
-        Transform the raw response to match the expected format
+        No transformation is needed for Anthropic messages, since we want the response in the Anthropic /v1/messages API spec
         """
-        # For Anthropic Messages, the response is already in the correct format
-        # Just parse the JSON response
-        response_json = raw_response.json()
-
-        # Return the parsed response
-        return response_json
-
-    def transform_streaming_response(
-        self,
-        streaming_response: httpx.Response,
-        model: str,
-        logging_obj: LiteLLMLoggingObj,
-        request_body: Dict[str, Any]
-    ) -> Any:
-        """
-        Transform a streaming response from Anthropic
-        """
-        # The streaming response processing is handled in the handler.py file
-        # This function is a placeholder for completeness
-        return streaming_response
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise AnthropicError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return AnthropicMessagesResponse(**raw_response_json)
