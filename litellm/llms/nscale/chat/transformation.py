@@ -41,4 +41,12 @@ class NscaleConfig(OpenAIGPTConfig):
             "n",
             "temperature",
             "top_p",
+            "stream",
+            "logprobs",
+            "top_logprobs",
+            "frequency_penalty",
+            "presence_penalty",
+            "response_format",
+            "stop",
+            "logit_bias",
         ]
