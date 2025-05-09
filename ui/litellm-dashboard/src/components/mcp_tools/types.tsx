@@ -69,3 +69,24 @@ export interface InputSchemaProperty {
     userRole: string | null;
     userID: string | null;
   }
+
+export interface MCPServer {
+  server_id: string;
+  alias: string;
+  description: string;
+  url: string;
+  transport: string;
+  spec_version: string;
+  auth_type: string | null;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface MCPServerProps {
+  mcp_servers: MCPServer[] | null;
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+}
