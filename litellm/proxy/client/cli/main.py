@@ -11,9 +11,11 @@ from .commands.chat import chat
 from .commands.http import http
 from .commands.keys import keys
 from .commands.users import users
+from litellm._version import version as litellm_version
 
 
 @click.group()
+@click.version_option(litellm_version, "--version", "-v", message="litellm-proxy version: %(version)s")
 @click.option(
     "--base-url",
     envvar="LITELLM_PROXY_URL",

@@ -15,6 +15,18 @@ The CLI can be configured using environment variables or command-line options:
 - `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
 - `LITELLM_PROXY_API_KEY`: API key for authentication
 
+## Global Options
+
+- `--version`, `-v`: Print the LiteLLM Proxy CLI version and exit.
+
+Example:
+
+```bash
+litellm-proxy --version
+# or
+litellm-proxy -v
+```
+
 ## Commands
 
 ### Models Management
