@@ -126,7 +126,7 @@ async def create_batch(
 
             response = await llm_router.acreate_batch(**_create_batch_data)  # type: ignore
         elif (
-            unified_file_id
+            unified_file_id and input_file_id
         ):  # litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini
             target_model_names = get_models_from_unified_file_id(unified_file_id)
             ## EXPECTS 1 MODEL
@@ -150,6 +150,7 @@ async def create_batch(
                 )
 
             response = await llm_router.acreate_batch(**_create_batch_data)
+            response.input_file_id = input_file_id
         else:
             response = await litellm.acreate_batch(
                 custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore

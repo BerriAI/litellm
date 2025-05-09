@@ -2743,68 +2743,82 @@ class Router:
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            deployment = await self.async_get_available_deployment(
+            healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
                 messages=[{"role": "user", "content": "files-api-fake-text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
-            )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-
-            data = deployment["litellm_params"].copy()
-            model_name = data["model"]
-
-            model_client = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
-
-            ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-            stripped_model, custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"]
+                parent_otel_span=parent_otel_span,
             )
 
-            response = litellm.acreate_file(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
+            async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
+                self._update_kwargs_with_deployment(
+                    deployment=deployment, kwargs=kwargs
+                )
+                data = deployment["litellm_params"].copy()
+                model_name = data["model"]
 
-            rpm_semaphore = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
+                model_client = self._get_async_openai_model_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                )
+                self.total_calls[model_name] += 1
 
-            if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
-            ):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
+                ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
+                stripped_model, custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"]
+                )
+
+                response = litellm.acreate_file(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
+                )
+
+                rpm_semaphore = self._get_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    client_type="max_parallel_requests",
+                )
+
+                if rpm_semaphore is not None and isinstance(
+                    rpm_semaphore, asyncio.Semaphore
+                ):
+                    async with rpm_semaphore:
+                        """
+                        - Check rpm limits before making the call
+                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                        """
+                        await self.async_routing_strategy_pre_call_checks(
+                            deployment=deployment, parent_otel_span=parent_otel_span
+                        )
+                        response = await response  # type: ignore
+                else:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response  # type: ignore
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info(
+                    f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m"
                 )
-                response = await response  # type: ignore
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info(
-                f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m"
-            )
+                return response
 
-            return response  # type: ignore
+            tasks = []
+            for deployment in healthy_deployments:
+                tasks.append(create_file_for_deployment(deployment))
+
+            responses = await asyncio.gather(*tasks)
+
+            if len(responses) == 0:
+                raise Exception("No healthy deployments found.")
+            return responses[0]
         except Exception as e:
             verbose_router_logger.exception(
                 f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
@@ -5936,6 +5950,80 @@ class Router:
 
         return model, healthy_deployments
 
+    async def async_get_healthy_deployments(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        parent_otel_span: Optional[Span] = None,
+    ) -> Union[List[Dict], Dict]:
+        """
+        Get the healthy deployments for a model.
+
+        Returns:
+        - List[Dict], if multiple models chosen
+        *OR*
+        - Dict, if specific model chosen
+        """
+
+        model, healthy_deployments = self._common_checks_available_deployment(
+            model=model,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )  # type: ignore
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
+
+        cooldown_deployments = await _async_get_cooldown_deployments(
+            litellm_router_instance=self, parent_otel_span=parent_otel_span
+        )
+        verbose_router_logger.debug(
+            f"async cooldown deployments: {cooldown_deployments}"
+        )
+        verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
+        healthy_deployments = self._filter_cooldown_deployments(
+            healthy_deployments=healthy_deployments,
+            cooldown_deployments=cooldown_deployments,
+        )
+
+        healthy_deployments = await self.async_callback_filter_deployments(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=(
+                cast(List[AllMessageValues], messages) if messages is not None else None
+            ),
+            request_kwargs=request_kwargs,
+            parent_otel_span=parent_otel_span,
+        )
+
+        if self.enable_pre_call_checks and messages is not None:
+            healthy_deployments = self._pre_call_checks(
+                model=model,
+                healthy_deployments=cast(List[Dict], healthy_deployments),
+                messages=messages,
+                request_kwargs=request_kwargs,
+            )
+        # check if user wants to do tag based routing
+        healthy_deployments = await get_deployments_for_tag(  # type: ignore
+            llm_router_instance=self,
+            model=model,
+            request_kwargs=request_kwargs,
+            healthy_deployments=healthy_deployments,
+        )
+
+        if len(healthy_deployments) == 0:
+            exception = await async_raise_no_deployment_exception(
+                litellm_router_instance=self,
+                model=model,
+                parent_otel_span=parent_otel_span,
+            )
+            raise exception
+
+        return healthy_deployments
+
     async def async_get_available_deployment(
         self,
         model: str,
@@ -5965,61 +6053,14 @@ class Router:
             )
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
-            model, healthy_deployments = self._common_checks_available_deployment(
+            healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
+                request_kwargs=request_kwargs,
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
-            )  # type: ignore
-            if isinstance(healthy_deployments, dict):
-                return healthy_deployments
-
-            cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=self, parent_otel_span=parent_otel_span
-            )
-            verbose_router_logger.debug(
-                f"async cooldown deployments: {cooldown_deployments}"
-            )
-            verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
-            healthy_deployments = self._filter_cooldown_deployments(
-                healthy_deployments=healthy_deployments,
-                cooldown_deployments=cooldown_deployments,
-            )
-
-            healthy_deployments = await self.async_callback_filter_deployments(
-                model=model,
-                healthy_deployments=healthy_deployments,
-                messages=(
-                    cast(List[AllMessageValues], messages)
-                    if messages is not None
-                    else None
-                ),
-                request_kwargs=request_kwargs,
                 parent_otel_span=parent_otel_span,
             )
-
-            if self.enable_pre_call_checks and messages is not None:
-                healthy_deployments = self._pre_call_checks(
-                    model=model,
-                    healthy_deployments=cast(List[Dict], healthy_deployments),
-                    messages=messages,
-                    request_kwargs=request_kwargs,
-                )
-            # check if user wants to do tag based routing
-            healthy_deployments = await get_deployments_for_tag(  # type: ignore
-                llm_router_instance=self,
-                model=model,
-                request_kwargs=request_kwargs,
-                healthy_deployments=healthy_deployments,
-            )
-
-            if len(healthy_deployments) == 0:
-                exception = await async_raise_no_deployment_exception(
-                    litellm_router_instance=self,
-                    model=model,
-                    parent_otel_span=parent_otel_span,
-                )
-                raise exception
             start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"

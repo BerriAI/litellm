@@ -118,3 +118,32 @@ async def test_router_with_tags_and_fallbacks():
             mock_testing_fallbacks=True,
             metadata={"tags": ["test"]},
         )
+
+
+@pytest.mark.asyncio
+async def test_router_acreate_file():
+    """
+    Write to all deployments of a model
+    """
+    from unittest.mock import MagicMock, call, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-4o-mini"}},
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        mock_acreate_file.return_value = MagicMock()
+        response = await router.acreate_file(
+            model="gpt-3.5-turbo",
+            purpose="test",
+            file=MagicMock(),
+        )
+
+        # assert that the mock_acreate_file was called twice
+        assert mock_acreate_file.call_count == 2
