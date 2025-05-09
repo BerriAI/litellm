@@ -125,6 +125,8 @@ You can configure the CLI using environment variables or command-line options:
   litellm-proxy models delete <model-id>
   ```
 
+  [API used (OpenAPI)](https://litellm-api.up.railway.app/#/model%20management)
+
 ### Credentials Management
 
 - List, create, get, and delete credentials for LLM providers.
@@ -136,6 +138,8 @@ You can configure the CLI using environment variables or command-line options:
   litellm-proxy credentials get azure-cred
   litellm-proxy credentials delete azure-cred
   ```
+
+  [API used (OpenAPI)](https://litellm-api.up.railway.app/#/credential%20management)
 
 ### Keys Management
 
@@ -149,6 +153,8 @@ You can configure the CLI using environment variables or command-line options:
   litellm-proxy keys delete --keys sk-key1,sk-key2 --key-aliases alias1,alias2
   ```
 
+  [API used (OpenAPI)](https://litellm-api.up.railway.app/#/key%20management)
+
 ### User Management
 
 - List, create, get info, and delete users.
@@ -161,15 +167,29 @@ You can configure the CLI using environment variables or command-line options:
   litellm-proxy users delete <user-id>
   ```
 
-### Chat & HTTP Requests
+  [API used (OpenAPI)](https://litellm-api.up.railway.app/#/Internal%20User%20management)
 
-- Make chat completions or direct HTTP requests to the proxy server.
+### Chat Completions
+
+- Ask for chat completions from the proxy server.
 - Example:
 
   ```bash
   litellm-proxy chat completions gpt-4 -m "user:Hello, how are you?"
+  ```
+
+  [API used (OpenAPI)](https://litellm-api.up.railway.app/#/chat%2Fcompletions)
+
+### General HTTP Requests
+
+- Make direct HTTP requests to the proxy server.
+- Example:
+
+  ```bash
   litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
   ```
+
+  [All APIs (OpenAPI)](https://litellm-api.up.railway.app/#/)
 
 ## Environment Variables
 
