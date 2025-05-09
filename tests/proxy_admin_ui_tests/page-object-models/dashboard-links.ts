@@ -4,6 +4,8 @@ export class DashboardLinks {
   private readonly userButton: Locator;
   private readonly logoutButton: Locator;
   private readonly modelsPageLink: Locator;
+  private readonly teamsPageLink: Locator;
+  private readonly internalUsersPageLink: Locator;
 
   constructor(private readonly page: Page) {
     this.userButton = this.page.getByRole("button", { name: "User" });
@@ -11,6 +13,8 @@ export class DashboardLinks {
     this.modelsPageLink = this.page.getByRole("menuitem", {
       name: "block Models",
     });
+    this.teamsPageLink = this.page.getByText("Teams");
+    this.internalUsersPageLink = this.page.getByText("Internal Users");
   }
 
   async logout() {
@@ -24,6 +28,14 @@ export class DashboardLinks {
 
   getModelsPageLink(): Locator {
     return this.modelsPageLink;
+  }
+
+  getTeamsPageLink(): Locator {
+    return this.teamsPageLink;
+  }
+
+  getInternalUsersPageLink(): Locator {
+    return this.internalUsersPageLink;
   }
 
   verifyLogout() {

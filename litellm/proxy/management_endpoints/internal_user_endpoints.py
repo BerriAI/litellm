@@ -184,11 +184,11 @@ async def new_user(
     """
     try:
         from litellm.proxy.proxy_server import (
-            general_settings,
-            litellm_proxy_admin_name,
+            # general_settings,
+            # litellm_proxy_admin_name,
             premium_user,
             prisma_client,
-            proxy_logging_obj,
+            # proxy_logging_obj,
         )
 
         # Check for duplicate email

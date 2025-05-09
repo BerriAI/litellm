@@ -4,7 +4,8 @@ import { loginDetailsSet } from "./../utils/utils";
 test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
   loginPage,
   dashboardLinks,
-  modelsPage,
+  teamsPage,
+  internalUsersPage,
   page,
 }) => {
   let username = "admin";
@@ -26,26 +27,101 @@ test(`10109_Create_New_User_With_Team_as_User_Member`, async ({
   });
   await page.pause();
 
+  /////////
+  await page.goto("http://localhost:3000/ui");
+  /////////
+
   console.log("2. Navigate to 'Teams' page.");
-  await page.getByText("Teams").click();
+  await dashboardLinks.getTeamsPageLink().click();
   await page.screenshot({
     path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/02_teams_page.png`,
   });
 
-  // 3. Click '+ Create New Team'.
+  console.log("3. Click '+ Create New Team'.");
+  await teamsPage.getCreateNewTeamButton().click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/03_click_create_team.png`,
+  });
+
   // 4. Enter team name in 'Team Name' field.
+  console.log("4. Enter team name in 'Team Name' field.");
+  await teamsPage.getTeamNameField().click();
+  await teamsPage.getTeamNameField().fill("team_1");
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/04_enter_team_name.png`,
+  });
+
   // 5. Click 'Create Team'.
+  console.log("5. Clicking 'Create Team'.");
+  await teamsPage.getCreateTeamButton().click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/05_click_create_team.png`,
+  });
+
   // 6. Navigate to 'Internal Users' page.
+  console.log("6. Navigating to 'Internal Users' page.");
+  await dashboardLinks.getInternalUsersPageLink().click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/06_internal_users_page.png`,
+  });
+
   // 7. Click the '+ Invite User' button.
+  console.log("7. Clicking '+ Invite User'.");
+  await internalUsersPage.getInviteUsersButton().click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/07_invite_user.png`,
+  });
+
   // 8. Enter email in 'User Email' field.
-  // 9. Enter team role in 'Team Role' field.
-  // 10. Click 'Create User'.
-  // 11. Copy invitation link.
-  // 12. Open new tab.
-  // 13. Navigate to inviation link.
-  // 14. Enter password.
-  // 15. Go to 'Team' page.
-  // 16. Verify user is a member of team created.
+  console.log("8. Entering email in 'User Email' field.");
+  await internalUsersPage.getInviteUserFormUserEmailField().click();
+  await internalUsersPage
+    .getInviteUserFormUserEmailField()
+    .fill("10109_test2@berri.ai");
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/08_user_email.png`,
+  });
+
+  // 9. Enter team id in 'Team ID' field.
+  console.log("9. Entering team id in 'Team ID' field.");
+  await internalUsersPage.getInviteUserFormTeamIdField().click();
+  await page.getByText("team_1").click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/09_team_id.png`,
+  });
+
+  // 10. Select Team Role in 'Team Role' field.
+  console.log("10. Select Team Role in 'Team Role' field.");
+  await internalUsersPage.getInviteUserFormTeamRoleField().click();
+  await internalUsersPage
+    .getInviteUserFormTeamRoleSelection("user- User role. Can view")
+    .click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/10_team_role.png`,
+  });
+
+  // 11. Click 'Create User'.
+  console.log("11. Clicking 'Create User'.");
+  await internalUsersPage.getInviteUserFormCreateUserButton().click();
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/11_create_user.png`,
+  });
+
+  // 12. Copy invitation link.
+  console.log("12. Copying invitation link.");
+  let invitationLink = await page
+    .getByText("http://localhost:3000/ui?invitation_id")
+    .innerText();
+  console.log("Invitation Link Text: " + invitationLink);
+  await page.screenshot({
+    path: `./test-results/10109_Create_New_User_With_Team_as_User_Member/12_copy_invitation_link.png`,
+  });
+
+  // 13. Open new tab.
+  // 14. Navigate to inviation link.
+  // 15. Enter password.
+  // 16. Go to 'Team' page.
+  // 17. Verify user is a member of team created.
 });
 
 /*
