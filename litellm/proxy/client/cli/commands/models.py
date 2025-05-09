@@ -333,6 +333,13 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list
 
+def _get_filtered_model_list(model_list, model_regex, access_group_regex):
+    """Return a list of models that pass the filter criteria."""
+    return [
+        model for model in model_list
+        if _filter_model(model, model_regex, access_group_regex)
+    ]
+
 @models.command("import")
 @click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
 @click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
@@ -355,19 +362,20 @@ def import_models(
     only_access_groups_matching_regex: Optional[str],
 ) -> None:
     """Import models from a YAML file and add them to the proxy."""
-    model_list = get_model_list_from_yaml_file(yaml_file)
 
-    client = create_client(ctx)
     model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
+    model_list = get_model_list_from_yaml_file(yaml_file)
+    filtered_model_list = _get_filtered_model_list(model_list, model_regex, access_group_regex)
 
     provider_counts: dict[str, int] = {}
     added_models: list[dict[str, str]] = []
     total = 0
 
-    for model in model_list:
-        if not _filter_model(model, model_regex, access_group_regex):
-            continue
+    if not dry_run:
+        client = create_client(ctx)
+
+    for model in filtered_model_list:
         model_name: str = model["model_name"]
         model_params: dict[str, Any] = model["litellm_params"]
         model_info: dict[str, Any] = model.get("model_info", {})
