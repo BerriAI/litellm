@@ -1,0 +1,142 @@
+.vault:
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://gitlab.photon.thalescloud.io
+  tags:
+    - photon_new_runners
+
+variables:
+  APPSTACKCODE: synapse
+  BUSINESSLINE: sre
+  GCP_PROJECT_ID_DEV: thl-sre-d-synapse
+  GCP_PROJECT_ID_PROD: thl-sre-p-synapse
+  ARTIFACT_REGISTRY_DEV: europe-west1-docker.pkg.dev/thl-sre-d-synapse/general
+  ARTIFACT_REGISTRY_PROD: europe-west1-docker.pkg.dev/thl-sre-p-synapse/general
+  IMAGE_NAME: litellm
+  DOCKERFILE_PATH: Dockerfile
+  environment: $CI_ENVIRONMENT_NAME
+  http_proxy: $HTTP_PROXY
+  https_proxy: $HTTP_PROXY
+  no_proxy: artifactory.photon.thalescloud.io,gitlab.photon.thalescloud.io,.local,localhost,127.0.0.1,github.com
+
+stages:
+  - sync
+  - build
+  - promote
+
+Sync Upstream:
+  stage: sync
+  tags:
+    - new_photon_runners
+  script:
+    - git config --global user.email "ci-bot@litellm.thales"
+    - git config --global user.name "GitLab CI Bot"
+    - git remote add upstream https://github.com/BerriAI/litellm.git || true
+    - git fetch upstream
+    - git checkout update
+    - git merge upstream/main --no-edit || echo "Manual conflict resolution needed"
+    - git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" update
+  only:
+    - schedules
+
+Build LiteLLM Image Dev:
+  stage: build
+  extends:
+    - .vault
+  environment:
+    name: development
+  variables:
+    environment: development
+    GCP_PROJECT_ID: $GCP_PROJECT_ID_DEV
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "review"'
+      changes:
+        - .gitlab-ci.yml
+        - Dockerfile
+        - cloudbuild.yaml
+        - requirements.txt
+        - pyproject.toml
+        - poetry.lock
+        - litellm/**/*
+        - docker/**/*
+  script:
+    - >
+      VERSION=$(date +"dev-%Y.%m.%d-%H%M%S"); 
+      echo "Generated Version: $VERSION"; 
+      echo "VERSION=$VERSION" > version.env;
+
+    - >
+      echo "Logging into Vault..."; 
+      vault_role=${BUSINESSLINE}-${APPSTACKCODE}-${environment}-infra; 
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${vault_role} jwt=${VAULT_ID_TOKEN}); 
+      echo "Vault login successful.";
+
+    - >
+      echo "Fetching GCP token from Vault..."; 
+      GCP_TOKEN_JSON=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/${environment}/gcp/roleset/automation-rw/token); 
+      export CLOUDSDK_AUTH_ACCESS_TOKEN=$(echo $GCP_TOKEN_JSON | jq -r '.data.token'); 
+      export GOOGLE_OAUTH_ACCESS_TOKEN=$CLOUDSDK_AUTH_ACCESS_TOKEN; 
+      echo "GCP token obtained.";
+
+    - >
+      echo "Submitting build to GCP Cloud Build with tag $VERSION..."; 
+      gcloud builds submit --project=$GCP_PROJECT_ID \
+        --config=cloudbuild.yaml \
+        --substitutions=_IMAGE_NAME=${IMAGE_NAME},_DOCKERFILE=${DOCKERFILE_PATH},_IMAGETAG=${VERSION};
+
+    - >
+      echo "Build successful, tagging repo with $VERSION"; 
+      git config --global user.email "ccoe-dis@thalesgroup.com"; 
+      git config --global user.name "Thales DIS CCoE"; 
+      git tag -a "$VERSION" -m "Auto-tag for successful dev build"; 
+      git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
+  artifacts:
+    reports:
+      dotenv: version.env
+    paths:
+      - version.env
+
+Promote LiteLLM Image to Prod:
+  extends:
+    - .vault
+  stage: promote
+  tags:
+    - new_photon_runners
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  script:
+    - >
+      echo "Logging into Vault for dev..."; 
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-development-infra jwt=${VAULT_ID_TOKEN}); 
+      export GCLOUD_DEV_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/development/gcp/roleset/automation-rw/token | jq -r '.data.token');
+
+    - >
+      echo "Logging into Vault for prod..."; 
+      vault login -no-print=true $(vault write -field=token auth/jwt/login role=${BUSINESSLINE}-${APPSTACKCODE}-production-infra jwt=${VAULT_ID_TOKEN}); 
+      export GCLOUD_PRD_ACCESS_TOKEN=$(vault read -format=json projects/${BUSINESSLINE}-${APPSTACKCODE}/production/gcp/roleset/automation-rw/token | jq -r '.data.token');
+
+    - >
+      echo "Extracting version from commit..."; 
+      VERSION=$(git log -1 --pretty=%B | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+'); 
+      if [ -z "$VERSION" ]; then echo "❌ Missing version"; exit 1; fi; 
+      echo "✅ Release version: $VERSION";
+
+    - >
+      echo "Extracting dev source tag..."; 
+      SOURCE_TAG=$(git log -1 --pretty=%B | grep -oE 'dev-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+'); 
+      if [ -z "$SOURCE_TAG" ]; then echo "❌ Missing dev image tag"; exit 1; fi; 
+      echo "✅ Dev image tag: $SOURCE_TAG";
+
+    - >
+      echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' && 
+      git config --global user.email "ccoe-dis@thalesgroup.com" &&
+      git config --global user.name "Thales DIS CCoE" &&
+      git tag -a "$VERSION" -m "Auto-tag from commit message" && 
+      git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
+
+    - >
+      echo "Promoting image $SOURCE_TAG → $VERSION to prod..."; 
+      skopeo copy --src-registry-token $GCLOUD_DEV_ACCESS_TOKEN \
+        docker://$ARTIFACT_REGISTRY_DEV/ccoe/$IMAGE_NAME:$SOURCE_TAG \
+        --dest-registry-token $GCLOUD_PRD_ACCESS_TOKEN \
+        docker://$ARTIFACT_REGISTRY_PROD/ccoe/$IMAGE_NAME:$VERSION;
