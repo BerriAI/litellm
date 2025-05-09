@@ -27,6 +27,7 @@ class ModelYamlInfo:
     def access_groups_str(self) -> str:
         return ", ".join(self.access_groups) if self.access_groups else ""
 
+
 def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: str = model["model_name"]
@@ -43,6 +44,7 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
         access_groups=access_groups,
         provider=provider,
     )
+
 
 def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
@@ -330,6 +332,7 @@ def _filter_model(model, model_regex, access_group_regex):
             return False
     return True
 
+
 def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
     if not added_models:
         return
@@ -340,6 +343,7 @@ def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
     for m in added_models:
         table.add_row(m.model_name, m.model_id, m.access_groups_str)
     rich.print(table)
+
 
 def _print_summary_table(provider_counts):
     summary_table = rich.table.Table(title="Model Import Summary")
@@ -354,6 +358,7 @@ def _print_summary_table(provider_counts):
 
     rich.print(summary_table)
 
+
 def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
     """Load and validate the model list from a YAML file."""
     with open(yaml_file, "r") as f:
@@ -365,20 +370,20 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list
 
+
 def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
     """Return a list of models that pass the filter criteria."""
     model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
-    return [
-        model for model in model_list
-        if _filter_model(model, model_regex, access_group_regex)
-    ]
+    return [model for model in model_list if _filter_model(model, model_regex, access_group_regex)]
+
 
 def _import_models_get_table_title(dry_run: bool) -> str:
     if dry_run:
         return "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
     else:
         return "Models Imported"
+
 
 @models.command("import")
 @click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
@@ -405,7 +410,9 @@ def import_models(
     provider_counts: dict[str, int] = defaultdict(int)
     added_models: list[ModelYamlInfo] = []
     model_list = get_model_list_from_yaml_file(yaml_file)
-    filtered_model_list = _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex)
+    filtered_model_list = _get_filtered_model_list(
+        model_list, only_models_matching_regex, only_access_groups_matching_regex
+    )
 
     if not dry_run:
         client = create_client(ctx)
