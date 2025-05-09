@@ -279,6 +279,49 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
     rich.print_json(data=result)
 
 
+def _filter_model(model, model_regex, access_group_regex):
+    model_name = model.get("model_name")
+    model_params = model.get("litellm_params")
+    model_info = model.get("model_info", {})
+    if not model_name or not model_params:
+        return False
+    model_id = model_params.get("model")
+    if not model_id or not isinstance(model_id, str):
+        return False
+    if model_regex and not model_regex.search(model_id):
+        return False
+    access_groups = model_info.get("access_groups", [])
+    if access_group_regex:
+        if not isinstance(access_groups, list):
+            return False
+        if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
+            return False
+    return True
+
+def _print_models_table(added_models, dry_run):
+    if not added_models:
+        return
+    table_title = (
+        "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
+        if dry_run else "Models Imported"
+    )
+    table = rich.table.Table(title=table_title)
+    table.add_column("Model Name", style="cyan")
+    table.add_column("Upstream Model", style="green")
+    table.add_column("Access Groups", style="magenta")
+    for m in added_models:
+        table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
+    rich.print(table)
+
+def _print_summary_table(provider_counts, total):
+    summary_table = rich.table.Table(title="Model Import Summary")
+    summary_table.add_column("Provider", style="cyan")
+    summary_table.add_column("Count", style="green")
+    for provider, count in provider_counts.items():
+        summary_table.add_row(str(provider), str(count))
+    summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
+    rich.print(summary_table)
+
 @models.command("import")
 @click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
 @click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
@@ -310,32 +353,21 @@ def import_models(
         raise click.ClickException("'model_list' must be a list of model definitions.")
 
     client = create_client(ctx)
-    provider_counts = {}
-    total = 0
-
-    regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
+    model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
 
+    provider_counts = {}
     added_models = []
+    total = 0
+
     for model in model_list:
-        model_name = model.get("model_name")
-        model_params = model.get("litellm_params")
+        if not _filter_model(model, model_regex, access_group_regex):
+            continue
+        model_name = model["model_name"]
+        model_params = model["litellm_params"]
         model_info = model.get("model_info", {})
-        if not model_name or not model_params:
-            continue
-        model_id = model_params.get("model")
-        if not model_id or not isinstance(model_id, str):
-            continue
-        # Filter by model regex
-        if regex and not regex.search(model_id):
-            continue
-        # Filter by access group regex
+        model_id = model_params["model"]
         access_groups = model_info.get("access_groups", [])
-        if access_group_regex:
-            if not isinstance(access_groups, list):
-                continue
-            if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
-                continue
         provider = model_id.split("/", 1)[0] if "/" in model_id else model_id
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
         total += 1
@@ -353,24 +385,6 @@ def import_models(
                 )
             except Exception:
                 pass  # For summary, ignore errors
-    # Output table of models
-    if added_models:
-        if dry_run:
-            table_title = "Models that would be imported if [yellow]--dry-run[/yellow] was not provided"
-        else:
-            table_title = "Models Imported"
-        table = rich.table.Table(title=table_title)
-        table.add_column("Model Name", style="cyan")
-        table.add_column("Upstream Model", style="green")
-        table.add_column("Access Groups", style="magenta")
-        for m in added_models:
-            table.add_row(m["model_name"], m["upstream_model"], m["access_groups"])
-        rich.print(table)
-    # Output summary as a rich table
-    summary_table = rich.table.Table(title="Model Import Summary")
-    summary_table.add_column("Provider", style="cyan")
-    summary_table.add_column("Count", style="green")
-    for provider, count in provider_counts.items():
-        summary_table.add_row(str(provider), str(count))
-    summary_table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
-    rich.print(summary_table)
+
+    _print_models_table(added_models, dry_run)
+    _print_summary_table(provider_counts, total)
