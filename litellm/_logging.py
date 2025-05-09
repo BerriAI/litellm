@@ -103,6 +103,11 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
+# Add the handler to the logger
+verbose_router_logger.addHandler(handler)
+verbose_proxy_logger.addHandler(handler)
+verbose_logger.addHandler(handler)
+
 ALL_LOGGERS = [
     logging.getLogger(),
     verbose_logger,

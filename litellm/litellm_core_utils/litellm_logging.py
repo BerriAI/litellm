@@ -135,11 +135,15 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
     from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+    from enterprise.enterprise_callbacks.send_emails.resend_email import (
+        ResendEmailLogger,
+    )
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
     GenericAPILogger = CustomLogger  # type: ignore
+    ResendEmailLogger = CustomLogger  # type: ignore
 
 _in_memory_loggers: List[Any] = []
 
@@ -3040,6 +3044,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             generic_api_logger = GenericAPILogger()
             _in_memory_loggers.append(generic_api_logger)
             return generic_api_logger  # type: ignore
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
+                    return callback
+            resend_email_logger = ResendEmailLogger()
+            _in_memory_loggers.append(resend_email_logger)
+            return resend_email_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -3186,6 +3197,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "generic_api":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GenericAPILogger):
+                    return callback
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
                     return callback
         return None
 

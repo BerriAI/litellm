@@ -24,13 +24,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -47,46 +47,6 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
 )
 
 router = APIRouter()
-
-
-async def create_internal_user_audit_log(
-    user_id: str,
-    action: AUDIT_ACTIONS,
-    litellm_changed_by: Optional[str],
-    user_api_key_dict: UserAPIKeyAuth,
-    litellm_proxy_admin_name: Optional[str],
-    before_value: Optional[str] = None,
-    after_value: Optional[str] = None,
-):
-    """
-    Create an audit log for an internal user.
-
-    Parameters:
-    - user_id: str - The id of the user to create the audit log for.
-    - action: AUDIT_ACTIONS - The action to create the audit log for.
-    - user_row: LiteLLM_UserTable - The user row to create the audit log for.
-    - litellm_changed_by: Optional[str] - The user id of the user who is changing the user.
-    - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
-    - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
-    """
-    if not litellm.store_audit_logs:
-        return
-
-    await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=litellm_changed_by
-            or user_api_key_dict.user_id
-            or litellm_proxy_admin_name,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=LitellmTableNames.USER_TABLE_NAME,
-            object_id=user_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
-        )
-    )
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -222,12 +182,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            litellm_proxy_admin_name,
-            prisma_client,
-            proxy_logging_obj,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         # Check for duplicate email
         await _check_duplicate_user_email(data.user_email, prisma_client)
@@ -283,62 +238,7 @@ async def new_user(
                 else:
                     raise e
 
-        if data.send_invite_email is True:
-            # check if user has setup email alerting
-            if "email" not in general_settings.get("alerting", []):
-                raise ValueError(
-                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
-                )
-
-            event = WebhookEvent(
-                event="internal_user_created",
-                event_group=Litellm_EntityType.USER,
-                event_message="Welcome to LiteLLM Proxy",
-                token=response.get("token", ""),
-                spend=response.get("spend", 0.0),
-                max_budget=response.get("max_budget", 0.0),
-                user_id=response.get("user_id", None),
-                user_email=response.get("user_email", None),
-                team_id=response.get("team_id", "Default Team"),
-                key_alias=response.get("key_alias", None),
-            )
-
-            # If user configured email alerting - send an Email letting their end-user know the key was created
-            asyncio.create_task(
-                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                    webhook_event=event,
-                )
-            )
-
-        try:
-            if prisma_client is None:
-                raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
-            )
-
-            user_row_litellm_typed = LiteLLM_UserTable(
-                **user_row.model_dump(exclude_none=True)
-            )
-            asyncio.create_task(
-                create_internal_user_audit_log(
-                    user_id=user_row_litellm_typed.user_id,
-                    action="created",
-                    litellm_changed_by=user_api_key_dict.user_id,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    before_value=None,
-                    after_value=user_row_litellm_typed.model_dump_json(
-                        exclude_none=True
-                    ),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
-            )
-
-        return NewUserResponse(
+        new_user_response = NewUserResponse(
             key=response.get("token", ""),
             expires=response.get("expires", None),
             max_budget=response["max_budget"],
@@ -355,6 +255,22 @@ async def new_user(
             budget_duration=response.get("budget_duration", None),
             model_max_budget=response.get("model_max_budget", None),
         )
+
+        #########################################################
+        ########## USER CREATED HOOK ################
+        #########################################################
+        asyncio.create_task(
+            UserManagementEventHooks.async_user_created_hook(
+                data=data,
+                response=new_user_response,
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+        #########################################################
+        ########## END USER CREATED HOOK ################
+        #########################################################
+
+        return new_user_response
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/new: Exception occured - {}".format(str(e))
@@ -819,7 +735,7 @@ async def user_update(
                     **user_row.model_dump(exclude_none=True)
                 )
                 asyncio.create_task(
-                    create_internal_user_audit_log(
+                    UserManagementEventHooks.create_internal_user_audit_log(
                         user_id=user_row_litellm_typed.user_id,
                         action="updated",
                         litellm_changed_by=user_api_key_dict.user_id,
