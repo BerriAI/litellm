@@ -220,7 +220,10 @@ def get_llm_provider(  # noqa: PLR0915
                         dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
                     elif endpoint == "https://api.featherless.ai/v1":
                         custom_llm_provider = "featherless_ai"
-                        dynamic_api_key = get_secret_str("FEATHERLESS_AI_API_KEY")
+                        dynamic_api_key = get_secret_str("FEATHERLESS_AI_API_KEY")                    elif endpoint == litellm.NscaleConfig.API_BASE_URL:
+                        custom_llm_provider = "nscale"
+                        dynamic_api_key = litellm.NscaleConfig.get_api_key()
+
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
                             "api base needs to be a string. api_base={}".format(
@@ -605,7 +608,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             dynamic_api_key,
         ) = litellm.FeatherlessAIConfig()._get_openai_compatible_provider_info(
             api_base, api_key
+        )    elif custom_llm_provider == "nscale":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
         )
+
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
     if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):

@@ -254,6 +254,42 @@ Example:
 litellm-proxy keys info --key sk-key1
 ```
 
+### User Management
+
+The CLI provides commands for managing users on your LiteLLM proxy server:
+
+#### List Users
+
+View all users:
+
+```bash
+litellm-proxy users list
+```
+
+#### Get User Info
+
+Get information about a specific user:
+
+```bash
+litellm-proxy users get --id <user-id>
+```
+
+#### Create User
+
+Create a new user:
+
+```bash
+litellm-proxy users create --email user@example.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
+```
+
+#### Delete User
+
+Delete one or more users by user_id:
+
+```bash
+litellm-proxy users delete <user-id-1> <user-id-2>
+```
+
 ### Chat Commands
 
 The CLI provides commands for interacting with chat models through your LiteLLM proxy server:
@@ -395,6 +431,22 @@ litellm-proxy credentials create azure-prod \
 litellm-proxy http request POST /chat/completions \
   -j '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}' \
   -H "X-Custom-Header:value"
+```
+
+8. User management:
+
+```bash
+# List users
+litellm-proxy users list
+
+# Get user info
+litellm-proxy users get --id u1
+
+# Create a user
+litellm-proxy users create --email a@b.com --role internal_user --alias "Alice" --team team1 --max-budget 100.0
+
+# Delete users
+litellm-proxy users delete u1 u2
 ```
 
 ## Error Handling

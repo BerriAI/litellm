@@ -6,13 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(
-    0, os.path.abspath("../../../..")
+    0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock
 
+from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
-from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.types.utils import SpecialEnums
 
 

@@ -38,6 +38,7 @@ The client is organized into several resource clients for different functionalit
 - `model_groups`: Model group management
 - `keys`: API key management
 - `credentials`: Credential management
+- `users`: User management
 
 ## Chat Completions
 
@@ -155,6 +156,34 @@ groups = client.model_groups.list()
 
 # Delete a model group
 client.model_groups.delete(name="gpt4-group")
+```
+
+## Users Management
+
+Manage users on your proxy:
+
+```python
+from litellm.proxy.client import UsersManagementClient
+
+users = UsersManagementClient(base_url="http://localhost:4000", api_key="sk-test")
+
+# List users
+user_list = users.list_users()
+
+# Get user info
+user_info = users.get_user(user_id="u1")
+
+# Create a new user
+created = users.create_user({
+    "user_email": "a@b.com",
+    "user_role": "internal_user",
+    "user_alias": "Alice",
+    "teams": ["team1"],
+    "max_budget": 100.0
+})
+
+# Delete users
+users.delete_user(["u1", "u2"])
 ```
 
 ## Low-Level HTTP Client

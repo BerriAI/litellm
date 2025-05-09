@@ -163,6 +163,7 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "meta_llama",
     "featherless_ai",
+    "nscale",
 ]
 
 
@@ -225,6 +226,7 @@ openai_compatible_endpoints: List = [
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
+    "inference.api.nscale.com/v1",
 ]
 
 
@@ -257,6 +259,7 @@ openai_compatible_providers: List = [
     "galadriel",
     "meta_llama",
     "featherless_ai",
+    "nscale",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
