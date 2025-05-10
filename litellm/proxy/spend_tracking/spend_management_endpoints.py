@@ -1709,12 +1709,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
         end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
+        # Initialize total_records at the start
+        total_records = 0
+
         # Build where conditions
         where_conditions: Dict[str, Any] = {
             "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
         }
-        # if api_key:
-        #     where_conditions["api_key"] = api_key
+
+        # Add direct filters that can be applied at the database level
         if user_id: 
             where_conditions["user"] = user_id 
         if request_id:
@@ -1728,57 +1731,62 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if max_spend is not None:
             where_conditions.setdefault("spend", {}).update({"lte": max_spend})
 
-        # Calculate skip value for pagination
-        skip = (page - 1) * page_size
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
 
-        # Get paginated data
-        data = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
-            skip=skip,
-            take=page_size,
-        )
-
-        if status_filter:
-            status_lower = status_filter.strip().lower()
-
-            def status_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                status_val = metadata.get("status") if isinstance(metadata, dict) else None
-                if status_lower == "failure":
-                    return status_val == "failure"
-                elif status_lower == "success":
-                    return status_val != "failure"
-                return True
-
-            data = list(filter(status_filter_fn, data))
-
-        if key_alias:
-            def key_alias_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                key_alias_val = metadata.get("user_api_key_alias") if isinstance(metadata, dict) else None
-                if key_alias_val == key_alias:
-                    return True
-                return False
-
-            data = list(filter(key_alias_filter_fn, data))
-
+        # Handle different filtering cases
         if api_key:
-            def key_hash_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                key_hash_val = metadata.get("user_api_key") if isinstance(metadata, dict) else None
-                if key_hash_val == api_key:
-                    return True
-                return False
+            # Paginated query for api_key
+            raw_query = """
+                SELECT * FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'user_api_key' = $1
+                ORDER BY "startTime" DESC
+                LIMIT $2 OFFSET $3
+            """
+            data = await prisma_client.db.query_raw(raw_query, api_key, page_size, offset)
 
-            data = list(filter(key_hash_filter_fn, data))
+            # Total count query for api_key
+            count_query = """
+                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'user_api_key' = $1
+            """
+            total_result = await prisma_client.db.query_raw(count_query, api_key)
+            total_records = int(total_result[0]["count"]) if total_result else 0
 
-        # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
-            where=where_conditions,
-        )
+        elif status_filter:
+            # Paginated query for status
+            raw_query = """
+                SELECT * FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'status' = $1
+                ORDER BY "startTime" DESC
+                LIMIT $2 OFFSET $3
+            """
+            data = await prisma_client.db.query_raw(raw_query, status_filter, page_size, offset)
+
+            # Total count query for status
+            count_query = """
+                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'status' = $1
+            """
+            total_result = await prisma_client.db.query_raw(count_query, status_filter)
+            total_records = int(total_result[0]["count"]) if total_result else 0
+
+        else:
+            # Default case - use Prisma's normal filtering
+            data = await prisma_client.db.litellm_spendlogs.find_many(
+                where=where_conditions,
+                order={
+                    "startTime": "desc",
+                },
+                skip=offset,
+                take=page_size,
+            )
+
+            # Get total count using the same where_conditions
+            total_records = await prisma_client.db.litellm_spendlogs.count(
+                where=where_conditions,
+            )
+
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
