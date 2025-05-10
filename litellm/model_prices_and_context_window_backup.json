@@ -1971,6 +1971,7 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "mistral",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
@@ -1982,6 +1983,7 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "mistral",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
@@ -1993,6 +1995,7 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "mistral",
         "mode": "chat",
+        "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     }
