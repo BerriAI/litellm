@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -47,7 +47,7 @@ class AmazonAnthropicClaude3MessagesConfig(
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
         return AmazonInvokeConfig.sign_request(
             self=self,
             headers=headers,

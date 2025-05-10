@@ -22,6 +22,7 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ModelInfoBase,
     ModelResponse,
+    ModelResponseStream,
     ProviderField,
 )
 
@@ -415,7 +416,9 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:

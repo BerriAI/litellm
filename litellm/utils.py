@@ -2659,7 +2659,8 @@ def get_optional_params(  # noqa: PLR0915
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+            custom_llm_provider != "bedrock"
+            and not custom_llm_provider.startswith("sagemaker")
         ):  # allow dynamically setting boto3 init logic
             continue
         elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
@@ -6722,6 +6723,7 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
     return non_default_params
 
 

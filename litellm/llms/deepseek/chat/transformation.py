@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -14,9 +14,24 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
+    @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         DeepSeek does not support content in list format.
         """

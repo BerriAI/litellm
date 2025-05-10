@@ -2664,19 +2664,21 @@ def completion(  # type: ignore # noqa: PLR0915
             response = _model_response
         elif custom_llm_provider == "sagemaker_chat":
             # boto3 reads keys from .env
-            model_response = sagemaker_chat_completion.completion(
+            model_response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                custom_llm_provider="sagemaker_chat",
                 timeout=timeout,
-                custom_prompt_dict=custom_prompt_dict,
-                logger_fn=logger_fn,
+                headers=headers,
                 encoding=encoding,
-                logging_obj=logging,
-                acompletion=acompletion,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
 
