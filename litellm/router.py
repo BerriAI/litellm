@@ -2813,8 +2813,11 @@ class Router:
                 return response
 
             tasks = []
-            for deployment in healthy_deployments:
-                tasks.append(create_file_for_deployment(deployment))
+            if isinstance(healthy_deployments, dict):
+                tasks.append(create_file_for_deployment(healthy_deployments))
+            else:
+                for deployment in healthy_deployments:
+                    tasks.append(create_file_for_deployment(deployment))
 
             responses = await asyncio.gather(*tasks)
 
@@ -5969,13 +5972,13 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
-
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
         )  # type: ignore
+
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
 
@@ -6063,6 +6066,9 @@ class Router:
                 specific_deployment=specific_deployment,
                 parent_otel_span=parent_otel_span,
             )
+            if isinstance(healthy_deployments, dict):
+                return healthy_deployments
+
             start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
