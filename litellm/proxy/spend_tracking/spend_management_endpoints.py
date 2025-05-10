@@ -1753,6 +1753,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             total_result = await prisma_client.db.query_raw(count_query, api_key)
             total_records = int(total_result[0]["count"]) if total_result else 0
 
+        elif key_alias:
+            # Paginated query for api_key
+            raw_query = """
+                SELECT * FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'user_api_key_alias' = $1
+                ORDER BY "startTime" DESC
+                LIMIT $2 OFFSET $3
+            """
+            data = await prisma_client.db.query_raw(raw_query, key_alias, page_size, offset)
+
+            # Total count query for api_key
+            count_query = """
+                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
+                WHERE metadata->>'user_api_key_alias' = $1
+            """
+            total_result = await prisma_client.db.query_raw(count_query, key_alias)
+            total_records = int(total_result[0]["count"]) if total_result else 0
+            
         elif status_filter:
             # Paginated query for status
             raw_query = """

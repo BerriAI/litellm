@@ -515,7 +515,7 @@ export default function SpendLogsTable({
           <div className="border-b px-6 py-4">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
               <div className="flex flex-wrap items-center gap-3">
-                <div className="relative w-64">
+                <div className="relative w-96">
                   <input
                     type="text"
                     placeholder="Search by Request ID, Model, User"
