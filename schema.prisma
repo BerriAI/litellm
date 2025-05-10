@@ -264,6 +264,7 @@ model LiteLLM_SpendLogs {
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
+  @@index([session_id])
 }
 
 // View spend, model, api_key per request
