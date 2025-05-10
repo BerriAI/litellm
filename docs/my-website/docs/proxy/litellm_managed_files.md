@@ -6,6 +6,15 @@ import Image from '@theme/IdealImage';
 
 Reuse the same 'file id' across different providers.
 
+:::info
+
+This is a LiteLLM Enterprise feature.
+
+Available for free via the `litellm[proxy]` package or any `litellm` docker image.
+
+:::
+
+
 | Feature | Description | Comments |
 | --- | --- | --- |
 | Proxy | ✅ |  |
