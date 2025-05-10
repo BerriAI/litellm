@@ -157,6 +157,7 @@ export function useLogFilterLogic({
       userIdParamFilter,
       statusParam, 
       modelParam, 
+      keyAliasParam,
     );
     // Assuming uiSpendLogsCall returns a type compatible with SpendLogsResponse
     return response as SpendLogsResponse;
