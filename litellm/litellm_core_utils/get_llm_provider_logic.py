@@ -4,7 +4,7 @@ import httpx
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
-from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.secret_managers.main import get_secret, get_secret_bool, get_secret_str
 
 from ..types.router import LiteLLM_Params
 
@@ -85,12 +85,51 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def force_use_litellm_proxy(
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """
+    Force use litellm proxy for all models
+    it forces the llm_provider to be 'litellm_proxy'
+    LITTELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY will be used
+    if api_base and api_key are not provided
+
+    Allow the model name to be passed in original format and still use litellm proxy:
+    "gemini/gemini-1.5-pro", "openai/gpt-4", "mistral/llama-2-70b-chat" etc.
+
+    Raises Error - if api_base or api_key are not set
+
+    Return model, custom_llm_provider, dynamic_api_key, api_base
+    """
+    custom_llm_provider = "litellm_proxy"
+    api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
+    dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+    if model.startswith("litellm_proxy/"):
+        model = model.split("/", 1)[1]
+
+    if api_base is not None and not isinstance(api_base, str) or not api_base:
+        raise Exception(
+            "api base needs to be a string. api_base={}".format(api_base)
+        )
+
+    if dynamic_api_key is not None and not isinstance(dynamic_api_key, str) or not dynamic_api_key:
+        raise Exception(
+            "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
+                dynamic_api_key
+            )
+        )
+
+    return model, custom_llm_provider, dynamic_api_key, api_base
+
+
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     litellm_params: Optional[LiteLLM_Params] = None,
+    use_proxy: bool = False,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
@@ -110,6 +149,9 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = litellm_params.custom_llm_provider
             api_base = litellm_params.api_base
             api_key = litellm_params.api_key
+
+        if get_secret_bool("LITELLM_PROXY_ALWAYS") or use_proxy:
+            return force_use_litellm_proxy(model=model, api_base=api_base, api_key=api_key)
 
         dynamic_api_key = None
         # check if llm provider provided
