@@ -810,9 +810,7 @@ async def _client_async_logging_helper(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
         # check if user does not want this to be logged
-        asyncio.create_task(
-            logging_obj.async_success_handler(result, start_time, end_time)
-        )
+        await logging_obj.async_success_handler(result, start_time, end_time)
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
@@ -1207,12 +1205,8 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            logging_obj.success_handler(result, start_time, end_time)
+
             # RETURN RESULT
             update_response_metadata(
                 result=result,
@@ -1385,15 +1379,18 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
+            async_logging_params = dict(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
             )
+            if litellm.sync_logging:
+                await _client_async_logging_helper(**async_logging_params)
+            else:
+                asyncio.create_task(_client_async_logging_helper(**async_logging_params))
+
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,

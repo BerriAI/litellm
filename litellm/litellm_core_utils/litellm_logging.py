@@ -8,12 +8,13 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -1315,7 +1316,36 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(  # noqa: PLR0915
+    def success_handler(
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        synchronous=None,
+        **kwargs
+    ):
+        """
+        Execute the success handler function in a sync or async manner.
+        If synchronous argument is not provided, global `litellm.sync_logging` config is used.
+        """
+        if synchronous is None:
+            synchronous = litellm.sync_logging
+
+        if synchronous:
+            self._success_handler(result, start_time, end_time, cache_hit, **kwargs)
+        else:
+            executor.submit(
+                self._success_handler,
+                result,
+                start_time,
+                end_time,
+                cache_hit,
+                **kwargs,
+            )
+
+
+    def _success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(
@@ -2436,12 +2466,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        executor.submit(
-            self.success_handler,
-            result,
-            start_time,
-            end_time,
-        )
+        self.success_handler(result, start_time, end_time)
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """
