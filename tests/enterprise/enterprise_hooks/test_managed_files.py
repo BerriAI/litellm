@@ -40,6 +40,24 @@ def test_get_file_ids_from_messages():
     ]
 
 
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_batch_retrieve():
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    data = {
+        "user_api_key_dict": {"parent_otel_span": MagicMock()},
+        "data": {
+            "batch_id": "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDpteS1nZW5lcmFsLWF6dXJlLWRlcGxveW1lbnQ7bGxtX2JhdGNoX2lkOmJhdGNoX2EzMjJiNmJhLWFjN2UtNDg4OC05MjljLTFhZDM0NDJmMDZlZA",
+        },
+        "call_type": "aretrieve_batch",
+        "cache": MagicMock(),
+    }
+    response = await proxy_managed_files.async_pre_call_hook(**data)
+    assert response["batch_id"] == "batch_a322b6ba-ac7e-4888-929c-1ad3442f06ed"
+    assert response["model"] == "my-general-azure-deployment"
+
+
 # def test_list_managed_files():
 #     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
 

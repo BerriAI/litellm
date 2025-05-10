@@ -118,3 +118,60 @@ async def test_router_with_tags_and_fallbacks():
             mock_testing_fallbacks=True,
             metadata={"tags": ["test"]},
         )
+
+
+@pytest.mark.asyncio
+async def test_router_acreate_file():
+    """
+    Write to all deployments of a model
+    """
+    from unittest.mock import MagicMock, call, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-4o-mini"}},
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        mock_acreate_file.return_value = MagicMock()
+        response = await router.acreate_file(
+            model="gpt-3.5-turbo",
+            purpose="test",
+            file=MagicMock(),
+        )
+
+        # assert that the mock_acreate_file was called twice
+        assert mock_acreate_file.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_router_async_get_healthy_deployments():
+    """
+    Test that afile_content returns the correct file content
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+        ],
+    )
+
+    result = await router.async_get_healthy_deployments(
+        model="gpt-3.5-turbo",
+        request_kwargs={},
+        messages=None,
+        input=None,
+        specific_deployment=False,
+        parent_otel_span=None,
+    )
+
+    assert len(result) == 1
+    assert result[0]["model_name"] == "gpt-3.5-turbo"
+    assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
