@@ -20,7 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -1129,6 +1129,7 @@ def _can_object_call_model(
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
+    fallback_depth: int = 0,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1146,6 +1147,12 @@ def _can_object_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise Exception(
+            "Unable to parse model, max fallback depth exceeded - received model: {}".format(
+                model
+            )
+        )
     if isinstance(model, list):
         for m in model:
             _can_object_call_model(
@@ -1154,6 +1161,7 @@ def _can_object_call_model(
                 models=models,
                 team_model_aliases=team_model_aliases,
                 object_type=object_type,
+                fallback_depth=fallback_depth + 1,
             )
         return True
 
