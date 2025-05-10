@@ -62,6 +62,7 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/management_client",
+        "proxy/management_cli",
         {
           type: "category",
           label: "Making LLM Requests",
