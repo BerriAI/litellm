@@ -7,7 +7,6 @@ test("4644_Test_Basic_Sign_in_Flow", async ({
   virtualKeysPage,
   page,
 }) => {
-  test.setTimeout(5_000);
   let username = "admin";
   let password = "sk-1234";
   if (loginDetailsSet()) {
@@ -15,17 +14,22 @@ test("4644_Test_Basic_Sign_in_Flow", async ({
     username = process.env.UI_USERNAME as string;
     password = process.env.UI_PASSWORD as string;
   }
+
   await loginPage.goto();
-  // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/navigate-to-login-page.png",});
+
+  await page.screenshot({
+    path: "./test-results/4644_Test_Basic_Sign_in_Flow/navigate-to-login-page.png",
+  });
 
   await loginPage.login(username, password);
+  // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/dashboard.png",});
+
   await expect(page.getByRole("button", { name: "User" })).toBeVisible();
   // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/dashboard.png",});
 
   // console.log("Logging out");
   await page.getByRole("button", { name: "User" }).click();
   await page.getByText("Logout").click();
-  await page.waitForTimeout(500);
 
   await expect(page.getByRole("heading", { name: "Login" })).toBeVisible();
   // await page.screenshot({path: "./test-results/4644_Test_Basic_Sign_in_Flow/logout.png",});

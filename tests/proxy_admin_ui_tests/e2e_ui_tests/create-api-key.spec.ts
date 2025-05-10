@@ -57,7 +57,7 @@ test("4644_Test_Creating_An_API_Key_for_Self_for_All_Team_Models", async ({
 
   // console.log("8. Exiting Modal Window");
 
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(2000);
   await page
     .getByRole("dialog")
     .filter({ hasText: "Save your KeyPlease save this" })

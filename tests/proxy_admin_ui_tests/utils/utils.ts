@@ -12,3 +12,18 @@ export function loginDetailsSet(): Boolean {
   }
   return loginDetailsSet;
 }
+
+export function generateRandomString(length) {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+  let result = "";
+
+  const randomSequence = new Uint8Array(length);
+  crypto.getRandomValues(randomSequence);
+  randomSequence.forEach((number) => {
+    result += chars[number % chars.length];
+  });
+
+  return result;
+}
