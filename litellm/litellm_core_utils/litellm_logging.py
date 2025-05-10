@@ -3674,6 +3674,7 @@ def get_standard_logging_object_payload(
             or litellm_params.get("metadata", None)
             or {}
         )
+
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
