@@ -2363,9 +2363,9 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
 
 
 async def send_email(
-    receiver_email: str,
-    subject: str,
-    html: str,
+    receiver_email: Optional[str] = None,
+    subject: Optional[str] = None,
+    html: Optional[str] = None,
 ):
     """
     smtp_host,
@@ -2384,6 +2384,12 @@ async def send_email(
     sender_email = os.getenv("SMTP_SENDER_EMAIL", None)
     if sender_email is None:
         raise ValueError("Trying to use SMTP, but SMTP_SENDER_EMAIL is not set")
+    if receiver_email is None:
+        raise ValueError(f"No receiver email provided for SMTP email. {receiver_email}")
+    if subject is None:
+        raise ValueError(f"No subject provided for SMTP email. {subject}")
+    if html is None:
+        raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
