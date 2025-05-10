@@ -133,7 +133,13 @@ def test_initialize_with_tenant_credentials(setup_mocks):
     assert "azure_ad_token_provider" in result
 
 
-def test_initialize_with_username_password(setup_mocks):
+def test_initialize_with_username_password(monkeypatch, setup_mocks):
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+
     # Test with azure_username, azure_password, and client_id provided
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={
@@ -147,6 +153,14 @@ def test_initialize_with_username_password(setup_mocks):
         api_version=None,
         is_async=False,
     )
+
+    # Print the call arguments for debugging
+    print("\nDebug - Call arguments for all mocks:")
+    print("username_password_token:", setup_mocks["username_password_token"].call_args)
+    print("entra_token:", setup_mocks["entra_token"].call_args)
+    print("oidc_token:", setup_mocks["oidc_token"].call_args)
+    print("token_provider:", setup_mocks["token_provider"].call_args)
+    print("\nResult:", result)
 
     # Verify that get_azure_ad_token_from_username_password was called
     setup_mocks["username_password_token"].assert_called_once_with(
@@ -259,6 +273,7 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
 
     # Verify expected result
     assert result["azure_ad_token"] == "mock-oidc-token"
+
 
 def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
     # Clear environment variables
