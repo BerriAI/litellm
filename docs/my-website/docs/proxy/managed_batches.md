@@ -53,7 +53,7 @@ model_list:
 
 ### 2. Create Virtual Key
 
-```bash
+```bash showLineNumbers title="create_virtual_key.sh"
 curl -L -X POST 'https://{PROXY_BASE_URL}/key/generate' \
 -H 'Authorization: Bearer ${PROXY_API_KEY}' \
 -H 'Content-Type: application/json' \
@@ -73,7 +73,7 @@ Here's how to create a LiteLLM managed file and execute Batch CRUD operations wi
 - See all models with `mode: batch`
 - Set `model` in .jsonl to the model from `/model_group/info`
 
-```json
+```json showLineNumbers title="request.jsonl"
 {"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-batch", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
 {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-batch", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
 ```
@@ -88,7 +88,7 @@ Specify `target_model_names: "<model-name>"` to enable LiteLLM managed files and
 
 model-name should be the same as the model-name in the request.jsonl
 
-```python
+```python showLineNumbers title="create_batch.py"
 from openai import OpenAI
 
 client = OpenAI(
@@ -112,7 +112,7 @@ All gpt-4o-batch deployments (gpt-4o-mini-general-deployment, gpt-4o-mini-specia
 
 ### 3. Create + Retrieve the batch
 
-```python
+```python showLineNumbers title="create_batch.py"
 ...
 # Create batch
 batch = client.batches.create( 
@@ -133,7 +133,7 @@ status = batch_response.status
 
 ### 4. Retrieve Batch Content 
 
-```python
+```python showLineNumbers title="create_batch.py"
 ...
 
 file_id = batch_response.output_file_id
@@ -144,7 +144,7 @@ print(file_response.text)
 
 ### 5. Cancel a batch
 
-```python
+```python showLineNumbers title="create_batch.py"
 ...
 
 client.batches.cancel(batch_id)
@@ -152,7 +152,7 @@ client.batches.cancel(batch_id)
 
 ### 6. List batches
 
-```python
+```python showLineNumbers title="create_batch.py"
 ...
 
 client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
@@ -161,7 +161,7 @@ client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
 
 ## E2E Example
 
-```python
+```python showLineNumbers title="create_batch.py"
 import json
 from pathlib import Path
 from openai import OpenAI
