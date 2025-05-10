@@ -252,8 +252,15 @@ export function useLogFilterLogic({
   const handleRefresh = () => {
     // Reset to first page
     setCurrentPage(1);
-    // The useEffect in useLogFilterLogic will automatically trigger a refetch
-    // when currentPage changes
+    
+    // Invalidate and refetch all relevant queries
+    queryClient.invalidateQueries({ queryKey: ['allKeysForLogFilters'] });
+    queryClient.invalidateQueries({ queryKey: ['allTeamsForLogFilters'] });
+    queryClient.invalidateQueries({ queryKey: ['allUsersForLogFilters'] });
+    queryClient.invalidateQueries({ queryKey: ['allModels'] });
+    
+    // Force an immediate refetch of the logs data
+    debouncedSearch(filters, 1);
   };
 
   return {
