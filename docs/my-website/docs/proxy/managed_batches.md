@@ -142,7 +142,15 @@ file_response = client.files.content(file_id)
 print(file_response.text)
 ```
 
-### 5. Cancel a batch
+### 5. List batches
+
+```python showLineNumbers title="create_batch.py"
+...
+
+client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
+```
+
+### [Coming Soon] Cancel a batch
 
 ```python showLineNumbers title="create_batch.py"
 ...
@@ -150,13 +158,6 @@ print(file_response.text)
 client.batches.cancel(batch_id)
 ```
 
-### 6. List batches
-
-```python showLineNumbers title="create_batch.py"
-...
-
-client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
-```
 
 
 ## E2E Example
