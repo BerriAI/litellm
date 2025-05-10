@@ -126,10 +126,12 @@ class AmazonAnthropicClaude3MessagesConfig(
             anthropic_messages_request.pop("model", None)
         return anthropic_messages_request
 
-    def get_streaming_response_iterator(
+    def get_async_streaming_response_iterator(
         self,
         model: str,
         httpx_response: httpx.Response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         aws_decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,

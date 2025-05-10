@@ -97,9 +97,11 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return headers
 
-    def get_streaming_response_iterator(
+    def get_async_streaming_response_iterator(
         self,
         model: str,
         httpx_response: httpx.Response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         raise NotImplementedError("Subclasses must implement this method")
