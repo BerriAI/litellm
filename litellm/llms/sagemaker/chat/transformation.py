@@ -7,8 +7,6 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-import json
-from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import httpx
@@ -25,8 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import LlmProviders, ModelResponse
-from litellm.utils import encoding
+from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
