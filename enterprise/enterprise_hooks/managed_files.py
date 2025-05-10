@@ -186,12 +186,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
             if potential_batch_id:
                 ## for managed batch id - get the model id
-                model_id = self.get_model_id_from_unified_batch_id(potential_batch_id)
-                if model_id is None:
+                potential_model_id = self.get_model_id_from_unified_batch_id(
+                    potential_batch_id
+                )
+                if potential_model_id is None:
                     raise Exception(
                         f"LiteLLM Managed Batch ID with id={retrieve_batch_id} is invalid - does not contain encoded model_id."
                     )
-                data["model"] = model_id
+                data["model"] = potential_model_id
                 data["batch_id"] = self.get_batch_id_from_unified_batch_id(
                     potential_batch_id
                 )
