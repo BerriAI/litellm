@@ -1,0 +1,185 @@
+---
+title: v1.69.0-stable
+slug: v1.69.0-stable
+date: 2025-05-10T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+
+hide_table_of_contents: false
+---
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+
+
+## Deploy this version
+
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+``` showLineNumbers title="docker run litellm"
+docker run
+-e STORE_MODEL_IN_DB=True
+-p 4000:4000
+ghcr.io/berriai/litellm:main-v1.69.0-stable
+```
+</TabItem>
+
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.69.0.post1
+```
+</TabItem>
+</Tabs>
+
+## Key Highlights
+
+LiteLLM v1.69.0-stable brings the following key improvements:
+
+- **Email Invites**: Send new users onboarded to LiteLLM an email invite. 
+- **Nscale**:  LLM API for compliance with European regulations.
+- **Bedrock /v1/messages**: Use Bedrock Anthropic models with /v1/messages. 
+
+## Email Invites
+
+This new release brings support for:
+- Sending email invites for new users added to LiteLLM.
+- Sending a user their virtual key over email. 
+- Controlling email notification settings. 
+- Support for SMTP servers or Resend for sending emails. 
+
+
+
+
+## New Models / Updated Models
+- **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
+    - Added `gemini-2.5-pro-preview-05-06` models with pricing and context window info - [PR](https://github.com/BerriAI/litellm/pull/10597)
+    - Set correct context window length for all Gemini 2.5 variants - [PR](https://github.com/BerriAI/litellm/pull/10690)
+- **[Perplexity](../../docs/providers/perplexity)**: 
+    - Added new Perplexity models - [PR](https://github.com/BerriAI/litellm/pull/10652) 
+    - Added sonar-deep-research model pricing - [PR](https://github.com/BerriAI/litellm/pull/10537)
+- **[Azure AI Foundry](../../docs/providers/azure_ai)**: 
+    - Added cost tracking for the following models [PR](https://github.com/BerriAI/litellm/pull/9956)
+        - DeepSeek V3 0324
+        - Llama 4 Scout
+        - Llama 4 Maverick
+- **[Bedrock](../../docs/providers/bedrock)**: 
+    - Added cost tracking for Bedrock Llama 4 models - [PR](https://github.com/BerriAI/litellm/pull/10582)
+    - Fixed template conversion for Llama 4 models in Bedrock - [PR](https://github.com/BerriAI/litellm/pull/10582)
+    - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681)
+    - Added streaming support for Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10710)
+- **[OpenAI](../../docs/providers/openai)**: Added `reasoning_effort` support for `o3` models - [PR](https://github.com/BerriAI/litellm/pull/10591)
+- **[Cerebras](../../docs/providers/cerebras)**: Fixed Llama-3.1-70b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/10648)
+- **[Ollama](../../docs/providers/ollama)**: 
+    - Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
+    - Fixed KeyError when using JSON response format - [PR](https://github.com/BerriAI/litellm/pull/10611)
+- 🆕 **[Nscale](../../docs/providers/nscale)**: 
+    - Added support for chat, image generation endpoints - [PR](https://github.com/BerriAI/litellm/pull/10638)
+
+## LLM API Endpoints
+- 🆕 **[Messages API](../../docs/anthropic_unified)**: 
+    - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
+- **[Moderations API](../../docs/moderations)**: 
+    - Fixed bug to allow using LiteLLM UI credentials for /moderations API - [PR](https://github.com/BerriAI/litellm/pull/10723)  
+- **[Realtime API](../../docs/realtime)**: 
+    - Fixed setting 'headers' in scope for websocket auth requests and infinite loop issues - [PR](https://github.com/BerriAI/litellm/pull/10679)
+
+## Spend Tracking / Budget Improvements
+- **Database Optimization**: 
+  - Updated token fields in schema.prisma to use BigInt for improved performance - [PR](https://github.com/BerriAI/litellm/pull/10697)
+  - Added index for session_id on LiteLLM_SpendLogs for better query performance - [PR](https://github.com/BerriAI/litellm/pull/10727)
+  - Added `status` to root of SpendLogs table for better filtering - [PR](https://github.com/BerriAI/litellm/pull/10661)
+- **Model Pricing**: 
+  - Added pricing for new Perplexity models - [PR](https://github.com/BerriAI/litellm/pull/10537)
+  - Added Bedrock Llama4 pricing - [PR](https://github.com/BerriAI/litellm/pull/10582)
+  - Fixed Ollama custom price cost tracking - [PR](https://github.com/BerriAI/litellm/pull/10636)
+
+## Management Endpoints / UI
+- **UI Enhancements**:
+  - Allow copying Request/Response on Logs Page - [PR](https://github.com/BerriAI/litellm/pull/10720)
+  - Fixed bug where log did not remain in focus on QA Logs page + text overflow on error logs - [PR](https://github.com/BerriAI/litellm/pull/10725)
+  - Fixed model info overwriting when editing a model on UI - [PR](https://github.com/BerriAI/litellm/pull/10726)
+  - Fixed team admin model updates and organization creation with specific models - [PR](https://github.com/BerriAI/litellm/pull/10539)
+- **Log Table**:
+  - Fixed log table bugs after filtering logic was added - [PR](https://github.com/BerriAI/litellm/pull/10712)
+  - Added filtering on status and model - [PR](https://github.com/BerriAI/litellm/pull/10670)
+  - Added general filtering on logs table - [PR](https://github.com/BerriAI/litellm/pull/10644)
+- **User Management**:
+  - Added user management functionality to Python client library & CLI - [PR](https://github.com/BerriAI/litellm/pull/10627)
+  - Fixed SCIM token creation on Admin UI - [PR](https://github.com/BerriAI/litellm/pull/10628)
+  - Added 404 response when delete_verification_tokens fails - [PR](https://github.com/BerriAI/litellm/pull/10605)
+
+## Logging / Guardrail Integrations
+- **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575)
+- **File Processing**:
+  - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
+  - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
+  - Complete unified batch ID support - replacing model in jsonl to be deployment model name - [PR](https://github.com/BerriAI/litellm/pull/10719)
+  - Beta support for unified file ID (managed files) for batches - [PR](https://github.com/BerriAI/litellm/pull/10650)
+- **Model Validation**:
+  - Added target model name validation - [PR](https://github.com/BerriAI/litellm/pull/10722)
+- **JSON Logging**:
+  - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
+- **Vector Stores**:
+  - Added documentation for StandardLoggingVectorStoreRequest - [PR](https://github.com/BerriAI/litellm/pull/10535)
+
+## Performance / Reliability Improvements
+- **Python Compatibility**:
+  - Added support for Python 3.11- (fixed datetime UTC handling) - [PR](https://github.com/BerriAI/litellm/pull/10701)
+  - Fixed UnicodeDecodeError: 'charmap' on Windows during litellm import - [PR](https://github.com/BerriAI/litellm/pull/10542)
+- **Caching**:
+  - Fixed embedding string caching result - [PR](https://github.com/BerriAI/litellm/pull/10700)
+  - Fixed cache miss for Gemini models with response_format - [PR](https://github.com/BerriAI/litellm/pull/10635)
+- **Azure**:
+  - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
+- **OpenTelemetry**:
+  - Fixed OpenTelemetry to follow genai semantic conventions + support for 'instructions' param for TTS - [PR](https://github.com/BerriAI/litellm/pull/10608)
+- **Databricks**:
+  - Fixed issue when Databricks uses external model and delta could be empty - [PR](https://github.com/BerriAI/litellm/pull/10540)
+
+## General Proxy Improvements
+- **CLI**:
+  - Added `--version` flag to `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10704)
+  - Added dedicated `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10578)
+- **Documentation**:
+  - Added management client documentation - [PR](https://github.com/BerriAI/litellm/pull/10703)
+  - Changed Llama-API link for LiteLLM - [PR](https://github.com/BerriAI/litellm/pull/10556)
+  - Added GPTLocalhost to projects docs - [PR](https://github.com/BerriAI/litellm/pull/10687)
+  - Updated Instructor documentation - [PR](https://github.com/BerriAI/litellm/pull/10549)
+- **Enterprise**:
+  - Refactored to use pip package for enterprise folder - [PR](https://github.com/BerriAI/litellm/pull/10709)
+  - Added MCP Server DB Schema - [PR](https://github.com/BerriAI/litellm/pull/10641)
+- **Alerting**:
+  - Fixed Slack alerting not working when using a DB - [PR](https://github.com/BerriAI/litellm/pull/10370)
+- **Email Invites**:
+  - Added V2 Emails with fixes for sending emails when creating keys + Resend API support - [PR](https://github.com/BerriAI/litellm/pull/10602)
+  - Added user invitation emails - [PR](https://github.com/BerriAI/litellm/pull/10615)
+  - Added endpoints to manage email settings - [PR](https://github.com/BerriAI/litellm/pull/10646)
+- **General**:
+  - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
+
+## New Contributors
+- [@zoltan-ongithub](https://github.com/zoltan-ongithub) made their first contribution in [PR #10568](https://github.com/BerriAI/litellm/pull/10568)
+- [@mkavinkumar1](https://github.com/mkavinkumar1) made their first contribution in [PR #10548](https://github.com/BerriAI/litellm/pull/10548)
+- [@thomelane](https://github.com/thomelane) made their first contribution in [PR #10549](https://github.com/BerriAI/litellm/pull/10549)
+- [@frankzye](https://github.com/frankzye) made their first contribution in [PR #10540](https://github.com/BerriAI/litellm/pull/10540)
+- [@aholmberg](https://github.com/aholmberg) made their first contribution in [PR #10591](https://github.com/BerriAI/litellm/pull/10591)
+- [@aravindkarnam](https://github.com/aravindkarnam) made their first contribution in [PR #10611](https://github.com/BerriAI/litellm/pull/10611)
+- [@xsg22](https://github.com/xsg22) made their first contribution in [PR #10648](https://github.com/BerriAI/litellm/pull/10648)
+- [@casparhsws](https://github.com/casparhsws) made their first contribution in [PR #10635](https://github.com/BerriAI/litellm/pull/10635)
+- [@hypermoose](https://github.com/hypermoose) made their first contribution in [PR #10370](https://github.com/BerriAI/litellm/pull/10370)
+- [@tomukmatthews](https://github.com/tomukmatthews) made their first contribution in [PR #10638](https://github.com/BerriAI/litellm/pull/10638)
+- [@keyute](https://github.com/keyute) made their first contribution in [PR #10652](https://github.com/BerriAI/litellm/pull/10652)
+- [@GPTLocalhost](https://github.com/GPTLocalhost) made their first contribution in [PR #10687](https://github.com/BerriAI/litellm/pull/10687)
+- [@husnain7766](https://github.com/husnain7766) made their first contribution in [PR #10697](https://github.com/BerriAI/litellm/pull/10697)
+- [@claralp](https://github.com/claralp) made their first contribution in [PR #10694](https://github.com/BerriAI/litellm/pull/10694)
+- [@mollux](https://github.com/mollux) made their first contribution in [PR #10690](https://github.com/BerriAI/litellm/pull/10690)
