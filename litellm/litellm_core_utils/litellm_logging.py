@@ -140,13 +140,16 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
         ResendEmailLogger,
     )
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+        SMTPEmailLogger,
+    )
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
-
+    SMTPEmailLogger = CustomLogger  # type: ignore
 _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
@@ -3053,6 +3056,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             resend_email_logger = ResendEmailLogger()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger  # type: ignore
+        elif logging_integration == "smtp_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SMTPEmailLogger):
+                    return callback
+            smtp_email_logger = SMTPEmailLogger()
+            _in_memory_loggers.append(smtp_email_logger)
+            return smtp_email_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -3203,6 +3213,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "resend_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, ResendEmailLogger):
+                    return callback
+        elif logging_integration == "smtp_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SMTPEmailLogger):
                     return callback
         return None
 

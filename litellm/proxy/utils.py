@@ -2362,7 +2362,11 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     return
 
 
-async def send_email(receiver_email, subject, html):
+async def send_email(
+    receiver_email: str,
+    subject: str,
+    html: str,
+):
     """
     smtp_host,
     smtp_port,
@@ -2398,19 +2402,31 @@ async def send_email(receiver_email, subject, html):
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
+        with smtplib.SMTP(
+            host=smtp_host,
+            port=smtp_port,
+        ) as server:
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:
-                server.login(smtp_username, smtp_password)  # type: ignore
+                server.login(
+                    user=smtp_username,
+                    password=smtp_password,
+                )
 
             # Send the email
-            server.send_message(email_message)
+            server.send_message(
+                msg=email_message,
+                from_addr=sender_email,
+                to_addrs=receiver_email,
+            )
 
     except Exception as e:
-        print_verbose("An error occurred while sending the email:" + str(e))
+        verbose_proxy_logger.exception(
+            "An error occurred while sending the email:" + str(e)
+        )
 
 
 def hash_token(token: str):
