@@ -2316,9 +2316,11 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
     )
 
+    LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
+
 
 LLMResponseTypes = Union[
-    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject, LiteLLMBatch
 ]
 
 

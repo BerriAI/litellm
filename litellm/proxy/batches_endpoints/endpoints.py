@@ -151,10 +151,16 @@ async def create_batch(
 
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
+            response._hidden_params["unified_file_id"] = unified_file_id
         else:
             response = await litellm.acreate_batch(
                 custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -232,7 +238,6 @@ async def retrieve_batch(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
         llm_router,
         proxy_config,
@@ -249,22 +254,24 @@ async def retrieve_batch(
 
         data = cast(dict, _retrieve_batch_request)
 
-        # setup logging
-        data["litellm_call_id"] = request.headers.get(
-            "x-litellm-call-id", str(uuid.uuid4())
-        )
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type="aretrieve_batch",
         )
 
-        if litellm.enable_loadbalancing_on_batch_endpoints is True:
+        if (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            or data.get("model") is not None
+        ):
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -283,6 +290,11 @@ async def retrieve_batch(
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(

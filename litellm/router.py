@@ -135,7 +135,7 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import GenericBudgetConfigType
+from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
@@ -2836,7 +2836,7 @@ class Router:
         self,
         model: str,
         **kwargs,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
@@ -2867,7 +2867,7 @@ class Router:
         self,
         model: str,
         **kwargs,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         try:
             verbose_router_logger.debug(
                 f"Inside _acreate_batch()- model: {model}; kwargs: {kwargs}"
@@ -2880,7 +2880,6 @@ class Router:
                 request_kwargs=kwargs,
             )
 
-            kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
             self._update_kwargs_with_deployment(
@@ -2932,8 +2931,9 @@ class Router:
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
-                f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m"
+                f"litellm.acreate_batch(model={model_name})\033[32m 200 OK\033[0m"
             )
+
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
@@ -2945,26 +2945,44 @@ class Router:
 
     async def aretrieve_batch(
         self,
+        model: Optional[str] = None,
         **kwargs,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         """
         Iterate through all models in a model group to check for batch
 
         Future Improvement - cache the result.
         """
         try:
-            filtered_model_list = self.get_model_list()
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            if model is not None:
+                filtered_model_list: Optional[
+                    Union[List[DeploymentTypedDict], List[Dict], Dict]
+                ] = await self.async_get_healthy_deployments(
+                    model=model,
+                    messages=[{"role": "user", "content": "retrieve-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                    parent_otel_span=parent_otel_span,
+                )
+            else:
+                filtered_model_list = self.get_model_list()
             if filtered_model_list is None:
                 raise Exception("Router not yet initialized.")
 
             receieved_exceptions = []
 
-            async def try_retrieve_batch(model_name):
+            async def try_retrieve_batch(model_name: DeploymentTypedDict):
                 try:
+                    model = model_name["litellm_params"].get("model")
+                    if model is None:
+                        raise Exception(
+                            f"Model not found in litellm_params for deployment: {model_name}"
+                        )
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
                     _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-                        model=model_name["litellm_params"]["model"]
+                        model=model
                     )
                     new_kwargs = copy.deepcopy(kwargs)
                     new_kwargs.pop("custom_llm_provider", None)
@@ -2976,15 +2994,35 @@ class Router:
                     return None
 
             # Check all models in parallel
-            results = await asyncio.gather(
-                *[try_retrieve_batch(model) for model in filtered_model_list],
-                return_exceptions=True,
-            )
+            if (
+                filtered_model_list is not None
+                and isinstance(filtered_model_list, list)
+                and len(filtered_model_list) > 0
+            ):
+                results = await asyncio.gather(
+                    *[
+                        try_retrieve_batch(cast(DeploymentTypedDict, model))
+                        for model in filtered_model_list
+                    ],
+                    return_exceptions=True,
+                )
+            elif filtered_model_list is not None and isinstance(
+                filtered_model_list, dict
+            ):
+                results = await try_retrieve_batch(
+                    cast(DeploymentTypedDict, filtered_model_list)
+                )
+            else:
+                raise Exception("No healthy deployments found.")
 
             # Check for successful responses and handle exceptions
-            for result in results:
-                if isinstance(result, Batch):
-                    return result
+            if results is not None:
+                if isinstance(results, LiteLLMBatch):
+                    return results
+                elif isinstance(results, list):
+                    for result in results:
+                        if isinstance(result, LiteLLMBatch):
+                            return result
 
             # If no valid Batch response was found, raise the first encountered exception
             if receieved_exceptions:
