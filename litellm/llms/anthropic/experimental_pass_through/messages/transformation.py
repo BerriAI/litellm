@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -36,7 +36,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base}/v1/messages"
@@ -46,7 +54,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
+        messages: List[Any],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if "x-api-key" not in headers:
             headers["x-api-key"] = api_key
@@ -101,3 +113,38 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
         return AnthropicMessagesResponse(**raw_response_json)
+
+    def get_async_streaming_response_iterator(
+        self,
+        model: str,
+        httpx_response: httpx.Response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> AsyncIterator:
+        """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
+        from datetime import datetime
+
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
+        )
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
+
+        # Create success handler object
+        passthrough_success_handler_obj = PassThroughEndpointLogging()
+
+        # Use the existing streaming handler for Anthropic
+        start_time = datetime.now()
+        return PassThroughStreamingHandler.chunk_processor(
+            response=httpx_response,
+            request_body=request_body,
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=start_time,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route="/v1/messages",
+        )

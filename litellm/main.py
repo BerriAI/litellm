@@ -34,6 +34,7 @@ from typing import (
     Type,
     Union,
     cast,
+    get_args,
 )
 
 import dotenv
@@ -73,7 +74,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
@@ -4661,6 +4662,7 @@ def image_generation(  # noqa: PLR0915
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        dynamic_api_key: Optional[str] = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,  # type: ignore
@@ -4694,6 +4696,18 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
+        image_generation_config: Optional[BaseImageGenerationConfig] = None
+        if (
+            custom_llm_provider is not None
+            and custom_llm_provider in LlmProviders._member_map_.values()
+        ):
+            image_generation_config = (
+                ProviderConfigManager.get_provider_image_generation_config(
+                    model=model,
+                    provider=LlmProviders(custom_llm_provider),
+                )
+            )
+
         optional_params = get_optional_params_image_gen(
             model=model,
             n=n,
@@ -4703,6 +4717,7 @@ def image_generation(  # noqa: PLR0915
             style=style,
             user=user,
             custom_llm_provider=custom_llm_provider,
+            provider_config=image_generation_config,
             **non_default_params,
         )
 

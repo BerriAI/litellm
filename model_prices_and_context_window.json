@@ -3033,6 +3033,18 @@
         "supports_tool_choice": true,
         "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438"
     },
+    "azure_ai/deepseek-v3-0324": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000114,
+        "output_cost_per_token": 0.00000456,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438"
+    },
     "azure_ai/jamba-instruct": {
         "max_tokens": 4096,
         "max_input_tokens": 70000,
@@ -3147,6 +3159,32 @@
         "supports_function_calling": true,
         "mode": "chat",
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview",
+        "supports_tool_choice": true
+    },
+    "azure_ai/Llama-4-Scout-17B-16E-Instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.00000078,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
+        "supports_tool_choice": true
+    },
+    "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "max_tokens": 16384,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.00000141,
+        "output_cost_per_token": 0.00000035,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_tool_choice": true
     },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
@@ -5628,9 +5666,9 @@
         "supports_tool_choice": true
     },
     "gemini/gemini-2.5-pro-exp-03-25": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5659,9 +5697,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "gemini/gemini-2.5-flash-preview-04-17": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5689,9 +5727,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
     },
     "gemini-2.5-flash-preview-04-17": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5792,9 +5830,9 @@
         "deprecation_date": "2026-02-25"
     },
     "gemini-2.5-pro-preview-05-06": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5821,9 +5859,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
     },
     "gemini-2.5-pro-preview-03-25": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5969,9 +6007,9 @@
         "source": "https://ai.google.dev/pricing#2_0flash"
     },
     "gemini/gemini-2.5-pro-preview-05-06": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -5998,9 +6036,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview"
     },
     "gemini/gemini-2.5-pro-preview-03-25": {
-        "max_tokens": 65536,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 65535,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -10691,7 +10729,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mistral": {
         "max_tokens": 8192,
@@ -10700,7 +10739,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "completion"
+        "mode": "completion",
+        "supports_function_calling": true
     },
     "ollama/mistral-7B-Instruct-v0.1": {
         "max_tokens": 8192,
@@ -10709,7 +10749,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mistral-7B-Instruct-v0.2": {
         "max_tokens": 32768,
@@ -10718,7 +10759,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mixtral-8x7B-Instruct-v0.1": {
         "max_tokens": 32768,
@@ -10727,7 +10769,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/mixtral-8x22B-Instruct-v0.1": {
         "max_tokens": 65536,
@@ -10736,7 +10779,8 @@
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "ollama",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "ollama/codellama": {
         "max_tokens": 4096, 

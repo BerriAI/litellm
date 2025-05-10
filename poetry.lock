@@ -1710,15 +1710,27 @@ importlib-resources = {version = ">=1.4.0", markers = "python_version < \"3.9\""
 referencing = ">=0.31.0"
 
 [[package]]
+name = "litellm-enterprise"
+version = "0.1.1"
+description = "Package for LiteLLM Enterprise features"
+optional = true
+python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
+groups = ["main"]
+markers = "extra == \"proxy\""
+files = [
+    {file = "litellm_enterprise-0.1.1.tar.gz", hash = "sha256:58465200b1ab8e8c3b5e8a4ba08267502ac35dc42bc05e3a388575d02a5219b6"},
+]
+
+[[package]]
 name = "litellm-proxy-extras"
-version = "0.1.17"
+version = "0.1.18"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.1.17.tar.gz", hash = "sha256:4f12d4ede66b1eb48033d4f495ac0603799ea389d42f8c7cf4066799c23c9f88"},
+    {file = "litellm_proxy_extras-0.1.18.tar.gz", hash = "sha256:4f5a1e01aa7fefd2cde6f492479e7a27bfa3a610dffdc6d6e059ae4e0835ac6e"},
 ]
 
 [[package]]
@@ -4669,9 +4681,9 @@ type = ["pytest-mypy"]
 
 [extras]
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-kms", "prisma", "redisvl", "resend"]
-proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-proxy-extras", "mcp", "orjson", "pynacl", "python-multipart", "pyyaml", "rich", "rq", "uvicorn", "uvloop", "websockets"]
+proxy = ["PyJWT", "apscheduler", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-enterprise", "litellm-proxy-extras", "mcp", "orjson", "pynacl", "python-multipart", "pyyaml", "rich", "rq", "uvicorn", "uvloop", "websockets"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "5a9d60f85a7455ba945df6d9924fa737f1c90f619f634aeb0eb3079a44dc3061"
+content-hash = "2eb67698c4810b12b9c31ef478721b952236438764b5b52bcb67b97884b2320c"

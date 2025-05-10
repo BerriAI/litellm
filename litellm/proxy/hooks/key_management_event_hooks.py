@@ -297,9 +297,10 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_created_email(response: dict):
-        from enterprise.enterprise_callbacks.send_emails.base_email import (
+        from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
             BaseEmailLogger,
         )
+
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
         from litellm.types.enterprise.enterprise_callbacks.send_emails import (
             SendKeyCreatedEmailEvent,

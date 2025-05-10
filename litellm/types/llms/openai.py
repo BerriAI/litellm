@@ -900,6 +900,20 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
 
 
+OpenAIImageGenerationOptionalParams = Literal[
+    "background",
+    "moderation",
+    "n",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "style",
+    "user",
+]
+
+
 class ComputerToolParam(TypedDict, total=False):
     display_height: Required[float]
     """The height of the computer display."""

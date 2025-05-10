@@ -1034,10 +1034,6 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-            AnthropicMessagesHandler,
-        )
-
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.ANTHROPIC
@@ -1059,7 +1055,11 @@ class BaseLLMHTTPHandler:
         headers = anthropic_messages_provider_config.validate_environment(
             headers=extra_headers or {},
             model=model,
+            messages=messages,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
             api_key=api_key,
+            api_base=api_base,
         )
 
         logging_obj.update_environment_variables(
@@ -1081,14 +1081,27 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        request_body["stream"] = stream
-        request_body["model"] = model
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
 
         # Make the request
         request_url = anthropic_messages_provider_config.get_complete_url(
-            api_base=api_base, model=model
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+        )
+
+        headers = anthropic_messages_provider_config.sign_request(
+            headers=headers,
+            optional_params=anthropic_messages_optional_request_params,
+            request_data=request_body,
+            api_base=request_url,
+            stream=stream,
+            fake_stream=False,
+            model=model,
         )
 
         logging_obj.pre_call(
@@ -1114,11 +1127,13 @@ class BaseLLMHTTPHandler:
         logging_obj.model_call_details["httpx_response"] = response
 
         if stream:
-            return await AnthropicMessagesHandler._handle_anthropic_streaming(
-                response=response,
+            completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
+                model=model,
+                httpx_response=response,
                 request_body=request_body,
                 litellm_logging_obj=logging_obj,
             )
+            return completion_stream
         else:
             return anthropic_messages_provider_config.transform_anthropic_messages_response(
                 model=model,

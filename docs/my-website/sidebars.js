@@ -62,6 +62,7 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/management_client",
+        "proxy/management_cli",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -552,6 +553,7 @@ const sidebars = {
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
             "projects/pgai",
+            "projects/GPTLocalhost",
           ],
         },
         "proxy/pii_masking",
