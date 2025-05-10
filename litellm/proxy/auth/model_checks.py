@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+from itertools import filterfalse
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -42,6 +43,10 @@ def get_provider_models(
             if provider not in _model:
                 provider_models[idx] = f"{provider}/{_model}"
         return provider_models
+    else: #deployment under custom prefix foo/*
+        custom_llm_provider = litellm_params.model.split("/", maxsplit=1)[0] \
+            if litellm_params and litellm_params.model and "/" in litellm_params.model else None
+        return get_valid_models(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
     return None
 
 
@@ -155,7 +160,8 @@ def get_complete_model_list(
         llm_router=llm_router,
     )
 
-    return list(unique_models) + all_wildcard_models
+    no_wildcards = filterfalse(_check_wildcard_routing, unique_models) # they were added above if necessary
+    return list(no_wildcards) + all_wildcard_models
 
 
 def get_known_models_from_wildcard(
@@ -172,7 +178,7 @@ def get_known_models_from_wildcard(
     if wildcard_models is None:
         return []
     if model == "*":
-        return wildcard_models or []
+        return [(provider+"/"+wc) for wc in wildcard_models] if wildcard_models else []
     else:
         model_prefix = model.replace("*", "")
         filtered_wildcard_models = [
