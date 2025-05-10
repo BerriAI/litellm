@@ -1998,7 +1998,7 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
-    }
+    },
     "mistral/mistral-medium-2312": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
