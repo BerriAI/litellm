@@ -36,3 +36,7 @@ def test_redacted_thinking_content_block_delta():
         model_response.choices[0].delta.thinking_blocks[0]["type"]
         == "redacted_thinking"
     )
+    
+    # Verify the fix from commit 59f457d79
+    assert model_response.choices[0].delta.provider_specific_fields is not None
+    assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
