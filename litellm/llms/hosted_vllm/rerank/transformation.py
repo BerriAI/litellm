@@ -1,22 +1,40 @@
+"""
+Transformation logic for Hosted VLLM rerank
+"""
+
+import uuid
 from typing import Any, Dict, List, Optional, Union
 
+from litellm.types.rerank import (
+    RerankBilledUnits,
+    RerankResponse,
+    RerankResponseDocument,
+    RerankResponseMeta,
+    RerankResponseResult,
+    RerankTokens,
+    OptionalRerankParams,
+    RerankRequest,
+)
+
 import httpx
-import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
-
-from ..common_utils import CohereError
 
 
-class CohereRerankConfig(BaseRerankConfig):
-    """
-    Reference: https://docs.cohere.com/v2/reference/rerank
-    """
+class HostedVLLMRerankError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
+    ):
+        super().__init__(status_code=status_code, message=message, headers=headers)
 
+
+class HostedVLLMRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
@@ -27,14 +45,13 @@ class CohereRerankConfig(BaseRerankConfig):
             if not api_base.endswith("/v1/rerank"):
                 api_base = f"{api_base}/v1/rerank"
             return api_base
-        return "https://api.cohere.ai/v1/rerank"
+        raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
             "query",
             "documents",
             "top_n",
-            "max_chunks_per_doc",
             "rank_fields",
             "return_documents",
         ]
@@ -54,17 +71,17 @@ class CohereRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: Optional[int] = None,
     ) -> OptionalRerankParams:
         """
-        Map Cohere rerank params
-
-        No mapping required - returns all supported params
+        Map parameters for Hosted VLLM rerank
         """
+        if max_chunks_per_doc is not None:
+            raise ValueError("Hosted VLLM does not support max_chunks_per_doc")
+            
         return OptionalRerankParams(
             query=query,
             documents=documents,
             top_n=top_n,
             rank_fields=rank_fields,
             return_documents=return_documents,
-            max_chunks_per_doc=max_chunks_per_doc,
         )
 
     def validate_environment(
@@ -74,19 +91,10 @@ class CohereRerankConfig(BaseRerankConfig):
         api_key: Optional[str] = None,
     ) -> dict:
         if api_key is None:
-            api_key = (
-                get_secret_str("COHERE_API_KEY")
-                or get_secret_str("CO_API_KEY")
-                or litellm.cohere_key
-            )
-
-        if api_key is None:
-            raise ValueError(
-                "Cohere API key is required. Please set 'COHERE_API_KEY' or 'CO_API_KEY' or 'litellm.cohere_key'"
-            )
+            api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
         default_headers = {
-            "Authorization": f"bearer {api_key}",
+            "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
         }
@@ -105,9 +113,10 @@ class CohereRerankConfig(BaseRerankConfig):
         headers: dict,
     ) -> dict:
         if "query" not in optional_rerank_params:
-            raise ValueError("query is required for Cohere rerank")
+            raise ValueError("query is required for Hosted VLLM rerank")
         if "documents" not in optional_rerank_params:
-            raise ValueError("documents is required for Cohere rerank")
+            raise ValueError("documents is required for Hosted VLLM rerank")
+        
         rerank_request = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
@@ -115,7 +124,6 @@ class CohereRerankConfig(BaseRerankConfig):
             top_n=optional_rerank_params.get("top_n", None),
             rank_fields=optional_rerank_params.get("rank_fields", None),
             return_documents=optional_rerank_params.get("return_documents", None),
-            max_chunks_per_doc=optional_rerank_params.get("max_chunks_per_doc", None),
         )
         return rerank_request.model_dump(exclude_none=True)
 
@@ -131,15 +139,13 @@ class CohereRerankConfig(BaseRerankConfig):
         litellm_params: dict = {},
     ) -> RerankResponse:
         """
-        Transform Cohere rerank response
-
-        No transformation required, litellm follows cohere API response format
+        Process response from Hosted VLLM rerank API
         """
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise CohereError(
-                message=raw_response.text, status_code=raw_response.status_code
+            raise ValueError(
+                f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}"
             )
 
         return RerankResponse(**raw_response_json)
@@ -147,4 +153,50 @@ class CohereRerankConfig(BaseRerankConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return CohereError(message=error_message, status_code=status_code)
+        return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
+
+    def _transform_response(self, response: dict) -> RerankResponse:
+        # Extract usage information
+        usage_data = response.get("usage", {})
+        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
+        _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
+        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+
+        # Extract results
+        _results: Optional[List[dict]] = response.get("results")
+
+        if _results is None:
+            raise ValueError(f"No results found in the response={response}")
+
+        rerank_results: List[RerankResponseResult] = []
+
+        for result in _results:
+            # Validate required fields exist
+            if not all(key in result for key in ["index", "relevance_score"]):
+                raise ValueError(f"Missing required fields in the result={result}")
+
+            # Get document data if it exists
+            document_data = result.get("document", {})
+            document = (
+                RerankResponseDocument(text=str(document_data.get("text", "")))
+                if document_data
+                else None
+            )
+
+            # Create typed result
+            rerank_result = RerankResponseResult(
+                index=int(result["index"]),
+                relevance_score=float(result["relevance_score"]),
+            )
+
+            # Only add document if it exists
+            if document:
+                rerank_result["document"] = document
+
+            rerank_results.append(rerank_result)
+
+        return RerankResponse(
+            id=response.get("id") or str(uuid.uuid4()),
+            results=rerank_results,
+            meta=rerank_meta,
+        ) 
