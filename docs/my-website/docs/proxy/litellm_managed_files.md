@@ -8,9 +8,9 @@ Reuse the same file across different providers.
 
 :::info
 
-This is a LiteLLM Enterprise feature.
+This is a free LiteLLM Enterprise feature.
 
-Available for free via the `litellm[proxy]` package or any `litellm` docker image.
+Available via the `litellm[proxy]` package or any `litellm` docker image.
 
 :::
 
