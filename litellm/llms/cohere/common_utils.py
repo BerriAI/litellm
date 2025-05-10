@@ -21,11 +21,15 @@ def validate_environment(
     messages: List[AllMessageValues],
     optional_params: dict,
     api_key: Optional[str] = None,
+    api_version: Optional[str] = "v1",
 ) -> dict:
     """
     Return headers to use for cohere chat completion request
 
-    Cohere API Ref: https://docs.cohere.com/reference/chat
+    Cohere API Ref: 
+    - v1: https://docs.cohere.com/reference/chat
+    - v2: https://docs.cohere.com/v2/reference/chat
+    
     Expected headers:
     {
         "Request-Source": "unspecified:litellm",

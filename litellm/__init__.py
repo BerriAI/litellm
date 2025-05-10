@@ -380,6 +380,7 @@ open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
 cohere_models: List = []
 cohere_chat_models: List = []
+cohere_v2_models: List = []
 mistral_chat_models: List = []
 text_completion_codestral_models: List = []
 anthropic_models: List = []
@@ -479,6 +480,8 @@ def add_known_models():
             cohere_models.append(key)
         elif value.get("litellm_provider") == "cohere_chat":
             cohere_chat_models.append(key)
+        elif value.get("litellm_provider") == "cohere_v2":
+            cohere_v2_models.append(key)
         elif value.get("litellm_provider") == "mistral":
             mistral_chat_models.append(key)
         elif value.get("litellm_provider") == "anthropic":
@@ -626,6 +629,7 @@ model_list = (
     + open_ai_text_completion_models
     + cohere_models
     + cohere_chat_models
+    + cohere_v2_models
     + anthropic_models
     + replicate_models
     + openrouter_models
@@ -679,8 +683,9 @@ provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "text-completion-openai": open_ai_text_completion_models,
-    "cohere": cohere_models + cohere_chat_models,
+    "cohere": cohere_models + cohere_chat_models + cohere_v2_models,
     "cohere_chat": cohere_chat_models,
+    "cohere_v2": cohere_v2_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
     "huggingface": huggingface_models,
@@ -951,6 +956,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
+from .llms.cohere.chat.transformation_v2 import CohereChatConfigV2
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
