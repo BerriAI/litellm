@@ -1,10 +1,10 @@
-# [BETA] Unified File ID with Batches
+# [BETA] LiteLLM Managed Files with Batches
 
 :::info
 
-This is a LiteLLM Enterprise feature.
+This is a free LiteLLM Enterprise feature.
 
-Available for free via the `litellm[proxy]` package or any `litellm` docker image.
+Available via the `litellm[proxy]` package or any `litellm` docker image.
 
 :::
 
@@ -21,8 +21,8 @@ Available for free via the `litellm[proxy]` package or any `litellm` docker imag
 Use this to:
 
 - Loadbalance across multiple Azure Batch deployments
-- Easily switch across Azure/OpenAI/VertexAI Batch APIs without needing to reupload files each time
 - Control batch model access by key/user/team (same as chat completion models)
+
 
 ## (Proxy Admin) Usage
 
@@ -32,7 +32,7 @@ Here's how to give developers access to your Batch models.
 
 - specify `mode: batch` for each model: Allows developers to know this is a batch model.
 
-```yaml
+```yaml showLineNumbers title="litellm_config.yaml"
 model_list:
   - model_name: "gpt-4o-batch"
     litellm_params:
@@ -65,6 +65,8 @@ You can now use the virtual key to access the batch models (See Developer flow).
 
 ## (Developer) Usage
 
+Here's how to create a LiteLLM managed file and execute Batch CRUD operations with the file. 
+
 ### 1. Create request.jsonl 
 
 - Check models available via `/model_group/info`
@@ -78,7 +80,7 @@ You can now use the virtual key to access the batch models (See Developer flow).
 
 Expectation:
 
-- LiteLLM translates this to the azure model specific value
+- LiteLLM translates this to the azure deployment specific value (e.g. `gpt-4o-mini-general-deployment`)
 
 ### 2. Upload File 
 
@@ -103,10 +105,10 @@ batch_input_file = client.files.create(
 print(batch_input_file)
 ```
 
-Expectation:
 
-- This is used to validate if user has model access. 
-- This is used to write the file to the correct deployments (all gpt-4o-batch deployments will be written to).
+**Where is the file written?**:
+
+All gpt-4o-batch deployments (gpt-4o-mini-general-deployment, gpt-4o-mini-special-deployment) will be written to. This enables loadbalancing across all gpt-4o-batch deployments in Step 3.
 
 ### 3. Create + Retrieve the batch
 
@@ -123,7 +125,7 @@ print(batch)
 
 # Retrieve batch
 
-batch_response = client.batches.retrieve( # LOG VIRTUAL MODEL NAME
+batch_response = client.batches.retrieve(
     batch_id
 )
 status = batch_response.status
@@ -156,3 +158,105 @@ client.batches.cancel(batch_id)
 client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
 ```
 
+
+## E2E Example
+
+```python
+import json
+from pathlib import Path
+from openai import OpenAI
+
+"""
+litellm yaml: 
+
+model_list:
+    - model_name: gpt-4o-batch
+      litellm_params:
+        model: azure/gpt-4o-my-special-deployment
+        api_key: ..
+        api_base: .. 
+
+---
+request.jsonl: 
+{
+    {
+        ...,
+        "body":{"model": "gpt-4o-batch", ...}}
+    }
+}
+"""
+
+client = OpenAI(
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-1234",
+)
+
+# Upload file
+batch_input_file = client.files.create(
+    file=open("./request.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"target_model_names": "gpt-4o-batch"}
+)
+print(batch_input_file) 
+
+
+# Create batch
+batch = client.batches.create( # UPDATE BATCH ID TO FILE ID 
+    input_file_id=batch_input_file.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"description": "Test batch job"},
+)
+print(batch)
+batch_id = batch.id
+
+# Retrieve batch
+
+batch_response = client.batches.retrieve( # LOG VIRTUAL MODEL NAME
+    batch_id
+)
+status = batch_response.status
+
+print(f"status: {status}, output_file_id: {batch_response.output_file_id}")
+
+# Download file
+output_file_id = batch_response.output_file_id
+print(f"output_file_id: {output_file_id}")
+if not output_file_id:
+    output_file_id = batch_response.error_file_id
+
+if output_file_id:
+    file_response = client.files.content(
+        output_file_id
+    )
+    raw_responses = file_response.text.strip().split("\n")
+
+    with open(
+        Path.cwd().parent / "unified_batch_output.json", "w"
+    ) as output_file:
+        for raw_response in raw_responses:
+            json.dump(json.loads(raw_response), output_file)
+            output_file.write("\n")
+## List Batch
+
+list_batch_response = client.batches.list( # LOG VIRTUAL MODEL NAME
+    extra_query={"target_model_names": "gpt-4o-batch"}
+)
+
+## Cancel Batch
+
+batch_response = client.batches.cancel( # LOG VIRTUAL MODEL NAME
+    batch_id
+)
+status = batch_response.status
+
+print(f"status: {status}")
+```
+
+## FAQ
+
+### Where are my files written?
+
+When a `target_model_names` is specified, the file is written to all deployments that match the `target_model_names`.
+
+No additional infrastructure is required.
