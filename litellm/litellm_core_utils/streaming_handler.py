@@ -1541,7 +1541,7 @@ class CustomStreamWrapper:
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
-                        obj_dict = response.dict()
+                        obj_dict = response.model_dump()
 
                         # Remove an attribute (e.g., 'attr2')
                         if "usage" in obj_dict:
@@ -1693,7 +1693,7 @@ class CustomStreamWrapper:
                         processed_chunk, "usage"
                     ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
-                        obj_dict = processed_chunk.dict()
+                        obj_dict = processed_chunk.model_dump()
 
                         # Remove an attribute (e.g., 'attr2')
                         if "usage" in obj_dict:
