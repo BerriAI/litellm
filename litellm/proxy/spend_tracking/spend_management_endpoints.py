@@ -1655,7 +1655,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     status_filter: Optional[str] = fastapi.Query(
         default=None,
-        description="Filter logs by status (e.g., success, failure)"
+        description="Filter logs by status (e.g., success || "" || null, failure)"
     ),
     model: Optional[str] = fastapi.Query(  # Add this new parameter
         default=None,
@@ -1717,93 +1717,98 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
         }
 
-        # Add direct filters that can be applied at the database level
-        if user_id: 
-            where_conditions["user"] = user_id 
-        if request_id:
-            where_conditions["request_id"] = request_id
-        if team_id:
-            where_conditions["team_id"] = team_id
-        if model:
-            where_conditions["model"] = model
-        if min_spend is not None:
-            where_conditions.setdefault("spend", {}).update({"gte": min_spend})
-        if max_spend is not None:
-            where_conditions.setdefault("spend", {}).update({"lte": max_spend})
-
+        
         # Calculate offset for pagination
         offset = (page - 1) * page_size
 
-        # Handle different filtering cases
+        # Build dynamic SQL conditions
+        conditions = []
+        params = []
+        param_index = 1  # To keep track of $1, $2, ...
+
+        conditions.append(f'"startTime" >= ${param_index}::timestamp')
+        params.append(start_date_iso)
+        param_index += 1
+
+        conditions.append(f'"startTime" <= ${param_index}::timestamp')
+        params.append(end_date_iso)
+        param_index += 1
+
+        # Optional filters
+        if user_id:
+            conditions.append(f'"user" = ${param_index}')
+            params.append(user_id)
+            param_index += 1
+
+        if request_id:
+            conditions.append(f'"request_id" = ${param_index}')
+            params.append(request_id)
+            param_index += 1
+
+        if team_id:
+            conditions.append(f'"team_id" = ${param_index}')
+            params.append(team_id)
+            param_index += 1
+
+        if model:
+            conditions.append(f'"model" = ${param_index}')
+            params.append(model)
+            param_index += 1
+
+        if min_spend is not None:
+            conditions.append(f'"spend" >= ${param_index}')
+            params.append(min_spend)
+            param_index += 1
+
+        if max_spend is not None:
+            conditions.append(f'"spend" <= ${param_index}')
+            params.append(max_spend)
+            param_index += 1
+
         if api_key:
-            # Paginated query for api_key
-            raw_query = """
-                SELECT * FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'user_api_key' = $1
-                ORDER BY "startTime" DESC
-                LIMIT $2 OFFSET $3
-            """
-            data = await prisma_client.db.query_raw(raw_query, api_key, page_size, offset)
+            conditions.append(f"metadata->>'user_api_key' = ${param_index}")
+            params.append(api_key)
+            param_index += 1
 
-            # Total count query for api_key
-            count_query = """
-                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'user_api_key' = $1
-            """
-            total_result = await prisma_client.db.query_raw(count_query, api_key)
-            total_records = int(total_result[0]["count"]) if total_result else 0
+        if key_alias:
+            conditions.append(f"metadata->>'user_api_key_alias' = ${param_index}")
+            params.append(key_alias)
+            param_index += 1
 
-        elif key_alias:
-            # Paginated query for api_key
-            raw_query = """
-                SELECT * FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'user_api_key_alias' = $1
-                ORDER BY "startTime" DESC
-                LIMIT $2 OFFSET $3
-            """
-            data = await prisma_client.db.query_raw(raw_query, key_alias, page_size, offset)
+        if status_filter:
+            if status_filter.lower() == "failure":
+                conditions.append("metadata->>'status' = 'failure'")
+            else:
+                conditions.append("(metadata->>'status' IS NULL OR metadata->>'status' != 'failure')")
 
-            # Total count query for api_key
-            count_query = """
-                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'user_api_key_alias' = $1
-            """
-            total_result = await prisma_client.db.query_raw(count_query, key_alias)
-            total_records = int(total_result[0]["count"]) if total_result else 0
-            
-        elif status_filter:
-            # Paginated query for status
-            raw_query = """
-                SELECT * FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'status' = $1
-                ORDER BY "startTime" DESC
-                LIMIT $2 OFFSET $3
-            """
-            data = await prisma_client.db.query_raw(raw_query, status_filter, page_size, offset)
+        # Final WHERE clause from dynamic conditions
+        where_clause = " AND ".join(conditions)
 
-            # Total count query for status
-            count_query = """
-                SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
-                WHERE metadata->>'status' = $1
-            """
-            total_result = await prisma_client.db.query_raw(count_query, status_filter)
-            total_records = int(total_result[0]["count"]) if total_result else 0
+        # Add LIMIT and OFFSET as the final two parameters
+        params += [page_size, offset]
+        param_index += 2  # Advance the parameter index accordingly
 
-        else:
-            # Default case - use Prisma's normal filtering
-            data = await prisma_client.db.litellm_spendlogs.find_many(
-                where=where_conditions,
-                order={
-                    "startTime": "desc",
-                },
-                skip=offset,
-                take=page_size,
-            )
+        # Dynamically reference the new LIMIT and OFFSET parameters
+        limit_param = f"${param_index - 2}"
+        offset_param = f"${param_index - 1}"
 
-            # Get total count using the same where_conditions
-            total_records = await prisma_client.db.litellm_spendlogs.count(
-                where=where_conditions,
-            )
+        # Final dynamic paginated query
+        raw_query = f"""
+            SELECT * FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+            ORDER BY "startTime" DESC
+            LIMIT {limit_param} OFFSET {offset_param}
+        """
+        data = await prisma_client.db.query_raw(raw_query, *params)
+
+        # Count query (without limit/offset params)
+        count_query = f"""
+            SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+        """
+        total_result = await prisma_client.db.query_raw(count_query, *params[:-2])  # Exclude limit/offset
+        total_records = int(total_result[0]["count"]) if total_result else 0
+
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
