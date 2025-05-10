@@ -10,8 +10,6 @@ import contextvars
 from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
 
-import httpx
-
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
