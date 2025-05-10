@@ -1727,11 +1727,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
-        # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
-            where=where_conditions,
-        )
-
         # Get paginated data
         data = await prisma_client.db.litellm_spendlogs.find_many(
             where=where_conditions,
@@ -1742,6 +1737,24 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             take=page_size,
         )
 
+        if status_filter:
+            status_lower = status_filter.strip().lower()
+
+            def status_filter_fn(row):
+                metadata = getattr(row, "metadata", {}) or {}
+                status_val = metadata.get("status") if isinstance(metadata, dict) else None
+                if status_lower == "failure":
+                    return status_val == "failure"
+                elif status_lower == "success":
+                    return status_val != "failure"
+                return True
+
+            data = list(filter(status_filter_fn, data))
+
+        # Get total count of records
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions,
+        )
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
