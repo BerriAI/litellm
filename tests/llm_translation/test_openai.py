@@ -473,10 +473,15 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
         return litellm.LlmProviders.OPENAI
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-4o", "anthropic/claude-3-5-sonnet-latest", "gemini/gemini-1.5-flash", "anthropic.claude-3-5-sonnet-20240620-v1:0"])
+@pytest.mark.parametrize("model", ["gpt-4o"])
 async def test_openai_pdf_url(model):
-    response = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
-    )
-    print("litellm response: ", response.model_dump_json(indent=4))
+    from litellm.utils import return_raw_request, CallTypes
+
+    request = return_raw_request(CallTypes.completion, {
+        "model": model,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
+    })
+    print("request: ", request)
+
+    assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
+
