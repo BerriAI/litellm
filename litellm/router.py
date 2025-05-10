@@ -3107,6 +3107,13 @@ class Router:
                 request_kwargs=kwargs,
             )
             kwargs["model"] = deployment["litellm_params"]["model"]
+            data = deployment["litellm_params"].copy()
+            self._update_kwargs_with_deployment(
+                deployment=deployment,
+                kwargs=kwargs,
+            )
+            kwargs.update(data)
+
         return await original_function(**kwargs)
 
     def factory_function(

@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -148,6 +149,7 @@ async def test_router_acreate_file():
         # assert that the mock_acreate_file was called twice
         assert mock_acreate_file.call_count == 2
 
+
 @pytest.mark.asyncio
 async def test_router_async_get_healthy_deployments():
     """
@@ -175,3 +177,34 @@ async def test_router_async_get_healthy_deployments():
     assert result[0]["model_name"] == "gpt-3.5-turbo"
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
 
+
+@pytest.mark.asyncio
+@patch("litellm.amoderation")
+async def test_router_amoderation_with_credential_name(mock_amoderation):
+    """
+    Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
+    """
+    mock_amoderation.return_value = AsyncMock()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "text-moderation-stable",
+                "litellm_params": {
+                    "model": "text-moderation-stable",
+                    "litellm_credential_name": "my-custom-auth",
+                },
+            },
+        ],
+    )
+
+    await router.amoderation(input="I love everyone!", model="text-moderation-stable")
+
+    mock_amoderation.assert_called_once()
+    call_kwargs = mock_amoderation.call_args[1]  # Get the kwargs of the call
+    print(
+        "call kwargs for router.amoderation=",
+        json.dumps(call_kwargs, indent=4, default=str),
+    )
+    assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
+    assert call_kwargs["model"] == "text-moderation-stable"
