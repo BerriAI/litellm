@@ -197,7 +197,10 @@ class MistralConfig(OpenAIGPTConfig):
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
-        return new_messages
+        if is_async:
+            return super()._transform_messages(new_messages, model, True)
+        else:
+            return super()._transform_messages(new_messages, model, False)
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

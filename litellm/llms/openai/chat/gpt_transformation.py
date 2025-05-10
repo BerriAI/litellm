@@ -398,14 +398,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages = self._transform_messages(
+        transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
-        if asyncio.iscoroutine(transformed_messages):
-            transformed_messages = await transformed_messages
+
         return {
             "model": model,
-            "messages": messages,
+            "messages": transformed_messages,
             **optional_params,
         }
 

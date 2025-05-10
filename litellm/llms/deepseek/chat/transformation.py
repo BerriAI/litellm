@@ -36,7 +36,14 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         DeepSeek does not support content in list format.
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
-        return super()._transform_messages(messages=messages, model=model)
+        if is_async:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=True
+            )
+        else:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=False
+            )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
