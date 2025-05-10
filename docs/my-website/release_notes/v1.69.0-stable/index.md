@@ -98,25 +98,18 @@ This new release brings support for:
   - Updated token fields in schema.prisma to use BigInt for improved performance - [PR](https://github.com/BerriAI/litellm/pull/10697)
   - Added index for session_id on LiteLLM_SpendLogs for better query performance - [PR](https://github.com/BerriAI/litellm/pull/10727)
   - Added `status` to root of SpendLogs table for better filtering - [PR](https://github.com/BerriAI/litellm/pull/10661)
-- **Model Pricing**: 
-  - Added pricing for new Perplexity models - [PR](https://github.com/BerriAI/litellm/pull/10537)
-  - Added Bedrock Llama4 pricing - [PR](https://github.com/BerriAI/litellm/pull/10582)
-  - Fixed Ollama custom price cost tracking - [PR](https://github.com/BerriAI/litellm/pull/10636)
 
 ## Management Endpoints / UI
-- **UI Enhancements**:
-  - Allow copying Request/Response on Logs Page - [PR](https://github.com/BerriAI/litellm/pull/10720)
-  - Fixed bug where log did not remain in focus on QA Logs page + text overflow on error logs - [PR](https://github.com/BerriAI/litellm/pull/10725)
-  - Fixed model info overwriting when editing a model on UI - [PR](https://github.com/BerriAI/litellm/pull/10726)
-  - Fixed team admin model updates and organization creation with specific models - [PR](https://github.com/BerriAI/litellm/pull/10539)
-- **Log Table**:
-  - Fixed log table bugs after filtering logic was added - [PR](https://github.com/BerriAI/litellm/pull/10712)
-  - Added filtering on status and model - [PR](https://github.com/BerriAI/litellm/pull/10670)
-  - Added general filtering on logs table - [PR](https://github.com/BerriAI/litellm/pull/10644)
+- **Models**
+    - Fixed model info overwriting when editing a model on UI - [PR](https://github.com/BerriAI/litellm/pull/10726)
+    - Fixed team admin model updates and organization creation with specific models - [PR](https://github.com/BerriAI/litellm/pull/10539)
+- **Logs**:
+  - Bug Fix -  copying Request/Response on Logs Page - [PR](https://github.com/BerriAI/litellm/pull/10720)
+  - Bug Fix -  log did not remain in focus on QA Logs page + text overflow on error logs - [PR](https://github.com/BerriAI/litellm/pull/10725)
 - **User Management**:
   - Added user management functionality to Python client library & CLI - [PR](https://github.com/BerriAI/litellm/pull/10627)
-  - Fixed SCIM token creation on Admin UI - [PR](https://github.com/BerriAI/litellm/pull/10628)
-  - Added 404 response when delete_verification_tokens fails - [PR](https://github.com/BerriAI/litellm/pull/10605)
+  - Bug Fix - Fixed SCIM token creation on Admin UI - [PR](https://github.com/BerriAI/litellm/pull/10628)
+  - Bug Fix - Added 404 response when trying to delete verification tokens that don't exist - [PR](https://github.com/BerriAI/litellm/pull/10605)
 
 ## Logging / Guardrail Integrations
 - **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575)
