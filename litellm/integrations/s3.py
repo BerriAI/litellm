@@ -27,6 +27,7 @@ class S3Logger:
         **kwargs,
     ):
         import boto3
+        import botocore
 
         try:
             verbose_logger.debug(
@@ -44,6 +45,7 @@ class S3Logger:
                 s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")
                 s3_region_name = litellm.s3_callback_params.get("s3_region_name")
                 s3_api_version = litellm.s3_callback_params.get("s3_api_version")
+                s3_cmek_arn = litellm.s3_callback_params.get("s3_cmek_arn")
                 s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl", True)
                 s3_verify = litellm.s3_callback_params.get("s3_verify")
                 s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
@@ -66,6 +68,16 @@ class S3Logger:
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
+            # CMEK requires v4 s3 sigs, which requires being set on config
+            # so if needed, merge that in to s3 config
+            self.s3_cmek_arn = s3_cmek_arn
+            self.s3_extra_args = None
+            if s3_cmek_arn is not None:
+                if s3_config is not None:
+                    s3_config = s3_config.merge(botocore.Config(signature_version="s3v4"))
+                else:
+                    s3_config = botocore.Config(signature_version="s3v4")
+
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -154,6 +166,19 @@ class S3Logger:
                 + ".json"
             )
 
+            # Set ExtraArgs if needed
+            if self.s3_cmek_arn is not None:
+                kms_extra_args = {
+                    "ServerSideEncryption": "aws:kms",
+                    "SSEKMSKeyId": self.s3_cmek_arn,
+                }
+                # Technically you can pass {} instead of None to ExtraArgs in the base case and
+                # make this simpler but this is more correct
+                if self.s3_extra_args is None:
+                    self.s3_extra_args = kms_extra_args
+                else:
+                    self.s3_extra_args = self.s3_extra_args | kms_extra_args
+
             import json
 
             payload_str = json.dumps(payload)
@@ -168,6 +193,7 @@ class S3Logger:
                 ContentLanguage="en",
                 ContentDisposition=f'inline; filename="{s3_object_download_filename}"',
                 CacheControl="private, immutable, max-age=31536000, s-maxage=0",
+                ExtraArgs=self.s3_extra_args,
             )
 
             print_verbose(f"Response from s3:{str(response)}")
