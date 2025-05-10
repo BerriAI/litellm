@@ -65,8 +65,12 @@ class OpikLogger(CustomBatchLogger):
         self.opik_workspace = opik_workspace
         self.opik_api_key = opik_api_key
         try:
+            loop = asyncio.get_running_loop()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
+        except RuntimeError:
+            # OpikLogger can be used both synchronously and asynchronously
+            self.flush_lock = None
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger - Asynchronous processing not initialized as we are not running in an async context {str(e)}"
