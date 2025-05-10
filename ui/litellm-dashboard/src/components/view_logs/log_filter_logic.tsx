@@ -169,8 +169,22 @@ export function useLogFilterLogic({
     refetchInterval: autoRefreshInterval && autoRefreshInterval > 0 ? autoRefreshInterval : undefined,
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
-    notifyOnChangeProps: ['data', 'error'],
+    staleTime: 0,
+    gcTime: 0,
+    retry: 1,
+    notifyOnChangeProps: ['data']
   });
+
+  // Handle success/error cases in useEffect
+  useEffect(() => {
+    if (logsQuery.error) {
+      console.error('Error fetching logs:', logsQuery.error);
+      setCurrentPage(1);
+    }
+    if (logsQuery.data && logsQuery.data.total_pages > 0 && currentPage > logsQuery.data.total_pages) {
+      setCurrentPage(1);
+    }
+  }, [logsQuery.error, logsQuery.data, currentPage]);
 
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters(prev => {
@@ -193,7 +207,7 @@ export function useLogFilterLogic({
   const pagination: PaginationState = useMemo(() => {
     const data: SpendLogsResponse | undefined = logsQuery.data;
     return {
-        currentPage: data?.page ?? currentPage,
+        currentPage: currentPage,
         totalPages: data?.total_pages ?? 0,
         totalCount: data?.total ?? 0,
         pageSize: data?.page_size ?? pageSize,
