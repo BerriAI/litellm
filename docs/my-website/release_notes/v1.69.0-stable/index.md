@@ -61,22 +61,27 @@ This new release brings support for:
 
 
 ## New Models / Updated Models
-- **Gemini 2.5**: Set correct context window length for all Gemini 2.5 variants - [PR](https://github.com/BerriAI/litellm/pull/10690) and added gemini-2.5-pro-preview-05-06 model with pricing and context window info - [PR](https://github.com/BerriAI/litellm/pull/10597)
+- **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
+    - Added `gemini-2.5-pro-preview-05-06` models with pricing and context window info - [PR](https://github.com/BerriAI/litellm/pull/10597)
+    - Set correct context window length for all Gemini 2.5 variants - [PR](https://github.com/BerriAI/litellm/pull/10690)
 - **[Perplexity](../../docs/providers/perplexity)**: 
     - Added new Perplexity models - [PR](https://github.com/BerriAI/litellm/pull/10652) 
     - Added sonar-deep-research model pricing - [PR](https://github.com/BerriAI/litellm/pull/10537)
-- **Azure**: Added support for new Azure models - [PR](https://github.com/BerriAI/litellm/pull/9956)
+- **[Azure AI Foundry](../../docs/providers/azure_ai)**: 
+    - Added cost tracking for the following models [PR](https://github.com/BerriAI/litellm/pull/9956)
+        - DeepSeek V3 0324
+        - Llama 4 Scout
+        - Llama 4 Maverick
 - **[Bedrock](../../docs/providers/bedrock)**: 
     - Added cost tracking for Bedrock Llama 4 models - [PR](https://github.com/BerriAI/litellm/pull/10582)
     - Fixed template conversion for Llama 4 models in Bedrock - [PR](https://github.com/BerriAI/litellm/pull/10582)
     - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681)
     - Added streaming support for Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10710)
-- **OpenAI**: Made O series conditionally accept provider/model - [PR](https://github.com/BerriAI/litellm/pull/10591)
-- **Cerebras**: Fixed Llama-3.1-70b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/10648)
-- **Ollama**: Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
+- **[OpenAI](../../docs/providers/openai)**: Added `reasoning_effort` support for `o3` models - [PR](https://github.com/BerriAI/litellm/pull/10591)
+- **[Cerebras](../../docs/providers/cerebras)**: Fixed Llama-3.1-70b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/10648)
+- **[Ollama](../../docs/providers/ollama)**: Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
 
 ## LLM API Endpoints
-- **Custom Logger API**: Introduced V2 Custom Logger API Endpoints - [PR](https://github.com/BerriAI/litellm/pull/10575)
 - **Anthropic**: Refactored /v1/messages endpoint to use base llm http handler and transformations - [PR](https://github.com/BerriAI/litellm/pull/10677)
 - **Bedrock**: Added support for using Bedrock Invoke models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
 - **Moderations**: Fixed bug to allow using credentials for /moderations API - [PR](https://github.com/BerriAI/litellm/pull/10723)
@@ -109,7 +114,8 @@ This new release brings support for:
   - Fixed SCIM token creation on Admin UI - [PR](https://github.com/BerriAI/litellm/pull/10628)
   - Added 404 response when delete_verification_tokens fails - [PR](https://github.com/BerriAI/litellm/pull/10605)
 
-## Logging / File Handling
+## Logging / Guardrail Integrations
+- **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575)
 - **File Processing**:
   - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
   - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
@@ -135,8 +141,6 @@ This new release brings support for:
   - Fixed OpenTelemetry to follow genai semantic conventions + support for 'instructions' param for TTS - [PR](https://github.com/BerriAI/litellm/pull/10608)
 - **Databricks**:
   - Fixed issue when Databricks uses external model and delta could be empty - [PR](https://github.com/BerriAI/litellm/pull/10540)
-- **Testing**:
-  - Increased timeout of LiteLLM tests - [PR](https://github.com/BerriAI/litellm/pull/10568)
 
 ## General Proxy Improvements
 - **CLI**:
@@ -152,10 +156,12 @@ This new release brings support for:
   - Added MCP Server DB Schema - [PR](https://github.com/BerriAI/litellm/pull/10641)
 - **Alerting**:
   - Fixed Slack alerting not working when using a DB - [PR](https://github.com/BerriAI/litellm/pull/10370)
-- **Email**:
+- **Email Invites**:
   - Added V2 Emails with fixes for sending emails when creating keys + Resend API support - [PR](https://github.com/BerriAI/litellm/pull/10602)
   - Added user invitation emails - [PR](https://github.com/BerriAI/litellm/pull/10615)
   - Added endpoints to manage email settings - [PR](https://github.com/BerriAI/litellm/pull/10646)
+- **General**:
+  - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
 
 ## New Contributors
 - [@zoltan-ongithub](https://github.com/zoltan-ongithub) made their first contribution in [PR #10568](https://github.com/BerriAI/litellm/pull/10568)
