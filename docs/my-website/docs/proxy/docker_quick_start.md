@@ -5,13 +5,13 @@ import TabItem from '@theme/TabItem';
 # Getting Started - E2E Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
-- Add an Azure OpenAI model 
-- Make a successful /chat/completion call 
-- Generate a virtual key 
-- Set RPM limit on virtual key 
+- Add an Azure OpenAI model
+- Make a successful /chat/completion call
+- Generate a virtual key
+- Set RPM limit on virtual key
 
 
-## Pre-Requisites 
+## Pre-Requisites
 
 - Install LiteLLM Docker Image ** OR ** LiteLLM CLI (pip package)
 
@@ -37,7 +37,7 @@ $ pip install 'litellm[proxy]'
 
 </Tabs>
 
-## 1. Add a model 
+## 1. Add a model
 
 Control LiteLLM Proxy with a config.yaml file.
 
@@ -58,7 +58,7 @@ model_list:
 
 - **`model_name`** (`str`) - This field should contain the name of the model as received.
 - **`litellm_params`** (`dict`) [See All LiteLLM Params](https://github.com/BerriAI/litellm/blob/559a6ad826b5daef41565f54f06c739c8c068b28/litellm/types/router.py#L222)
-    - **`model`** (`str`) - Specifies the model name to be sent to `litellm.acompletion` / `litellm.aembedding`, etc. This is the identifier used by LiteLLM to route to the correct model + provider logic on the backend. 
+    - **`model`** (`str`) - Specifies the model name to be sent to `litellm.acompletion` / `litellm.aembedding`, etc. This is the identifier used by LiteLLM to route to the correct model + provider logic on the backend.
     - **`api_key`** (`str`) - The API key required for authentication. It can be retrieved from an environment variable using `os.environ/`.
     - **`api_base`** (`str`) - The API base for your azure deployment.
     - **`api_version`** (`str`) - The API Version to use when calling Azure's OpenAI API. Get the latest Inference API version [here](https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation?source=recommendations#latest-preview-api-releases).
@@ -70,11 +70,11 @@ model_list:
 - [**Pass provider-specific params**](../completion/provider_specific_params.md#proxy-usage)
 
 
-## 2. Make a successful /chat/completion call 
+## 2. Make a successful /chat/completion call
 
 LiteLLM Proxy is 100% OpenAI-compatible. Test your azure model via the `/chat/completions` route.
 
-### 2.1 Start Proxy 
+### 2.1 Start Proxy
 
 Save your config.yaml from step 1. as `litellm_config.yaml`.
 
@@ -119,7 +119,7 @@ Loaded config YAML (api_key and environment_variables are not shown):
 "model_name ...
 ```
 
-### 2.2 Make Call 
+### 2.2 Make Call
 
 
 ```bash
@@ -183,7 +183,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 Track Spend, and control model access via virtual keys for the proxy
 
-### 3.1 Set up a Database 
+### 3.1 Set up a Database
 
 **Requirements**
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
@@ -198,8 +198,8 @@ model_list:
       api_key: "os.environ/AZURE_API_KEY"
       api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 
-general_settings: 
-  master_key: sk-1234 
+general_settings:
+  master_key: sk-1234
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
 ```
 
@@ -209,27 +209,27 @@ Save config.yaml as `litellm_config.yaml` (used in 3.2).
 
 **What is `general_settings`?**
 
-These are settings for the LiteLLM Proxy Server. 
+These are settings for the LiteLLM Proxy Server.
 
-See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-settings).
+See All General Settings [here](http://localhost:3000/docs/proxy/config_settings).
 
 1. **`master_key`** (`str`)
-   - **Description**: 
+   - **Description**:
      - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
-   - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:master_key`, example - 
+   - **Usage**:
+     - ** Set on config.yaml** set your master key under `general_settings:master_key`, example -
         `master_key: sk-1234`
      - ** Set env variable** set `LITELLM_MASTER_KEY`
 
 2. **`database_url`** (str)
-   - **Description**: 
+   - **Description**:
      - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
-   - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:database_url`, example - 
+   - **Usage**:
+     - ** Set on config.yaml** set your master key under `general_settings:database_url`, example -
         `database_url: "postgresql://..."`
-     - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+     - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env
 
-### 3.2 Start Proxy 
+### 3.2 Start Proxy
 
 ```bash
 docker run \
@@ -246,7 +246,7 @@ docker run \
 
 Create a key with `rpm_limit: 1`. This will only allow 1 request per minute for calls to proxy with this key.
 
-```bash 
+```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -265,11 +265,11 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 }
 ```
 
-### 3.4 Test it! 
+### 3.4 Test it!
 
 **Use your virtual key from step 3.3**
 
-1st call - Expect to work! 
+1st call - Expect to work!
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -300,7 +300,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 ```
 
-2nd call - Expect to fail! 
+2nd call - Expect to fail!
 
 **Why did this call fail?**
 
@@ -339,7 +339,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 ```
 
-### Useful Links 
+### Useful Links
 
 - [Creating Virtual Keys](./virtual_keys.md)
 - [Key Management API Endpoints Swagger](https://litellm-api.up.railway.app/#/key%20management)
@@ -347,7 +347,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 - [Dynamic TPM/RPM Limits for keys](./team_budgets.md#dynamic-tpmrpm-allocation)
 
 
-## Troubleshooting 
+## Troubleshooting
 
 ### Non-root docker image?
 
@@ -355,7 +355,7 @@ If you need to run the docker image as a non-root user, use [this](https://githu
 
 ### SSL Verification Issue / Connection Error.
 
-If you see 
+If you see
 
 ```bash
 ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain (_ssl.c:1006)
@@ -367,7 +367,7 @@ OR
 Connection Error.
 ```
 
-You can disable ssl verification with: 
+You can disable ssl verification with:
 
 ```yaml
 model_list:
@@ -383,23 +383,23 @@ litellm_settings:
 ```
 
 
-### (DB) All connection attempts failed 
+### (DB) All connection attempts failed
 
 
 If you see:
 
 ```
-httpx.ConnectError: All connection attempts failed                                                                        
-                                                                                                                         
-ERROR:    Application startup failed. Exiting.                                                                            
-3:21:43 - LiteLLM Proxy:ERROR: utils.py:2207 - Error getting LiteLLM_SpendLogs row count: All connection attempts failed 
+httpx.ConnectError: All connection attempts failed
+
+ERROR:    Application startup failed. Exiting.
+3:21:43 - LiteLLM Proxy:ERROR: utils.py:2207 - Error getting LiteLLM_SpendLogs row count: All connection attempts failed
 ```
 
-This might be a DB permission issue. 
+This might be a DB permission issue.
 
-1. Validate db user permission issue 
+1. Validate db user permission issue
 
-Try creating a new database. 
+Try creating a new database.
 
 ```bash
 STATEMENT: CREATE DATABASE "litellm"
@@ -408,10 +408,10 @@ STATEMENT: CREATE DATABASE "litellm"
 If you get:
 
 ```
-ERROR: permission denied to create 
+ERROR: permission denied to create
 ```
 
-This indicates you have a permission issue. 
+This indicates you have a permission issue.
 
 2. Grant permissions to your DB user
 
@@ -434,7 +434,7 @@ GRANT ALL PRIVILEGES ON DATABASE litellm TO your_username;
 
 **What is `litellm_settings`?**
 
-LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing) for handling LLM API calls. 
+LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing) for handling LLM API calls.
 
 `litellm_settings` are module-level params for the LiteLLM Python SDK (equivalent to doing `litellm.<some_param>` on the SDK). You can see all params [here](https://github.com/BerriAI/litellm/blob/208fe6cb90937f73e0def5c97ccb2359bf8a467b/litellm/__init__.py#L114)
 
@@ -446,7 +446,7 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-[![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
+[![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw)
 
 
 
