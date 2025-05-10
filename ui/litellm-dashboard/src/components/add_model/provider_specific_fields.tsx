@@ -316,6 +316,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     type: "password",
     required: true
   }],
+  [Providers.Netmind]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
   [Providers.Openrouter]: [{
     key: "api_key",
     label: "API Key",

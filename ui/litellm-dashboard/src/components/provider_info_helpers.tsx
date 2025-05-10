@@ -26,8 +26,8 @@ export enum Providers {
     TogetherAI = "TogetherAI",
     Openrouter = "Openrouter",
     FireworksAI = "Fireworks AI",
+    Netmind = "Netmind"
     Triton = "Triton"
-
   }
   
 export const provider_map: Record<string, string> = {
@@ -55,6 +55,7 @@ export const provider_map: Record<string, string> = {
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
     FireworksAI: "fireworks_ai",
+    Netmind: "netmind",
     Triton: "triton"
 };
 
@@ -85,6 +86,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.Netmind]: `${asset_logos_folder}netmind.svg`
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`
 };
 

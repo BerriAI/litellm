@@ -255,6 +255,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "netmind",
     "meta_llama",
     "nscale",
 ]
@@ -404,6 +405,9 @@ together_ai_models: List = [
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
+
+netmind_models: list = [
+]
 
 baseten_models: List = [
     "qvv0xeq",

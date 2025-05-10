@@ -136,7 +136,7 @@ def test_completion_missing_role(openai_api_response):
         "gemini/gemini-1.5-flash",
         "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "anthropic/claude-3-5-sonnet",
+        "anthropic/claude-3-5-sonnet"
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -190,7 +190,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
         assert "jpeg" not in json_str
 
 
-@pytest.mark.parametrize("model", ["gpt-4o-mini"])
+@pytest.mark.parametrize("model", ["gpt-4o-mini", "netmind/meta-llama/Llama-3.2-90B-Vision-Instruct"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_url_with_format_param_openai(model, sync_mode):
