@@ -96,3 +96,10 @@ class BaseAnthropicMessagesConfig(ABC):
         For all other providers, this is a no-op and we just return the headers
         """
         return headers
+
+    def get_streaming_response_iterator(
+        self,
+        model: str,
+        httpx_response: httpx.Response,
+    ) -> Any:
+        pass
