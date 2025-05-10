@@ -681,7 +681,7 @@ def test_alternating_roles_e2e():
         except Exception as e:
             print(f"error: {e}")
 
-        assert json.dumps(mock_post.call_args.kwargs["data"]) == json.dumps(
+        assert mock_post.call_args.kwargs["data"] == json.dumps(
             {
                 "model": "databricks-meta-llama-3-1-70b-instruct",
                 "messages": [

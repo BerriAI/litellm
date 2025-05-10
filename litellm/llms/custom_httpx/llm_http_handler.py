@@ -132,7 +132,9 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=signed_json_body if signed_json_body is not None else data,
+                    data=signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
