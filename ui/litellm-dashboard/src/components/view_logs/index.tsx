@@ -240,6 +240,28 @@ export default function SpendLogsTable({
         }));
       }
     },
+    {
+      name: "Key Alias",
+      label: "Key Alias",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredKeyAliases = allKeyAliases.filter(key => {
+          return key.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredKeyAliases.map((key) => {
+          return {
+            label: key,
+            value: key
+          }
+        });
+      }
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
+    }
   ];
 
   if (selectedSessionId && sessionLogs.data) {
@@ -493,7 +515,7 @@ export default function SpendLogsTable({
           <div className="border-b px-6 py-4">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
               <div className="flex flex-wrap items-center gap-3">
-                <div className="relative w-64">
+                <div className="relative w-96">
                   <input
                     type="text"
                     placeholder="Search by Request ID, Model, User"

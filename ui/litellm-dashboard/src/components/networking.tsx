@@ -2149,6 +2149,7 @@ export const uiSpendLogsCall = async (
   user_id?: string,
   status_filter?: string,
   model?: string,
+  key_alias?: string, // Add key_alias here
 ) => {
   try {
     // Construct base URL
@@ -2156,7 +2157,7 @@ export const uiSpendLogsCall = async (
 
     // Add query parameters if they exist
     const queryParams = new URLSearchParams();
-    if (api_key) queryParams.append('api_key', api_key);
+    if (api_key) queryParams.append('api_key', api_key); //This is for Key Hash
     if (team_id) queryParams.append('team_id', team_id);
     if (request_id) queryParams.append('request_id', request_id);
     if (start_date) queryParams.append('start_date', start_date);
@@ -2166,6 +2167,7 @@ export const uiSpendLogsCall = async (
     if (user_id) queryParams.append('user_id', user_id);
     if (status_filter) queryParams.append('status_filter', status_filter); 
     if (model) queryParams.append('model', model);
+    if (key_alias) queryParams.append('key_alias', key_alias); 
 
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();

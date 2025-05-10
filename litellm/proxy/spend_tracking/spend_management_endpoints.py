@@ -1655,11 +1655,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     status_filter: Optional[str] = fastapi.Query(
         default=None,
-        description="Filter logs by status (e.g., success, failure)"
+        description="Filter logs by status (e.g., success || "" || null, failure)"
     ),
     model: Optional[str] = fastapi.Query(  # Add this new parameter
         default=None,
         description="Filter logs by model name"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by key alias"
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -1705,56 +1709,102 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
         end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
-        # Build where conditions
-        where_conditions: Dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
-        }
-        if api_key:
-            where_conditions["api_key"] = api_key
-        if user_id: 
-            where_conditions["user"] = user_id 
+        # Initialize total_records at the start
+        total_records = 0
+
+        
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
+
+        # Build dynamic SQL conditions
+        conditions = []
+        params: list[Any] = []
+        param_index = 1  # To keep track of $1, $2, ...
+
+        conditions.append(f'"startTime" >= ${param_index}::timestamp')
+        params.append(start_date_iso)
+        param_index += 1
+
+        conditions.append(f'"startTime" <= ${param_index}::timestamp')
+        params.append(end_date_iso)
+        param_index += 1
+
+        # Optional filters
+        if user_id:
+            conditions.append(f'"user" = ${param_index}')
+            params.append(user_id)
+            param_index += 1
+
         if request_id:
-            where_conditions["request_id"] = request_id
+            conditions.append(f'"request_id" = ${param_index}')
+            params.append(request_id)
+            param_index += 1
+
         if team_id:
-            where_conditions["team_id"] = team_id
+            conditions.append(f'"team_id" = ${param_index}')
+            params.append(team_id)
+            param_index += 1
+
         if model:
-            where_conditions["model"] = model
+            conditions.append(f'"model" = ${param_index}')
+            params.append(model)
+            param_index += 1
+
         if min_spend is not None:
-            where_conditions.setdefault("spend", {}).update({"gte": min_spend})
+            conditions.append(f'"spend" >= ${param_index}')
+            params.append(min_spend)
+            param_index += 1
+
         if max_spend is not None:
-            where_conditions.setdefault("spend", {}).update({"lte": max_spend})
+            conditions.append(f'"spend" <= ${param_index}')
+            params.append(max_spend)
+            param_index += 1
 
-        # Calculate skip value for pagination
-        skip = (page - 1) * page_size
+        if api_key:
+            conditions.append(f"metadata->>'user_api_key' = ${param_index}")
+            params.append(api_key)
+            param_index += 1
 
-        # Get paginated data
-        data = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
-            skip=skip,
-            take=page_size,
-        )
+        if key_alias:
+            conditions.append(f"metadata->>'user_api_key_alias' = ${param_index}")
+            params.append(key_alias)
+            param_index += 1
 
         if status_filter:
-            status_lower = status_filter.strip().lower()
+            if status_filter.lower() == "failure":
+                conditions.append("metadata->>'status' = 'failure'")
+            else:
+                conditions.append("(metadata->>'status' IS NULL OR metadata->>'status' != 'failure')")
 
-            def status_filter_fn(row):
-                metadata = getattr(row, "metadata", {}) or {}
-                status_val = metadata.get("status") if isinstance(metadata, dict) else None
-                if status_lower == "failure":
-                    return status_val == "failure"
-                elif status_lower == "success":
-                    return status_val != "failure"
-                return True
+        # Final WHERE clause from dynamic conditions
+        where_clause = " AND ".join(conditions)
 
-            data = list(filter(status_filter_fn, data))
+        # Add LIMIT and OFFSET as the final two parameters
+        params += [page_size, offset]
+        param_index += 2  # Advance the parameter index accordingly
 
-        # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
-            where=where_conditions,
-        )
+        # Dynamically reference the new LIMIT and OFFSET parameters
+        limit_param = f"${param_index - 2}"
+        offset_param = f"${param_index - 1}"
+
+        # Final dynamic paginated query
+        raw_query = f"""
+            SELECT * FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+            ORDER BY "startTime" DESC
+            LIMIT {limit_param} OFFSET {offset_param}
+        """
+        data = await prisma_client.db.query_raw(raw_query, *params)
+
+        # Count query (without limit/offset params)
+        count_query = f"""
+            SELECT COUNT(*) FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+        """
+        total_result = await prisma_client.db.query_raw(count_query, *params[:-2])  # Exclude limit/offset
+        total_records = int(total_result[0]["count"]) if total_result else 0
+
+
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 

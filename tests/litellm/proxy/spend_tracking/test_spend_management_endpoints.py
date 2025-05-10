@@ -91,6 +91,13 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
                 return 1
             return len(mock_spend_logs)
 
+        async def query_raw(self, raw_query, *params):
+            if "count(*)" in raw_query.lower():
+                if "test_user_1" in params:
+                    return [{"count": 1}]
+                return [{"count": len(mock_spend_logs)}]
+            return [mock_spend_logs[0]] if "test_user_1" in params else mock_spend_logs
+
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
@@ -136,7 +143,7 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
-    # Mock data for the test
+    # Mock data
     mock_spend_logs = [
         {
             "id": "log1",
@@ -160,44 +167,36 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
+    # Mock database with query_raw
     class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on team_id in the where conditions
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
-
-        async def count(self, *args, **kwargs):
-            # Return count based on team_id filter
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return 1
-            return len(mock_spend_logs)
+        async def query_raw(self, query, *params):
+            if "count(*)" in query.lower():
+                # Simulate the count response
+                for param in params:
+                    if param == "team1":
+                        return [{"count": 1}]
+                return [{"count": 2}]
+            else:
+                for param in params:
+                    if param == "team1":
+                        return [mock_spend_logs[0]]
+                return mock_spend_logs
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
 
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    # Apply monkeypatch to replace the real Prisma client
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
 
-    # Set up test dates
+    # Build test time range
     start_date = (
         datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
     ).strftime("%Y-%m-%d %H:%M:%S")
     end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Make the request with team_id filter
+    # Make the GET request
     response = client.get(
         "/spend/logs/ui",
         params={
@@ -208,11 +207,10 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         headers={"Authorization": "Bearer sk-test"},
     )
 
-    # Assert response
+    # Assertions
     assert response.status_code == 200
     data = response.json()
 
-    # Verify the filtered data
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["team_id"] == "team1"
@@ -220,6 +218,9 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
+    import datetime
+    from datetime import timezone
+
     # Create a larger set of mock data for pagination testing
     mock_spend_logs = [
         {
@@ -229,29 +230,36 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
             "user": f"test_user_{i % 3}",
             "team_id": f"team{i % 2 + 1}",
             "spend": 0.05 * i,
-            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=i)
+            ).isoformat(),
             "model": "gpt-3.5-turbo" if i % 2 == 0 else "gpt-4",
         }
         for i in range(1, 26)  # 25 records
     ]
 
-    # Create a mock prisma client with pagination support
+    # Mock DB with query_raw and count support
     class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Handle pagination
-            skip = kwargs.get("skip", 0)
-            take = kwargs.get("take", 10)
-            return mock_spend_logs[skip : skip + take]
-
-        async def count(self, *args, **kwargs):
-            return len(mock_spend_logs)
+        async def query_raw(self, raw_query, *params):
+            if "count(*)" in raw_query.lower():
+                # Simulate total count response
+                return [{"count": len(mock_spend_logs)}]
+            else:
+                # Simulate paginated data response
+                try:
+                    limit = int(params[-2])
+                    offset = int(params[-1])
+                except (IndexError, ValueError):
+                    limit = 10
+                    offset = 0
+                return mock_spend_logs[offset: offset + limit]
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
 
-    # Apply the monkeypatch
+    # Monkeypatch the prisma client
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -298,6 +306,7 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
     assert data["total"] == 25
     assert len(data["data"]) == 10
     assert data["page"] == 2
+
 
 
 @pytest.mark.asyncio
@@ -382,6 +391,21 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
             logs = await self.find_many(*args, **kwargs)
             return len(logs)
 
+        async def query_raw(self, raw_query, *params):
+            # Simulate response to SELECT COUNT(*)
+            if "COUNT" in raw_query.upper():
+                filtered_logs = await self.find_many(where={"startTime": {
+                    "gte": params[0],
+                    "lte": params[1],
+                }})
+                return [{"count": str(len(filtered_logs))}]
+            else:
+                # Simulate raw query returning spend logs
+                return await self.find_many(where={"startTime": {
+                    "gte": params[0],
+                    "lte": params[1],
+                }})
+
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
@@ -397,10 +421,7 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 
     response = client.get(
         "/spend/logs/ui",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
+        params={"start_date": start_date, "end_date": end_date},
         headers={"Authorization": "Bearer sk-test"},
     )
 
