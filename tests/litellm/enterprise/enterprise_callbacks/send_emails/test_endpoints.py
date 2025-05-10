@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from enterprise.enterprise_callbacks.send_emails.endpoints import (
+from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     _get_email_settings,
     _save_email_settings,
     get_email_event_settings,
@@ -17,6 +17,7 @@ from enterprise.enterprise_callbacks.send_emails.endpoints import (
     router,
     update_event_settings,
 )
+
 from litellm.types.enterprise.enterprise_callbacks.send_emails import (
     DefaultEmailSettings,
     EmailEvent,
@@ -146,7 +147,7 @@ async def test_get_email_event_settings(mock_prisma_client, mock_user_api_key_au
     # Setup mocks
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         with mock.patch(
-            "enterprise.enterprise_callbacks.send_emails.endpoints._get_email_settings",
+            "litellm_enterprise.enterprise_callbacks.send_emails.endpoints._get_email_settings",
             side_effect=mock_get_settings,
         ):
             # Call the endpoint function directly
@@ -185,11 +186,11 @@ async def test_update_event_settings(mock_prisma_client, mock_user_api_key_auth)
     # Setup mocks
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         with mock.patch(
-            "enterprise.enterprise_callbacks.send_emails.endpoints._get_email_settings",
+            "litellm_enterprise.enterprise_callbacks.send_emails.endpoints._get_email_settings",
             side_effect=mock_get_settings,
         ):
             with mock.patch(
-                "enterprise.enterprise_callbacks.send_emails.endpoints._save_email_settings",
+                "litellm_enterprise.enterprise_callbacks.send_emails.endpoints._save_email_settings",
                 side_effect=mock_save_settings,
             ):
                 # Create request with updated settings
@@ -227,7 +228,7 @@ async def test_reset_event_settings(mock_prisma_client, mock_user_api_key_auth):
     # Setup mocks
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         with mock.patch(
-            "enterprise.enterprise_callbacks.send_emails.endpoints._save_email_settings",
+            "litellm_enterprise.enterprise_callbacks.send_emails.endpoints._save_email_settings",
             side_effect=mock_save_settings,
         ):
             # Call the endpoint function directly
