@@ -74,20 +74,16 @@ export default function SpendLogsTable({
     allOrganizations,
     allUsers,
     allKeyAliases,
-    allModels,
     handleFilterChange,
     handleFilterReset,
     isLoading,
     pagination,
     setCurrentPage,
-    handleRefresh,
   } = useLogFilterLogic({
     accessToken,
     startTime,
     endTime,
     pageSize,
-    userID,
-    userRole,
   });
 
   const sessionLogs = useQuery<{data: LogEntry[]}>({
@@ -173,6 +169,10 @@ export default function SpendLogsTable({
       onSessionClick: (sessionId: string) => {},
     })) || [];
 
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['logs', 'table', accessToken, startTime, endTime, filters] });
+  };
+
   const getTimeRangeDisplay = () => {
     if (isCustomDate) {
       return `${moment(startTime).format('MMM D, h:mm A')} - ${moment(endTime).format('MMM D, h:mm A')}`;
@@ -204,6 +204,7 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!hookAllTeams || hookAllTeams.length === 0) return [];
         const filtered = hookAllTeams.filter((team: Team) =>{
+          console.log("team", searchText)
           return team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
           (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
       });
@@ -213,32 +214,55 @@ export default function SpendLogsTable({
         }));
       }
     },
-    {
-      name: 'Status',
-      label: 'Status',
-      isSearchable: false,
-      options: [
-        { label: 'All', value: '' },
-        { label: 'Success', value: 'success' },
-        { label: 'Failure', value: 'failure' },
-      ],
-    },
-    {
-      name: 'Model',
-      label: 'Model',
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        // Get unique models from the current logs
-        const uniqueModels = new Set(filteredLogs.map((log: LogEntry) => log.model));
-        const filteredModels = Array.from(uniqueModels).filter(model => 
-          model.toLowerCase().includes(searchText.toLowerCase())
-        );
-        return filteredModels.map(model => ({
-          label: model,
-          value: model
-        }));
-      }
-    },
+    // {
+    //   name: 'Key Alias',
+    //   label: 'Key Alias',
+    //   isSearchable: true,
+    //   searchFn: async (searchText: string) => {
+    //     const filteredKeyAliases = allKeyAliases.filter(key => {
+    //       console.log("key", searchText);
+    //       return key.toLowerCase().includes(searchText.toLowerCase())
+    //     });
+
+    //     return filteredKeyAliases.map((key) => {
+    //       return {
+    //         label: key,
+    //         value: key
+    //       }
+    //     });
+    //   }
+    // },
+    // {
+    //   name: 'Key Hash',
+    //   label: 'Key Hash',
+    //   isSearchable: false, 
+    // },
+    // {
+    //   name: 'Request ID',
+    //   label: 'Request ID',
+    //   isSearchable: false,
+    // },
+    // {
+    //   name: 'Model',
+    //   label: 'Model',
+    //   isSearchable: false, 
+    // },
+    // {
+    //     name: 'User',
+    //     label: 'User',
+    //     isSearchable: true,
+    //     searchFn: async (searchText: string) => {
+    //         if (!allUsers || allUsers.length === 0) return [];
+    //         const filtered = allUsers.filter((user: UserInfo) => 
+    //           (user.user_id && user.user_id.toLowerCase().includes(searchText.toLowerCase())) ||
+    //           (user.user_email && user.user_email.toLowerCase().includes(searchText.toLowerCase()))
+    //         );
+    //         return filtered.map((user: UserInfo) => ({
+    //           label: `${user.user_email || user.user_id} (${user.user_id})`,
+    //           value: user.user_id
+    //         }));
+    //     }
+    // },
   ];
 
   if (selectedSessionId && sessionLogs.data) {
@@ -477,7 +501,7 @@ export default function SpendLogsTable({
   }
 
   return (
-    <div className="w-full p-6 overflow-hidden">
+    <div className="w-full p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">
           Request Logs
@@ -601,62 +625,6 @@ export default function SpendLogsTable({
                   </svg>
                   <span>Refresh</span>
                 </button>
-
-                <div className="flex items-center space-x-4">
-                  <span className="text-sm text-gray-700">
-                    Showing{" "}
-                    {isLoading
-                      ? "..."
-                      : pagination.totalCount > 0
-                      ? (pagination.currentPage - 1) * pagination.pageSize + 1
-                      : 0}{" "}
-                    -{" "}
-                    {isLoading
-                      ? "..."
-                      : pagination.totalCount > 0
-                      ? Math.min(pagination.currentPage * pagination.pageSize, pagination.totalCount)
-                      : 0}{" "}
-                    of{" "}
-                    {isLoading
-                      ? "..."
-                      : pagination.totalCount ?? 0}{" "}
-                    results
-                  </span>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm text-gray-700">
-                      Page {isLoading ? "..." : pagination.currentPage} of{" "}
-                      {isLoading
-                        ? "..."
-                        : pagination.totalPages ?? 1}
-                    </span>
-                    <button
-                      onClick={() =>
-                        setCurrentPage((p) => Math.max(1, p - 1))
-                      }
-                      disabled={isLoading || pagination.currentPage === 1}
-                      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={() =>
-                        setCurrentPage((p) =>
-                          Math.min(
-                            pagination.totalPages || 1,
-                            p + 1,
-                          ),
-                        )
-                      }
-                      disabled={
-                        isLoading ||
-                        pagination.currentPage === (pagination.totalPages || 1)
-                      }
-                      className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {isCustomDate && (
