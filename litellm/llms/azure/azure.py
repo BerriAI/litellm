@@ -207,6 +207,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
+            self.maybe_remove_stream_options(optional_params)
+
             max_retries = optional_params.pop("max_retries", None)
             if max_retries is None:
                 max_retries = DEFAULT_MAX_RETRIES
@@ -361,6 +363,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers=error_headers,
                 body=error_body,
             )
+
+    def maybe_remove_stream_options(self, optional_params):
+        if "stream_options" in optional_params and not optional_params["stream"]:
+            del optional_params["stream_options"]
 
     async def acompletion(
         self,
