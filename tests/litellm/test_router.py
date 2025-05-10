@@ -149,6 +149,94 @@ async def test_router_acreate_file():
         assert mock_acreate_file.call_count == 2
 
 @pytest.mark.asyncio
+async def test_router_acreate_file_with_jsonl():
+    """
+    Test router.acreate_file with both JSONL and non-JSONL files
+    """
+    import json
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    # Create test JSONL content
+    jsonl_data = [
+        {
+            "body": {
+                "model": "gpt-3.5-turbo-router",
+                "messages": [{"role": "user", "content": "test"}],
+            }
+        },
+        {
+            "body": {
+                "model": "gpt-3.5-turbo-router",
+                "messages": [{"role": "user", "content": "test2"}],
+            }
+        },
+    ]
+    jsonl_content = "\n".join(json.dumps(item) for item in jsonl_data)
+    jsonl_file = BytesIO(jsonl_content.encode("utf-8"))
+    jsonl_file.name = "test.jsonl"
+
+    # Create test non-JSONL content
+    non_jsonl_content = "This is not a JSONL file"
+    non_jsonl_file = BytesIO(non_jsonl_content.encode("utf-8"))
+    non_jsonl_file.name = "test.txt"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo-router",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo-router",
+                "litellm_params": {"model": "gpt-4o-mini"},
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        # Test with JSONL file
+        response = await router.acreate_file(
+            model="gpt-3.5-turbo-router",
+            purpose="batch",
+            file=jsonl_file,
+        )
+
+        # Verify mock was called twice (once for each deployment)
+        print(f"mock_acreate_file.call_count: {mock_acreate_file.call_count}")
+        print(f"mock_acreate_file.call_args_list: {mock_acreate_file.call_args_list}")
+        assert mock_acreate_file.call_count == 2
+
+        # Get the file content passed to the first call
+        first_call_file = mock_acreate_file.call_args_list[0][1]["file"]
+        first_call_content = first_call_file.read().decode("utf-8")
+
+        # Verify the model name was replaced in the JSONL content
+        first_line = json.loads(first_call_content.split("\n")[0])
+        assert first_line["body"]["model"] == "gpt-3.5-turbo"
+
+        # Reset mock for next test
+        mock_acreate_file.reset_mock()
+
+        # Test with non-JSONL file
+        response = await router.acreate_file(
+            model="gpt-3.5-turbo-router",
+            purpose="user_data",
+            file=non_jsonl_file,
+        )
+
+        # Verify mock was called twice
+        assert mock_acreate_file.call_count == 2
+
+        # Get the file content passed to the first call
+        first_call_file = mock_acreate_file.call_args_list[0][1]["file"]
+        first_call_content = first_call_file.read().decode("utf-8")
+
+        # Verify the non-JSONL content was not modified
+        assert first_call_content == non_jsonl_content
+
+
+@pytest.mark.asyncio
 async def test_router_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
