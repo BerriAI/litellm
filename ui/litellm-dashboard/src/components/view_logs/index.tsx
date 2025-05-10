@@ -88,7 +88,6 @@ export default function SpendLogsTable({
     pageSize,
     userID,
     userRole,
-    autoRefreshInterval: 5000,
   });
 
   const sessionLogs = useQuery<{data: LogEntry[]}>({
