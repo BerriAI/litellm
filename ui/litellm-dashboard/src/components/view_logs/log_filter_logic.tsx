@@ -132,6 +132,7 @@ export function useLogFilterLogic({
     const formattedEndTime = moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss");
 
     const apiKeyParam = filters['Key Hash'] || undefined;
+    const keyAliasParam = filters['Key Alias'] || undefined;
     const teamIdParam = filters['Team ID'] || undefined;
     const requestIdParam = filters['Request ID'] || undefined;
     const userIdParamFilter = filters['User'] || undefined; 

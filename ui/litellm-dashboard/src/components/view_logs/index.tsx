@@ -240,6 +240,28 @@ export default function SpendLogsTable({
         }));
       }
     },
+    {
+      name: "Key Alias",
+      label: "Key Alias",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredKeyAliases = allKeyAliases.filter(key => {
+          return key.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredKeyAliases.map((key) => {
+          return {
+            label: key,
+            value: key
+          }
+        });
+      }
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
+    }
   ];
 
   if (selectedSessionId && sessionLogs.data) {

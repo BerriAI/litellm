@@ -1661,6 +1661,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Filter logs by model name"
     ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by key alias"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1709,8 +1713,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         where_conditions: Dict[str, Any] = {
             "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
         }
-        if api_key:
-            where_conditions["api_key"] = api_key
+        # if api_key:
+        #     where_conditions["api_key"] = api_key
         if user_id: 
             where_conditions["user"] = user_id 
         if request_id:
@@ -1750,6 +1754,26 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 return True
 
             data = list(filter(status_filter_fn, data))
+
+        if key_alias:
+            def key_alias_filter_fn(row):
+                metadata = getattr(row, "metadata", {}) or {}
+                key_alias_val = metadata.get("user_api_key_alias") if isinstance(metadata, dict) else None
+                if key_alias_val == key_alias:
+                    return True
+                return False
+
+            data = list(filter(key_alias_filter_fn, data))
+
+        if api_key:
+            def key_hash_filter_fn(row):
+                metadata = getattr(row, "metadata", {}) or {}
+                key_hash_val = metadata.get("user_api_key") if isinstance(metadata, dict) else None
+                if key_hash_val == api_key:
+                    return True
+                return False
+
+            data = list(filter(key_hash_filter_fn, data))
 
         # Get total count of records
         total_records = await prisma_client.db.litellm_spendlogs.count(
