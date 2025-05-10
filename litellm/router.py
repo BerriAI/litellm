@@ -2985,6 +2985,11 @@ class Router:
                         model=model
                     )
                     new_kwargs = copy.deepcopy(kwargs)
+                    self._update_kwargs_with_deployment(
+                        deployment=cast(dict, model_name),
+                        kwargs=new_kwargs,
+                        function_name="aretrieve_batch",
+                    )
                     new_kwargs.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
                         custom_llm_provider=custom_llm_provider, **new_kwargs  # type: ignore
