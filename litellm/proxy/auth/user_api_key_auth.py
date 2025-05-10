@@ -41,6 +41,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
+    get_model_from_request,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -215,20 +216,6 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.PROXY_ADMIN
     else:
         return LitellmUserRoles.TEAM
-
-
-def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
-    # First try to get model from request_data
-    model = request_data.get("model")
-
-    # If model not in request_data, try to extract from route
-    if model is None:
-        # Parse model from route that follows the pattern /openai/deployments/{model}/*
-        match = re.match(r"/openai/deployments/([^/]+)", route)
-        if match:
-            model = match.group(1)
-
-    return model
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915

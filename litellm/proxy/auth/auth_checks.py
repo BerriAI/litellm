@@ -48,6 +48,7 @@ from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
+from .auth_utils import get_model_from_request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -90,7 +91,9 @@ async def common_checks(
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _model: Optional[str] = cast(Optional[str], request_body.get("model", None))
+    _model: Optional[Union[str, List[str]]] = get_model_from_request(
+        request_body, route
+    )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -1121,7 +1124,7 @@ async def get_org_object(
 
 
 def _can_object_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
@@ -1143,6 +1146,17 @@ def _can_object_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if isinstance(model, list):
+        for m in model:
+            _can_object_call_model(
+                model=m,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                object_type=object_type,
+            )
+        return True
+
     if model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
 
@@ -1220,7 +1234,7 @@ def _model_in_team_aliases(
 
 
 async def can_key_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_model_list: Optional[list],
     valid_token: UserAPIKeyAuth,
     llm_router: Optional[litellm.Router],
@@ -1263,7 +1277,7 @@ def can_org_access_model(
 
 
 async def can_team_access_model(
-    model: str,
+    model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
@@ -1282,7 +1296,7 @@ async def can_team_access_model(
 
 
 async def can_user_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
 ) -> Literal[True]:
