@@ -96,11 +96,7 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            update_cache,
-        )
+        from litellm.proxy.proxy_server import proxy_logging_obj, update_cache
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
@@ -134,7 +130,7 @@ class _ProxyDBLogger(CustomLogger):
                     )
 
                 verbose_proxy_logger.debug(
-                    f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
+                    f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,

@@ -173,7 +173,7 @@ export function useLogFilterLogic({
     staleTime: 0,
     gcTime: 0,
     retry: 1,
-    notifyOnChangeProps: ['data']
+    notifyOnChangeProps: ['data', 'error']
   });
 
   // Handle success/error cases in useEffect
