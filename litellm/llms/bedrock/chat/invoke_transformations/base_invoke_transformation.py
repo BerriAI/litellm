@@ -121,60 +121,17 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.get("aws_access_key_id", None)
-        aws_session_token = optional_params.get("aws_session_token", None)
-        aws_role_name = optional_params.get("aws_role_name", None)
-        aws_session_name = optional_params.get("aws_session_name", None)
-        aws_profile_name = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
-        aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params, model=model
-        )
-
-        credentials: Credentials = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-        )
-
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-        if headers is not None:
-            headers = {"Content-Type": "application/json", **headers}
-        else:
-            headers = {"Content-Type": "application/json"}
-
-        request = AWSRequest(
-            method="POST",
-            url=api_base,
-            data=json.dumps(request_data),
+    ) -> Tuple[dict, Optional[bytes]]:
+        return self._sign_request(
+            service_name="bedrock",
             headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
         )
-        sigv4.add_auth(request)
-
-        request_headers_dict = dict(request.headers)
-        if (
-            headers is not None and "Authorization" in headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
-        return request_headers_dict
 
     def transform_request(
         self,
@@ -454,7 +411,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return BedrockError(status_code=status_code, message=error_message)
 
     @track_llm_api_timing()
-    def get_async_custom_stream_wrapper(
+    async def get_async_custom_stream_wrapper(
         self,
         model: str,
         custom_llm_provider: str,
@@ -465,6 +422,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -499,6 +457,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -510,6 +469,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 api_base=api_base,
                 headers=headers,
                 data=json.dumps(data),
+                signed_json_body=signed_json_body,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
