@@ -79,15 +79,19 @@ This new release brings support for:
     - Added streaming support for Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10710)
 - **[OpenAI](../../docs/providers/openai)**: Added `reasoning_effort` support for `o3` models - [PR](https://github.com/BerriAI/litellm/pull/10591)
 - **[Cerebras](../../docs/providers/cerebras)**: Fixed Llama-3.1-70b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/10648)
-- **[Ollama](../../docs/providers/ollama)**: Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
+- **[Ollama](../../docs/providers/ollama)**: 
+    - Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
+    - Fixed KeyError when using JSON response format - [PR](https://github.com/BerriAI/litellm/pull/10611)
+- 🆕 **[Nscale](../../docs/providers/nscale)**: 
+    - Added support for chat, image generation endpoints - [PR](https://github.com/BerriAI/litellm/pull/10638)
 
 ## LLM API Endpoints
-- **Anthropic**: Refactored /v1/messages endpoint to use base llm http handler and transformations - [PR](https://github.com/BerriAI/litellm/pull/10677)
-- **Bedrock**: Added support for using Bedrock Invoke models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
-- **Moderations**: Fixed bug to allow using credentials for /moderations API - [PR](https://github.com/BerriAI/litellm/pull/10723)
-- **Meta Llama**: Fixed handling of Meta Llama tool call responses - [PR](https://github.com/BerriAI/litellm/pull/10541)
-- **Ollama**: Fixed KeyError when using JSON response format - [PR](https://github.com/BerriAI/litellm/pull/10611)
-- **Realtime API**: Fixed setting 'headers' in scope for websocket auth requests and infinite loop issues - [PR](https://github.com/BerriAI/litellm/pull/10679)
+- 🆕 **[Messages API](../../docs/anthropic_unified)**: 
+    - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
+- **[Moderations API](../../docs/moderations)**: 
+    - Fixed bug to allow using LiteLLM UI credentials for /moderations API - [PR](https://github.com/BerriAI/litellm/pull/10723)  
+- **[Realtime API](../../docs/realtime)**: 
+    - Fixed setting 'headers' in scope for websocket auth requests and infinite loop issues - [PR](https://github.com/BerriAI/litellm/pull/10679)
 
 ## Spend Tracking / Budget Improvements
 - **Database Optimization**: 
