@@ -108,7 +108,7 @@ export function useLogFilterLogic({
     queryFn: async () => {
       if (!accessToken) return [];
       // Assuming userListCall fetches all users. Adapt if pagination or specific params are needed.
-      const response = await userListCall(accessToken, null, 1, 1000); // Fetch a large number for dropdown
+      const response = await userListCall(accessToken, null, 1, 100); // Fetch a large number for dropdown
       return response.users || [];
     },
     enabled: !!accessToken,
