@@ -323,6 +323,27 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Override to allow for http requests on async calls - e.g. converting url to base64
+
+        Currently only used by openai.py
+        """
+        return self.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     @abstractmethod
     def transform_response(
         self,
