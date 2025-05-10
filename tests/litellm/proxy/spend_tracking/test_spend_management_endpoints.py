@@ -143,7 +143,7 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
-    # Mock data for the test
+    # Mock data
     mock_spend_logs = [
         {
             "id": "log1",
@@ -167,44 +167,36 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         },
     ]
 
-    # Create a mock prisma client
+    # Mock database with query_raw
     class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Filter based on team_id in the where conditions
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return [mock_spend_logs[0]]
-            return mock_spend_logs
-
-        async def count(self, *args, **kwargs):
-            # Return count based on team_id filter
-            if (
-                "where" in kwargs
-                and "team_id" in kwargs["where"]
-                and kwargs["where"]["team_id"] == "team1"
-            ):
-                return 1
-            return len(mock_spend_logs)
+        async def query_raw(self, query, *params):
+            if "count(*)" in query.lower():
+                # Simulate the count response
+                for param in params:
+                    if param == "team1":
+                        return [{"count": 1}]
+                return [{"count": 2}]
+            else:
+                for param in params:
+                    if param == "team1":
+                        return [mock_spend_logs[0]]
+                return mock_spend_logs
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
 
-    # Apply the monkeypatch
-    mock_prisma_client = MockPrismaClient()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    # Apply monkeypatch to replace the real Prisma client
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
 
-    # Set up test dates
+    # Build test time range
     start_date = (
         datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
     ).strftime("%Y-%m-%d %H:%M:%S")
     end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Make the request with team_id filter
+    # Make the GET request
     response = client.get(
         "/spend/logs/ui",
         params={
@@ -215,11 +207,10 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         headers={"Authorization": "Bearer sk-test"},
     )
 
-    # Assert response
+    # Assertions
     assert response.status_code == 200
     data = response.json()
 
-    # Verify the filtered data
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["team_id"] == "team1"
