@@ -1069,7 +1069,24 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    token_data = _valid_token.model_dump(exclude_none=True)
+
+    # Manually map the budget from the joined budget table if it exists
+    # This ensures the max_budget from LiteLLM_BudgetTable takes precedence if set
+    if token_data.get("litellm_budget_table_max_budget") is not None:
+        token_data["max_budget"] = token_data.pop("litellm_budget_table_max_budget")
+    if token_data.get("litellm_budget_table_soft_budget") is not None:
+        token_data["soft_budget"] = token_data.pop("litellm_budget_table_soft_budget")
+    # Only override if budget table value is explicitly set (not None) and > 0
+    budget_tpm_limit = token_data.pop("litellm_budget_table_tpm_limit", None)
+    if budget_tpm_limit is not None and budget_tpm_limit > 0:
+        token_data["tpm_limit"] = budget_tpm_limit
+    budget_rpm_limit = token_data.pop("litellm_budget_table_rpm_limit", None)
+    if budget_rpm_limit is not None and budget_rpm_limit > 0:
+        token_data["rpm_limit"] = budget_rpm_limit
+
+
+    _response = UserAPIKeyAuth(**token_data)
 
     # save the key object to cache
     await _cache_key_object(
