@@ -69,7 +69,11 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
 )
-from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+from litellm.router_utils.batch_utils import (
+    _get_router_metadata_variable_name,
+    replace_model_in_jsonl,
+    should_replace_model_in_jsonl,
+)
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
@@ -106,7 +110,12 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.scheduler import FlowItem, Scheduler
-from litellm.types.llms.openai import AllMessageValues, FileTypes, OpenAIFileObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    FileTypes,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
+)
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
@@ -2766,6 +2775,26 @@ class Router:
                 stripped_model, custom_llm_provider, _, _ = get_llm_provider(
                     model=data["model"]
                 )
+
+                ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
+                purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
+                file = cast(Optional[FileTypes], kwargs.get("file"))
+                if not file or not purpose:
+                    raise Exception(
+                        "file and file_purpose are required for create_file"
+                    )
+
+                replace_model_in_jsonl_bool = should_replace_model_in_jsonl(
+                    purpose=purpose,
+                )
+                if replace_model_in_jsonl_bool:
+                    file = replace_model_in_jsonl(
+                        file_content=file,
+                        new_model_name=stripped_model,
+                    )
+
+                    kwargs_copy["file"] = file
+
                 response = litellm.acreate_file(
                     **{
                         **data,
