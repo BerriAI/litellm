@@ -148,7 +148,6 @@ async def test_router_acreate_file():
         # assert that the mock_acreate_file was called twice
         assert mock_acreate_file.call_count == 2
 
-
 @pytest.mark.asyncio
 async def test_router_acreate_file_with_jsonl():
     """
@@ -263,3 +262,4 @@ async def test_router_async_get_healthy_deployments():
     assert len(result) == 1
     assert result[0]["model_name"] == "gpt-3.5-turbo"
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
+
