@@ -413,7 +413,6 @@ async def get_file_content(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
         llm_router,
         proxy_config,
@@ -421,16 +420,21 @@ async def get_file_content(
         version,
     )
 
-    data: Dict = {}
+    data: Dict = {"file_id": file_id}
     try:
         # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type="afile_content",
         )
 
         custom_llm_provider = (
@@ -464,15 +468,32 @@ async def get_file_content(
                     param="None",
                     code=500,
                 )
-            response = await managed_files_obj.afile_content(
-                file_id=file_id,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                llm_router=llm_router,
-                **data,
-            )
+            model = cast(Optional[str], data.get("model"))
+            if model:
+                response = await llm_router.afile_content(
+                    **{
+                        "model": model,
+                        "file_id": file_id,
+                        **data,
+                    }
+                )  # type: ignore
+
+            else:
+                response = await managed_files_obj.afile_content(
+                    **{
+                        "file_id": file_id,
+                        "litellm_parent_otel_span": user_api_key_dict.parent_otel_span,
+                        "llm_router": llm_router,
+                        **data,
+                    }
+                )
         else:
             response = await litellm.afile_content(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                **{
+                    "custom_llm_provider": custom_llm_provider,
+                    "file_id": file_id,
+                    **data,
+                }  # type: ignore
             )
 
         ### ALERTING ###
@@ -514,7 +535,7 @@ async def get_file_content(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - {}".format(
                 str(e)
             )
