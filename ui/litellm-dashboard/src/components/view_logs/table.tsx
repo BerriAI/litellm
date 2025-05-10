@@ -36,10 +36,17 @@ export function DataTable<TData, TValue>({
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
-  const table = useReactTable({
+  const table = useReactTable<TData>({
     data,
     columns,
     getRowCanExpand,
+    getRowId: (row: TData, index: number) => {
+      const _row: any = row as any;
+      return (
+        _row?.request_id ??
+        String(index)
+      );
+    },
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
   });
