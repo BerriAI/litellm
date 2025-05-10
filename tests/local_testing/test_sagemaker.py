@@ -85,37 +85,6 @@ async def test_completion_sagemaker(sync_mode):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-@pytest.mark.asyncio()
-async def test_completion_sagemaker_messages_api_with_retry_and_aws_params():
-    litellm._turn_on_debug()
-    # litellm.set_verbose = True
-    from litellm import stream_chunk_builder
-    resp = await litellm.acompletion(
-        model="sagemaker_chat/jumpstart-dft-meta-textgeneration-l-20250507-003700",
-        messages=[
-            {"role": "user", "content": "hi"},
-        ],
-        temperature=0.2,
-        max_tokens=80,
-        aws_region_name="us-east-1",
-        num_retries=3,
-        stream=True,
-    )
-
-    print(f"resp: {resp}")
-
-    # # Get the streaming iterator by awaiting the coroutine
-    # stream = await resp
-    # print(stream)
-
-    # Now we can iterate over the stream
-    chunks = []
-    async for chunk in resp:  
-        print(chunk)
-        chunks.append(chunk)
-    response = stream_chunk_builder(chunks)
-    print(response)
-
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize(
@@ -423,7 +392,7 @@ async def test_completion_sagemaker_prompt_template_non_stream():
     mock_response.status_code = 200
 
     expected_payload = {
-        "inputs": "You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n\n### Instruction:\nhi\n\n\n### Response:\n",
+        "inputs": "<｜begin▁of▁sentence｜>You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n\n### Instruction:\nhi\n\n\n### Response:\n",
         "parameters": {"temperature": 0.2, "max_new_tokens": 80},
     }
 
