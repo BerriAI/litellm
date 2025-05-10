@@ -2,7 +2,6 @@
 Support for gpt model family 
 """
 
-import asyncio
 from typing import (
     TYPE_CHECKING,
     Any,
