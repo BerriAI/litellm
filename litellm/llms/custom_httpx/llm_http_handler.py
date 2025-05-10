@@ -1116,7 +1116,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
         )
 
-        headers = anthropic_messages_provider_config.sign_request(
+        headers, signed_json_body = anthropic_messages_provider_config.sign_request(
             headers=headers,
             optional_params=anthropic_messages_optional_request_params,
             request_data=request_body,
@@ -1139,7 +1139,7 @@ class BaseLLMHTTPHandler:
         response = await async_httpx_client.post(
             url=request_url,
             headers=headers,
-            data=json.dumps(request_body),
+            data=signed_json_body or json.dumps(request_body),
             stream=stream or False,
             logging_obj=logging_obj,
         )
