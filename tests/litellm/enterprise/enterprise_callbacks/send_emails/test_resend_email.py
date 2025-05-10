@@ -7,7 +7,9 @@ from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+    ResendEmailLogger,
+)
 
 
 @pytest.fixture
@@ -19,7 +21,7 @@ def mock_env_vars():
 @pytest.fixture
 def mock_httpx_client():
     with mock.patch(
-        "enterprise.enterprise_callbacks.send_emails.resend_email.get_async_httpx_client"
+        "litellm_enterprise.enterprise_callbacks.send_emails.resend_email.get_async_httpx_client"
     ) as mock_client:
         # Create a mock response
         mock_response = mock.AsyncMock(spec=Response)

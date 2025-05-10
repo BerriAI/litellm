@@ -253,7 +253,6 @@ async def retrieve_batch(
         )
 
         data = cast(dict, _retrieve_batch_request)
-
         unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
 
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)

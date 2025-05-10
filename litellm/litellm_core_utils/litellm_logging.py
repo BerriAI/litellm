@@ -134,8 +134,10 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
-    from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
-    from enterprise.enterprise_callbacks.send_emails.resend_email import (
+    from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
+        GenericAPILogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
         ResendEmailLogger,
     )
 except Exception as e:

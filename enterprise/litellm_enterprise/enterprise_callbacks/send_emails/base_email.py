@@ -105,9 +105,9 @@ class BaseEmailLogger(CustomLogger):
         support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", self.DEFAULT_SUPPORT_EMAIL)
         base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
 
-        recipient_email: Optional[str] = (
-            user_email or await self._lookup_user_email_from_db(user_id=user_id)
-        )
+        recipient_email: Optional[
+            str
+        ] = user_email or await self._lookup_user_email_from_db(user_id=user_id)
         if recipient_email is None:
             raise ValueError(
                 f"User email not found for user_id: {user_id}. User email is required to send email."
