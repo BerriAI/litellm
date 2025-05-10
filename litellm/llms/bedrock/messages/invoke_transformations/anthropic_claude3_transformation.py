@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+
+import httpx
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -6,10 +8,13 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.types.utils import ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -120,3 +125,42 @@ class AmazonAnthropicClaude3MessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
         return anthropic_messages_request
+
+    def get_async_streaming_response_iterator(
+        self,
+        model: str,
+        httpx_response: httpx.Response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> AsyncIterator:
+        aws_decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+            model=model,
+        )
+        completion_stream = aws_decoder.aiter_bytes(
+            httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
+        )
+        return completion_stream
+
+
+class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+    ) -> None:
+        """
+        Iterator to return Bedrock invoke response in anthropic /messages format
+        """
+        super().__init__(model=model)
+        self.DEFAULT_CHUNK_SIZE = 1024
+
+    def _chunk_parser(
+        self, chunk_data: dict
+    ) -> Union[GChunk, ModelResponseStream, dict]:
+        """
+        Parse the chunk data into anthropic /messages format
+
+        No transformation is needed for anthropic /messages format
+
+        since bedrock invoke returns the response in the correct format
+        """
+        return chunk_data
