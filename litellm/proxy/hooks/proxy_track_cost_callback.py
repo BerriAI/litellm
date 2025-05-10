@@ -96,11 +96,7 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            update_cache,
-        )
+        from litellm.proxy.proxy_server import proxy_logging_obj, update_cache
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
