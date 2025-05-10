@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
 import httpx
 
@@ -130,7 +130,7 @@ class AmazonAnthropicClaude3MessagesConfig(
         self,
         model: str,
         httpx_response: httpx.Response,
-    ) -> Any:
+    ) -> AsyncIterator:
         aws_decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -101,5 +101,5 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         model: str,
         httpx_response: httpx.Response,
-    ) -> Any:
-        pass
+    ) -> AsyncIterator:
+        raise NotImplementedError("Subclasses must implement this method")
