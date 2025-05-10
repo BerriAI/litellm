@@ -253,6 +253,7 @@ async def retrieve_batch(
         )
 
         data = cast(dict, _retrieve_batch_request)
+        unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
 
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -268,10 +269,7 @@ async def retrieve_batch(
             route_type="aretrieve_batch",
         )
 
-        if (
-            litellm.enable_loadbalancing_on_batch_endpoints is True
-            or data.get("model") is not None
-        ):
+        if litellm.enable_loadbalancing_on_batch_endpoints is True or unified_batch_id:
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -281,6 +279,7 @@ async def retrieve_batch(
                 )
 
             response = await llm_router.aretrieve_batch(**data)  # type: ignore
+            response._hidden_params["unified_batch_id"] = unified_batch_id
         else:
             custom_llm_provider = (
                 provider
