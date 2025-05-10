@@ -91,6 +91,12 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
                 return 1
             return len(mock_spend_logs)
 
+            if "count(*)" in raw_query.lower():
+                if "test_user_1" in params:
+                    return [{"count": 1}]
+                return [{"count": len(mock_spend_logs)}]
+            return [mock_spend_logs[0]] if "test_user_1" in params else mock_spend_logs
+
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
@@ -220,6 +226,9 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
+    import datetime
+    from datetime import timezone
+
     # Create a larger set of mock data for pagination testing
     mock_spend_logs = [
         {
@@ -229,29 +238,36 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
             "user": f"test_user_{i % 3}",
             "team_id": f"team{i % 2 + 1}",
             "spend": 0.05 * i,
-            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=i)
+            ).isoformat(),
             "model": "gpt-3.5-turbo" if i % 2 == 0 else "gpt-4",
         }
         for i in range(1, 26)  # 25 records
     ]
 
-    # Create a mock prisma client with pagination support
+    # Mock DB with query_raw and count support
     class MockDB:
-        async def find_many(self, *args, **kwargs):
-            # Handle pagination
-            skip = kwargs.get("skip", 0)
-            take = kwargs.get("take", 10)
-            return mock_spend_logs[skip : skip + take]
-
-        async def count(self, *args, **kwargs):
-            return len(mock_spend_logs)
+        async def query_raw(self, raw_query, *params):
+            if "count(*)" in raw_query.lower():
+                # Simulate total count response
+                return [{"count": len(mock_spend_logs)}]
+            else:
+                # Simulate paginated data response
+                try:
+                    limit = int(params[-2])
+                    offset = int(params[-1])
+                except (IndexError, ValueError):
+                    limit = 10
+                    offset = 0
+                return mock_spend_logs[offset: offset + limit]
 
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
 
-    # Apply the monkeypatch
+    # Monkeypatch the prisma client
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -298,6 +314,7 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
     assert data["total"] == 25
     assert len(data["data"]) == 10
     assert data["page"] == 2
+
 
 
 @pytest.mark.asyncio
