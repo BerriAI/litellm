@@ -3814,6 +3814,7 @@ async def embeddings(  # noqa: PLR0915
                     if m["model_name"] == data["model"] and (
                         m["litellm_params"]["model"] in litellm.open_ai_embedding_models
                         or m["litellm_params"]["model"].startswith("azure/")
+                        or m["litellm_params"]["model"].startswith("hosted_vllm/")
                     ):
                         pass
                     else:
@@ -3821,7 +3822,7 @@ async def embeddings(  # noqa: PLR0915
                         input_list = []
                         for i in data["input"]:
                             input_list.append(
-                                litellm.decode(model="gpt-3.5-turbo", tokens=i)
+                                litellm.decode(model=m["model_name"], tokens=i)
                             )
                         data["input"] = input_list
                         break
