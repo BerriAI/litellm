@@ -260,6 +260,26 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
     # Verify expected result
     assert result["azure_ad_token"] == "mock-oidc-token"
 
+def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
+    # Clear environment variables
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Test with custom azure_ad_token_provider
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token_provider": lambda: "mock-custom-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token_provider"]() == "mock-custom-token"
+
 
 def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
     litellm._turn_on_debug()
