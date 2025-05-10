@@ -72,6 +72,8 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         non_default_params: dict,
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,

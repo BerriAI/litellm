@@ -885,7 +885,9 @@ def _add_prompt_to_generation_params(
     ):
         try:
             generation_params["prompt"] = langfuse_client.get_prompt(
-                prompt_management_metadata["prompt_id"]
+                prompt_management_metadata["prompt_id"],
+                version=prompt_management_metadata["prompt_version"],
+                label=prompt_management_metadata["prompt_label"],
             )
         except Exception as e:
             verbose_logger.debug(

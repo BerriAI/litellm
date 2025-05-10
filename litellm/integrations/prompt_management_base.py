@@ -23,6 +23,8 @@ class PromptManagementBase(ABC):
     def should_run_prompt_management(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         pass
@@ -31,6 +33,8 @@ class PromptManagementBase(ABC):
     def _compile_prompt_helper(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:
@@ -46,12 +50,16 @@ class PromptManagementBase(ABC):
     def compile_prompt(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         client_messages: List[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
+            prompt_version=prompt_version,
+            prompt_label=prompt_label,
             prompt_variables=prompt_variables,
             dynamic_callback_params=dynamic_callback_params,
         )
@@ -81,17 +89,24 @@ class PromptManagementBase(ABC):
         non_default_params: dict,
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         if prompt_id is None:
             raise ValueError("prompt_id is required for Prompt Management Base class")
         if not self.should_run_prompt_management(
-            prompt_id=prompt_id, dynamic_callback_params=dynamic_callback_params
+            prompt_id=prompt_id,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            dynamic_callback_params=dynamic_callback_params,
         ):
             return model, messages, non_default_params
 
         prompt_template = self.compile_prompt(
             prompt_id=prompt_id,
+            prompt_version=prompt_version,
+            prompt_label=prompt_label,
             prompt_variables=prompt_variables,
             client_messages=messages,
             dynamic_callback_params=dynamic_callback_params,
