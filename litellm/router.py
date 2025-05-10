@@ -2953,7 +2953,9 @@ class Router:
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             if model is not None:
-                filtered_model_list = await self.async_get_healthy_deployments(
+                filtered_model_list: Optional[
+                    Union[List[DeploymentTypedDict], List[Dict], Dict]
+                ] = await self.async_get_healthy_deployments(
                     model=model,
                     messages=[{"role": "user", "content": "retrieve-api-fake-text"}],
                     specific_deployment=kwargs.pop("specific_deployment", None),
