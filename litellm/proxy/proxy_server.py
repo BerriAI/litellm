@@ -1558,7 +1558,10 @@ class ProxyConfig:
         environment_variables = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
-                os.environ[key] = str(get_secret(secret_name=key, default_value=value))
+                str_data=str(get_secret(secret_name=key, default_value=value))
+                if str_data is None:
+                    str_data = value
+                os.environ[key] = str_data
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
