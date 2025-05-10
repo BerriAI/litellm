@@ -91,6 +91,7 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
                 return 1
             return len(mock_spend_logs)
 
+        async def query_raw(self, raw_query, *params):
             if "count(*)" in raw_query.lower():
                 if "test_user_1" in params:
                     return [{"count": 1}]
