@@ -146,3 +146,27 @@ async def test_completion_with_retries(sync_mode):
         mock_completion.assert_called_once()
         assert mock_completion.call_args.kwargs["num_retries"] == 0
         assert mock_completion.call_args.kwargs["max_retries"] == 0
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_retries():
+    """
+    Test that the acompletion function is called num_retries number of times
+    """
+
+    from unittest.mock import patch
+
+    with patch.object(litellm, "acompletion") as mock_completion:
+        async def timeout_fnc(*args, **kwargs):
+            await mock_completion(*args, **kwargs)
+            raise litellm.Timeout(message='test', model='gpt-3.5-turbo', llm_provider='mock')
+        
+        with pytest.raises(litellm.Timeout):
+            await acompletion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=timeout_fnc,
+            )
+    
+    assert mock_completion.call_count == 3
+    
