@@ -791,7 +791,7 @@ async def test_watsonx_tool_choice(sync_mode):
             mock_completion.assert_called_once()
             print(mock_completion.call_args.kwargs)
             json_data = json.loads(mock_completion.call_args.kwargs["data"])
-            json_data["tool_choice_options"] == "auto"
+            json_data["tool_choice_option"] == "auto"
         except Exception as e:
             print(e)
             if "The read operation timed out" in str(e):
