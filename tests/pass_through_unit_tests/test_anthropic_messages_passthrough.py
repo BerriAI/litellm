@@ -294,7 +294,8 @@ class TestCustomLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
+@pytest.mark.parametrize("model", ["anthropic-api-claude-3-haiku", "bedrock-claude-3-7-sonnet"])
+async def test_anthropic_messages_litellm_router_non_streaming_with_logging(model):
     """
     Test the anthropic_messages with non-streaming request
 
@@ -306,10 +307,16 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     router = Router(
         model_list=[
             {
-                "model_name": "claude-special-alias",
+                "model_name": "anthropic-api-claude-3-haiku",
                 "litellm_params": {
                     "model": "claude-3-haiku-20240307",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+            {
+                "model_name": "bedrock-claude-3-7-sonnet",
+                "litellm_params": {
+                    "model": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
                 },
             }
         ]
@@ -321,7 +328,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     # Call the handler
     response = await router.aanthropic_messages(
         messages=messages,
-        model="claude-special-alias",
+        model=model,
         max_tokens=100,
     )
 
@@ -333,10 +340,17 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     await asyncio.sleep(1)
     assert test_custom_logger.logged_standard_logging_payload["messages"] == messages
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
-    assert (
-        test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
-    )
+    
+    if model == "bedrock-claude-3-7-sonnet":
+        assert (
+            test_custom_logger.logged_standard_logging_payload["model"]
+            == "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        )
+    else:
+        assert (
+            test_custom_logger.logged_standard_logging_payload["model"]
+            == "claude-3-haiku-20240307"
+        )
 
     # check logged usage + spend
     assert test_custom_logger.logged_standard_logging_payload["response_cost"] > 0
