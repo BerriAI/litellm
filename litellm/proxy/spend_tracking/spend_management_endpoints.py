@@ -1712,11 +1712,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Initialize total_records at the start
         total_records = 0
 
-        # Build where conditions
-        where_conditions: Dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso} # Ensure date range is always applied
-        }
-
         
         # Calculate offset for pagination
         offset = (page - 1) * page_size

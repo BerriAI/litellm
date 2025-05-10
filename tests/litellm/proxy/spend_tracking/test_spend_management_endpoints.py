@@ -382,6 +382,21 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
             logs = await self.find_many(*args, **kwargs)
             return len(logs)
 
+        async def query_raw(self, raw_query, *params):
+            # Simulate response to SELECT COUNT(*)
+            if "COUNT" in raw_query.upper():
+                filtered_logs = await self.find_many(where={"startTime": {
+                    "gte": params[0],
+                    "lte": params[1],
+                }})
+                return [{"count": str(len(filtered_logs))}]
+            else:
+                # Simulate raw query returning spend logs
+                return await self.find_many(where={"startTime": {
+                    "gte": params[0],
+                    "lte": params[1],
+                }})
+
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
@@ -397,10 +412,7 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 
     response = client.get(
         "/spend/logs/ui",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
+        params={"start_date": start_date, "end_date": end_date},
         headers={"Authorization": "Bearer sk-test"},
     )
 
