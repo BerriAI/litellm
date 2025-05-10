@@ -120,17 +120,11 @@ This new release brings support for:
 
 ## Logging / Guardrail Integrations
 - **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575)
-- **File Processing**:
-  - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
-  - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
-  - Complete unified batch ID support - replacing model in jsonl to be deployment model name - [PR](https://github.com/BerriAI/litellm/pull/10719)
-  - Beta support for unified file ID (managed files) for batches - [PR](https://github.com/BerriAI/litellm/pull/10650)
-- **Model Validation**:
-  - Added target model name validation - [PR](https://github.com/BerriAI/litellm/pull/10722)
-- **JSON Logging**:
-  - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
-- **Vector Stores**:
-  - Added documentation for StandardLoggingVectorStoreRequest - [PR](https://github.com/BerriAI/litellm/pull/10535)
+- **OpenTelemetry**:
+  - Fixed OpenTelemetry to follow genai semantic conventions + support for 'instructions' param for TTS - [PR](https://github.com/BerriAI/litellm/pull/10608)
+- ** Bedrock PII**:
+  - Add support for PII Masking with bedrock guardrails - [Get Started](https://docs.litellm.ai/docs/proxy/guardrails/bedrock#pii-masking-with-bedrock-guardrails), [PR](https://github.com/BerriAI/litellm/pull/10608)
+- Added documentation for StandardLoggingVectorStoreRequest - [PR](https://github.com/BerriAI/litellm/pull/10535)
 
 ## Performance / Reliability Improvements
 - **Python Compatibility**:
@@ -141,8 +135,6 @@ This new release brings support for:
   - Fixed cache miss for Gemini models with response_format - [PR](https://github.com/BerriAI/litellm/pull/10635)
 - **Azure**:
   - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
-- **OpenTelemetry**:
-  - Fixed OpenTelemetry to follow genai semantic conventions + support for 'instructions' param for TTS - [PR](https://github.com/BerriAI/litellm/pull/10608)
 - **Databricks**:
   - Fixed issue when Databricks uses external model and delta could be empty - [PR](https://github.com/BerriAI/litellm/pull/10540)
 
@@ -150,11 +142,6 @@ This new release brings support for:
 - **CLI**:
   - Added `--version` flag to `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10704)
   - Added dedicated `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10578)
-- **Documentation**:
-  - Added management client documentation - [PR](https://github.com/BerriAI/litellm/pull/10703)
-  - Changed Llama-API link for LiteLLM - [PR](https://github.com/BerriAI/litellm/pull/10556)
-  - Added GPTLocalhost to projects docs - [PR](https://github.com/BerriAI/litellm/pull/10687)
-  - Updated Instructor documentation - [PR](https://github.com/BerriAI/litellm/pull/10549)
 - **Enterprise**:
   - Refactored to use pip package for enterprise folder - [PR](https://github.com/BerriAI/litellm/pull/10709)
   - Added MCP Server DB Schema - [PR](https://github.com/BerriAI/litellm/pull/10641)
@@ -166,6 +153,17 @@ This new release brings support for:
   - Added endpoints to manage email settings - [PR](https://github.com/BerriAI/litellm/pull/10646)
 - **General**:
   - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
+
+
+
+- **File Processing**:
+  - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
+  - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
+  - Complete unified batch ID support - replacing model in jsonl to be deployment model name - [PR](https://github.com/BerriAI/litellm/pull/10719)
+  - Beta support for unified file ID (managed files) for batches - [PR](https://github.com/BerriAI/litellm/pull/10650)
+- **Model Validation**:
+  - Added target model name validation - [PR](https://github.com/BerriAI/litellm/pull/10722)
+
 
 ## New Contributors
 - [@zoltan-ongithub](https://github.com/zoltan-ongithub) made their first contribution in [PR #10568](https://github.com/BerriAI/litellm/pull/10568)
