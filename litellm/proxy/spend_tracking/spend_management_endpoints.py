@@ -1718,7 +1718,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         # Build dynamic SQL conditions
         conditions = []
-        params = []
+        params: list[Any] = []
         param_index = 1  # To keep track of $1, $2, ...
 
         conditions.append(f'"startTime" >= ${param_index}::timestamp')
