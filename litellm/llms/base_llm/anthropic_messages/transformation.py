@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -87,7 +87,7 @@ class BaseAnthropicMessagesConfig(ABC):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[bytes]]:
         """
         OPTIONAL
 
@@ -95,7 +95,7 @@ class BaseAnthropicMessagesConfig(ABC):
 
         For all other providers, this is a no-op and we just return the headers
         """
-        return headers
+        return headers, None
 
     def get_async_streaming_response_iterator(
         self,
