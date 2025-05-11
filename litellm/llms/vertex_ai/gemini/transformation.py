@@ -158,7 +158,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             audio_element = cast(ChatCompletionAudioObject, element)
                             audio_data = audio_element["input_audio"].get("data")
                             audio_format = audio_element["input_audio"].get("format")
-                            if audio_data is not None:
+                            if audio_data is not None and audio_format is not None:
+                                audio_format = (
+                                    "audio/" + audio_format
+                                    if audio_format.startswith("audio/") is False
+                                    else audio_format
+                                )  # Gemini expects audio/wav, audio/mp3, etc.
                                 openai_image_str = (
                                     convert_generic_image_chunk_to_openai_image_obj(
                                         image_chunk=GenericImageParsingChunk(

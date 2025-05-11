@@ -471,6 +471,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         response_modalities.append("TEXT")
                     elif modality == "image":
                         response_modalities.append("IMAGE")
+                    elif modality == "audio":
+                        response_modalities.append("AUDIO")
                     else:
                         response_modalities.append("MODALITY_UNSPECIFIED")
                 optional_params["responseModalities"] = response_modalities

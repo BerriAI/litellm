@@ -531,13 +531,13 @@ class BaseLLMChatTest(ABC):
         Test that audio input is supported by the LLM API
         """
         from litellm.utils import supports_audio_input
+        litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_audio_input(base_completion_call_args["model"], None):
             pytest.skip(
                 f"Model={base_completion_call_args['model']} does not support audio input"
             )
 
-        audio_input = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
         response = httpx.get(url)
         response.raise_for_status()
@@ -546,7 +546,6 @@ class BaseLLMChatTest(ABC):
 
         completion = self.completion_function(
             **base_completion_call_args,
-            modalities=["text", "audio"],
             messages=[
                 {
                     "role": "user",
