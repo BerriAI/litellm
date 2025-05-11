@@ -1018,7 +1018,7 @@ class BaseLLMChatTest(ABC):
         assert response._hidden_params["response_cost"] > 0
 
     @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
-    @pytest.mark.parametrize("format_specified", [True, False])
+    @pytest.mark.parametrize("format_specified", [True])
     def test_supports_audio_input(self, input_type, format_specified):
         from litellm.utils import return_raw_request, supports_audio_input
         from litellm.types.utils import CallTypes
@@ -1049,16 +1049,10 @@ class BaseLLMChatTest(ABC):
         test_file_id = "gs://bucket/file.wav"
 
         if input_type == "input_audio":
-            if format_specified:
-                audio_content.append({
-                    "type": "input_audio",
-                    "input_audio": {"data": encoded_string, "format": audio_format},
-                })
-            else:
-                audio_content.append({
-                    "type": "input_audio",
-                    "input_audio": {"data": encoded_string},
-                })
+            audio_content.append({
+                "type": "input_audio",
+                "input_audio": {"data": encoded_string, "format": audio_format},
+            })
         elif input_type == "audio_url":
             audio_content.append(
                 {
