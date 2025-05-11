@@ -259,14 +259,14 @@ class LiteLLM:
         timeout: Optional[float] = 600,
         max_retries: Optional[int] = litellm.num_retries,
         default_headers: Optional[Mapping[str, str]] = None,
-    ):
+    ) -> None:
         self.params = locals()
         self.chat = Chat(self.params, router_obj=None)
 
 
 class Chat:
-    def __init__(self, params, router_obj: Optional[Any]):
-        self.params = params
+    def __init__(self, params: Dict[str, Any], router_obj: Optional[Any]) -> None:
+        self.params = dict(params)  # Use a shallow copy to prevent side effects.
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
             self.completions: Union[AsyncCompletions, Completions] = AsyncCompletions(
@@ -277,38 +277,40 @@ class Chat:
 
 
 class Completions:
-    def __init__(self, params, router_obj: Optional[Any]):
-        self.params = params
+    def __init__(self, params: Dict[str, Any], router_obj: Optional[Any]) -> None:
+        self.params = dict(params)
         self.router_obj = router_obj
 
     def create(self, messages, model=None, **kwargs):
+        params = dict(self.params)
         for k, v in kwargs.items():
-            self.params[k] = v
-        model = model or self.params.get("model")
+            params[k] = v
+        model = model or params.get("model")
         if self.router_obj is not None:
             response = self.router_obj.completion(
-                model=model, messages=messages, **self.params
+                model=model, messages=messages, **params
             )
         else:
-            response = completion(model=model, messages=messages, **self.params)
+            response = completion(model=model, messages=messages, **params)
         return response
 
 
 class AsyncCompletions:
-    def __init__(self, params, router_obj: Optional[Any]):
-        self.params = params
+    def __init__(self, params: Dict[str, Any], router_obj: Optional[Any]) -> None:
+        self.params = dict(params)
         self.router_obj = router_obj
 
     async def create(self, messages, model=None, **kwargs):
+        params = dict(self.params)
         for k, v in kwargs.items():
-            self.params[k] = v
-        model = model or self.params.get("model")
+            params[k] = v
+        model = model or params.get("model")
         if self.router_obj is not None:
             response = await self.router_obj.acompletion(
-                model=model, messages=messages, **self.params
+                model=model, messages=messages, **params
             )
         else:
-            response = await acompletion(model=model, messages=messages, **self.params)
+            response = await acompletion(model=model, messages=messages, **params)
         return response
 
 
