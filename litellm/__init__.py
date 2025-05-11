@@ -117,6 +117,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bedrock_vector_store",
     "generic_api",
     "resend_email",
+    "smtp_email",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
