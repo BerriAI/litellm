@@ -2,12 +2,23 @@ import Image from '@theme/IdealImage';
 
 # Email Notifications 
 
-Send an Email to your users when:
-- A Proxy API Key is created for them 
-- Their API Key crosses it's Budget 
-- All Team members of a LiteLLM Team -> when the team crosses it's budget
+<Image 
+  img={require('../../img/email_2.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  LiteLLM Email Notifications
+</p>
 
-<Image img={require('../../img/email_notifs.png')} style={{ width: '500px' }}/>
+## Overview
+
+Send LiteLLM Proxy users emails for specific events.
+
+| Category | Details |
+|----------|---------|
+| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user |
+| Supported Email Integrations | • Resend API<br/>• SMTP |
+
 
 ## Quick Start 
 
