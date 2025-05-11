@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # Email Notifications 
 
 <Image 
-  img={require('../../img/email_2.png')}
+  img={require('../../img/email_2_0.png')}
   style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
@@ -76,6 +76,29 @@ litellm_settings:
 On the LiteLLM Proxy UI, go to users > create a new user. 
 
 After creating a new user, they will receive an email invite a the email you specified when creating the user. 
+
+## Email Templates 
+
+
+### 1. User added as a user on LiteLLM Proxy
+
+This email is send when you create a new user on LiteLLM Proxy.
+
+<Image 
+  img={require('../../img/email_event_1.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+### 2. Proxy API Key created for user
+
+This email is sent when you create a new API key for a user on LiteLLM Proxy.
+
+This is triggered when you go to Virtual Keys > Create API Key > Select User ID > In advanced settings select send email. > Create API Key.
+
+<Image 
+  img={require('../../img/email_event_2.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
 
 ## Customizing Email Branding
 
