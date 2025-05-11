@@ -89,16 +89,42 @@ This email is send when you create a new user on LiteLLM Proxy.
   style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
 />
 
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Users > Create User > Enter the user's email address > Create User.
+
+<Image 
+  img={require('../../img/new_user_email.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
 ### 2. Proxy API Key created for user
 
 This email is sent when you create a new API key for a user on LiteLLM Proxy.
-
-This is triggered when you go to Virtual Keys > Create API Key > Select User ID > In advanced settings select send email. > Create API Key.
 
 <Image 
   img={require('../../img/email_event_2.png')}
   style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
 />
+
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Virtual Keys > Create API Key > Select User ID
+
+<Image 
+  img={require('../../img/key_email.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+On the Create Key Modal, Select Advanced Settings > Set Send Email to True.
+
+<Image 
+  img={require('../../img/key_email_2.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+
+
 
 ## Customizing Email Branding
 
