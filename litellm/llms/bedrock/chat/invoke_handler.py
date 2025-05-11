@@ -272,6 +272,7 @@ def make_sync_call(
     api_base: str,
     headers: dict,
     data: str,
+    signed_json_body: Optional[bytes],
     model: str,
     messages: list,
     logging_obj: Logging,
@@ -286,7 +287,7 @@ def make_sync_call(
         response = client.post(
             api_base,
             headers=headers,
-            data=data,
+            data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
         )
