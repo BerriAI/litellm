@@ -526,6 +526,46 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
     @pytest.mark.flaky(retries=6, delay=1)
+    def test_audio_input(self):
+        """
+        Test that audio input is supported by the LLM API
+        """
+        from litellm.utils import supports_audio_input
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_audio_input(base_completion_call_args["model"], None):
+            pytest.skip(
+                f"Model={base_completion_call_args['model']} does not support audio input"
+            )
+
+        audio_input = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
+        response = httpx.get(url)
+        response.raise_for_status()
+        wav_data = response.content
+        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+
+        completion = self.completion_function(
+            **base_completion_call_args,
+            modalities=["text", "audio"],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this recording?"},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": encoded_string, "format": "wav"},
+                        },
+                    ],
+                },
+            ],
+        )
+
+        print(completion.choices[0].message)
+
+
+            
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
