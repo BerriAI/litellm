@@ -1,5 +1,5 @@
 ---
-title: v1.69.0-stable
+title: v1.69.0-stable - Loadbalance Batch API Models
 slug: v1.69.0-stable
 date: 2025-05-10T10:00:00
 authors:
@@ -45,10 +45,28 @@ pip install litellm==1.69.0.post1
 
 LiteLLM v1.69.0-stable brings the following key improvements:
 
-- **Email Invites 2.0**: Send new users onboarded to LiteLLM an email invite.
 - **Loadbalance Batch API Models**: Easily loadbalance across multiple azure batch deployments using LiteLLM Managed Files
-- **Nscale**:  LLM API for compliance with European regulations.
+- **Email Invites 2.0**: Send new users onboarded to LiteLLM an email invite.
+- **Nscale**: LLM API for compliance with European regulations.
 - **Bedrock /v1/messages**: Use Bedrock Anthropic models with Anthropic's /v1/messages.
+
+## Batch API Load Balancing
+
+<Image 
+img={require('../../img/release_notes/lb_batch.png')}
+  style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+
+This release brings LiteLLM Managed File support to Batches. This is great for:
+
+- Proxy Admins: You can now control which Batch models users can call.
+- Developers: You no longer need to know the Azure deployment name when creating your batch .jsonl files - just specify the model your LiteLLM key has access to. 
+
+Over time, we expect LiteLLM Managed Files to be the way most teams use Files across `/chat/completions`, `/batch`, `/fine_tuning` endpoints. 
+
+[Read more here](https://docs.litellm.ai/docs/proxy/managed_batches)
+
 
 ## Email Invites
 
@@ -67,22 +85,6 @@ For LiteLLM Cloud Users, please reach out to us if you want this enabled for you
 
 [Read more here](https://docs.litellm.ai/docs/proxy/email)
 
-## Batch API Load Balancing
-
-<Image 
-img={require('../../img/release_notes/lb_batch.png')}
-  style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
-/>
-
-
-This release brings LiteLLM Managed File support to Batches. This is great for:
-
-- Proxy Admins: You can now control which Batch models users can call.
-- Developers: You no longer need to know the Azure deployment name when creating your batch .jsonl files - just specify the model your LiteLLM key has access to. 
-
-Over time, we expect LiteLLM Managed Files to be the way most teams use Files across `/chat/completions`, `/batch`, `/fine_tuning` endpoints. 
-
-[Read more here](https://docs.litellm.ai/docs/proxy/managed_batches)
 
 ## New Models / Updated Models
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
