@@ -65,6 +65,8 @@ This release brings the following improvements to our email invite integration:
 
 For LiteLLM Cloud Users, please reach out to us if you want this enabled for your instance. 
 
+[Read more here](https://docs.litellm.ai/docs/proxy/email)
+
 ## Batch API Load Balancing
 
 <Image 
@@ -79,6 +81,8 @@ This release brings LiteLLM Managed File support to Batches. This is great for:
 - Developers: You no longer need to know the Azure deployment name when creating your batch .jsonl files - just specify the model your LiteLLM key has access to. 
 
 Over time, we expect LiteLLM Managed Files to be the way most teams use Files across `/chat/completions`, `/batch`, `/fine_tuning` endpoints. 
+
+[Read more here](https://docs.litellm.ai/docs/proxy/managed_batches)
 
 ## New Models / Updated Models
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
