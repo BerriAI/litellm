@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Email Notifications 
 
@@ -19,28 +21,55 @@ Send LiteLLM Proxy users emails for specific events.
 | Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user |
 | Supported Email Integrations | • Resend API<br/>• SMTP |
 
+## Usage
 
-## Quick Start 
+### 1. Configure email integration
+
+<Tabs>
+  <TabItem value="smtp" label="SMTP">
 
 Get SMTP credentials to set this up
+
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+    callbacks: ["smtp_email"]
+```
+
 Add the following to your proxy env
 
-```shell
+```shell showLineNumbers
 SMTP_HOST="smtp.resend.com"
+SMTP_TLS="True"
+SMTP_PORT="587"
 SMTP_USERNAME="resend"
-SMTP_PASSWORD="*******"
-SMTP_SENDER_EMAIL="support@alerts.litellm.ai"  # email to send alerts from: `support@alerts.litellm.ai`
+SMTP_SENDER_EMAIL="notifications@alerts.litellm.ai"
+SMTP_PASSWORD="xxxxx"
 ```
 
-Add `email` to your proxy config.yaml under `general_settings`
+  </TabItem>
+  <TabItem value="resend" label="Resend API">
 
-```yaml
-general_settings:
-  master_key: sk-1234
-  alerting: ["email"]
+Add `resend_email` to your proxy config.yaml under `litellm_settings`
+
+set the following env variables
+
+```shell showLineNumbers
+RESEND_API_KEY="re_1234"
 ```
 
-That's it ! start your proxy
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+    callbacks: ["resend_email"]
+```
+
+  </TabItem>
+</Tabs>
+
+### 2. Create a new user
+
+On the LiteLLM Proxy UI, go to users > create a new user. 
+
+After creating a new user, they will receive an email invite a the email you specified when creating the user. 
 
 ## Customizing Email Branding
 
