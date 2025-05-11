@@ -6,7 +6,7 @@ model_list:
 
 
 litellm_settings:
-    callbacks: ["resend_email"]
+    callbacks: ["smtp_email"]
   
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
