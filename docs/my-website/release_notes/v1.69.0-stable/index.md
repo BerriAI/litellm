@@ -58,8 +58,6 @@ This new release brings support for:
 - Support for SMTP servers or Resend for sending emails. 
 
 
-
-
 ## New Models / Updated Models
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
     - Added `gemini-2.5-pro-preview-05-06` models with pricing and context window info - [PR](https://github.com/BerriAI/litellm/pull/10597)
@@ -67,6 +65,8 @@ This new release brings support for:
 - **[Perplexity](../../docs/providers/perplexity)**: 
     - Added new Perplexity models - [PR](https://github.com/BerriAI/litellm/pull/10652) 
     - Added sonar-deep-research model pricing - [PR](https://github.com/BerriAI/litellm/pull/10537)
+- **[Azure OpenAI](../../docs/providers/azure)**: 
+  - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
 - **[Azure AI Foundry](../../docs/providers/azure_ai)**: 
     - Added cost tracking for the following models [PR](https://github.com/BerriAI/litellm/pull/9956)
         - DeepSeek V3 0324
@@ -78,6 +78,8 @@ This new release brings support for:
     - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681)
     - Added streaming support for Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10710)
 - **[OpenAI](../../docs/providers/openai)**: Added `reasoning_effort` support for `o3` models - [PR](https://github.com/BerriAI/litellm/pull/10591)
+- **[Databricks](../../docs/providers/databricks)**:
+    - Fixed issue when Databricks uses external model and delta could be empty - [PR](https://github.com/BerriAI/litellm/pull/10540)
 - **[Cerebras](../../docs/providers/cerebras)**: Fixed Llama-3.1-70b model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/10648)
 - **[Ollama](../../docs/providers/ollama)**: 
     - Fixed custom price cost tracking and added 'max_completion_token' support - [PR](https://github.com/BerriAI/litellm/pull/10636)
@@ -86,12 +88,20 @@ This new release brings support for:
     - Added support for chat, image generation endpoints - [PR](https://github.com/BerriAI/litellm/pull/10638)
 
 ## LLM API Endpoints
-- 🆕 **[Messages API](../../docs/anthropic_unified)**: 
-    - Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
+- **[Messages API](../../docs/anthropic_unified)**: 
+    - 🆕 Added support for using Bedrock Anthropic models with /v1/messages format - [PR](https://github.com/BerriAI/litellm/pull/10681) and streaming support - [PR](https://github.com/BerriAI/litellm/pull/10710)
 - **[Moderations API](../../docs/moderations)**: 
     - Fixed bug to allow using LiteLLM UI credentials for /moderations API - [PR](https://github.com/BerriAI/litellm/pull/10723)  
 - **[Realtime API](../../docs/realtime)**: 
     - Fixed setting 'headers' in scope for websocket auth requests and infinite loop issues - [PR](https://github.com/BerriAI/litellm/pull/10679)
+- **[Files API](../../docs/proxy/litellm_managed_files)**:
+    - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
+    - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
+    - Added target model name validation - [PR](https://github.com/BerriAI/litellm/pull/10722)
+- **[Batches API](../../docs/batches)**:
+    - Complete unified batch ID support - replacing model in jsonl to be deployment model name - [PR](https://github.com/BerriAI/litellm/pull/10719)
+  - Beta support for unified file ID (managed files) for batches - [PR](https://github.com/BerriAI/litellm/pull/10650)
+
 
 ## Spend Tracking / Budget Improvements
 - Bug Fix - PostgreSQL Integer Overflow Error in DB Spend Tracking - [PR](https://github.com/BerriAI/litellm/pull/10697)
@@ -124,18 +134,11 @@ This new release brings support for:
 - **Caching**:
   - Fixed embedding string caching result - [PR](https://github.com/BerriAI/litellm/pull/10700)
   - Fixed cache miss for Gemini models with response_format - [PR](https://github.com/BerriAI/litellm/pull/10635)
-- **Azure**:
-  - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
-- **Databricks**:
-  - Fixed issue when Databricks uses external model and delta could be empty - [PR](https://github.com/BerriAI/litellm/pull/10540)
 
 ## General Proxy Improvements
-- **CLI**:
+- **Proxy CLI**:
   - Added `--version` flag to `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10704)
   - Added dedicated `litellm-proxy` CLI - [PR](https://github.com/BerriAI/litellm/pull/10578)
-- **Enterprise**:
-  - Refactored to use pip package for enterprise folder - [PR](https://github.com/BerriAI/litellm/pull/10709)
-  - Added MCP Server DB Schema - [PR](https://github.com/BerriAI/litellm/pull/10641)
 - **Alerting**:
   - Fixed Slack alerting not working when using a DB - [PR](https://github.com/BerriAI/litellm/pull/10370)
 - **Email Invites**:
@@ -144,16 +147,6 @@ This new release brings support for:
   - Added endpoints to manage email settings - [PR](https://github.com/BerriAI/litellm/pull/10646)
 - **General**:
   - Fixed bug where duplicate JSON logs were getting emitted - [PR](https://github.com/BerriAI/litellm/pull/10580)
-
-
-
-- **File Processing**:
-  - Unified File ID output support - [PR](https://github.com/BerriAI/litellm/pull/10713)
-  - Support for writing files to all deployments - [PR](https://github.com/BerriAI/litellm/pull/10708)
-  - Complete unified batch ID support - replacing model in jsonl to be deployment model name - [PR](https://github.com/BerriAI/litellm/pull/10719)
-  - Beta support for unified file ID (managed files) for batches - [PR](https://github.com/BerriAI/litellm/pull/10650)
-- **Model Validation**:
-  - Added target model name validation - [PR](https://github.com/BerriAI/litellm/pull/10722)
 
 
 ## New Contributors
