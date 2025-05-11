@@ -23,6 +23,12 @@ Send LiteLLM Proxy users emails for specific events.
 
 ## Usage
 
+:::info
+
+LiteLLM Cloud: This feature is enabled for all LiteLLM Cloud users, there's no need to configure anything.
+
+:::
+
 ### 1. Configure email integration
 
 <Tabs>
