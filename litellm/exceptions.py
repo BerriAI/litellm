@@ -118,6 +118,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.BadRequestError: {}".format(message)
@@ -133,7 +134,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -202,6 +203,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
         headers: Optional[dict] = None,
+        exception_status_code: Optional[int] = None,
     ):
         request = httpx.Request(
             method="POST",
@@ -210,7 +212,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
-        self.status_code = 408
+        self.status_code = exception_status_code or 408
         self.message = "litellm.Timeout: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider

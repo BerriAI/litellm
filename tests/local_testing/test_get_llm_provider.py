@@ -185,6 +185,16 @@ def test_get_llm_provider_hosted_vllm():
     assert dynamic_api_key == "fake-api-key"
 
 
+def test_get_llm_provider_llamafile():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="llamafile/mistralai/mistral-7b-instruct-v0.2",
+    )
+    assert custom_llm_provider == "llamafile"
+    assert model == "mistralai/mistral-7b-instruct-v0.2"
+    assert dynamic_api_key == "fake-api-key"
+    assert api_base == "http://127.0.0.1:8080/v1"
+
+
 def test_get_llm_provider_watson_text():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="watsonx_text/watson-text-to-speech",
@@ -216,3 +226,21 @@ def test_bedrock_invoke_anthropic():
     )
     assert custom_llm_provider == "bedrock"
     assert model == "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+
+@pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])
+def test_xai_api_base(model):
+    args = {
+        "model": model,
+        "custom_llm_provider": "xai",
+        "api_base": None,
+        "api_key": "xai-my-specialkey",
+        "litellm_params": None,
+    }
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        **args
+    )
+    assert custom_llm_provider == "xai"
+    assert model == "grok-2-vision-latest"
+    assert api_base == "https://api.x.ai/v1"
+    assert dynamic_api_key == "xai-my-specialkey"

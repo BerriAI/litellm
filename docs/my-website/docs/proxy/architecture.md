@@ -36,7 +36,7 @@ import TabItem from '@theme/TabItem';
         - Virtual Key Rate Limit
         - User Rate Limit
         - Team Limit
-    - The `_PROXY_track_cost_callback` updates spend / usage in the LiteLLM database. [Here is everything tracked in the DB per request](https://github.com/BerriAI/litellm/blob/ba41a72f92a9abf1d659a87ec880e8e319f87481/schema.prisma#L172)
+    - The `_ProxyDBLogger` updates spend / usage in the LiteLLM database. [Here is everything tracked in the DB per request](https://github.com/BerriAI/litellm/blob/ba41a72f92a9abf1d659a87ec880e8e319f87481/schema.prisma#L172)
 
 ## Frequently Asked Questions
 

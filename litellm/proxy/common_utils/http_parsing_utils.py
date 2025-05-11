@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -42,7 +42,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             if not body:
                 parsed_body = {}
             else:
-                parsed_body = orjson.loads(body)
+                try:
+                    parsed_body = orjson.loads(body)
+                except orjson.JSONDecodeError:
+                    # Fall back to the standard json module which is more forgiving
+                    # First decode bytes to string if needed
+                    body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+
+                    # Replace invalid surrogate pairs
+                    import re
+
+                    # This regex finds incomplete surrogate pairs
+                    body_str = re.sub(
+                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
+                    )
+                    # This regex finds low surrogates without high surrogates
+                    body_str = re.sub(
+                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
+                    )
+
+                    parsed_body = json.loads(body_str)
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
@@ -62,8 +81,13 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
-        return request.state.parsed_body
+    if (
+        hasattr(request, "scope")
+        and "parsed_body" in request.scope
+        and isinstance(request.scope["parsed_body"], tuple)
+    ):
+        accepted_keys, parsed_body = request.scope["parsed_body"]
+        return {key: parsed_body[key] for key in accepted_keys}
     return None
 
 
@@ -74,7 +98,7 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.state.parsed_body = parsed_body
+        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
@@ -161,3 +185,23 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+async def get_form_data(request: Request) -> Dict[str, Any]:
+    """
+    Read form data from request
+
+    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    """
+    form = await request.form()
+    form_data = dict(form)
+    parsed_form_data: dict[str, Any] = {}
+    for key, value in form_data.items():
+
+        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+        if key.endswith("[]"):
+            clean_key = key[:-2]
+            parsed_form_data.setdefault(clean_key, []).append(value)
+        else:
+            parsed_form_data[key] = value
+    return parsed_form_data

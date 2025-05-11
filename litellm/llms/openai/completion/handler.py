@@ -220,7 +220,6 @@ class OpenAITextCompletion(BaseLLM):
         client=None,
         organization=None,
     ):
-
         if client is None:
             openai_client = OpenAI(
                 api_key=api_key,

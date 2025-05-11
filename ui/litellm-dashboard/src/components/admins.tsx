@@ -32,16 +32,27 @@ import {
   Grid,
   Callout,
   Divider,
+  TabGroup,
+  TabList,
+  Tab,
+  TabPanel,
+  TabPanels,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
+import SSOModals from "./SSOModals";
+import { ssoProviderConfigs } from './SSOModals';
+import SCIMConfig from "./SCIM";
+
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
+  userID: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
+  proxySettings?: any;
 }
 import { useBaseUrl } from "./constants";
 
@@ -62,8 +73,10 @@ import {
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
   accessToken,
+  userID,
   showSSOBanner,
   premiumUser,
+  proxySettings,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -484,13 +497,27 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     if (accessToken == null) {
       return;
     }
-    let payload = {
-      environment_variables: {
-        PROXY_BASE_URL: formValues.proxy_base_url,
-        GOOGLE_CLIENT_ID: formValues.google_client_id,
-        GOOGLE_CLIENT_SECRET: formValues.google_client_secret,
-      },
+
+    const provider = formValues.sso_provider;
+    const config = ssoProviderConfigs[provider];
+    
+    const envVars: Record<string, string> = {
+      PROXY_BASE_URL: formValues.proxy_base_url,
     };
+
+    // Add provider-specific environment variables using the configuration
+    if (config) {
+      Object.entries(config.envVarMap).forEach(([formKey, envKey]) => {
+        if (formValues[formKey]) {
+          envVars[envKey] = formValues[formKey];
+        }
+      });
+    }
+
+    const payload = {
+      environment_variables: envVars,
+    };
+    
     setCallbacksCall(accessToken, payload);
   };
   console.log(`admins: ${admins?.length}`);
@@ -498,132 +525,51 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Admin Access </Title>
       <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
-      <Grid >
-        <Card>
-        <Title level={4}> ✨ Security Settings</Title>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-    <div>
-      <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
-    </div>
-    <div>
-      <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
-    </div>
-  </div>
-        </Card>
-       
-        <div className="flex justify-start mb-4">
-         
-          <Modal
-            title="Add SSO"
-            visible={isAddSSOModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleAddSSOOk}
-            onCancel={handleAddSSOCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleShowInstructions}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-            >
-              <>
-                <Form.Item
-                  label="Admin Email"
-                  name="user_email"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the email of the proxy admin",
-                    },
-                  ]}
-                >
-                  <Input />
-                </Form.Item>
-                <Form.Item
-                  label="PROXY BASE URL"
-                  name="proxy_base_url"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the proxy base url",
-                    },
-                  ]}
-                >
-                  <Input />
-                </Form.Item>
-
-                <Form.Item
-                  label="GOOGLE CLIENT ID"
-                  name="google_client_id"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the google client id",
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-
-                <Form.Item
-                  label="GOOGLE CLIENT SECRET"
-                  name="google_client_secret"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the google client secret",
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Save</Button2>
+      <TabGroup>
+        <TabList>
+          <Tab>Security Settings</Tab>
+          <Tab>SCIM</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Card>
+              <Title level={4}> ✨ Security Settings</Title>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+                <div>
+                  <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
+                </div>
+                <div>
+                  <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
+                </div>
               </div>
-            </Form>
-          </Modal>
-          <Modal
-            title="SSO Setup Instructions"
-            visible={isInstructionsModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleInstructionsOk}
-            onCancel={handleInstructionsCancel}
-          >
-            <p>Follow these steps to complete the SSO setup:</p>
-            <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-            <Text className="mt-2">
-              2. Open a new tab, visit your proxy base url
-            </Text>
-            <Text className="mt-2">
-              3. Confirm your SSO is configured correctly and you can login on
-              the new Tab
-            </Text>
-            <Text className="mt-2">
-              4. If Step 3 is successful, you can close this tab
-            </Text>
-            <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 onClick={handleInstructionsOk}>Done</Button2>
-            </div>
-          </Modal>
-          <Modal
-          title="Manage Allowed IP Addresses"
-          width={800}
-          visible={isAllowedIPModalVisible}
-          onCancel={() => setIsAllowedIPModalVisible(false)}
-          footer={[
-            <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
-              Add IP Address
-            </Button>,
-            <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-              Close
-            </Button>
-          ]}
-        >
-          <Table>
+            </Card>
+           
+            <div className="flex justify-start mb-4">
+              <SSOModals
+                isAddSSOModalVisible={isAddSSOModalVisible}
+                isInstructionsModalVisible={isInstructionsModalVisible}
+                handleAddSSOOk={handleAddSSOOk}
+                handleAddSSOCancel={handleAddSSOCancel}
+                handleShowInstructions={handleShowInstructions}
+                handleInstructionsOk={handleInstructionsOk}
+                handleInstructionsCancel={handleInstructionsCancel}
+                form={form}
+              />
+              <Modal
+              title="Manage Allowed IP Addresses"
+              width={800}
+              visible={isAllowedIPModalVisible}
+              onCancel={() => setIsAllowedIPModalVisible(false)}
+              footer={[
+                <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
+                  Add IP Address
+                </Button>,
+                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
+                  Close
+                </Button>
+              ]}
+            >
+              <Table>
   <TableHead>
     <TableRow>
       <TableHeaderCell>IP Address</TableHeaderCell>
@@ -691,7 +637,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <b>{nonSssoUrl}</b>{" "}
           </a>
         </Callout>
-      </Grid>
+          </TabPanel>
+          <TabPanel>
+            <SCIMConfig 
+              accessToken={accessToken} 
+              userID={userID}
+              proxySettings={proxySettings}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

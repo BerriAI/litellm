@@ -2,13 +2,24 @@ import hashlib
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    cast,
+    get_args,
+)
 
 import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret
 
@@ -223,17 +234,85 @@ class BaseAWSLLM:
             # Catch any unexpected errors and return None
             return None
 
+    @staticmethod
+    def _get_provider_from_model_path(
+        model_path: str,
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the provider from a model path with format: provider/model-name
+
+        Args:
+            model_path (str): The model path (e.g., 'llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n' or 'anthropic/model-name')
+
+        Returns:
+            Optional[str]: The provider name, or None if no valid provider found
+        """
+        parts = model_path.split("/")
+        if len(parts) >= 1:
+            provider = parts[0]
+            if provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
+        return None
+
+    @staticmethod
+    def get_bedrock_invoke_provider(
+        model: str,
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the bedrock provider from the model
+
+        handles 3 scenarions:
+        1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
+        4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
+        """
+        if model.startswith("invoke/"):
+            model = model.replace("invoke/", "", 1)
+
+        _split_model = model.split(".")[0]
+        if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
+
+        # If not a known provider, check for pattern with two slashes
+        provider = BaseAWSLLM._get_provider_from_model_path(model)
+        if provider is not None:
+            return provider
+
+        # check if provider == "nova"
+        if "nova" in model:
+            return "nova"
+        else:
+            for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                if provider in model:
+                    return provider
+        return None
+
     def _get_aws_region_name(
-        self, optional_params: dict, model: Optional[str] = None
+        self,
+        optional_params: dict,
+        model: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> str:
         """
-        Get the AWS region name from the environment variables
+        Get the AWS region name from the environment variables.
+
+        Parameters:
+            optional_params (dict): Optional parameters for the model call
+            model (str): The model name
+            model_id (str): The model ID. This is the ARN of the model, if passed in as a separate param.
+
+        Returns:
+            str: The AWS region name
         """
         aws_region_name = optional_params.get("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #
-            aws_region_name = self._get_aws_region_from_model_arn(model)
+            if model_id is not None:
+                aws_region_name = self._get_aws_region_from_model_arn(model_id)
+            else:
+                aws_region_name = self._get_aws_region_from_model_arn(model)
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
 
@@ -312,7 +391,7 @@ class BaseAWSLLM:
             "region_name": aws_region_name,
         }
 
-        if sts_response["PackedPolicySize"] > 75:
+        if sts_response["PackedPolicySize"] > BEDROCK_MAX_POLICY_SIZE:
             verbose_logger.warning(
                 f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
             )
@@ -499,6 +578,7 @@ class BaseAWSLLM:
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = self._get_aws_region_name(optional_params, model)
+        optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
@@ -555,3 +635,74 @@ class BaseAWSLLM:
         prepped = request.prepare()
 
         return prepped
+
+    def _sign_request(
+        self,
+        service_name: Literal["bedrock", "sagemaker"],
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """
+        Sign a request for Bedrock or Sagemaker
+
+        Returns:
+            Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
+        """
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        ## CREDENTIALS ##
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
+        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.get("aws_access_key_id", None)
+        aws_session_token = optional_params.get("aws_session_token", None)
+        aws_role_name = optional_params.get("aws_role_name", None)
+        aws_session_name = optional_params.get("aws_session_name", None)
+        aws_profile_name = optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params, model=model
+        )
+
+        credentials: Credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+        )
+
+        sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
+        if headers is not None:
+            headers = {"Content-Type": "application/json", **headers}
+        else:
+            headers = {"Content-Type": "application/json"}
+
+        request = AWSRequest(
+            method="POST",
+            url=api_base,
+            data=json.dumps(request_data),
+            headers=headers,
+        )
+        sigv4.add_auth(request)
+
+        request_headers_dict = dict(request.headers)
+        if (
+            headers is not None and "Authorization" in headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["Authorization"]
+        return request_headers_dict, request.body

@@ -7,16 +7,15 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
@@ -28,7 +27,6 @@ else:
 
 
 class AnthropicPassthroughLoggingHandler:
-
     @staticmethod
     def anthropic_passthrough_handler(
         httpx_response: httpx.Response,
@@ -116,27 +114,19 @@ class AnthropicPassthroughLoggingHandler:
                         {"proxy_server_request": {"body": {"user": user}}}
                     )
 
-            # Make standard logging object for Anthropic
-            standard_logging_object = get_standard_logging_object_payload(
-                kwargs=kwargs,
-                init_response_obj=litellm_model_response,
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=logging_obj,
-                status="success",
-            )
-
             # pretty print standard logging object
             verbose_proxy_logger.debug(
-                "standard_logging_object= %s",
-                json.dumps(standard_logging_object, indent=4),
+                "kwargs= %s",
+                json.dumps(kwargs, indent=4, default=str),
             )
-            kwargs["standard_logging_object"] = standard_logging_object
 
             # set litellm_call_id to logging response object
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
+            logging_obj.model_call_details["custom_llm_provider"] = (
+                litellm.LlmProviders.ANTHROPIC.value
+            )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -210,23 +200,19 @@ class AnthropicPassthroughLoggingHandler:
             streaming_response=None,
             sync_stream=False,
         )
-        litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
-            completion_stream=anthropic_model_response_iterator,
-            model=model,
-            logging_obj=litellm_logging_obj,
-            custom_llm_provider="anthropic",
-        )
         all_openai_chunks = []
         for _chunk_str in all_chunks:
             try:
-                generic_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
+                transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                     chunk=_chunk_str
                 )
-                litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                    chunk=generic_chunk
+                if transformed_openai_chunk is not None:
+                    all_openai_chunks.append(transformed_openai_chunk)
+
+                verbose_proxy_logger.debug(
+                    "all openai chunks= %s",
+                    json.dumps(all_openai_chunks, indent=4, default=str),
                 )
-                if litellm_chunk is not None:
-                    all_openai_chunks.append(litellm_chunk)
             except (StopIteration, StopAsyncIteration):
                 break
         complete_streaming_response = litellm.stream_chunk_builder(

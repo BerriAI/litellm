@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent
+from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
@@ -52,16 +52,18 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolUseParam(TypedDict):
+class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
     input: dict
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
+    ChatCompletionThinkingBlock,
 ]
 
 
@@ -151,22 +153,23 @@ AllAnthropicMessageValues = Union[
 ]
 
 
-class AnthropicMessageRequestBase(TypedDict, total=False):
-    messages: Required[List[AllAnthropicMessageValues]]
-    max_tokens: Required[int]
-    metadata: AnthropicMetadata
-    stop_sequences: List[str]
-    stream: bool
-    system: Union[str, List]
-    temperature: float
-    tool_choice: AnthropicMessagesToolChoice
-    tools: List[AllAnthropicToolsValues]
-    top_k: int
-    top_p: float
+class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
+    max_tokens: Optional[int]
+    metadata: Optional[Union[AnthropicMetadata, Dict]]
+    stop_sequences: Optional[List[str]]
+    stream: Optional[bool]
+    system: Optional[Union[str, List]]
+    temperature: Optional[float]
+    thinking: Optional[Dict]
+    tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
+    tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
+    top_k: Optional[int]
+    top_p: Optional[float]
 
 
-class AnthropicMessagesRequest(AnthropicMessageRequestBase, total=False):
+class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
     model: Required[str]
+    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
     # litellm param - used for tracking litellm proxy metadata in the request
     litellm_metadata: dict
 
@@ -358,3 +361,8 @@ ANTHROPIC_API_HEADERS = {
 ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
+
+
+class AnthropicThinkingParam(TypedDict, total=False):
+    type: Literal["enabled"]
+    budget_tokens: int

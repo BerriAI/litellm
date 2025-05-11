@@ -31,9 +31,8 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LiteLLMBatch
 from litellm.utils import client, get_litellm_params, supports_httpx_timeout
-
-from .batch_utils import batches_async_logging
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
@@ -52,7 +51,7 @@ async def acreate_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
 
@@ -85,17 +84,6 @@ async def acreate_batch(
         else:
             response = init_response
 
-        # Start async logging job
-        if response is not None:
-            asyncio.create_task(
-                batches_async_logging(
-                    logging_obj=kwargs.get("litellm_logging_obj", None),
-                    batch_id=response.id,
-                    custom_llm_provider=custom_llm_provider,
-                    **kwargs,
-                )
-            )
-
         return response
     except Exception as e:
         raise e
@@ -111,7 +99,7 @@ def create_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
     Creates and executes a batch from an uploaded file of request
 
@@ -119,21 +107,27 @@ def create_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_call_id = kwargs.get("litellm_call_id", None)
+        proxy_server_request = kwargs.get("proxy_server_request", None)
+        model_info = kwargs.get("model_info", None)
         _is_async = kwargs.pop("acreate_batch", False) is True
+        litellm_params = get_litellm_params(**kwargs)
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        litellm_params = get_litellm_params(
-            custom_llm_provider=custom_llm_provider,
-            litellm_call_id=kwargs.get("litellm_call_id", None),
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
-            litellm_metadata=kwargs.get("litellm_metadata"),
-        )
         litellm_logging_obj.update_environment_variables(
             model=None,
             user=None,
             optional_params=optional_params.model_dump(),
-            litellm_params=litellm_params,
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "metadata": metadata,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            },
             custom_llm_provider=custom_llm_provider,
         )
 
@@ -159,11 +153,11 @@ def create_batch(
         )
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -224,6 +218,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -261,7 +256,7 @@ def create_batch(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response
@@ -269,6 +264,7 @@ def create_batch(
         raise e
 
 
+@client
 async def aretrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -276,7 +272,7 @@ async def aretrieve_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Retrieves a batch.
 
@@ -310,6 +306,7 @@ async def aretrieve_batch(
         raise e
 
 
+@client
 def retrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -317,7 +314,7 @@ def retrieve_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
     Retrieves a batch.
 
@@ -325,9 +322,20 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            user=None,
+            optional_params=optional_params.model_dump(),
+            litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         if (
             timeout is not None
@@ -350,11 +358,11 @@ def retrieve_batch(
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -415,6 +423,7 @@ def retrieve_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 retrieve_batch_data=_retrieve_batch_request,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -517,6 +526,10 @@ def list_batches(
     try:
         # set API KEY
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
         api_key = (
             optional_params.api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
@@ -545,6 +558,7 @@ def list_batches(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -594,6 +608,7 @@ def list_batches(
                 api_version=api_version,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -669,6 +684,10 @@ def cancel_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -697,6 +716,7 @@ def cancel_batch(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -756,6 +776,7 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 cancel_batch_data=_cancel_batch_request,
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(

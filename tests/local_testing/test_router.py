@@ -194,6 +194,9 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_client_init():
 
     _deployment = {
@@ -219,6 +222,43 @@ def test_router_azure_ai_client_init():
     assert not isinstance(_client, AsyncAzureOpenAI)
 
 
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
+def test_router_azure_ad_token_provider():
+    _deployment = {
+        "model_name": "gpt-4o_2024-05-13",
+        "litellm_params": {
+            "model": "azure/gpt-4o_2024-05-13",
+            "api_base": "my-fake-route",
+            "api_version": "2024-08-01-preview",
+        },
+        "model_info": {"id": "1234"},
+    }
+    for azure_cred in ["DefaultAzureCredential", "AzureCliCredential"]:
+        os.environ["AZURE_CREDENTIAL"] = azure_cred
+        litellm.enable_azure_ad_token_refresh = True
+        router = Router(model_list=[_deployment])
+
+        _client = router._get_client(
+            deployment=_deployment,
+            client_type="async",
+            kwargs={"stream": False},
+        )
+        print(_client)
+        import azure.identity as identity
+        from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+        assert isinstance(_client, AsyncOpenAI)
+        assert isinstance(_client, AsyncAzureOpenAI)
+        assert _client._azure_ad_token_provider is not None
+        assert isinstance(_client._azure_ad_token_provider.__closure__, tuple)
+        assert isinstance(
+            _client._azure_ad_token_provider.__closure__[0].cell_contents._credential,
+            getattr(identity, os.environ["AZURE_CREDENTIAL"]),
+        )
+
+
 def test_router_sensitive_keys():
     try:
         router = Router(
@@ -226,7 +266,7 @@ def test_router_sensitive_keys():
                 {
                     "model_name": "gpt-3.5-turbo",  # openai model name
                     "litellm_params": {  # params for litellm completion/embedding call
-                        "model": "azure/chatgpt-v-2",
+                        "model": "azure/chatgpt-v-3",
                         "api_key": "special-key",
                     },
                     "model_info": {"id": 12345},
@@ -280,91 +320,6 @@ def test_router_order():
         assert response._hidden_params["model_id"] == "1"
 
 
-@pytest.mark.parametrize("num_retries", [None, 2])
-@pytest.mark.parametrize("max_retries", [None, 4])
-def test_router_num_retries_init(num_retries, max_retries):
-    """
-    - test when num_retries set v/s not
-    - test client value when max retries set v/s not
-    """
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": "bad-key",
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "max_retries": max_retries,
-                },
-                "model_info": {"id": 12345},
-            },
-        ],
-        num_retries=num_retries,
-    )
-
-    if num_retries is not None:
-        assert router.num_retries == num_retries
-    else:
-        assert router.num_retries == openai.DEFAULT_MAX_RETRIES
-
-    model_client = router._get_client(
-        {"model_info": {"id": 12345}}, client_type="async", kwargs={}
-    )
-
-    if max_retries is not None:
-        assert getattr(model_client, "max_retries") == max_retries
-    else:
-        assert getattr(model_client, "max_retries") == 0
-
-
-@pytest.mark.parametrize(
-    "timeout", [10, 1.0, httpx.Timeout(timeout=300.0, connect=20.0)]
-)
-@pytest.mark.parametrize("ssl_verify", [True, False])
-def test_router_timeout_init(timeout, ssl_verify):
-    """
-    Allow user to pass httpx.Timeout
-
-    related issue - https://github.com/BerriAI/litellm/issues/3162
-    """
-    litellm.ssl_verify = ssl_verify
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "timeout": timeout,
-                },
-                "model_info": {"id": 1234},
-            }
-        ]
-    )
-
-    model_client = router._get_client(
-        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
-    )
-
-    assert getattr(model_client, "timeout") == timeout
-
-    print(f"vars model_client: {vars(model_client)}")
-    http_client = getattr(model_client, "_client")
-    print(f"http client: {vars(http_client)}, ssl_Verify={ssl_verify}")
-    if ssl_verify == False:
-        assert http_client._transport._pool._ssl_context.verify_mode.name == "CERT_NONE"
-    else:
-        assert (
-            http_client._transport._pool._ssl_context.verify_mode.name
-            == "CERT_REQUIRED"
-        )
-
-
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_router_retries(sync_mode):
@@ -379,7 +334,7 @@ async def test_router_retries(sync_mode):
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/gpt-4o-new-test",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_base": os.getenv("AZURE_API_BASE"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
@@ -413,6 +368,9 @@ async def test_router_retries(sync_mode):
         "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
     ],
 )
+@pytest.mark.skip(
+    reason="Router no longer creates clients, this is delegated to the provider integration."
+)
 def test_router_azure_ai_studio_init(mistral_api_base):
     router = Router(
         model_list=[
@@ -428,16 +386,21 @@ def test_router_azure_ai_studio_init(mistral_api_base):
         ]
     )
 
-    model_client = router._get_client(
-        deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # model_client = router._get_client(
+    #     deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
+    # )
+    # url = getattr(model_client, "_base_url")
+    # uri_reference = str(getattr(url, "_uri_reference"))
+
+    # print(f"uri_reference: {uri_reference}")
+
+    # assert "/v1/" in uri_reference
+    # assert uri_reference.count("v1") == 1
+    response = router.completion(
+        model="azure/mistral-large-latest",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
-    url = getattr(model_client, "_base_url")
-    uri_reference = str(getattr(url, "_uri_reference"))
-
-    print(f"uri_reference: {uri_reference}")
-
-    assert "/v1/" in uri_reference
-    assert uri_reference.count("v1") == 1
+    assert response is not None
 
 
 def test_exception_raising():
@@ -454,7 +417,7 @@ def test_exception_raising():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -516,7 +479,7 @@ def test_reading_key_from_model_list():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -572,7 +535,7 @@ def test_reading_key_from_model_list():
 def test_call_one_endpoint():
     # [PROD TEST CASE]
     # user passes one deployment they want to call on the router, we call the specified one
-    # this test makes a completion calls azure/chatgpt-v-2, it should work
+    # this test makes a completion calls azure/chatgpt-v-3, it should work
     try:
         print("Testing calling a specific deployment")
         old_api_key = os.environ["AZURE_API_KEY"]
@@ -581,7 +544,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4o-new-test",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -611,7 +574,7 @@ def test_call_one_endpoint():
 
         async def call_azure_completion():
             response = await router.acompletion(
-                model="azure/chatgpt-v-2",
+                model="azure/gpt-4o-new-test",
                 messages=[{"role": "user", "content": "hello this request will pass"}],
                 specific_deployment=True,
             )
@@ -657,7 +620,7 @@ def test_router_azure_acompletion():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/gpt-4o-new-test",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -830,7 +793,7 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -884,7 +847,7 @@ def test_router_context_window_check_pre_call_check():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -938,7 +901,7 @@ def test_router_context_window_check_pre_call_check_out_group():
             {
                 "model_name": "gpt-3.5-turbo-small",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -1017,7 +980,7 @@ def test_router_region_pre_call_check(allowed_model_region):
         {
             "model_name": "gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -1173,16 +1136,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            },
-            {
-                "model_name": "dall-e-2",
-                "litellm_params": {
-                    "model": "azure/",
-                    "api_version": "2023-06-01-preview",
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                },
-            },
+            }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
@@ -1190,13 +1144,6 @@ async def test_aimg_gen_on_router():
         )
         print(response)
         assert len(response.data) > 0
-
-        response = await router.aimage_generation(
-            model="dall-e-2", prompt="A cute baby sea otter"
-        )
-        print(response)
-        assert len(response.data) > 0
-
         router.reset()
     except litellm.InternalServerError as e:
         pass
@@ -2669,7 +2616,7 @@ def test_is_team_specific_model():
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-2",
+#                     "model": "azure/chatgpt-v-3",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
 #                     "tpm": 100000,
@@ -2679,7 +2626,7 @@ def test_is_team_specific_model():
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-2",
+#                     "model": "azure/chatgpt-v-3",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
 #                     "tpm": 500,
@@ -2777,3 +2724,67 @@ def test_router_get_model_list_from_model_alias():
         model_name="gpt-3.5-turbo"
     )
     assert len(model_alias_list) == 0
+
+
+def test_router_dynamic_credentials():
+    """
+    Assert model id for dynamic api key 1 != model id for dynamic api key 2
+    """
+    original_model_id = "123"
+    original_api_key = "my-bad-key"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": original_api_key,
+                    "mock_response": "fake_response",
+                },
+                "model_info": {"id": original_model_id},
+            }
+        ]
+    )
+
+    deployment = router.get_deployment(model_id=original_model_id)
+    assert deployment is not None
+    assert deployment.litellm_params.api_key == original_api_key
+
+    response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="my-bad-key-2",
+    )
+
+    response_2 = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="my-bad-key-3",
+    )
+
+    assert response_2._hidden_params["model_id"] != response._hidden_params["model_id"]
+
+    deployment = router.get_deployment(model_id=original_model_id)
+    assert deployment is not None
+    assert deployment.litellm_params.api_key == original_api_key
+
+
+def test_router_get_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+            },
+        ],
+    )
+
+    model_group_info = router.get_model_group_info(model_group="gpt-4")
+    assert model_group_info is not None
+    assert model_group_info.model_group == "gpt-4"
+    assert model_group_info.input_cost_per_token > 0
+    assert model_group_info.output_cost_per_token > 0
