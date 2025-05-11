@@ -159,7 +159,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             audio_data = audio_element["input_audio"].get("data")
                             audio_format = audio_element["input_audio"].get("format")
                             if audio_data is not None and audio_format is not None:
-                                audio_format = (
+                                audio_format_modified = (
                                     "audio/" + audio_format
                                     if audio_format.startswith("audio/") is False
                                     else audio_format
@@ -168,14 +168,14 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     convert_generic_image_chunk_to_openai_image_obj(
                                         image_chunk=GenericImageParsingChunk(
                                             type="base64",
-                                            media_type=audio_format,
+                                            media_type=audio_format_modified,
                                             data=audio_data,
                                         )
                                     )
                                 )
                                 _part = _process_gemini_image(
                                     image_url=openai_image_str,
-                                    format=audio_format,
+                                    format=audio_format_modified,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
