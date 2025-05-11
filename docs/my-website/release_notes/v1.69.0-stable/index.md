@@ -95,6 +95,10 @@ For LiteLLM Cloud Users, please reach out to us if you want this enabled for you
     - Added sonar-deep-research model pricing - [PR](https://github.com/BerriAI/litellm/pull/10537)
 - **[Azure OpenAI](../../docs/providers/azure)**: 
   - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
+- **[OpenAI](../../docs/providers/openai)**:
+    - Added support for pdf url's in 'file' parameter - [PR](https://github.com/BerriAI/litellm/pull/10640)
+- **[Sagemaker](../../docs/providers/aws_sagemaker)**:
+    - Fix content length for `sagemaker_chat` provider - [PR](https://github.com/BerriAI/litellm/pull/10607)
 - **[Azure AI Foundry](../../docs/providers/azure_ai)**: 
     - Added cost tracking for the following models [PR](https://github.com/BerriAI/litellm/pull/9956)
         - DeepSeek V3 0324
