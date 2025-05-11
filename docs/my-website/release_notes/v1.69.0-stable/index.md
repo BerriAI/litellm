@@ -94,10 +94,7 @@ This new release brings support for:
     - Fixed setting 'headers' in scope for websocket auth requests and infinite loop issues - [PR](https://github.com/BerriAI/litellm/pull/10679)
 
 ## Spend Tracking / Budget Improvements
-- **Database Optimization**: 
-  - Updated token fields in schema.prisma to use BigInt for improved performance - [PR](https://github.com/BerriAI/litellm/pull/10697)
-  - Added index for session_id on LiteLLM_SpendLogs for better query performance - [PR](https://github.com/BerriAI/litellm/pull/10727)
-  - Added `status` to root of SpendLogs table for better filtering - [PR](https://github.com/BerriAI/litellm/pull/10661)
+- Bug Fix - PostgreSQL Integer Overflow Error in DB Spend Tracking - [PR](https://github.com/BerriAI/litellm/pull/10697)
 
 ## Management Endpoints / UI
 - **Models**
@@ -106,13 +103,14 @@ This new release brings support for:
 - **Logs**:
   - Bug Fix -  copying Request/Response on Logs Page - [PR](https://github.com/BerriAI/litellm/pull/10720)
   - Bug Fix -  log did not remain in focus on QA Logs page + text overflow on error logs - [PR](https://github.com/BerriAI/litellm/pull/10725)
+  - Added index for session_id on LiteLLM_SpendLogs for better query performance - [PR](https://github.com/BerriAI/litellm/pull/10727)
 - **User Management**:
   - Added user management functionality to Python client library & CLI - [PR](https://github.com/BerriAI/litellm/pull/10627)
   - Bug Fix - Fixed SCIM token creation on Admin UI - [PR](https://github.com/BerriAI/litellm/pull/10628)
   - Bug Fix - Added 404 response when trying to delete verification tokens that don't exist - [PR](https://github.com/BerriAI/litellm/pull/10605)
 
 ## Logging / Guardrail Integrations
-- **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575)
+- **Custom Logger API**: v2 Custom Callback API (send llm logs to custom api) - [PR](https://github.com/BerriAI/litellm/pull/10575), [Get Started](https://docs.litellm.ai/docs/proxy/logging#custom-callback-apis-async)
 - **OpenTelemetry**:
   - Fixed OpenTelemetry to follow genai semantic conventions + support for 'instructions' param for TTS - [PR](https://github.com/BerriAI/litellm/pull/10608)
 - ** Bedrock PII**:
