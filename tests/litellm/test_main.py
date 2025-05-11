@@ -454,3 +454,32 @@ class Test_Chat:
             call(model="gemini/gemini-1.5-flash", messages=[{"role": "user", "content": "hello"}], bar="foo"),
         ]
         assert params == {"acompletion": True}
+
+    def test_calls_completion_with_router_obj(self, mocker):
+        router_obj = mocker.MagicMock()
+        chatobj = litellm.main.Chat({}, router_obj=router_obj)
+        chatobj.completions.create(
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        router_obj.completion.assert_called_once_with(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            foo="bar"
+        )
+
+    @pytest.mark.asyncio
+    async def test_calls_acompletion_with_router_obj(self, mocker):
+        router_obj = mocker.AsyncMock()
+        chatobj = litellm.main.Chat({"acompletion": True}, router_obj=router_obj)
+        await chatobj.completions.create(  # type: ignore
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini/gemini-1.5-flash",
+            foo="bar",
+        )
+        router_obj.acompletion.assert_called_once_with(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            foo="bar"
+        )
