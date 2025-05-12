@@ -67,6 +67,22 @@ response = completion(
 print(response)
 ```
 
+```python showLineNumbers title="Nscale Text Generation - Streaming"
+from litellm import completion
+import os
+
+os.environ["NSCALE_API_KEY"] = ""  # your Nscale API key
+stream = completion(
+    model="nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+    messages=[{"role": "user", "content": "What is LiteLLM?"}],
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content is not None:
+        print(chunk.choices[0].delta.content, end="")
+```
+
 ### Image Generation
 
 ```python showLineNumbers title="Nscale Image Generation"
