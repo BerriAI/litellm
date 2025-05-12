@@ -3,6 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # Nscale (EU Sovereign)
 
+https://docs.nscale.com/docs/inference/chat
+
+:::tip
+
+**We support ALL Nscale models, just set `model=nscale/<any-model-on-nscale>` as a prefix when sending litellm requests**
+
+:::
+
 | Property | Details |
 |-------|-------|
 | Description | European-domiciled full-stack AI cloud platform for LLMs and image generation. |
