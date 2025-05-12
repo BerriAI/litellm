@@ -994,7 +994,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimConfig = NvidiaNimConfig()
