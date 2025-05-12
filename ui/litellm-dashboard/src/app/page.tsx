@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { defaultOrg } from "@/components/common_components/default_org";
@@ -121,6 +121,7 @@ export default function CreateKeyPage() {
   const [userID, setUserID] = useState<string | null>(null);
 
   const invitation_id = searchParams.get("invitation_id");
+  const router = useRouter()
 
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
@@ -155,7 +156,7 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      router.push('/sso/key/generate')
     }
   }, [redirectToLogin])
 
