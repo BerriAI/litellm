@@ -215,7 +215,7 @@ class AimGuardrail(CustomGuardrail):
     def _deanonymize_output(self, output: str) -> dict | None:
         try:
             for entity in self.dlp_entities:
-                output = output.replace(f"[{entity["name"]}]", entity["content"])
+                output = output.replace(f"[{entity['name']}]", entity["content"])
             return {"redacted_output": output}
         except Exception as e:
             verbose_proxy_logger.error(f"Aim: Error while redacting output: {e}")
