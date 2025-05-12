@@ -4661,6 +4661,7 @@ def image_generation(  # noqa: PLR0915
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
         headers: dict = kwargs.get("headers", None) or {}
+        base_model = kwargs.get("base_model", None)
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
@@ -4705,13 +4706,13 @@ def image_generation(  # noqa: PLR0915
         ):
             image_generation_config = (
                 ProviderConfigManager.get_provider_image_generation_config(
-                    model=model,
+                    model=base_model or model,
                     provider=LlmProviders(custom_llm_provider),
                 )
             )
 
         optional_params = get_optional_params_image_gen(
-            model=model,
+            model=base_model or model,
             n=n,
             quality=quality,
             response_format=response_format,
