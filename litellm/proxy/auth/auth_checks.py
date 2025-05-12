@@ -20,7 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -45,8 +45,10 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
+from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
+from .auth_utils import get_model_from_request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -89,7 +91,9 @@ async def common_checks(
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _model: Optional[str] = cast(Optional[str], request_body.get("model", None))
+    _model: Optional[Union[str, List[str]]] = get_model_from_request(
+        request_body, route
+    )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -957,7 +961,7 @@ async def get_team_object(
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
-        from datetime import UTC, datetime, timedelta
+        from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             encrypt_value_helper,
@@ -967,7 +971,7 @@ class ExperimentalUIJWTToken:
             raise Exception("User role is required for experimental UI login")
 
         # Calculate expiration time (10 minutes from now)
-        expiration_time = datetime.now(UTC) + timedelta(minutes=10)
+        expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
@@ -1120,11 +1124,12 @@ async def get_org_object(
 
 
 def _can_object_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
+    fallback_depth: int = 0,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1142,6 +1147,24 @@ def _can_object_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise Exception(
+            "Unable to parse model, max fallback depth exceeded - received model: {}".format(
+                model
+            )
+        )
+    if isinstance(model, list):
+        for m in model:
+            _can_object_call_model(
+                model=m,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                object_type=object_type,
+                fallback_depth=fallback_depth + 1,
+            )
+        return True
+
     if model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
 
@@ -1219,7 +1242,7 @@ def _model_in_team_aliases(
 
 
 async def can_key_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_model_list: Optional[list],
     valid_token: UserAPIKeyAuth,
     llm_router: Optional[litellm.Router],
@@ -1262,7 +1285,7 @@ def can_org_access_model(
 
 
 async def can_team_access_model(
-    model: str,
+    model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
@@ -1281,7 +1304,7 @@ async def can_team_access_model(
 
 
 async def can_user_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
 ) -> Literal[True]:

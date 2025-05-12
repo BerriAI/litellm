@@ -22,6 +22,7 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ModelInfoBase,
     ModelResponse,
+    ModelResponseStream,
     ProviderField,
 )
 
@@ -150,6 +151,7 @@ class OllamaConfig(BaseConfig):
             "frequency_penalty",
             "stop",
             "response_format",
+            "max_completion_tokens",
         ]
 
     def map_openai_params(
@@ -160,7 +162,7 @@ class OllamaConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -257,9 +259,13 @@ class OllamaConfig(BaseConfig):
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
             response_content = json.loads(response_json["response"])
-            
+
             # Check if this is a function call format with name/arguments structure
-            if isinstance(response_content, dict) and "name" in response_content and "arguments" in response_content:
+            if (
+                isinstance(response_content, dict)
+                and "name" in response_content
+                and "arguments" in response_content
+            ):
                 # Handle as function call (original behavior)
                 function_call = response_content
                 message = litellm.Message(
@@ -410,7 +416,9 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
