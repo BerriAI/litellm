@@ -4,17 +4,18 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 from typing import List, Optional, Tuple
 
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.router import LiteLLM_Params
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> List:
-        list = super().get_supported_openai_params(model)
-        list.append("thinking")
-        list.append("reasoning_effort")
-        return list
+        params_list = super().get_supported_openai_params(model)
+        params_list.append("thinking")
+        params_list.append("reasoning_effort")
+        return params_list
 
     def _map_openai_params(
         self,
@@ -52,3 +53,26 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+
+    @staticmethod
+    def _should_use_litellm_proxy_by_default(
+        litellm_params: Optional[LiteLLM_Params] = None,
+    ):
+        """
+        Returns True if litellm proxy should be used by default for a given request
+
+        Issue: https://github.com/BerriAI/litellm/issues/10559
+
+        Use case:
+        - When using Google ADK, users want a flag to dynamically enable sending the request to litellm proxy or not
+        """
+        import litellm
+
+        if get_secret_bool("USE_LITELLM_PROXY") is True:
+            return True
+        litellm_params = litellm_params or {}
+        if litellm_params.get("use_litellm_proxy", False) is True:
+            return True
+        if litellm.use_litellm_proxy is True:
+            return True
+        return False
