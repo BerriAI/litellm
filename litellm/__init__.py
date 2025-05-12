@@ -117,6 +117,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bedrock_vector_store",
     "generic_api",
     "resend_email",
+    "smtp_email",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -993,7 +994,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimConfig = NvidiaNimConfig()

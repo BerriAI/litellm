@@ -597,7 +597,7 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
