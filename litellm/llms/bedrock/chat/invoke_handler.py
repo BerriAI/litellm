@@ -272,6 +272,7 @@ def make_sync_call(
     api_base: str,
     headers: dict,
     data: str,
+    signed_json_body: Optional[bytes],
     model: str,
     messages: list,
     logging_obj: Logging,
@@ -286,7 +287,7 @@ def make_sync_call(
         response = client.post(
             api_base,
             headers=headers,
-            data=data,
+            data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
         )
@@ -1413,7 +1414,9 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
 
-    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream]:
+    def _chunk_parser(
+        self, chunk_data: dict
+    ) -> Union[GChunk, ModelResponseStream, dict]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -1473,7 +1476,7 @@ class AWSEventStreamDecoder:
 
     def iter_bytes(
         self, iterator: Iterator[bytes]
-    ) -> Iterator[Union[GChunk, ModelResponseStream]]:
+    ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1489,7 +1492,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[Union[GChunk, ModelResponseStream]]:
+    ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1576,7 +1579,9 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream]:
+    def _chunk_parser(
+        self, chunk_data: dict
+    ) -> Union[GChunk, ModelResponseStream, dict]:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 

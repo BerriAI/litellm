@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.utils import get_utc_datetime
 
 
 @pytest.fixture(autouse=True)
@@ -68,8 +69,8 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     # Verify expiration time is set and valid
     assert "expires" in token_data
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
-    assert expires > datetime.now(UTC)
-    assert expires <= datetime.now(UTC) + timedelta(minutes=10)
+    assert expires > get_utc_datetime()
+    assert expires <= get_utc_datetime() + timedelta(minutes=10)
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(

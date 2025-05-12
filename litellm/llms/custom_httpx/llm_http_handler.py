@@ -1,5 +1,16 @@
 import json
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -8,6 +19,9 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -28,6 +42,9 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import (
     CreateFileRequest,
@@ -61,6 +78,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
         max_retry_on_unprocessable_entity_error = (
@@ -73,7 +91,9 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -116,6 +136,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
@@ -128,7 +149,9 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -178,6 +201,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: bool = False,
+        signed_json_body: Optional[bytes] = None,
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
@@ -197,6 +221,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
             logging_obj=logging_obj,
+            signed_json_body=signed_json_body,
         )
         return provider_config.transform_response(
             model=model,
@@ -228,7 +253,7 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         fake_stream: bool = False,
         api_key: Optional[str] = None,
-        headers: Optional[dict] = {},
+        headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         provider_config: Optional[BaseConfig] = None,
     ):
@@ -278,7 +303,7 @@ class BaseLLMHTTPHandler:
         if extra_body is not None:
             data = {**data, **extra_body}
 
-        headers = provider_config.sign_request(
+        headers, signed_json_body = provider_config.sign_request(
             headers=headers,
             optional_params=optional_params,
             request_data=data,
@@ -325,6 +350,7 @@ class BaseLLMHTTPHandler:
                     litellm_params=litellm_params,
                     json_mode=json_mode,
                     optional_params=optional_params,
+                    signed_json_body=signed_json_body,
                 )
 
             else:
@@ -349,6 +375,7 @@ class BaseLLMHTTPHandler:
                         else None
                     ),
                     json_mode=json_mode,
+                    signed_json_body=signed_json_body,
                 )
 
         if stream is True:
@@ -365,6 +392,7 @@ class BaseLLMHTTPHandler:
                     api_base=api_base,
                     headers=headers,
                     data=data,
+                    signed_json_body=signed_json_body,
                     messages=messages,
                     client=client,
                     json_mode=json_mode,
@@ -374,6 +402,8 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 headers=headers,  # type: ignore
                 data=data,
+                signed_json_body=signed_json_body,
+                original_data=data,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -408,6 +438,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
@@ -432,6 +463,8 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
+        signed_json_body: Optional[bytes],
+        original_data: dict,
         model: str,
         messages: list,
         logging_obj,
@@ -460,6 +493,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
@@ -472,7 +506,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 model_response=litellm.ModelResponse(),
                 logging_obj=logging_obj,
-                request_data=data,
+                request_data=original_data,
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
@@ -516,9 +550,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
-            return provider_config.get_async_custom_stream_wrapper(
+            return await provider_config.get_async_custom_stream_wrapper(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
@@ -528,6 +563,7 @@ class BaseLLMHTTPHandler:
                 messages=messages,
                 client=client,
                 json_mode=json_mode,
+                signed_json_body=signed_json_body,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
@@ -545,6 +581,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params=optional_params,
             json_mode=json_mode,
+            signed_json_body=signed_json_body,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -570,6 +607,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> Tuple[Any, httpx.Headers]:
         """
         Helper function for making an async call with stream.
@@ -593,6 +631,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers,
             data=data,
+            signed_json_body=signed_json_body,
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
@@ -663,7 +702,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         aembedding: bool = False,
-        headers={},
+        headers: Optional[Dict[str, Any]] = None,
     ) -> EmbeddingResponse:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -671,7 +710,7 @@ class BaseLLMHTTPHandler:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
-            headers=headers,
+            headers=headers or {},
             model=model,
             messages=[],
             optional_params=optional_params,
@@ -804,7 +843,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
         _is_async: bool = False,
-        headers: dict = {},
+        headers: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
@@ -812,7 +851,7 @@ class BaseLLMHTTPHandler:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
-            headers=headers,
+            headers=headers or {},
             model=model,
         )
 
@@ -934,7 +973,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         atranscription: bool = False,
-        headers: dict = {},
+        headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
     ) -> TranscriptionResponse:
         if provider_config is None:
@@ -943,7 +982,7 @@ class BaseLLMHTTPHandler:
             )
         headers = provider_config.validate_environment(
             api_key=api_key,
-            headers=headers,
+            headers=headers or {},
             model=model,
             messages=[],
             optional_params=optional_params,
@@ -1000,6 +1039,169 @@ class BaseLLMHTTPHandler:
             )
             return returned_response
         return model_response
+
+    async def async_anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        stream: Optional[bool] = False,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC
+            )
+        else:
+            async_httpx_client = client
+
+        # Prepare headers
+        kwargs = kwargs or {}
+        provider_specific_header = cast(
+            Optional[litellm.types.utils.ProviderSpecificHeader],
+            kwargs.get("provider_specific_header", None),
+        )
+        extra_headers = (
+            provider_specific_header.get("extra_headers", {})
+            if provider_specific_header
+            else {}
+        )
+        headers = anthropic_messages_provider_config.validate_environment(
+            headers=extra_headers or {},
+            model=model,
+            messages=messages,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+        logging_obj.update_environment_variables(
+            model=model,
+            optional_params=dict(anthropic_messages_optional_request_params),
+            litellm_params={
+                "metadata": kwargs.get("metadata", {}),
+                "preset_cache_key": None,
+                "stream_response": {},
+                **anthropic_messages_optional_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+        # Prepare request body
+        request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        logging_obj.stream = stream
+        logging_obj.model_call_details.update(request_body)
+
+        # Make the request
+        request_url = anthropic_messages_provider_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+        )
+
+        headers, signed_json_body = anthropic_messages_provider_config.sign_request(
+            headers=headers,
+            optional_params=anthropic_messages_optional_request_params,
+            request_data=request_body,
+            api_base=request_url,
+            stream=stream,
+            fake_stream=False,
+            model=model,
+        )
+
+        logging_obj.pre_call(
+            input=[{"role": "user", "content": json.dumps(request_body)}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": str(request_url),
+                "headers": headers,
+            },
+        )
+
+        response = await async_httpx_client.post(
+            url=request_url,
+            headers=headers,
+            data=signed_json_body or json.dumps(request_body),
+            stream=stream or False,
+            logging_obj=logging_obj,
+        )
+        response.raise_for_status()
+
+        # used for logging + cost tracking
+        logging_obj.model_call_details["httpx_response"] = response
+
+        if stream:
+            completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
+                model=model,
+                httpx_response=response,
+                request_body=request_body,
+                litellm_logging_obj=logging_obj,
+            )
+            return completion_stream
+        else:
+            return anthropic_messages_provider_config.transform_anthropic_messages_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+    def anthropic_messages_handler(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: Dict,
+        custom_llm_provider: str,
+        _is_async: bool,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        stream: Optional[bool] = False,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        AnthropicMessagesResponse,
+        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator]],
+    ]:
+        """
+        LLM HTTP Handler for Anthropic Messages
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_anthropic_messages_handler(
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                stream=stream,
+                kwargs=kwargs,
+            )
+        raise ValueError("anthropic_messages_handler is not implemented for sync calls")
 
     def response_api_handler(
         self,
@@ -1455,7 +1657,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 client=client,
             )
-        
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)}
@@ -1496,9 +1698,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url, headers=headers, params=data
-            )
+            response = sync_httpx_client.get(url=url, headers=headers, params=data)
         except Exception as e:
             raise self._handle_error(
                 e=e,
