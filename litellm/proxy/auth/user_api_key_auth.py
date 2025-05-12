@@ -89,6 +89,17 @@ azure_apim_header = APIKeyHeader(
 )
 
 
+def _get_bearer_token_or_received_api_key(api_key: str) -> str:
+    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
+        api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
+    elif api_key.startswith("bearer "):
+        api_key = api_key.replace("bearer ", "")
+
+    return api_key
+
+
 def _get_bearer_token(
     api_key: str,
 ):
@@ -261,7 +272,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         if isinstance(custom_litellm_key_header, str):
-            api_key = custom_litellm_key_header
+            api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
         elif isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
