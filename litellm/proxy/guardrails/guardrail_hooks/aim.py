@@ -133,10 +133,8 @@ class AimGuardrail(CustomGuardrail):
                 return self._anonymize_request(
                     res["analysis_result"], required_action, data
                 )
-            case "engage_action":
-                verbose_proxy_logger.info("Aim: engage action")
             case _:
-                verbose_proxy_logger.error("Aim: unknown action")
+                verbose_proxy_logger.error(f"Aim: {action_type} action")
         return data
 
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
