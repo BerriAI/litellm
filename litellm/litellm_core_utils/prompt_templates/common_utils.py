@@ -346,14 +346,14 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
-    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        convert_b64_uid_to_unified_uid,
+    )
 
     if not file_id:
         return None
     try:
-        transformed_file_id = (
-            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
-        )
+        transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
         if transformed_file_id.startswith(
             SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
         ):

@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Any, List, Optional, cast
+from typing import Any, List, Literal, Optional, cast
 
 from pydantic import BaseModel
 
@@ -88,9 +88,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -309,6 +309,9 @@ def get_logging_payload(  # noqa: PLR0915
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
+            ),
+            status=_get_status_for_spend_log(
+                metadata=metadata,
             ),
         )
 
@@ -530,3 +533,17 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings.get("store_prompts_in_spend_logs") is True
+
+
+def _get_status_for_spend_log(
+    metadata: dict,
+) -> Literal["success", "failure"]:
+    """
+    Get the status for the spend log.
+
+    It's only a failure if metadata.get("status") is "failure"
+    """
+    _status: Optional[str] = metadata.get("status", None)
+    if _status == "failure":
+        return "failure"
+    return "success"

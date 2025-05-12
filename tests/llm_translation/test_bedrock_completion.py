@@ -1070,7 +1070,7 @@ async def test_bedrock_custom_prompt_template():
             pass
 
         print(f"mock_client_post.call_args: {mock_client_post.call_args}")
-        assert "prompt" in mock_client_post.call_args.kwargs["data"]
+        assert "prompt" in json.loads(mock_client_post.call_args.kwargs["data"])
 
         prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
         assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
@@ -3028,3 +3028,5 @@ def test_bedrock_application_inference_profile():
             "https://bedrock-runtime.eu-central-1.amazonaws.com/"
         )
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
+
+

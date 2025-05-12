@@ -2035,6 +2035,7 @@ class SpendLogsPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     proxy_server_request: Optional[str]
     session_id: Optional[str]
+    status: Literal["success", "failure"]
 
 
 class SpanAttributes(str, enum.Enum):

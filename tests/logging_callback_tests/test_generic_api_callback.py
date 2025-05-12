@@ -28,7 +28,7 @@ from litellm.types.utils import (
 )
 
 verbose_logger.setLevel(logging.DEBUG)
-from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
 
 
 

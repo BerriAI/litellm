@@ -25,5 +25,6 @@
     "custom_llm_provider": "openai",
     "messages": "{}",
     "response": "{}",
-    "proxy_server_request": "{}"
+    "proxy_server_request": "{}",
+    "status": "success"
 }

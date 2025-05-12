@@ -48,6 +48,7 @@ import SCIMConfig from "./SCIM";
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
+  userID: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
@@ -72,6 +73,7 @@ import {
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
   accessToken,
+  userID,
   showSSOBanner,
   premiumUser,
   proxySettings,
@@ -639,7 +641,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           <TabPanel>
             <SCIMConfig 
               accessToken={accessToken} 
-              userID={admins && admins.length > 0 ? admins[0].user_id : null}
+              userID={userID}
               proxySettings={proxySettings}
             />
           </TabPanel>

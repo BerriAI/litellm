@@ -481,6 +481,8 @@ async def test_team_update_sc_2():
                 or k == "model_max_budget"
                 or k == "model_id"
                 or k == "litellm_organization_table"
+                or k == "object_permission_id"
+                or k == "object_permission"
                 or k == "litellm_model_table"
             ):
                 pass

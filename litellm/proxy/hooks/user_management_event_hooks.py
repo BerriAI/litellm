@@ -7,10 +7,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+    BaseEmailLogger,
+)
 from pydantic import BaseModel
 
 import litellm
-from enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     AUDIT_ACTIONS,

@@ -106,6 +106,8 @@ class LowestTPMLoggingHandler(CustomLogger):
                 elif isinstance(id, int):
                     id = str(id)
 
+                if "usage" not in response_obj:
+                    return
                 total_tokens = response_obj["usage"]["total_tokens"]
 
                 # ------------
@@ -144,7 +146,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            verbose_router_logger.error(
+            verbose_router_logger.exception(
                 "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
                     str(e)
                 )

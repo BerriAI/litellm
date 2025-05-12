@@ -101,10 +101,10 @@ def test_get_model_info_ollama_chat():
             }
         ),
     ) as mock_client:
-        info = OllamaConfig().get_model_info("mistral")
+        info = OllamaConfig().get_model_info("unknown-model")
         assert info["supports_function_calling"] is True
 
-        info = get_model_info("ollama/mistral")
+        info = get_model_info("ollama/unknown-model")
         print("info", info)
         assert info["supports_function_calling"] is True
 
@@ -112,7 +112,7 @@ def test_get_model_info_ollama_chat():
 
         print(mock_client.call_args.kwargs)
 
-        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+        assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
 def test_get_model_info_gemini():

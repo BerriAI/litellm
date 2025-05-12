@@ -99,7 +99,7 @@ def test_sign_request_basic(mock_aws_request, mock_sigv4_auth, bedrock_transform
     api_base = "https://bedrock-runtime.us-east-1.amazonaws.com"
 
     # Call the method
-    result = bedrock_transformer.sign_request(
+    result, _ = bedrock_transformer.sign_request(
         headers=headers,
         optional_params=optional_params,
         request_data=request_data,

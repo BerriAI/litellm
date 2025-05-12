@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple, cast
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -92,9 +92,24 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             )
         raise ValueError("file_id or file_data is required")
 
+    @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Support translating video files from file_id or file_data to video_url
         """
@@ -114,5 +129,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         message_content[idx] = self._convert_file_to_video_url(
                             content_item
                         )
-        transformed_messages = super()._transform_messages(messages, model)
-        return transformed_messages
+        if is_async:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[True], True)
+            )
+        else:
+            return super()._transform_messages(
+                messages, model, is_async=cast(Literal[False], False)
+            )

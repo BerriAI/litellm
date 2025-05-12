@@ -105,6 +105,14 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
+    # PII control params
+    mask_request_content: Optional[
+        bool
+    ]  # will mask request content if guardrail makes any changes
+    mask_response_content: Optional[
+        bool
+    ]  # will mask response content if guardrail makes any changes
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_name: str
@@ -121,19 +129,6 @@ class GuardrailEventHooks(str, Enum):
     post_call = "post_call"
     during_call = "during_call"
     logging_only = "logging_only"
-
-
-class BedrockTextContent(TypedDict, total=False):
-    text: str
-
-
-class BedrockContentItem(TypedDict, total=False):
-    text: BedrockTextContent
-
-
-class BedrockRequest(TypedDict, total=False):
-    source: Literal["INPUT", "OUTPUT"]
-    content: List[BedrockContentItem]
 
 
 class DynamicGuardrailParams(TypedDict):

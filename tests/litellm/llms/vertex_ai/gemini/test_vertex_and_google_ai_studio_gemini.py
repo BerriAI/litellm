@@ -1,5 +1,6 @@
 import asyncio
 from typing import List, cast
+from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
@@ -69,37 +70,39 @@ def test_get_model_name_from_gemini_spec_model():
 
 def test_vertex_ai_response_schema_dict():
     v = VertexGeminiConfig()
-    transformed_request = v.map_openai_params(
-        non_default_params={
-            "messages": [{"role": "user", "content": "Hello, world!"}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "math_reasoning",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "steps": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "thought": {"type": "string"},
-                                        "output": {"type": "string"},
-                                    },
-                                    "required": ["thought", "output"],
-                                    "additionalProperties": False,
+    non_default_params = {
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "math_reasoning",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "thought": {"type": "string"},
+                                    "output": {"type": "string"},
                                 },
+                                "required": ["thought", "output"],
+                                "additionalProperties": False,
                             },
-                            "final_answer": {"type": "string"},
                         },
-                        "required": ["steps", "final_answer"],
-                        "additionalProperties": False,
+                        "final_answer": {"type": "string"},
                     },
-                    "strict": False,
+                    "required": ["steps", "final_answer"],
+                    "additionalProperties": False,
                 },
+                "strict": False,
             },
         },
+    }
+    original_non_default_params = deepcopy(non_default_params)
+    transformed_request = v.map_openai_params(
+        non_default_params=non_default_params,
         optional_params={},
         model="gemini-2.0-flash-lite",
         drop_params=False,
@@ -137,6 +140,8 @@ def test_vertex_ai_response_schema_dict():
         "required": ["steps", "final_answer"],
         "propertyOrdering": ["steps", "final_answer"],
     }
+    # should not mutate the original non_default_params
+    assert non_default_params == original_non_default_params
 
 
 class MathReasoning(BaseModel):

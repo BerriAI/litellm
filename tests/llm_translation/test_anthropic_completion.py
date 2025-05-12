@@ -1157,3 +1157,16 @@ def test_anthropic_redacted_thinking_in_assistant_message(model):
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+def test_just_system_message():
+    litellm._turn_on_debug()
+    litellm.modify_params = True
+    params = {
+        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "messages": [{"role": "system", "content": "You are a helpful assistant."}],
+    }
+
+    response = litellm.completion(**params)
+
+    assert response is not None

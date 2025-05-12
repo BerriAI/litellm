@@ -2,9 +2,18 @@ import TabItem from '@theme/TabItem';
 import Tabs from '@theme/Tabs';
 import Image from '@theme/IdealImage';
 
-# [BETA] Unified File ID
+# [BETA] LiteLLM Managed Files
 
-Reuse the same 'file id' across different providers.
+Reuse the same file across different providers.
+
+:::info
+
+This is a free LiteLLM Enterprise feature.
+
+Available via the `litellm[proxy]` package or any `litellm` docker image.
+
+:::
+
 
 | Feature | Description | Comments |
 | --- | --- | --- |
@@ -15,8 +24,7 @@ Reuse the same 'file id' across different providers.
 
 
 Limitations of LiteLLM Managed Files:
-- Only works for `/chat/completions` requests. 
-- Assumes just 1 model configured per model_name.
+- Only works for `/chat/completions` and `/batch` requests. 
 
 Follow [here](https://github.com/BerriAI/litellm/discussions/9632) for multiple models, batches support.
 

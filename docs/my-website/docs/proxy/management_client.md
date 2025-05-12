@@ -1,5 +1,7 @@
 # LiteLLM Proxy Client
 
+> **See also:** [LiteLLM Proxy CLI Management Tool](./management_cli.md)
+
 A Python client library for interacting with the LiteLLM proxy server. This client provides a clean, typed interface for managing models, keys, credentials, and making chat completions.
 
 ## Installation
