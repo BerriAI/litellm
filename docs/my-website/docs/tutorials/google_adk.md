@@ -1,8 +1,24 @@
-# Building Multi-Provider Intelligent Agents with ADK and LiteLLM
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
-This tutorial shows you how to create intelligent agents using Agent Development Kit (ADK) with support for multiple Large Language Model (LLM) providers via LiteLLM integration.
 
-## Introduction
+# Google ADK with LiteLLM
+
+<Image 
+  img={require('../../img/litellm_adk.png')}
+  style={{width: '90%', display: 'block', margin: '2rem 0'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  Use Google ADK with LiteLLM Python SDK, LiteLLM Proxy
+</p>
+
+
+This tutorial shows you how to create intelligent agents using Agent Development Kit (ADK) with support for multiple Large Language Model (LLM) providers with LiteLLM.
+
+
+
+## Overview
 
 ADK (Agent Development Kit) allows you to build intelligent agents powered by LLMs. By integrating with LiteLLM, you can:
 
@@ -252,6 +268,14 @@ await test_gemini_agent()
 ## 5. Using LiteLLM Proxy with ADK
 
 LiteLLM proxy provides a unified API endpoint for multiple models, simplifying deployment and centralized management.
+
+Required settings for using litellm proxy 
+
+| Variable | Description | 
+|----------|-------------|
+| `LITELLM_PROXY_API_KEY` | The API key for the LiteLLM proxy |
+| `LITELLM_PROXY_API_BASE` | The base URL for the LiteLLM proxy |
+| `USE_LITELLM_PROXY` or `litellm.use_litellm_proxy` | When set to True, your request will be sent to litellm proxy. |
 
 ```python showLineNumbers title="LiteLLM proxy integration"
 # Set your LiteLLM Proxy credentials as environment variables
