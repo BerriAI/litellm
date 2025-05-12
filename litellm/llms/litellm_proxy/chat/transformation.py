@@ -72,8 +72,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
         if get_secret_bool("USE_LITELLM_PROXY") is True:
             return True
-        litellm_params = litellm_params or {}
-        if litellm_params.get("use_litellm_proxy", False) is True:
+        if litellm_params and litellm_params.use_litellm_proxy is True:
             return True
         if litellm.use_litellm_proxy is True:
             return True
