@@ -3822,7 +3822,7 @@ async def embeddings(  # noqa: PLR0915
                         input_list = []
                         for i in data["input"]:
                             input_list.append(
-                                litellm.decode(model=m["model_name"], tokens=i)
+                                litellm.decode(model="gpt-3.5-turbo", tokens=i)
                             )
                         data["input"] = input_list
                         break
