@@ -7,9 +7,6 @@ This file only contains param mapping logic
 
 API calling is done using the OpenAI SDK with an api_base
 """
-
-from typing import Optional, Union
-
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -19,31 +16,6 @@ class NvidiaNimConfig(OpenAIGPTConfig):
 
     The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
-
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    max_tokens: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-
-    def __init__(
-        self,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -116,6 +88,9 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "max_completion_tokens",
                 "stop",
                 "seed",
+                "tools",
+                "tool_choice",
+                "parallel_tool_calls",
             ]
 
     def map_openai_params(

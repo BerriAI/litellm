@@ -171,7 +171,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
+    from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 
     assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
         model="llama3"
