@@ -74,7 +74,9 @@ class GenericAPILogger(CustomBatchLogger):
             headers: Optional[dict] = None
         """
         # Process headers from different sources
-        headers_dict = {}
+        headers_dict = {
+            "Content-Type": "application/json",
+        }
 
         # 1. First check for headers from env var
         env_headers = os.getenv("GENERIC_LOGGER_HEADERS")
