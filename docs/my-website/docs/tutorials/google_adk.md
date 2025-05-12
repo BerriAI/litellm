@@ -1,6 +1,6 @@
 # Building Multi-Provider Intelligent Agents with ADK and LiteLLM
 
-This tutorial shows you how to create intelligent agents using Agent Development Kit (ADK) with LiteLLM. 
+This tutorial shows you how to create intelligent agents using Agent Development Kit (ADK) with support for multiple Large Language Model (LLM) providers via LiteLLM integration.
 
 ## Introduction
 
@@ -34,6 +34,7 @@ from google.adk.models.lite_llm import LiteLlm  # For multi-model support
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
+import litellm  # Import for proxy configuration
 
 # Set your API keys
 os.environ["GOOGLE_API_KEY"] = "your-google-api-key"  # For Gemini models
@@ -80,96 +81,7 @@ def get_weather(city: str) -> dict:
         return {"status": "error", "error_message": f"Sorry, I don't have weather information for '{city}'."}
 ```
 
-## 3. Using Different Model Providers with ADK
-
-### 3.1 Using OpenAI Models
-
-```python
-# Create an agent powered by OpenAI's GPT model
-weather_agent_gpt = Agent(
-    name="weather_agent_gpt",
-    model=LiteLlm(model=MODEL_GPT_4O),  # Use OpenAI's GPT model
-    description="Provides weather information using OpenAI's GPT.",
-    instruction="You are a helpful weather assistant powered by GPT-4o. "
-                "Use the 'get_weather' tool for city weather requests. "
-                "Present information clearly.",
-    tools=[get_weather],
-)
-
-# Set up session and runner
-session_service_gpt = InMemorySessionService()
-session_gpt = session_service_gpt.create_session(
-    app_name="weather_app",
-    user_id="user_1",
-    session_id="session_gpt"
-)
-
-runner_gpt = Runner(
-    agent=weather_agent_gpt,
-    app_name="weather_app",
-    session_service=session_service_gpt
-)
-```
-
-### 3.2 Using Anthropic Models
-
-```python
-# Create an agent powered by Anthropic's Claude model
-weather_agent_claude = Agent(
-    name="weather_agent_claude",
-    model=LiteLlm(model=MODEL_CLAUDE_SONNET),  # Use Anthropic's Claude model
-    description="Provides weather information using Anthropic's Claude.",
-    instruction="You are a helpful weather assistant powered by Claude Sonnet. "
-                "Use the 'get_weather' tool for city weather requests. "
-                "Present information clearly.",
-    tools=[get_weather],
-)
-
-# Set up session and runner
-session_service_claude = InMemorySessionService()
-session_claude = session_service_claude.create_session(
-    app_name="weather_app",
-    user_id="user_1",
-    session_id="session_claude"
-)
-
-runner_claude = Runner(
-    agent=weather_agent_claude,
-    app_name="weather_app",
-    session_service=session_service_claude
-)
-```
-
-### 3.3 Using Google's Gemini Models
-
-```python
-# Create an agent powered by Google's Gemini model
-weather_agent_gemini = Agent(
-    name="weather_agent_gemini",
-    model=MODEL_GEMINI_PRO,  # Use Gemini model directly (no LiteLlm wrapper needed)
-    description="Provides weather information using Google's Gemini.",
-    instruction="You are a helpful weather assistant powered by Gemini Pro. "
-                "Use the 'get_weather' tool for city weather requests. "
-                "Present information clearly.",
-    tools=[get_weather],
-)
-
-# Set up session and runner
-session_service_gemini = InMemorySessionService()
-session_gemini = session_service_gemini.create_session(
-    app_name="weather_app",
-    user_id="user_1",
-    session_id="session_gemini"
-)
-
-runner_gemini = Runner(
-    agent=weather_agent_gemini,
-    app_name="weather_app",
-    session_service=session_service_gemini
-)
-```
-
-## 4. Interacting with the Agents
+## 3. Helper Function for Agent Interaction
 
 Create a helper function to facilitate agent interaction:
 
@@ -197,11 +109,38 @@ async def call_agent_async(query: str, runner, user_id, session_id):
     print(f"<<< Agent Response: {final_response_text}")
 ```
 
-Interact with each agent:
+## 4. Using Different Model Providers with ADK
+
+### 4.1 Using OpenAI Models
 
 ```python
-async def run_conversation():
-    # Test with GPT
+# Create an agent powered by OpenAI's GPT model
+weather_agent_gpt = Agent(
+    name="weather_agent_gpt",
+    model=LiteLlm(model=MODEL_GPT_4O),  # Use OpenAI's GPT model
+    description="Provides weather information using OpenAI's GPT.",
+    instruction="You are a helpful weather assistant powered by GPT-4o. "
+                "Use the 'get_weather' tool for city weather requests. "
+                "Present information clearly.",
+    tools=[get_weather],
+)
+
+# Set up session and runner
+session_service_gpt = InMemorySessionService()
+session_gpt = session_service_gpt.create_session(
+    app_name="weather_app",
+    user_id="user_1",
+    session_id="session_gpt"
+)
+
+runner_gpt = Runner(
+    agent=weather_agent_gpt,
+    app_name="weather_app",
+    session_service=session_service_gpt
+)
+
+# Test the GPT agent
+async def test_gpt_agent():
     print("\n--- Testing GPT Agent ---")
     await call_agent_async(
         "What's the weather in London?",
@@ -209,8 +148,45 @@ async def run_conversation():
         user_id="user_1",
         session_id="session_gpt"
     )
-    
-    # Test with Claude
+
+# Execute the conversation with the GPT agent
+await test_gpt_agent()
+
+# Or if running as a standard Python script:
+# if __name__ == "__main__":
+#     asyncio.run(test_gpt_agent())
+```
+
+### 4.2 Using Anthropic Models
+
+```python
+# Create an agent powered by Anthropic's Claude model
+weather_agent_claude = Agent(
+    name="weather_agent_claude",
+    model=LiteLlm(model=MODEL_CLAUDE_SONNET),  # Use Anthropic's Claude model
+    description="Provides weather information using Anthropic's Claude.",
+    instruction="You are a helpful weather assistant powered by Claude Sonnet. "
+                "Use the 'get_weather' tool for city weather requests. "
+                "Present information clearly.",
+    tools=[get_weather],
+)
+
+# Set up session and runner
+session_service_claude = InMemorySessionService()
+session_claude = session_service_claude.create_session(
+    app_name="weather_app",
+    user_id="user_1",
+    session_id="session_claude"
+)
+
+runner_claude = Runner(
+    agent=weather_agent_claude,
+    app_name="weather_app",
+    session_service=session_service_claude
+)
+
+# Test the Claude agent
+async def test_claude_agent():
     print("\n--- Testing Claude Agent ---")
     await call_agent_async(
         "What's the weather in Tokyo?",
@@ -218,8 +194,45 @@ async def run_conversation():
         user_id="user_1",
         session_id="session_claude"
     )
-    
-    # Test with Gemini
+
+# Execute the conversation with the Claude agent
+await test_claude_agent()
+
+# Or if running as a standard Python script:
+# if __name__ == "__main__":
+#     asyncio.run(test_claude_agent())
+```
+
+### 4.3 Using Google's Gemini Models
+
+```python
+# Create an agent powered by Google's Gemini model
+weather_agent_gemini = Agent(
+    name="weather_agent_gemini",
+    model=MODEL_GEMINI_PRO,  # Use Gemini model directly (no LiteLlm wrapper needed)
+    description="Provides weather information using Google's Gemini.",
+    instruction="You are a helpful weather assistant powered by Gemini Pro. "
+                "Use the 'get_weather' tool for city weather requests. "
+                "Present information clearly.",
+    tools=[get_weather],
+)
+
+# Set up session and runner
+session_service_gemini = InMemorySessionService()
+session_gemini = session_service_gemini.create_session(
+    app_name="weather_app",
+    user_id="user_1",
+    session_id="session_gemini"
+)
+
+runner_gemini = Runner(
+    agent=weather_agent_gemini,
+    app_name="weather_app",
+    session_service=session_service_gemini
+)
+
+# Test the Gemini agent
+async def test_gemini_agent():
     print("\n--- Testing Gemini Agent ---")
     await call_agent_async(
         "What's the weather in New York?",
@@ -228,36 +241,74 @@ async def run_conversation():
         session_id="session_gemini"
     )
 
-# Execute the conversation
-await run_conversation()
+# Execute the conversation with the Gemini agent
+await test_gemini_agent()
 
 # Or if running as a standard Python script:
 # if __name__ == "__main__":
-#     asyncio.run(run_conversation())
+#     asyncio.run(test_gemini_agent())
 ```
 
 ## 5. Using LiteLLM Proxy with ADK
 
 LiteLLM proxy provides a unified API endpoint for multiple models, simplifying deployment and centralized management.
 
-### 5.1 Setting Up LiteLLM Proxy Environment
+### 5.1 Method 1: Using Environment Variables
 
 ```python
-# Set your LiteLLM Proxy credentials
+# Set your LiteLLM Proxy credentials as environment variables
 os.environ["LITELLM_PROXY_API_KEY"] = "your-litellm-proxy-api-key"
 os.environ["LITELLM_PROXY_API_BASE"] = "your-litellm-proxy-url"  # e.g., "http://localhost:4000"
 
-# Alternatively, set them dynamically without environment variables:
-LITELLM_PROXY_API_KEY = "your-litellm-proxy-api-key"
-LITELLM_PROXY_API_BASE = "your-litellm-proxy-url"
+# Create a proxy-enabled agent (using environment variables)
+weather_agent_proxy_env = Agent(
+    name="weather_agent_proxy_env",
+    model=LiteLlm(model="litellm_proxy/your-model-name"),  # The model name registered in your proxy
+    description="Provides weather information using a model from LiteLLM proxy.",
+    instruction="You are a helpful weather assistant. "
+                "Use the 'get_weather' tool for city weather requests. "
+                "Present information clearly.",
+    tools=[get_weather],
+)
+
+# Set up session and runner
+session_service_proxy_env = InMemorySessionService()
+session_proxy_env = session_service_proxy_env.create_session(
+    app_name="weather_app",
+    user_id="user_1",
+    session_id="session_proxy_env"
+)
+
+runner_proxy_env = Runner(
+    agent=weather_agent_proxy_env,
+    app_name="weather_app",
+    session_service=session_service_proxy_env
+)
+
+# Test the proxy-enabled agent (environment variables method)
+async def test_proxy_env_agent():
+    print("\n--- Testing Proxy-enabled Agent (Environment Variables) ---")
+    await call_agent_async(
+        "What's the weather in London?",
+        runner=runner_proxy_env,
+        user_id="user_1",
+        session_id="session_proxy_env"
+    )
+
+# Execute the conversation
+await test_proxy_env_agent()
 ```
 
-### 5.2 Creating an Agent Using LiteLLM Proxy
+### 5.2 Method 2: Using Dynamic Credentials
 
 ```python
-# Proxy-enabled agent with dynamic credentials
-weather_agent_proxy = Agent(
-    name="weather_agent_proxy",
+# Define dynamic credentials
+LITELLM_PROXY_API_KEY = "your-litellm-proxy-api-key"
+LITELLM_PROXY_API_BASE = "your-litellm-proxy-url"
+
+# Create a proxy-enabled agent with dynamic credentials
+weather_agent_proxy_dynamic = Agent(
+    name="weather_agent_proxy_dynamic",
     model=LiteLlm(
         model="litellm_proxy/your-model-name",  # The model name registered in your proxy
         api_key=LITELLM_PROXY_API_KEY,          # Dynamic API key
@@ -270,30 +321,83 @@ weather_agent_proxy = Agent(
     tools=[get_weather],
 )
 
-# Setup session and runner
-session_service_proxy = InMemorySessionService()
-session_proxy = session_service_proxy.create_session(
+# Set up session and runner
+session_service_proxy_dynamic = InMemorySessionService()
+session_proxy_dynamic = session_service_proxy_dynamic.create_session(
     app_name="weather_app",
     user_id="user_1",
-    session_id="session_proxy"
+    session_id="session_proxy_dynamic"
 )
 
-runner_proxy = Runner(
-    agent=weather_agent_proxy,
+runner_proxy_dynamic = Runner(
+    agent=weather_agent_proxy_dynamic,
     app_name="weather_app",
-    session_service=session_service_proxy
+    session_service=session_service_proxy_dynamic
 )
 
-# Test the proxy-enabled agent
-async def test_proxy_agent():
-    print("\n--- Testing Proxy-enabled Agent ---")
+# Test the proxy-enabled agent (dynamic credentials method)
+async def test_proxy_dynamic_agent():
+    print("\n--- Testing Proxy-enabled Agent (Dynamic Credentials) ---")
     await call_agent_async(
         "What's the weather in London?",
-        runner=runner_proxy,
+        runner=runner_proxy_dynamic,
         user_id="user_1",
-        session_id="session_proxy"
+        session_id="session_proxy_dynamic"
     )
 
-await test_proxy_agent()
+# Execute the conversation
+await test_proxy_dynamic_agent()
 ```
 
+### 5.3 Method 3: Using litellm.use_litellm_proxy Flag
+
+```python
+# Set your LiteLLM Proxy credentials
+os.environ["LITELLM_PROXY_API_KEY"] = "your-litellm-proxy-api-key"
+os.environ["LITELLM_PROXY_API_BASE"] = "your-litellm-proxy-url"  # e.g., "http://localhost:4000"
+
+# Enable the use_litellm_proxy flag
+litellm.use_litellm_proxy = True
+
+# Create a proxy-enabled agent with the simplified approach
+# With use_litellm_proxy=True, you only need to specify the model name (no litellm_proxy/ prefix needed)
+weather_agent_proxy_flag = Agent(
+    name="weather_agent_proxy_flag",
+    model=LiteLlm(model="your-model-name"),  # No need for litellm_proxy/ prefix
+    description="Provides weather information using a model from LiteLLM proxy.",
+    instruction="You are a helpful weather assistant. "
+                "Use the 'get_weather' tool for city weather requests. "
+                "Present information clearly.",
+    tools=[get_weather],
+)
+
+# Set up session and runner
+session_service_proxy_flag = InMemorySessionService()
+session_proxy_flag = session_service_proxy_flag.create_session(
+    app_name="weather_app",
+    user_id="user_1",
+    session_id="session_proxy_flag"
+)
+
+runner_proxy_flag = Runner(
+    agent=weather_agent_proxy_flag,
+    app_name="weather_app",
+    session_service=session_service_proxy_flag
+)
+
+# Test the proxy-enabled agent (use_litellm_proxy flag method)
+async def test_proxy_flag_agent():
+    print("\n--- Testing Proxy-enabled Agent (use_litellm_proxy flag) ---")
+    await call_agent_async(
+        "What's the weather in London?",
+        runner=runner_proxy_flag,
+        user_id="user_1",
+        session_id="session_proxy_flag"
+    )
+
+# Execute the conversation
+await test_proxy_flag_agent()
+
+# Disable the flag after you're done if needed
+# litellm.use_litellm_proxy = False
+```
