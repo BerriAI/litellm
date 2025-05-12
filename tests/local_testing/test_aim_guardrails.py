@@ -10,11 +10,16 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail, AimGuardrailMissingSecrets
+from litellm.proxy.guardrails.guardrail_hooks.aim import (
+    AimGuardrail,
+    AimGuardrailMissingSecrets,
+)
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -70,7 +75,7 @@ def test_aim_guard_config_no_api_key():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["pre_call", "during_call"])
-async def test_callback(mode: str):
+async def test_block_callback(mode: str):
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -84,7 +89,9 @@ async def test_callback(mode: str):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -98,7 +105,18 @@ async def test_callback(mode: str):
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
-                json={"detected": True, "details": {}, "detection_message": "Jailbreak detected"},
+                json={
+                    "analysis_result": {
+                        "analysis_time_ms": 212,
+                        "policy_drill_down": {},
+                        "session_entities": [],
+                    },
+                    "required_action": {
+                        "action_type": "block_action",
+                        "detection_message": "Jailbreak detected",
+                        "policy_name": "blocking policy",
+                    },
+                },
                 status_code=200,
                 request=Request(method="POST", url="http://aim"),
             ),
@@ -119,6 +137,118 @@ async def test_callback(mode: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["pre_call", "during_call"])
+async def test_anonymize_callback__it_returns_redacted_content(mode: str):
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": mode,
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    data = {
+        "messages": [
+            {"role": "user", "content": "Hi my name id Brian"},
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {
+                    "analysis_time_ms": 10,
+                    "policy_drill_down": {
+                        "PII": {
+                            "detections": [
+                                {
+                                    "message": '"Brian" detected as name',
+                                    "entity": {
+                                        "type": "NAME",
+                                        "content": "Brian",
+                                        "start": 14,
+                                        "end": 19,
+                                        "score": 1.0,
+                                        "certainty": "HIGH",
+                                        "additional_content_index": None,
+                                    },
+                                    "detection_location": None,
+                                }
+                            ]
+                        }
+                    },
+                    "last_message_entities": [
+                        {
+                            "type": "NAME",
+                            "content": "Brian",
+                            "name": "NAME_1",
+                            "start": 14,
+                            "end": 19,
+                            "score": 1.0,
+                            "certainty": "HIGH",
+                            "additional_content_index": None,
+                        }
+                    ],
+                    "session_entities": [
+                        {"type": "NAME", "content": "Brian", "name": "NAME_1"}
+                    ],
+                },
+                "required_action": {
+                    "action_type": "anonymize_action",
+                    "policy_name": "PII",
+                    "chat_redaction_result": {
+                        "all_redacted_messages": [
+                            {
+                                "content": "Hi my name is [NAME_1]",
+                                "role": "user",
+                                "additional_contents": [],
+                                "received_message_id": "0",
+                                "extra_fields": {},
+                            }
+                        ],
+                        "redacted_new_message": {
+                            "content": "Hi my name is [NAME_1]",
+                            "role": "user",
+                            "additional_contents": [],
+                            "received_message_id": "0",
+                            "extra_fields": {},
+                        },
+                    },
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://aim"),
+        ),
+    ):
+        if mode == "pre_call":
+            data = await aim_guardrail.async_pre_call_hook(
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+        else:
+            data = await aim_guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+    assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("length", (0, 1, 2))
 async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     init_guardrails_v2(
@@ -134,7 +264,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -150,7 +282,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
     websocket_mock = AsyncMock()
 
-    messages_from_aim = [b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'] * length
+    messages_from_aim = [
+        b'{"verified_chunk": {"choices": [{"delta": {"content": "A"}}]}}'
+    ] * length
     messages_from_aim.append(b'{"done": true}')
     websocket_mock.recv = ReceiveMock(messages_from_aim, delay=0.2)
 
@@ -158,7 +292,9 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+    )
 
     results = []
     async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
@@ -188,7 +324,9 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         ],
         config_file_path="",
     )
-    aim_guardrails = [callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)]
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
     assert len(aim_guardrails) == 1
     aim_guardrail = aim_guardrails[0]
 
@@ -213,7 +351,9 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     async def connect_mock(*args, **kwargs):
         yield websocket_mock
 
-    monkeypatch.setattr("litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock)
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+    )
 
     results = []
     with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):
@@ -227,4 +367,7 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
     # Chunks that were received before the blocking message should be returned as usual.
     assert len(results) == 1
     assert results[0].choices[0].delta.content == "A"
-    assert websocket_mock.send.mock_calls == [call('{"choices": [{"delta": {"content": "A"}}]}'), call('{"done": true}')]
+    assert websocket_mock.send.mock_calls == [
+        call('{"choices": [{"delta": {"content": "A"}}]}'),
+        call('{"done": true}'),
+    ]

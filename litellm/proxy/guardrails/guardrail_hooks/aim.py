@@ -142,8 +142,7 @@ class AimGuardrail(CustomGuardrail):
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
-            "Aim: detected: {detected}, enabled policies: {policies}".format(
-                detected=True,
+            "Aim: Violation detected enabled policies: {policies}".format(
                 policies=list(analysis_result["policy_drill_down"].keys()),
             ),
         )
@@ -152,31 +151,27 @@ class AimGuardrail(CustomGuardrail):
     def _anonymize_request(
         self, analysis_result: Any, required_action: Any, data: dict
     ) -> dict:
-        try:
-            verbose_proxy_logger.info("Aim: anonymize action")
-            redaction_result = required_action and required_action.get(
-                "chat_redaction_result"
-            )
-            if not redaction_result:
-                return data
-            if analysis_result and analysis_result.get("session_entities"):
-                self.dlp_entities = analysis_result.get("session_entities")
-            data["messages"] = [
-                {
-                    "role": redaction_result["redacted_new_message"]["role"],
-                    "content": redaction_result["redacted_new_message"]["content"],
-                }
-            ] + [
-                {
-                    "role": message["role"],
-                    "content": message["content"],
-                }
-                for message in redaction_result["all_redacted_messages"]
-            ]
+        verbose_proxy_logger.info("Aim: anonymize action")
+        redaction_result = required_action and required_action.get(
+            "chat_redaction_result"
+        )
+        if not redaction_result:
             return data
-        except Exception as e:
-            verbose_proxy_logger.error(f"Aim: Error while redacting: {e}")
-            return data  # todo do we want to fallback to this or raise?
+        if analysis_result and analysis_result.get("session_entities"):
+            self.dlp_entities = analysis_result.get("session_entities")
+        data["messages"] = [
+            {
+                "role": redaction_result["redacted_new_message"]["role"],
+                "content": redaction_result["redacted_new_message"]["content"],
+            }
+        ] + [
+            {
+                "role": message["role"],
+                "content": message["content"],
+            }
+            for message in redaction_result["all_redacted_messages"]
+        ]
+        return data
 
     async def call_aim_guardrail_on_output(
         self, request_data: dict, output: str, hook: str, key_alias: Optional[str]
