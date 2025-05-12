@@ -195,7 +195,7 @@ class PangeaHandler(CustomGuardrail):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                f"Pangea Guardrail ({hook_name}): Error calling API: {e}. Response text: {getattr(e, 'response', None) and getattr(e.response, 'text', None)}"
+                    f"Pangea Guardrail ({hook_name}): Error calling API: {e}. Response text: {getattr(e, 'response', None) and getattr(e.response, 'text', None)}"  # type: ignore
             )
             # Decide if you want to block by default on error, or allow through
             # Raising an exception here will block the request.
