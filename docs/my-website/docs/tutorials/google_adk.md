@@ -18,7 +18,7 @@ ADK (Agent Development Kit) allows you to build intelligent agents powered by LL
 
 ## Installation
 
-```bash
+```bash showLineNumbers title="Install dependencies"
 pip install google-adk litellm
 ```
 
@@ -26,7 +26,7 @@ pip install google-adk litellm
 
 First, import the necessary libraries and set up your API keys:
 
-```python
+```python showLineNumbers title="Setup environment and API keys"
 import os
 import asyncio
 from google.adk.agents import Agent
@@ -51,7 +51,7 @@ MODEL_CLAUDE_SONNET = "anthropic/claude-3-sonnet-20240229"
 
 Create a tool that your agent can use:
 
-```python
+```python showLineNumbers title="Weather tool implementation"
 def get_weather(city: str) -> dict:
     """Retrieves the current weather report for a specified city.
     
@@ -85,7 +85,7 @@ def get_weather(city: str) -> dict:
 
 Create a helper function to facilitate agent interaction:
 
-```python
+```python showLineNumbers title="Agent interaction helper function"
 async def call_agent_async(query: str, runner, user_id, session_id):
     """Sends a query to the agent and prints the final response."""
     print(f"\n>>> User Query: {query}")
@@ -113,7 +113,7 @@ async def call_agent_async(query: str, runner, user_id, session_id):
 
 ### 4.1 Using OpenAI Models
 
-```python
+```python showLineNumbers title="OpenAI model implementation"
 # Create an agent powered by OpenAI's GPT model
 weather_agent_gpt = Agent(
     name="weather_agent_gpt",
@@ -159,7 +159,7 @@ await test_gpt_agent()
 
 ### 4.2 Using Anthropic Models
 
-```python
+```python showLineNumbers title="Anthropic model implementation"
 # Create an agent powered by Anthropic's Claude model
 weather_agent_claude = Agent(
     name="weather_agent_claude",
@@ -205,7 +205,7 @@ await test_claude_agent()
 
 ### 4.3 Using Google's Gemini Models
 
-```python
+```python showLineNumbers title="Gemini model implementation"
 # Create an agent powered by Google's Gemini model
 weather_agent_gemini = Agent(
     name="weather_agent_gemini",
@@ -253,7 +253,7 @@ await test_gemini_agent()
 
 LiteLLM proxy provides a unified API endpoint for multiple models, simplifying deployment and centralized management.
 
-```python
+```python showLineNumbers title="LiteLLM proxy integration"
 # Set your LiteLLM Proxy credentials as environment variables
 os.environ["LITELLM_PROXY_API_KEY"] = "your-litellm-proxy-api-key"
 os.environ["LITELLM_PROXY_API_BASE"] = "your-litellm-proxy-url"  # e.g., "http://localhost:4000"
