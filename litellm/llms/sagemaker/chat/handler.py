@@ -93,10 +93,6 @@ class SagemakerChatHandler(BaseAWSLLM):
         if sagemaker_base_url is not None:
             api_base = sagemaker_base_url
 
-        model_id = optional_params.get("model_id", None)
-        if model_id:
-            del data['model']
-
         encoded_data = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
@@ -136,7 +132,6 @@ class SagemakerChatHandler(BaseAWSLLM):
         inference_params = deepcopy(optional_params)
         stream = inference_params.pop("stream", None)
         
-        model_id = optional_params.get("model_id", None)
 
         from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
 
@@ -157,13 +152,6 @@ class SagemakerChatHandler(BaseAWSLLM):
             credentials=credentials,
             aws_region_name=aws_region_name,
         )
-
-        if model_id is not None:
-            # Add model_id as InferenceComponentName header
-            # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
-            prepared_request.headers.update(
-                {"X-Amzn-SageMaker-Inference-Component": model_id}
-            )
 
         custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
 
