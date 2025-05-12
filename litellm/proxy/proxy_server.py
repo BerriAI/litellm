@@ -3812,23 +3812,23 @@ async def embeddings(  # noqa: PLR0915
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_model_list is not None and data["model"] in router_model_names:
                 for m in llm_model_list:
-                    if m["model_name"] == data["model"] and (
-                        m["litellm_params"]["model"] in litellm.open_ai_embedding_models
-                        or any(
-                            m["litellm_params"]["model"].startswith(provider)
-                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                        )
-                    ):
-                        pass
-                    else:
-                        # non-openai/azure embedding model called with token input
-                        input_list = []
-                        for i in data["input"]:
-                            input_list.append(
-                                litellm.decode(model="gpt-3.5-turbo", tokens=i)
-                            )
-                        data["input"] = input_list
-                        break
+                    if m["model_name"] == data["model"]:
+                        if (m["litellm_params"]["model"] in litellm.open_ai_embedding_models
+                                or any(
+                                    m["litellm_params"]["model"].startswith(provider)
+                                    for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+                                )
+                        ):
+                            pass
+                        else:
+                            # non-openai/azure embedding model called with token input
+                            input_list = []
+                            for i in data["input"]:
+                                input_list.append(
+                                    litellm.decode(model="gpt-3.5-turbo", tokens=i)
+                                )
+                            data["input"] = input_list
+                            break
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
