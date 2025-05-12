@@ -494,7 +494,7 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-
+            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",
