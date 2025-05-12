@@ -13,11 +13,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
 import litellm
-
-from litellm.litellm_core_utils.get_llm_provider_logic import force_use_litellm_proxy
-
+from litellm.types.router import LiteLLM_Params
 
 def test_get_llm_provider():
     _, response, _, _ = litellm.get_llm_provider(model="anthropic.claude-v2:1")
@@ -341,11 +338,11 @@ def test_force_use_litellm_proxy_invalid_api_key_type():
     assert "dynamic_api_key needs to be a string" in str(excinfo.value)
 
 
-# -------- Tests for get_llm_provider triggering force_use_litellm_proxy ---------
+# -------- Tests for get_llm_provider triggering use_litellm_proxy ---------
 
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     """
-    Tests get_llm_provider uses litellm_proxy when LITELLM_PROXY_ALWAYS is "True".
+    Tests get_llm_provider uses litellm_proxy when USE_LITELLM_PROXY is "True".
     """
     test_model_input = "openai/gpt-4"
     expected_model_output = "openai/gpt-4"
@@ -353,7 +350,7 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     proxy_api_key = "global_proxy_key"
 
     with patch.dict(os.environ, {
-        "LITELLM_PROXY_ALWAYS": "True",
+        "USE_LITELLM_PROXY": "True",
         "LITELLM_PROXY_API_BASE": proxy_api_base,
         "LITELLM_PROXY_API_KEY": proxy_api_key
     }, clear=True):
@@ -366,7 +363,7 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
 
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     """
-    Tests get_llm_provider with LITELLM_PROXY_ALWAYS="True" and model prefix "litellm_proxy/".
+    Tests get_llm_provider with USE_LITELLM_PROXY="True" and model prefix "litellm_proxy/".
     """
     test_model_input = "litellm_proxy/gpt-4-turbo"
     expected_model_output = "gpt-4-turbo"
@@ -374,7 +371,7 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     proxy_api_key = "another_key"
 
     with patch.dict(os.environ, {
-        "LITELLM_PROXY_ALWAYS": "True",
+        "USE_LITELLM_PROXY": "True",
         "LITELLM_PROXY_API_BASE": proxy_api_base,
         "LITELLM_PROXY_API_KEY": proxy_api_key
     }, clear=True):
@@ -400,7 +397,10 @@ def test_get_llm_provider_use_proxy_arg_true():
         "LITELLM_PROXY_API_BASE": proxy_api_base,
         "LITELLM_PROXY_API_KEY": proxy_api_key
     }, clear=True): # clear=True removes LITELLM_PROXY_ALWAYS if it was set by other tests
-        model, provider, key, base = litellm.get_llm_provider(model=test_model_input, use_proxy=True)
+        model, provider, key, base = litellm.get_llm_provider(
+            model=test_model_input, 
+            litellm_params=LiteLLM_Params(use_litellm_proxy=True)
+        )
 
     assert model == expected_model_output
     assert provider == "litellm_proxy"
@@ -428,9 +428,9 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     }, clear=True):
         model, provider, key, base = litellm.get_llm_provider(
             model=test_model_input, 
-            use_proxy=True,
             api_base=arg_api_base,
-            api_key=arg_api_key
+            api_key=arg_api_key,
+            litellm_params=LiteLLM_Params(use_litellm_proxy=True)
         )
 
     assert model == expected_model_output
