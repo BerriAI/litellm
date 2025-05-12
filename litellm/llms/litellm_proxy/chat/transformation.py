@@ -65,6 +65,8 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
         Use case:
         - When using Google ADK, users want a flag to dynamically enable sending the request to litellm proxy or not
+        - Allow the model name to be passed in original format and still use litellm proxy:
+        "gemini/gemini-1.5-pro", "openai/gpt-4", "mistral/llama-2-70b-chat" etc.
         """
         import litellm
 
@@ -76,3 +78,39 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         if litellm.use_litellm_proxy is True:
             return True
         return False
+
+    @staticmethod
+    def litellm_proxy_get_custom_llm_provider_info(
+        model: str, api_base: Optional[str] = None, api_key: Optional[str] = None
+    ) -> Tuple[str, str, Optional[str], Optional[str]]:
+        """
+        Force use litellm proxy for all models
+
+        Issue: https://github.com/BerriAI/litellm/issues/10559
+
+        Expected behavior:
+        - custom_llm_provider will be 'litellm_proxy'
+        - api_base = api_base OR LITELLM_PROXY_API_BASE
+        - api_key = api_key OR LITELLM_PROXY_API_KEY
+
+        Use case:
+        - When using Google ADK, users want a flag to dynamically enable sending the request to litellm proxy or not
+        -  Allow the model name to be passed in original format and still use litellm proxy:
+        "gemini/gemini-1.5-pro", "openai/gpt-4", "mistral/llama-2-70b-chat" etc.
+
+        Return model, custom_llm_provider, dynamic_api_key, api_base
+        """
+        import litellm
+
+        custom_llm_provider = "litellm_proxy"
+        if model.startswith("litellm_proxy/"):
+            model = model.split("/", 1)[1]
+
+        (
+            api_base,
+            api_key,
+        ) = litellm.LiteLLMProxyChatConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
+
+        return model, custom_llm_provider, api_key, api_base
