@@ -253,17 +253,17 @@ await test_gemini_agent()
 
 LiteLLM proxy provides a unified API endpoint for multiple models, simplifying deployment and centralized management.
 
-### 5.1 Method 1: Using Environment Variables
-
 ```python
 # Set your LiteLLM Proxy credentials as environment variables
 os.environ["LITELLM_PROXY_API_KEY"] = "your-litellm-proxy-api-key"
 os.environ["LITELLM_PROXY_API_BASE"] = "your-litellm-proxy-url"  # e.g., "http://localhost:4000"
+# Enable the use_litellm_proxy flag
+litellm.use_litellm_proxy = True
 
 # Create a proxy-enabled agent (using environment variables)
 weather_agent_proxy_env = Agent(
     name="weather_agent_proxy_env",
-    model=LiteLlm(model="litellm_proxy/your-model-name"),  # The model name registered in your proxy
+    model=LiteLlm(model="gpt-4o"), # this will call the `gpt-4o` model on LiteLLM proxy
     description="Provides weather information using a model from LiteLLM proxy.",
     instruction="You are a helpful weather assistant. "
                 "Use the 'get_weather' tool for city weather requests. "
@@ -297,107 +297,4 @@ async def test_proxy_env_agent():
 
 # Execute the conversation
 await test_proxy_env_agent()
-```
-
-### 5.2 Method 2: Using Dynamic Credentials
-
-```python
-# Define dynamic credentials
-LITELLM_PROXY_API_KEY = "your-litellm-proxy-api-key"
-LITELLM_PROXY_API_BASE = "your-litellm-proxy-url"
-
-# Create a proxy-enabled agent with dynamic credentials
-weather_agent_proxy_dynamic = Agent(
-    name="weather_agent_proxy_dynamic",
-    model=LiteLlm(
-        model="litellm_proxy/your-model-name",  # The model name registered in your proxy
-        api_key=LITELLM_PROXY_API_KEY,          # Dynamic API key
-        api_base=LITELLM_PROXY_API_BASE         # Dynamic API base URL
-    ),
-    description="Provides weather information using a model from LiteLLM proxy.",
-    instruction="You are a helpful weather assistant. "
-                "Use the 'get_weather' tool for city weather requests. "
-                "Present information clearly.",
-    tools=[get_weather],
-)
-
-# Set up session and runner
-session_service_proxy_dynamic = InMemorySessionService()
-session_proxy_dynamic = session_service_proxy_dynamic.create_session(
-    app_name="weather_app",
-    user_id="user_1",
-    session_id="session_proxy_dynamic"
-)
-
-runner_proxy_dynamic = Runner(
-    agent=weather_agent_proxy_dynamic,
-    app_name="weather_app",
-    session_service=session_service_proxy_dynamic
-)
-
-# Test the proxy-enabled agent (dynamic credentials method)
-async def test_proxy_dynamic_agent():
-    print("\n--- Testing Proxy-enabled Agent (Dynamic Credentials) ---")
-    await call_agent_async(
-        "What's the weather in London?",
-        runner=runner_proxy_dynamic,
-        user_id="user_1",
-        session_id="session_proxy_dynamic"
-    )
-
-# Execute the conversation
-await test_proxy_dynamic_agent()
-```
-
-### 5.3 Method 3: Using litellm.use_litellm_proxy Flag
-
-```python
-# Set your LiteLLM Proxy credentials
-os.environ["LITELLM_PROXY_API_KEY"] = "your-litellm-proxy-api-key"
-os.environ["LITELLM_PROXY_API_BASE"] = "your-litellm-proxy-url"  # e.g., "http://localhost:4000"
-
-# Enable the use_litellm_proxy flag
-litellm.use_litellm_proxy = True
-
-# Create a proxy-enabled agent with the simplified approach
-# With use_litellm_proxy=True, you only need to specify the model name (no litellm_proxy/ prefix needed)
-weather_agent_proxy_flag = Agent(
-    name="weather_agent_proxy_flag",
-    model=LiteLlm(model="your-model-name"),  # No need for litellm_proxy/ prefix
-    description="Provides weather information using a model from LiteLLM proxy.",
-    instruction="You are a helpful weather assistant. "
-                "Use the 'get_weather' tool for city weather requests. "
-                "Present information clearly.",
-    tools=[get_weather],
-)
-
-# Set up session and runner
-session_service_proxy_flag = InMemorySessionService()
-session_proxy_flag = session_service_proxy_flag.create_session(
-    app_name="weather_app",
-    user_id="user_1",
-    session_id="session_proxy_flag"
-)
-
-runner_proxy_flag = Runner(
-    agent=weather_agent_proxy_flag,
-    app_name="weather_app",
-    session_service=session_service_proxy_flag
-)
-
-# Test the proxy-enabled agent (use_litellm_proxy flag method)
-async def test_proxy_flag_agent():
-    print("\n--- Testing Proxy-enabled Agent (use_litellm_proxy flag) ---")
-    await call_agent_async(
-        "What's the weather in London?",
-        runner=runner_proxy_flag,
-        user_id="user_1",
-        session_id="session_proxy_flag"
-    )
-
-# Execute the conversation
-await test_proxy_flag_agent()
-
-# Disable the flag after you're done if needed
-# litellm.use_litellm_proxy = False
 ```
