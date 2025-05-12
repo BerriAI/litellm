@@ -672,7 +672,6 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                 # Verify get_credentials was called with the correct parameters
                 mock_get_credentials.assert_called_once()
                 call_args = mock_get_credentials.call_args[1]
-                print("CALL ARGS to get credentials", call_args)
                 
                 # Assert that our test credentials were passed correctly
                 for param_name, param_value in test_params.items():
