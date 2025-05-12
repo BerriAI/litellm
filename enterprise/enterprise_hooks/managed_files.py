@@ -23,7 +23,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import LiteLLMBatch, LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -136,6 +136,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "pass_through_endpoint",
             "rerank",
             "acreate_batch",
+            "aretrieve_batch",
+            "afile_content",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """
@@ -153,6 +155,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
 
                     data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.afile_content.value:
+            retrieve_file_id = cast(Optional[str], data.get("file_id"))
+            potential_file_id = (
+                _is_base64_encoded_unified_file_id(retrieve_file_id)
+                if retrieve_file_id
+                else False
+            )
+            if potential_file_id:
+                model_id = self.get_model_id_from_unified_file_id(potential_file_id)
+                if model_id:
+                    data["model"] = model_id
+                    data["file_id"] = self.get_output_file_id_from_unified_file_id(
+                        potential_file_id
+                    )
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -161,6 +177,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
 
                 data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.aretrieve_batch.value:
+            retrieve_batch_id = cast(Optional[str], data.get("batch_id"))
+            potential_batch_id = (
+                _is_base64_encoded_unified_file_id(retrieve_batch_id)
+                if retrieve_batch_id
+                else False
+            )
+            if potential_batch_id:
+                ## for managed batch id - get the model id
+                potential_model_id = self.get_model_id_from_unified_batch_id(
+                    potential_batch_id
+                )
+                if potential_model_id is None:
+                    raise Exception(
+                        f"LiteLLM Managed Batch ID with id={retrieve_batch_id} is invalid - does not contain encoded model_id."
+                    )
+                data["model"] = potential_model_id
+                data["batch_id"] = self.get_batch_id_from_unified_batch_id(
+                    potential_batch_id
+                )
+
         return data
 
     async def async_pre_call_deployment_hook(
@@ -317,8 +354,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         file_type = file_data["content_type"]
 
+        output_file_id = file_objects[0].id
+        model_id = file_objects[0]._hidden_params.get("model_id")
+
         unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-            file_type, str(uuid.uuid4()), ",".join(target_model_names_list)
+            file_type,
+            str(uuid.uuid4()),
+            ",".join(target_model_names_list),
+            output_file_id,
+            model_id,
         )
 
         # Convert to URL-safe base64 and strip padding
@@ -339,6 +383,83 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         return response
+
+    def get_unified_batch_id(self, batch_id: str, model_id: str) -> str:
+        unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
+            model_id, batch_id
+        )
+        return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
+
+    def get_unified_output_file_id(
+        self, output_file_id: str, model_id: str, model_name: str
+    ) -> str:
+        unified_output_file_id = (
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "application/json",
+                str(uuid.uuid4()),
+                model_name,
+                output_file_id,
+                model_id,
+            )
+        )
+        return (
+            base64.urlsafe_b64encode(unified_output_file_id.encode())
+            .decode()
+            .rstrip("=")
+        )
+
+    def get_model_id_from_unified_file_id(self, file_id: str) -> str:
+        return file_id.split("llm_output_file_model_id,")[1].split(";")[0]
+
+    def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
+        return file_id.split("llm_output_file_id,")[1].split(";")[0]
+
+    def get_model_id_from_unified_batch_id(self, file_id: str) -> Optional[str]:
+        """
+        Get the model_id from the file_id
+
+        Expected format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
+        """
+        ## use regex to get the model_id from the file_id
+        try:
+            return file_id.split("model_id:")[1].split(";")[0]
+        except Exception:
+            return None
+
+    def get_batch_id_from_unified_batch_id(self, file_id: str) -> str:
+        ## use regex to get the batch_id from the file_id
+        return file_id.split("llm_batch_id:")[1].split(",")[0]
+
+    async def async_post_call_success_hook(
+        self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> Any:
+        if isinstance(response, LiteLLMBatch):
+            ## Check if unified_file_id is in the response
+            unified_file_id = response._hidden_params.get(
+                "unified_file_id"
+            )  # managed file id
+            unified_batch_id = response._hidden_params.get(
+                "unified_batch_id"
+            )  # managed batch id
+            model_id = cast(Optional[str], response._hidden_params.get("model_id"))
+            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            if (unified_batch_id or unified_file_id) and model_id:
+                response.id = self.get_unified_batch_id(
+                    batch_id=response.id, model_id=model_id
+                )
+
+                if (
+                    response.output_file_id and model_name and model_id
+                ):  # return a file id with the model_id and output_file_id
+                    response.output_file_id = self.get_unified_output_file_id(
+                        output_file_id=response.output_file_id,
+                        model_id=model_id,
+                        model_name=model_name,
+                    )
+
+        return await super().async_post_call_success_hook(
+            data, user_api_key_dict, response
+        )
 
     async def afile_retrieve(
         self, file_id: str, litellm_parent_otel_span: Optional[Span]

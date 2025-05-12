@@ -228,6 +228,9 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
@@ -2210,12 +2213,16 @@ def get_optional_params_image_gen(
     user: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[bool] = None,
+    provider_config: Optional[BaseImageGenerationConfig] = None,
+    drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
     model = passed_params.pop("model", None)
     custom_llm_provider = passed_params.pop("custom_llm_provider")
+    provider_config = passed_params.pop("provider_config", None)
+    drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
@@ -2247,7 +2254,7 @@ def get_optional_params_image_gen(
         default_params=default_params,
         additional_drop_params=additional_drop_params,
     )
-    optional_params = {}
+    optional_params: Dict[str, Any] = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     def _check_valid_arg(supported_params):
@@ -2255,8 +2262,8 @@ def get_optional_params_image_gen(
             keys = list(non_default_params.keys())
             for k in keys:
                 if (
-                    litellm.drop_params is True and k not in supported_params
-                ):  # drop the unsupported non-default values
+                    litellm.drop_params is True or drop_params is True
+                ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
@@ -2265,7 +2272,18 @@ def get_optional_params_image_gen(
                     )
             return non_default_params
 
-    if (
+    if provider_config is not None:
+        supported_params = provider_config.get_supported_openai_params(
+            model=model or ""
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model or "",
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    elif (
         custom_llm_provider == "openai"
         or custom_llm_provider == "azure"
         or custom_llm_provider in litellm.openai_compatible_providers
@@ -2641,7 +2659,8 @@ def get_optional_params(  # noqa: PLR0915
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+            custom_llm_provider != "bedrock"
+            and not custom_llm_provider.startswith("sagemaker")
         ):  # allow dynamically setting boto3 init logic
             continue
         elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
@@ -6383,6 +6402,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.NSCALE == provider:
+            return litellm.NscaleConfig()
         return None
 
     @staticmethod
@@ -6427,6 +6448,10 @@ class ProviderConfigManager:
     ) -> Optional[BaseAnthropicMessagesConfig]:
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
+        # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
+        # This mapping ensures that the correct configuration is returned for BEDROCK.
+        elif litellm.LlmProviders.BEDROCK == provider:
+            return litellm.AmazonAnthropicClaude3MessagesConfig()
         return None
 
     @staticmethod
@@ -6532,6 +6557,25 @@ class ProviderConfigManager:
 
         if LlmProviders.BEDROCK == provider:
             return BedrockVectorStore.get_initialized_custom_logger()
+        return None
+
+    @staticmethod
+    def get_provider_image_generation_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageGenerationConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_generation import (
+                get_openai_image_generation_config,
+            )
+
+            return get_openai_image_generation_config(model)
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.image_generation import (
+                get_azure_image_generation_config,
+            )
+
+            return get_azure_image_generation_config(model)
         return None
 
 
@@ -6679,6 +6723,7 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
     return non_default_params
 
 
