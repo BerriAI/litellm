@@ -1489,7 +1489,7 @@ class ProxyConfig:
                     bucket_name=bucket_name, object_key=object_key
                 )
             else:
-                config = get_file_contents_from_s3(
+                config = await get_file_contents_from_s3(
                     bucket_name=bucket_name, object_key=object_key
                 )
 
