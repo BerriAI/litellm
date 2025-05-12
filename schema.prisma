@@ -261,6 +261,7 @@ model LiteLLM_SpendLogs {
   response            Json?     @default("{}")
   session_id          String?
   status              String?
+  key_name            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])

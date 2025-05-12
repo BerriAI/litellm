@@ -2036,6 +2036,7 @@ class SpendLogsPayload(TypedDict):
     proxy_server_request: Optional[str]
     session_id: Optional[str]
     status: Literal["success", "failure"]
+    key_name: str
 
 
 class SpanAttributes(str, enum.Enum):

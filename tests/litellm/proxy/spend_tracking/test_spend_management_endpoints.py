@@ -486,6 +486,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "key_name": "",
                 }
             )
 
@@ -578,6 +579,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "key_name": "",
                 }
             )
 
@@ -668,6 +670,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "key_name": "",
                 }
             )
 

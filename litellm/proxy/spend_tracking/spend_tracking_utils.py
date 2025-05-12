@@ -168,7 +168,8 @@ def get_logging_payload(  # noqa: PLR0915
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 
     api_key = metadata.get("user_api_key", "")
-
+    key_name = metadata.get("user_api_key_alias", "")
+    
     standard_logging_prompt_tokens: int = 0
     standard_logging_completion_tokens: int = 0
     standard_logging_total_tokens: int = 0
@@ -313,6 +314,7 @@ def get_logging_payload(  # noqa: PLR0915
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
+            key_name=str(key_name)
         )
 
         verbose_proxy_logger.debug(
