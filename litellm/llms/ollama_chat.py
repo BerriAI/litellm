@@ -1,4 +1,3 @@
-import inspect
 import json
 import time
 import uuid
@@ -208,9 +207,9 @@ class OllamaChatConfig(OpenAIGPTConfig):
                     litellm.add_function_to_prompt = (
                         True  # so that main.py adds the function call to the prompt
                     )
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.get("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.get("functions")
+                    )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
