@@ -131,7 +131,6 @@ class SagemakerChatHandler(BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params = deepcopy(optional_params)
         stream = inference_params.pop("stream", None)
-        
 
         from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
 
