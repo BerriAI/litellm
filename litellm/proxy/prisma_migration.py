@@ -79,10 +79,8 @@ while retry_count < max_retries and exit_code != 0:
         )  # Log stderr
 
     # Run the Prisma db push command
-    verbose_proxy_logger.info("Running 'prisma db push --accept-data-loss'...")
-    result = subprocess.run(
-        ["prisma", "db", "push", "--accept-data-loss"], capture_output=True, text=True
-    )
+    verbose_proxy_logger.info("Running 'prisma db push'...")
+    result = subprocess.run(["prisma", "db", "push"], capture_output=True, text=True)
     verbose_proxy_logger.info(f"'prisma db push' stdout: {result.stdout}")  # Log stdout
     exit_code = result.returncode
 
