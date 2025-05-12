@@ -158,7 +158,7 @@ class TestLangfuseLogging:
         print(f"URL: {url}")
         print(f"Request Body: {json.dumps(actual_request_body, indent=4)}")
 
-        assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
+        assert url == "https://cloud.langfuse.com/api/public/ingestion"
         assert_langfuse_request_matches_expected(
             actual_request_body,
             expected_file_name,
