@@ -11,7 +11,7 @@
 import asyncio
 import json
 import uuid
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import aiohttp
 from pydantic import BaseModel
@@ -25,7 +25,10 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
+    PresidioAnalyzeRequest,
+)
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -40,6 +43,7 @@ class PresidioPerRequestConfig(BaseModel):
     """
 
     language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -56,6 +60,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
+        pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -67,6 +72,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
+        self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
+            pii_entities_config or {}
+        )
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -132,6 +140,43 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
+    def _get_presidio_analyze_request_payload(
+        self,
+        text: str,
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> PresidioAnalyzeRequest:
+        """
+        Construct the payload for the Presidio analyze request
+
+        API Ref: https://microsoft.github.io/presidio/api-docs/api-docs.html#tag/Analyzer/paths/~1analyze/post
+        """
+        analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
+            text=text,
+            language="en",
+        )
+        ##################################################################
+        ###### Check if user has configured any params for this guardrail
+        ################################################################
+        if self.ad_hoc_recognizers is not None:
+            analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
+
+        if self.pii_entities_config:
+            analyze_payload["entities"] = list(self.pii_entities_config.keys())
+
+        ##################################################################
+        ######### End of adding config params
+        ##################################################################
+
+        # Check if client side request passed any dynamic params
+        if presidio_config and presidio_config.language:
+            analyze_payload["language"] = presidio_config.language
+        analyze_payload.update(
+            self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+        )
+
+        return analyze_payload
+
     async def analyze_text(
         self,
         text: str,
@@ -148,15 +193,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 # Make the request to /analyze
                 analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                analyze_payload = {"text": text, "language": "en"}
-                if presidio_config and presidio_config.language:
-                    analyze_payload["language"] = presidio_config.language
-                if self.ad_hoc_recognizers is not None:
-                    analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
 
-                analyze_payload.update(
-                    self.get_guardrail_dynamic_request_body_params(
-                        request_data=request_data
+                analyze_payload: PresidioAnalyzeRequest = (
+                    self._get_presidio_analyze_request_payload(
+                        text=text,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
                     )
                 )
 
