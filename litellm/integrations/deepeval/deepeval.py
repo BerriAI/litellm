@@ -8,7 +8,10 @@ from litellm.integrations.deepeval.types import (
     TraceApi,
     TraceSpanApiStatus,
 )
-from litellm.integrations.deepeval.utils import to_zod_compatible_iso
+from litellm.integrations.deepeval.utils import (
+    to_zod_compatible_iso,
+    validate_environment,
+)
 from litellm._logging import verbose_logger
 
 
@@ -19,6 +22,8 @@ class DeepEvalLogger(CustomLogger):
 
     def __init__(self, *args, **kwargs):
         api_key = os.getenv("CONFIDENT_API_KEY")
+        self.litellm_environment = os.getenv("LITELM_ENVIRONMENT", "development")
+        validate_environment(self.litellm_environment)
         if not api_key:
             raise ValueError(
                 "Please set 'CONFIDENT_API_KEY=<>' in your environment variables."
@@ -68,6 +73,7 @@ class DeepEvalLogger(CustomLogger):
             standard_logging_object=_standard_logging_object,
             start_time=_start_time,
             end_time=_end_time,
+            litellm_environment=self.litellm_environment,
         )
 
         body = {}
@@ -85,12 +91,14 @@ class DeepEvalLogger(CustomLogger):
         body = self._prepare_trace_api(
             kwargs, response_obj, start_time, end_time, is_success
         )
-        response = self.api.send_request(
-            method=HttpMethods.POST,
-            endpoint=Endpoints.TRACING_ENDPOINT,
-            body=body,
-        )
-
+        try:
+            response = self.api.send_request(
+                method=HttpMethods.POST,
+                endpoint=Endpoints.TRACING_ENDPOINT,
+                body=body,
+            )
+        except Exception as e:
+            raise e
         verbose_logger.debug(
             "DeepEvalLogger: sync_log_failure_event: Api response", response
         )
@@ -147,7 +155,12 @@ class DeepEvalLogger(CustomLogger):
         )
 
     def _create_trace_api(
-        self, base_api_span, standard_logging_object, start_time, end_time
+        self,
+        base_api_span,
+        standard_logging_object,
+        start_time,
+        end_time,
+        litellm_environment,
     ):
         return TraceApi(
             uuid=standard_logging_object.get("trace_id", uuid.uuid4()),
@@ -158,4 +171,5 @@ class DeepEvalLogger(CustomLogger):
             toolSpans=[],
             startTime=str(start_time),
             endTime=str(end_time),
+            environment=litellm_environment,
         )

@@ -94,28 +94,6 @@ class Api:
                 return res.json()
             except ValueError:
                 return res.text
-        elif res.status_code == 409 and body:
-            message = res.json().get("message", "Conflict occurred.")
-
-            # Prompt the user for action
-            user_input = (
-                input(
-                    f"{message} Would you like to overwrite it? [y/N] or change the alias [c]: "
-                )
-                .strip()
-                .lower()
-            )
-
-            if user_input == "y":
-                body["overwrite"] = True
-                return self.send_request(method, endpoint, body)
-            elif user_input == "c":
-                new_alias = input("Enter a new alias: ").strip()
-                body["alias"] = new_alias
-                return self.send_request(method, endpoint, body)
-            else:
-                verbose_logger.debug("Aborted.")
-                return None
         else:
             verbose_logger.debug(res.json())
             raise Exception(res.json().get("error", res.text))
@@ -138,27 +116,6 @@ class Api:
                         return await res.json()
                     except aiohttp.ContentTypeError:
                         return await res.text()
-                elif res.status == 409 and body:
-                    message = (await res.json()).get("message", "Conflict occurred.")
-
-                    user_input = (
-                        input(
-                            f"{message} Would you like to overwrite it? [y/N] or change the alias [c]: "
-                        )
-                        .strip()
-                        .lower()
-                    )
-
-                    if user_input == "y":
-                        body["overwrite"] = True
-                        return await self.a_send_request(method, endpoint, body)
-                    elif user_input == "c":
-                        new_alias = input("Enter a new alias: ").strip()
-                        body["alias"] = new_alias
-                        return await self.a_send_request(method, endpoint, body)
-                    else:
-                        verbose_logger.debug("Aborted.")
-                        return None
                 else:
                     try:
                         error_data = await res.json()

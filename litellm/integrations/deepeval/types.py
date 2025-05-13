@@ -1,6 +1,6 @@
 # Duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/tracing/api.py
 from enum import Enum
-from typing import Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field
 
 
@@ -53,3 +53,12 @@ class TraceApi(BaseModel):
     tool_spans: List[BaseApiSpan] = Field(alias="toolSpans")
     start_time: str = Field(alias="startTime")
     end_time: str = Field(alias="endTime")
+    metadata: Optional[Dict[str, Any]] = Field(None)
+    tags: Optional[List[str]] = Field(None)
+    environment: Optional[str] = Field(None)
+
+
+class Environment(Enum):
+    PRODUCTION = "production"
+    DEVELOPMENT = "development"
+    STAGING = "staging"
