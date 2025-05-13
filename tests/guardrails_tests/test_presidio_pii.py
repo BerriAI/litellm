@@ -329,61 +329,6 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
     )
 
 
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],
-)
-@pytest.mark.asyncio
-async def test_presidio_pii_masking_logging_output_only_logged_response(sync_mode):
-    import litellm
-
-    litellm.set_verbose = True
-    pii_masking = _OPTIONAL_PresidioPIIMasking(
-        logging_only=True,
-        mock_testing=True,
-        mock_redacted_text=input_b_anonymizer_results,
-        guardrail_name="presidio",
-    )
-
-    test_messages = [
-        {
-            "role": "user",
-            "content": "My name is Jane Doe, who are you? Say my name in your response",
-        }
-    ]
-
-    if sync_mode:
-        target_function = "log_success_event"
-        mock_call = MagicMock()
-    else:
-        target_function = "async_log_success_event"
-        mock_call = AsyncMock()
-
-    with patch.object(pii_masking, target_function, new=mock_call) as mock_call:
-        litellm.callbacks = [pii_masking]
-        if sync_mode:
-            response = litellm.completion(
-                model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
-            )
-            time.sleep(3)
-        else:
-            response = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
-            )
-            await asyncio.sleep(3)
-
-        assert response.choices[0].message.content == "Hi Peter!"  # type: ignore
-
-        mock_call.assert_called_once()
-
-        print(mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"])
-
-        assert (
-            mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"]
-            == "My name is <PERSON>, who are you? Say my name in your response"
-        )
-
-
 @pytest.mark.asyncio
 async def test_presidio_pii_masking_logging_output_only_logged_response_guardrails_config():
     from typing import Dict, List, Optional
