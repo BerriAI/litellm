@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import hashlib
 import json
 import os
 import smtplib
