@@ -120,6 +120,122 @@ curl http://localhost:4000/chat/completions \
 
 </Tabs>
 
+## Entity Type Configuration
+
+You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
+
+### Configure Entity Types in config.yaml
+
+Define your guardrails with specific entity type configuration:
+
+```yaml title="config.yaml with Entity Types" showLineNumbers
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-mask-guard"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"  # Will mask credit card numbers
+        EMAIL_ADDRESS: "MASK"  # Will mask email addresses
+        
+  - guardrail_name: "presidio-block-guard"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      pii_entities_config:
+        CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
+```
+
+### Supported Entity Types
+
+LiteLLM Supports all Presidio entity types. See the complete list of presidio entity types [here](https://microsoft.github.io/presidio/supported_entities/).
+
+### Supported Actions
+
+For each entity type, you can specify one of the following actions:
+
+- `MASK`: Replace the entity with a placeholder (e.g., `<PERSON>`)
+- `BLOCK`: Block the request entirely if this entity type is detected
+
+### Test request with Entity Type Configuration
+
+<Tabs>
+<TabItem label="Masking PII entities" value="masked-entities">
+
+When using the masking configuration, entities will be replaced with placeholders:
+
+```shell title="Masking PII Request" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com"}
+    ],
+    "guardrails": ["presidio-mask-guard"]
+  }'
+```
+
+Example response with masked entities:
+
+```json
+{
+  "id": "chatcmpl-123abc",
+  "choices": [
+    {
+      "message": {
+        "content": "I can see you provided a <CREDIT_CARD> and an <EMAIL_ADDRESS>. For security reasons, I recommend not sharing this sensitive information.",
+        "role": "assistant"
+      },
+      "index": 0,
+      "finish_reason": "stop"
+    }
+  ],
+  // ... other response fields
+}
+```
+
+</TabItem>
+
+<TabItem label="Blocking PII entities" value="blocked-entity">
+
+When using the blocking configuration, requests containing the configured entity types will be blocked completely with an exception:
+
+```shell title="Blocking PII Request" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "My credit card is 4111-1111-1111-1111"}
+    ],
+    "guardrails": ["presidio-block-guard"]
+  }'
+```
+
+When running this request, the proxy will raise a `BlockedPiiEntityError` exception.
+
+```json
+{
+  "error": {
+    "message": "Blocked PII entity detected: CREDIT_CARD by Guardrail: presidio-block-guard."
+  }
+}
+```
+
+The exception includes the entity type that was blocked (`CREDIT_CARD` in this case) and the guardrail name that caused the blocking.
+
+</TabItem>
+</Tabs>
+
 ## Advanced
 
 ###  Set `language` per request
@@ -177,7 +293,6 @@ print(response)
 </TabItem>
 
 </Tabs>
-
 
 ### Output parsing 
 
