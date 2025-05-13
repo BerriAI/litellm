@@ -11,7 +11,7 @@ LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) fo
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="config.yaml" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -27,7 +27,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Setup Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -42,7 +42,7 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ### 2. Start LiteLLM Gateway 
 
 
-```shell
+```shell title="Start Gateway" showLineNumbers
 litellm --config config.yaml --detailed_debug
 ```
 
@@ -55,7 +55,7 @@ litellm --config config.yaml --detailed_debug
 
 Expect this to mask `Jane Doe` since it's PII
 
-```shell
+```shell title="Masked PII Request" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -70,7 +70,7 @@ curl http://localhost:4000/chat/completions \
 
 Expected response on failure
 
-```shell
+```shell title="Response with Masked PII" showLineNumbers
 {
  "id": "chatcmpl-A3qSC39K7imjGbZ8xCDacGJZBoTJQ",
  "choices": [
@@ -102,7 +102,7 @@ Expected response on failure
 
 <TabItem label="No PII Call " value = "allowed">
 
-```shell
+```shell title="No PII Request" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -129,7 +129,7 @@ The Presidio API [supports passing the `language` param](https://microsoft.githu
 <Tabs>
 <TabItem label="curl" value = "curl">
 
-```shell
+```shell title="Language Parameter - curl" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -148,8 +148,7 @@ curl http://localhost:4000/chat/completions \
 
 <TabItem label="OpenAI Python SDK" value = "python">
 
-```python
-
+```python title="Language Parameter - Python" showLineNumbers
 import openai
 client = openai.OpenAI(
     api_key="anything",
@@ -188,7 +187,7 @@ LLM responses can sometimes contain the masked tokens.
 For presidio 'replace' operations, LiteLLM can check the LLM response and replace the masked token with the user-submitted values. 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Output Parsing Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -223,7 +222,7 @@ Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the pro
 #### Define ad-hoc recognizer on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Ad Hoc Recognizers Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -240,7 +239,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Ad Hoc Recognizers Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -248,13 +247,13 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 You can see this working, when you run the proxy: 
 
-```bash
+```bash title="Run Proxy with Debug" showLineNumbers
 litellm --config /path/to/config.yaml --debug
 ```
 
 Make a chat completions request, example:
 
-```
+```json title="Custom PII Request" showLineNumbers
 {
   "model": "azure-gpt-3.5",
   "messages": [{"role": "user", "content": "John Smith AHV number is 756.3026.0705.92. Zip code: 1334023"}]
@@ -262,7 +261,7 @@ Make a chat completions request, example:
 ```
 
 And search for any log starting with `Presidio PII Masking`, example:
-```
+```text title="PII Masking Log" showLineNumbers
 Presidio PII Masking: Redacted pii message: <PERSON> AHV number is <AHV_NUMBER>. Zip code: <US_DRIVER_LICENSE>
 ```
 
@@ -283,7 +282,7 @@ This is currently only applied for
 1. Define mode: `logging_only` on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Logging Only Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -299,7 +298,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Logging Only Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -307,13 +306,13 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 2. Start proxy
 
-```bash
+```bash title="Start Proxy" showLineNumbers
 litellm --config /path/to/config.yaml
 ```
 
 3. Test it! 
 
-```bash
+```bash title="Test Logging Only" showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
@@ -331,7 +330,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 **Expected Logged Response**
 
-```
+```text title="Logged Response with Masked PII" showLineNumbers
 Hi, my name is <PERSON>!
 ```
 
