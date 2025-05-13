@@ -80,7 +80,8 @@ class LakeraCategoryThresholds(TypedDict, total=False):
     jailbreak: float
 
 
-class LitellmParams(TypedDict):
+class LitellmParams(TypedDict, total=False):
+    """TypedDict for Litellm parameters with support for both static and dynamic fields"""    
     guardrail: str
     mode: str
     api_key: Optional[str]
@@ -105,6 +106,12 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
+
+    # Support for dynamic parameters
+    def __class_getitem__(cls, key: str) -> Any:
+        """Enable dictionary-style access to dynamic fields"""
+        return Dict[str, Any].__class_getitem__(key)    
+      
     # PII control params
     mask_request_content: Optional[
         bool
