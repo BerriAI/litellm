@@ -190,7 +190,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
         assert "jpeg" not in json_str
 
 
-@pytest.mark.parametrize("model", ["gpt-4o-mini", "netmind/meta-llama/Llama-3.2-90B-Vision-Instruct"])
+@pytest.mark.parametrize("model", ["gpt-4o-mini"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_url_with_format_param_openai(model, sync_mode):
@@ -239,6 +239,60 @@ async def test_url_with_format_param_openai(model, sync_mode):
 
         json_str = json.dumps(mock_client.call_args.kwargs)
 
+        assert "format" not in json_str
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "netmind/meta-llama/Llama-3.2-90B-Vision-Instruct",
+        "netmind/doubao/Doubao-1.5-vision-pro",
+    ]
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_netmind_models(model, sync_mode):
+    from openai import AsyncOpenAI, OpenAI
+    from litellm import acompletion, completion
+
+    if sync_mode:
+        client = OpenAI()
+    else:
+        client = AsyncOpenAI()
+
+    args = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                            "format": "image/png",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ],
+    }
+    with patch.object(
+            client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            if sync_mode:
+                response = completion(**args, client=client)
+            else:
+                response = await acompletion(**args, client=client)
+            print(response)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called()
+        print(mock_client.call_args.kwargs)
+        json_str = json.dumps(mock_client.call_args.kwargs)
         assert "format" not in json_str
 
 
