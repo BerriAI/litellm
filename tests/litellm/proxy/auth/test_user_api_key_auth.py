@@ -9,6 +9,8 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from litellm.proxy.auth.user_api_key_auth import get_api_key
@@ -26,6 +28,8 @@ def test_get_api_key():
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
         pass_through_endpoints=None,
+        route="",
+        request=MagicMock(),
     ) == (api_key, passed_in_key)
 
 
@@ -49,4 +53,6 @@ def test_get_api_key_with_custom_litellm_key_header(
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
         pass_through_endpoints=None,
+        route="",
+        request=MagicMock(),
     ) == (api_key, passed_in_key)

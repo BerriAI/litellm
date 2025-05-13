@@ -236,6 +236,8 @@ def get_api_key(
     google_ai_studio_api_key_header: Optional[str],
     azure_apim_header: Optional[str],
     pass_through_endpoints: Optional[List[dict]],
+    route: str,
+    request: Request,
 ) -> Tuple[str, Optional[str]]:
     """
     Returns:
@@ -324,6 +326,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             google_ai_studio_api_key_header=google_ai_studio_api_key_header,
             azure_apim_header=azure_apim_header,
             pass_through_endpoints=pass_through_endpoints,
+            route=route,
+            request=request,
         )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
