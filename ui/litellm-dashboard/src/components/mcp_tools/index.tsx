@@ -93,7 +93,7 @@ const MCPToolsViewer = ({
       const searchLower = searchTerm.toLowerCase();
       return (
         tool.name.toLowerCase().includes(searchLower) ||
-        tool.description.toLowerCase().includes(searchLower) ||
+        (tool.description != null && tool.description.toLowerCase().includes(searchLower)) ||
         tool.mcp_info.server_name.toLowerCase().includes(searchLower)
       );
     });

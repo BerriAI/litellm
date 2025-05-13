@@ -42,7 +42,7 @@ export interface InputSchemaProperty {
   // Define the structure for a single MCP tool
   export interface MCPTool {
     name: string;
-    description: string;
+    description?: string;
     inputSchema: InputSchema | string; // API returns string "tool_input_schema" or the actual schema
     mcp_info: MCPInfo;
     // Function to select a tool (added in the component)
