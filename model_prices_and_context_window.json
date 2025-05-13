@@ -3444,6 +3444,19 @@
         "supports_embedding_image_input": true,
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
     },
+    "azure_ai/embed-v-4-0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "output_vector_size": 3072,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "mode": "embedding",
+        "supports_embedding_image_input": true,
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image"],
+        "source":"https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice"
+    },
     "babbage-002": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
