@@ -95,15 +95,22 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
-
-                        if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                        if completion_tokens > 0:
+                            final_value = float(
+                                response_ms.total_seconds() / completion_tokens
                             )
+                            if time_to_first_token_response_time is not None:
+                                time_to_first_token = float(
+                                    time_to_first_token_response_time.total_seconds()
+                                    / completion_tokens
+                                )
+                        else:  # completion_tokens is 0 or less
+                            # final_value remains response_ms (a timedelta), will be converted before storage
+                            if time_to_first_token_response_time is not None:
+                                # Store as float if completion_tokens is 0
+                                time_to_first_token = time_to_first_token_response_time.total_seconds()
+                    # else if _usage is None, final_value remains response_ms (timedelta)
+                    # and time_to_first_token remains None (as it was initialized)
 
                 # ------------
                 # Update usage
@@ -120,16 +127,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
+                _latency_to_store = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
                 if (
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
-                    request_count_dict[id].setdefault("latency", []).append(latency_value)
+                    request_count_dict[id].setdefault("latency", []).append(_latency_to_store)
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][: self.routing_args.max_latency_list_size - 1] + [_latency_to_store]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -303,15 +310,22 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
-
-                        if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                        if completion_tokens > 0:
+                            final_value = float(
+                                response_ms.total_seconds() / completion_tokens
                             )
+                            if time_to_first_token_response_time is not None:
+                                time_to_first_token = float(
+                                    time_to_first_token_response_time.total_seconds()
+                                    / completion_tokens
+                                )
+                        else:  # completion_tokens is 0 or less
+                            # final_value remains response_ms (a timedelta), will be converted before storage
+                            if time_to_first_token_response_time is not None:
+                                # Store as float if completion_tokens is 0
+                                time_to_first_token = time_to_first_token_response_time.total_seconds()
+                    # else if _usage is None, final_value remains response_ms (timedelta)
+                    # and time_to_first_token remains None (as it was initialized)
                 # ------------
                 # Update usage
                 # ------------
@@ -329,16 +343,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
+                _latency_to_store = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
                 if (
                     len(request_count_dict[id].get("latency", []))
                     < self.routing_args.max_latency_list_size
                 ):
-                    latency_value = final_value.total_seconds() if isinstance(final_value, timedelta) else final_value
-                    request_count_dict[id].setdefault("latency", []).append(latency_value)
+                    request_count_dict[id].setdefault("latency", []).append(_latency_to_store)
                 else:
                     request_count_dict[id]["latency"] = request_count_dict[id][
                         "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
+                    ][: self.routing_args.max_latency_list_size - 1] + [_latency_to_store]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -464,25 +478,40 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
             # get average latency or average ttft (depending on streaming/non-streaming)
-            total: float = 0.0
-            if (
+            total_latency_sum: float = 0.0
+            valid_latency_count: int = 0
+            current_latency_list_to_process: list = []
+            calculated_item_latency: float = float('inf') # Default to infinity
+
+            use_ttft = (
                 request_kwargs is not None
-                and request_kwargs.get("stream", None) is not None
-                and request_kwargs["stream"] is True
+                and request_kwargs.get("stream", None) is True
                 and len(item_ttft_latency) > 0
-            ):
-                for _call_latency in item_ttft_latency:
-                    if isinstance(_call_latency, float):
-                        total += _call_latency
-                total = total / len(item_ttft_latency) if total > 0 else float('inf')
-            elif len(item_latency) > 0 and isinstance(item_latency[0], timedelta):
-                for _call_latency in item_latency:
-                    total += _call_latency.total_seconds()
-            else:
-                for _call_latency in item_latency:
-                    if isinstance(_call_latency, float):
-                        total += _call_latency
-            item_latency = total / len(item_latency) if total > 0 else float('inf')
+            )
+
+            if use_ttft:
+                current_latency_list_to_process = item_ttft_latency
+            elif len(item_latency) > 0: # only process item_latency if it's not empty
+                current_latency_list_to_process = item_latency
+            
+            for _latency_obj in current_latency_list_to_process:
+                _val_to_add = 0.0
+                if isinstance(_latency_obj, timedelta):
+                    _val_to_add = _latency_obj.total_seconds()
+                elif isinstance(_latency_obj, float):
+                    _val_to_add = _latency_obj
+                else:
+                    # Potentially log or handle unexpected type, for now, skip
+                    continue 
+                total_latency_sum += _val_to_add
+                valid_latency_count += 1
+            
+            if valid_latency_count > 0:
+                calculated_item_latency = total_latency_sum / valid_latency_count
+            # else: calculated_item_latency remains float('inf')
+
+            # item_latency variable is used later, so assign the calculated value to it
+            item_latency = calculated_item_latency
 
             # -------------- #
             # Debugging Logic
@@ -509,13 +538,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
         if len(potential_deployments) == 0:
             return None
 
-        if not healthy_deployments:
+        if not healthy_deployments: # This check was already present and is good
             return None
 
         # Sort potential deployments by latency
         sorted_deployments = sorted(potential_deployments, key=lambda x: x[1])
 
-        # Find lowest latency deployment
+        if not sorted_deployments: # Add check for empty sorted_deployments
+            return None
+            
+        # Get the lowest latency
         lowest_latency = sorted_deployments[0][1]
 
         # Find deployments within buffer of lowest latency
@@ -524,8 +556,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # If no deployments within buffer, fall back to all sorted deployments
         valid_deployments = [
             x for x in sorted_deployments if x[1] <= lowest_latency + buffer
-        ] or sorted_deployments
+        ] or sorted_deployments # This fallback is good
 
+        if not valid_deployments: # Add check for empty valid_deployments after fallback
+             return None
+            
         # Pick a random deployment from valid deployments
         random_valid_deployment = random.choice(valid_deployments)
         deployment = random_valid_deployment[0]
