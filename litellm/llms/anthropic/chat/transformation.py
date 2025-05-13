@@ -226,7 +226,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     additional_tool_params[k] = v
 
             returned_tool = AnthropicHostedTools(
-                type=tool["type"], name=function_name, **additional_tool_params
+                type=tool["type"], name=function_name, **additional_tool_params  # type: ignore
             )
         if returned_tool is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
