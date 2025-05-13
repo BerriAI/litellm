@@ -80,6 +80,63 @@ class LakeraCategoryThresholds(TypedDict, total=False):
     jailbreak: float
 
 
+class PiiAction(str, Enum):
+    BLOCK = "BLOCK"
+    MASK = "MASK"
+
+
+class PiiEntityType(str, Enum):
+    # General
+    CREDIT_CARD = "CREDIT_CARD"
+    CRYPTO = "CRYPTO"
+    DATE_TIME = "DATE_TIME"
+    EMAIL_ADDRESS = "EMAIL_ADDRESS"
+    IBAN_CODE = "IBAN_CODE"
+    IP_ADDRESS = "IP_ADDRESS"
+    NRP = "NRP"
+    LOCATION = "LOCATION"
+    PERSON = "PERSON"
+    PHONE_NUMBER = "PHONE_NUMBER"
+    MEDICAL_LICENSE = "MEDICAL_LICENSE"
+    URL = "URL"
+    # USA
+    US_BANK_NUMBER = "US_BANK_NUMBER"
+    US_DRIVER_LICENSE = "US_DRIVER_LICENSE"
+    US_ITIN = "US_ITIN"
+    US_PASSPORT = "US_PASSPORT"
+    US_SSN = "US_SSN"
+    # UK
+    UK_NHS = "UK_NHS"
+    UK_NINO = "UK_NINO"
+    # Spain
+    ES_NIF = "ES_NIF"
+    ES_NIE = "ES_NIE"
+    # Italy
+    IT_FISCAL_CODE = "IT_FISCAL_CODE"
+    IT_DRIVER_LICENSE = "IT_DRIVER_LICENSE"
+    IT_VAT_CODE = "IT_VAT_CODE"
+    IT_PASSPORT = "IT_PASSPORT"
+    IT_IDENTITY_CARD = "IT_IDENTITY_CARD"
+    # Poland
+    PL_PESEL = "PL_PESEL"
+    # Singapore
+    SG_NRIC_FIN = "SG_NRIC_FIN"
+    SG_UEN = "SG_UEN"
+    # Australia
+    AU_ABN = "AU_ABN"
+    AU_ACN = "AU_ACN"
+    AU_TFN = "AU_TFN"
+    AU_MEDICARE = "AU_MEDICARE"
+    # India
+    IN_PAN = "IN_PAN"
+    IN_AADHAAR = "IN_AADHAAR"
+    IN_VEHICLE_REGISTRATION = "IN_VEHICLE_REGISTRATION"
+    IN_VOTER = "IN_VOTER"
+    IN_PASSPORT = "IN_PASSPORT"
+    # Finland
+    FI_PERSONAL_IDENTITY_CODE = "FI_PERSONAL_IDENTITY_CODE"
+
+
 class LitellmParams(TypedDict):
     guardrail: str
     mode: str
@@ -97,6 +154,8 @@ class LitellmParams(TypedDict):
     output_parse_pii: Optional[bool]
     presidio_ad_hoc_recognizers: Optional[str]
     mock_redacted_text: Optional[dict]
+    # PII control params
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
 
     # hide secrets params
     detect_secrets_config: Optional[dict]
@@ -105,7 +164,8 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
-    # PII control params
+    ################## PII control params #################
+    ########################################################
     mask_request_content: Optional[
         bool
     ]  # will mask request content if guardrail makes any changes
