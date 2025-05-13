@@ -218,7 +218,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 """
                 has_text_in_content = _check_text_in_content(user_content)
                 if has_text_in_content is False:
-                    verbose_logger.warning(
+                    verbose_logger.debug(
                         "No text in user content. Adding a blank text to user content, to ensure Gemini doesn't fail the request. Relevant Issue - https://github.com/BerriAI/litellm/issues/5515"
                     )
                     user_content.append(
