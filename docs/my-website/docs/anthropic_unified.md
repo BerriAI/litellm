@@ -16,10 +16,10 @@ Use LiteLLM to call all your LLM APIs in the Anthropic `v1/messages` format.
 | Streaming | ✅ | |
 | Fallbacks | ✅ | between anthropic models |
 | Loadbalancing | ✅ | between anthropic models |
+| Support llm providers | - `anthropic` <br/> - `bedrock` (only Anthropic models) | |
 
 Planned improvement:
 - Vertex AI Anthropic support
-- Bedrock Anthropic support
 
 ## Usage 
 ---
@@ -109,7 +109,7 @@ client = anthropic.Anthropic(
 
 response = client.messages.create(
     messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
-    model="anthropic/claude-3-haiku-20240307",
+    model="anthropic-claude",
     max_tokens=100,
 )
 ```

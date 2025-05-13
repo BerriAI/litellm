@@ -7,13 +7,13 @@ model_list:
       id: "1"
   - model_name: gpt-3.5-turbo-end-user-test
     litellm_params:
-      model: azure/chatgpt-v-2
+      model: azure/gpt-4o-new-test
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: azure/chatgpt-v-2
+      model: azure/gpt-4o-new-test
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
@@ -26,7 +26,7 @@ model_list:
       stream_timeout: 60
   - model_name: gpt-4
     litellm_params:
-      model: azure/chatgpt-v-2
+      model: azure/gpt-4o-new-test
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
@@ -46,12 +46,9 @@ model_list:
     model_info:
       mode: embedding
       base_model: text-embedding-ada-002
-  - model_name: dall-e-2
+  - model_name: dall-e-2 # some tests use dall-e-2 which is now deprecated, alias to dall-e-3
     litellm_params:
-      model: azure/
-      api_version: 2023-06-01-preview
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_key: os.environ/AZURE_API_KEY
+      model: openai/dall-e-3
   - model_name: openai-dall-e-3
     litellm_params:
       model: dall-e-3

@@ -1,17 +1,18 @@
 """
-Support for OpenAI's `/v1/chat/completions` endpoint. 
+Support for OpenAI's `/v1/chat/completions` endpoint.
 
 Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
@@ -46,6 +47,27 @@ class OpenrouterConfig(OpenAIGPTConfig):
             "extra_body"
         ] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        extra_body = optional_params.pop("extra_body", {})
+        response = super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
+        response.update(extra_body)
+        return response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

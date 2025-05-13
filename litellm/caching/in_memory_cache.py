@@ -15,7 +15,8 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel
 
-from ..constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+
 from .base_cache import BaseCache
 
 
@@ -52,7 +53,8 @@ class InMemoryCache(BaseCache):
             # Fast path for common primitive types that are typically small
             if (
                 isinstance(value, (bool, int, float, str))
-                and len(str(value)) < self.max_size_per_item * 512
+                and len(str(value))
+                < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
             ):  # Conservative estimate
                 return True
 
@@ -181,7 +183,6 @@ class InMemoryCache(BaseCache):
         init_value = await self.async_get_cache(key=key) or 0
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
-
         return value
 
     def flush_cache(self):

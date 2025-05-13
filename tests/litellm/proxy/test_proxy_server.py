@@ -39,7 +39,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
         "litellm.proxy.proxy_server.store_model_in_db", False
     ):  # set store_model_in_db to False
-
         # Test when store_model_in_db is False
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
@@ -57,7 +56,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
         "litellm.proxy.proxy_server.store_model_in_db", True
     ), patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True):
-
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
             prisma_client=mock_prisma_client,
@@ -164,3 +162,30 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         from litellm.proxy.proxy_server import master_key
 
         assert master_key == test_resolved_key
+
+
+def test_team_info_masking():
+    """
+    Test that sensitive team information is properly masked
+
+    Ref: https://huntr.com/bounties/661b388a-44d8-4ad5-862b-4dc5b80be30a
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    # Test team object with sensitive data
+    team1_info = {
+        "success_callback": "['langfuse', 's3']",
+        "langfuse_secret": "secret-test-key",
+        "langfuse_public_key": "public-test-key",
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        proxy_config._get_team_config(
+            team_id="test_dev",
+            all_teams_config=[team1_info],
+        )
+
+    print("Got exception: {}".format(exc_info.value))
+    assert "secret-test-key" not in str(exc_info.value)
+    assert "public-test-key" not in str(exc_info.value)

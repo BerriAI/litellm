@@ -4,6 +4,7 @@ import time
 from typing import Callable, List, Union
 
 import litellm
+from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -28,7 +29,9 @@ def handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(0.5)  # prevent being rate limited by replicate
+        time.sleep(
+            REPLICATE_POLLING_DELAY_SECONDS
+        )  # prevent being rate limited by replicate
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -77,7 +80,9 @@ async def async_handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        await asyncio.sleep(0.5)  # prevent being rate limited by replicate
+        await asyncio.sleep(
+            REPLICATE_POLLING_DELAY_SECONDS
+        )  # prevent being rate limited by replicate
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = await http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -136,6 +141,7 @@ def completion(
         model=model,
         messages=messages,
         optional_params=optional_params,
+        litellm_params=litellm_params,
     )
     # Start a prediction and get the prediction URL
     version_id = replicate_config.model_to_version_id(model)
@@ -170,6 +176,7 @@ def completion(
 
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
+        api_key=api_key,
         model=model,
         optional_params=optional_params,
         litellm_params=litellm_params,
@@ -246,6 +253,7 @@ async def async_completion(
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
+        api_key=api_key,
         model=model,
         optional_params=optional_params,
         litellm_params=litellm_params,

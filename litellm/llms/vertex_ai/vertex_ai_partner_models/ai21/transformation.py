@@ -2,9 +2,10 @@ import types
 from typing import Optional
 
 import litellm
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class VertexAIAi21Config:
+class VertexAIAi21Config(OpenAIGPTConfig):
     """
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/ai21
 
@@ -39,9 +40,6 @@ class VertexAIAi21Config:
             )
             and v is not None
         }
-
-    def get_supported_openai_params(self):
-        return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
 
     def map_openai_params(
         self,

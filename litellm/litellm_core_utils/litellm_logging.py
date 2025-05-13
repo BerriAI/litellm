@@ -28,12 +28,22 @@ from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
-from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.constants import (
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+)
+from litellm.cost_calculator import (
+    RealtimeAPITokenUsageProcessor,
+    _select_model_name_for_cost_calc,
+)
+from litellm.integrations.agentops import AgentOps
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -49,17 +59,21 @@ from litellm.types.llms.openai import (
     Batch,
     FineTuningJob,
     HttpxBinaryResponseContent,
+    OpenAIFileObject,
+    OpenAIModerationResponse,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
+from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
+    LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -75,6 +89,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardLoggingPromptManagementMetadata,
+    StandardLoggingVectorStoreRequest,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -119,14 +134,22 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
-    from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
+    from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
         GenericAPILogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+        ResendEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+        SMTPEmailLogger,
     )
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
     )
-
+    GenericAPILogger = CustomLogger  # type: ignore
+    ResendEmailLogger = CustomLogger  # type: ignore
+    SMTPEmailLogger = CustomLogger  # type: ignore
 _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
@@ -150,7 +173,6 @@ dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
-genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
@@ -237,7 +259,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id = litellm_trace_id
+        self.litellm_trace_id: str = litellm_trace_id or str(uuid.uuid4())
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[
@@ -290,6 +312,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "input": _input,
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
+            "model": model,
         }
 
     def process_dynamic_callbacks(self):
@@ -434,26 +457,74 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        if (
-            litellm_params.get("input_cost_per_token") is not None
-            or litellm_params.get("input_cost_per_second") is not None
-            or litellm_params.get("output_cost_per_token") is not None
-            or litellm_params.get("output_cost_per_second") is not None
-        ):
-            self.custom_pricing = True
+        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+        for key in custom_pricing_keys:
+            if litellm_params.get(key) is not None:
+                self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def should_run_prompt_management_hooks(
+        self,
+        non_default_params: Dict,
+        prompt_id: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+    ) -> bool:
+        """
+        Return True if prompt management hooks should be run
+        """
+        if prompt_id:
+            return True
+
+        if self._should_run_prompt_management_hooks_without_prompt_id(
+            non_default_params=non_default_params,
+            tools=tools,
+        ):
+            return True
+
+        return False
+
+    def _should_run_prompt_management_hooks_without_prompt_id(
+        self,
+        non_default_params: Dict,
+        tools: Optional[List[Dict]] = None,
+    ) -> bool:
+        """
+        Certain prompt management hooks don't need a `prompt_id` to be passed in, they are triggered by dynamic params
+
+        eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
+        """
+        for param in non_default_params:
+            if param in DynamicPromptManagementParamLiteral.list_all_params():
+                return True
+
+        #############################################################################
+        # Check if Vector Store / Knowledge Base hooks should be applied to the prompt
+        #############################################################################
+        if litellm.vector_store_registry is not None:
+            if litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params, tools=tools
+            ):
+                return True
+        return False
 
     def get_chat_completion_prompt(
         self,
         model: str,
         messages: List[AllMessageValues],
-        non_default_params: dict,
-        prompt_id: str,
+        non_default_params: Dict,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        custom_logger = self.get_custom_logger_for_prompt_management(model)
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(
+                model=model, non_default_params=non_default_params
+            )
+        )
+
         if custom_logger:
             (
                 model,
@@ -462,7 +533,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ) = custom_logger.get_chat_completion_prompt(
                 model=model,
                 messages=messages,
-                non_default_params=non_default_params,
+                non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
@@ -470,8 +541,43 @@ class Logging(LiteLLMLoggingBaseClass):
         self.messages = messages
         return model, messages, non_default_params
 
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: Dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        prompt_management_logger: Optional[CustomLogger] = None,
+        tools: Optional[List[Dict]] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        custom_logger = (
+            prompt_management_logger
+            or self.get_custom_logger_for_prompt_management(
+                model=model, non_default_params=non_default_params
+            )
+        )
+
+        if custom_logger:
+            (
+                model,
+                messages,
+                non_default_params,
+            ) = await custom_logger.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params or {},
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
+                litellm_logging_obj=self,
+                tools=tools,
+            )
+        self.messages = messages
+        return model, messages, non_default_params
+
     def get_custom_logger_for_prompt_management(
-        self, model: str
+        self, model: str, non_default_params: Dict
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -506,6 +612,46 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 
+        if anthropic_cache_control_logger := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(
+            non_default_params
+        ):
+            self.model_call_details[
+                "prompt_integration"
+            ] = anthropic_cache_control_logger.__class__.__name__
+            return anthropic_cache_control_logger
+
+        #########################################################
+        # Vector Store / Knowledge Base hooks
+        #########################################################
+        if litellm.vector_store_registry is not None:
+            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
+                non_default_params=non_default_params
+            ):
+                vector_store_custom_logger = (
+                    litellm.ProviderConfigManager.get_provider_vector_store_config(
+                        provider=cast(
+                            litellm.LlmProviders,
+                            vector_store_to_run.get("custom_llm_provider"),
+                        ),
+                    )
+                )
+                self.model_call_details[
+                    "prompt_integration"
+                ] = vector_store_custom_logger.__class__.__name__
+                return vector_store_custom_logger
+
+        return None
+
+    def get_custom_logger_for_anthropic_cache_control_hook(
+        self, non_default_params: Dict
+    ) -> Optional[CustomLogger]:
+        if non_default_params.get("cache_control_injection_points", None):
+            custom_logger = _init_custom_logger_compatible_class(
+                logging_integration="anthropic_cache_control_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            return custom_logger
         return None
 
     def _get_raw_request_body(self, data: Optional[Union[dict, str]]) -> dict:
@@ -609,7 +755,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     ] = RawRequestTypedDict(
                         error=str(e),
                     )
-                    traceback.print_exc()
                     _metadata[
                         "raw_request"
                     ] = "Unable to Log \
@@ -890,9 +1035,13 @@ class Logging(LiteLLMLoggingBaseClass):
             FineTuningJob,
             ResponsesAPIResponse,
             ResponseCompletedEvent,
+            OpenAIFileObject,
+            LiteLLMRealtimeStreamLoggingObject,
+            OpenAIModerationResponse,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
+        router_model_id: Optional[str] = None,
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -931,6 +1080,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "custom_pricing": custom_pricing,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
+                "router_model_id": router_model_id,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -1010,6 +1160,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
         return True
 
+    def _update_completion_start_time(self, completion_start_time: datetime.datetime):
+        self.completion_start_time = completion_start_time
+        self.model_call_details["completion_start_time"] = self.completion_start_time
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1036,26 +1190,52 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_anthropic_messages_response_logging(result=result)
             ## if model in model cost map - log the response cost
             ## else set cost to None
+
+            logging_result = result
+
+            if self.call_type == CallTypes.arealtime.value and isinstance(result, list):
+                combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+                    results=result
+                )
+                logging_result = (
+                    RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+                        usage=combined_usage_object,
+                        results=result,
+                    )
+                )
+
+                # self.model_call_details[
+                #     "response_cost"
+                # ] = handle_realtime_stream_cost_calculation(
+                #     results=result,
+                #     combined_usage_object=combined_usage_object,
+                #     custom_llm_provider=self.custom_llm_provider,
+                #     litellm_model_name=self.model,
+                # )
+                # self.model_call_details["combined_usage_object"] = combined_usage_object
             if (
                 standard_logging_object is None
                 and result is not None
                 and self.stream is not True
             ):
                 if (
-                    isinstance(result, ModelResponse)
-                    or isinstance(result, ModelResponseStream)
-                    or isinstance(result, EmbeddingResponse)
-                    or isinstance(result, ImageResponse)
-                    or isinstance(result, TranscriptionResponse)
-                    or isinstance(result, TextCompletionResponse)
-                    or isinstance(result, HttpxBinaryResponseContent)  # tts
-                    or isinstance(result, RerankResponse)
-                    or isinstance(result, FineTuningJob)
-                    or isinstance(result, LiteLLMBatch)
-                    or isinstance(result, ResponsesAPIResponse)
+                    isinstance(logging_result, ModelResponse)
+                    or isinstance(logging_result, ModelResponseStream)
+                    or isinstance(logging_result, EmbeddingResponse)
+                    or isinstance(logging_result, ImageResponse)
+                    or isinstance(logging_result, TranscriptionResponse)
+                    or isinstance(logging_result, TextCompletionResponse)
+                    or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
+                    or isinstance(logging_result, RerankResponse)
+                    or isinstance(logging_result, FineTuningJob)
+                    or isinstance(logging_result, LiteLLMBatch)
+                    or isinstance(logging_result, ResponsesAPIResponse)
+                    or isinstance(logging_result, OpenAIFileObject)
+                    or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
+                    or isinstance(logging_result, OpenAIModerationResponse)
                 ):
                     ## HIDDEN PARAMS ##
-                    hidden_params = getattr(result, "_hidden_params", {})
+                    hidden_params = getattr(logging_result, "_hidden_params", {})
                     if hidden_params:
                         # add to metadata for logging
                         if self.model_call_details.get("litellm_params") is not None:
@@ -1073,7 +1253,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             self.model_call_details["litellm_params"]["metadata"][  # type: ignore
                                 "hidden_params"
                             ] = getattr(
-                                result, "_hidden_params", {}
+                                logging_result, "_hidden_params", {}
                             )
                     ## RESPONSE COST - Only calculate if not in hidden_params ##
                     if "response_cost" in hidden_params:
@@ -1083,14 +1263,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     else:
                         self.model_call_details[
                             "response_cost"
-                        ] = self._response_cost_calculator(result=result)
+                        ] = self._response_cost_calculator(result=logging_result)
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details[
                         "standard_logging_object"
                     ] = get_standard_logging_object_payload(
                         kwargs=self.model_call_details,
-                        init_response_obj=result,
+                        init_response_obj=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                         logging_obj=self,
@@ -1391,35 +1571,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                         service_name="langfuse",
                                         trace_id=_trace_id,
                                     )
-                    if callback == "generic":
-                        global genericAPILogger
-                        verbose_logger.debug("reaches langfuse for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
-                        if genericAPILogger is None:
-                            genericAPILogger = GenericAPILogger()  # type: ignore
-                        genericAPILogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
                     if callback == "greenscale" and greenscaleLogger is not None:
                         kwargs = {}
                         for k, v in self.model_call_details.items():
@@ -2599,7 +2750,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     """
     try:
         custom_logger_init_args = custom_logger_init_args or {}
-        if logging_integration == "lago":
+        if logging_integration == "agentops":  # Add AgentOps initialization
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AgentOps):
+                    return callback  # type: ignore
+
+            agentops_logger = AgentOps()
+            _in_memory_loggers.append(agentops_logger)
+            return agentops_logger  # type: ignore
+        elif logging_integration == "lago":
             for callback in _in_memory_loggers:
                 if isinstance(callback, LagoLogger):
                     return callback  # type: ignore
@@ -2862,6 +3021,20 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger  # type: ignore
+        elif logging_integration == "anthropic_cache_control_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+            anthropic_cache_control_hook = AnthropicCacheControlHook()
+            _in_memory_loggers.append(anthropic_cache_control_hook)
+            return anthropic_cache_control_hook  # type: ignore
+        elif logging_integration == "bedrock_vector_store":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockVectorStore):
+                    return callback
+            bedrock_vector_store = BedrockVectorStore()
+            _in_memory_loggers.append(bedrock_vector_store)
+            return bedrock_vector_store  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -2869,6 +3042,27 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _gcs_pubsub_logger = GcsPubSubLogger()
             _in_memory_loggers.append(_gcs_pubsub_logger)
             return _gcs_pubsub_logger  # type: ignore
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
+            generic_api_logger = GenericAPILogger()
+            _in_memory_loggers.append(generic_api_logger)
+            return generic_api_logger  # type: ignore
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
+                    return callback
+            resend_email_logger = ResendEmailLogger()
+            _in_memory_loggers.append(resend_email_logger)
+            return resend_email_logger  # type: ignore
+        elif logging_integration == "smtp_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SMTPEmailLogger):
+                    return callback
+            smtp_email_logger = SMTPEmailLogger()
+            _in_memory_loggers.append(smtp_email_logger)
+            return smtp_email_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -3000,12 +3194,32 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
                     return callback
+        elif logging_integration == "anthropic_cache_control_hook":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "bedrock_vector_store":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BedrockVectorStore):
+                    return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
                     return callback
-
+        elif logging_integration == "generic_api":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GenericAPILogger):
+                    return callback
+        elif logging_integration == "resend_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ResendEmailLogger):
+                    return callback
+        elif logging_integration == "smtp_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SMTPEmailLogger):
+                    return callback
         return None
+
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error getting custom logger: {e}"
@@ -3042,10 +3256,11 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    for _custom_cost_param in SPECIAL_MODEL_INFO_PARAMS:
-        if litellm_params.get(_custom_cost_param, None) is not None:
+    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
+    for key in custom_pricing_keys:
+        if litellm_params.get(key, None) is not None:
             return True
-        elif model_info.get(_custom_cost_param, None) is not None:
+        elif model_info.get(key, None) is not None:
             return True
 
     return False
@@ -3109,6 +3324,10 @@ class StandardLoggingPayloadSetup:
         prompt_integration: Optional[str] = None,
         applied_guardrails: Optional[List[str]] = None,
         mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+        vector_store_request_metadata: Optional[
+            List[StandardLoggingVectorStoreRequest]
+        ] = None,
+        usage_object: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3156,6 +3375,8 @@ class StandardLoggingPayloadSetup:
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
+            vector_store_request_metadata=vector_store_request_metadata,
+            usage_object=usage_object,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3181,8 +3402,12 @@ class StandardLoggingPayloadSetup:
         return clean_metadata
 
     @staticmethod
-    def get_usage_from_response_obj(response_obj: Optional[dict]) -> Usage:
+    def get_usage_from_response_obj(
+        response_obj: Optional[dict], combined_usage_object: Optional[Usage] = None
+    ) -> Usage:
         ## BASE CASE ##
+        if combined_usage_object is not None:
+            return combined_usage_object
         if response_obj is None:
             return Usage(
                 prompt_tokens=0,
@@ -3311,6 +3536,7 @@ class StandardLoggingPayloadSetup:
             litellm_overhead_time_ms=None,
             batch_models=None,
             litellm_model_name=None,
+            usage_object=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3386,6 +3612,28 @@ class StandardLoggingPayloadSetup:
         else:
             return end_time_float - start_time_float
 
+    @staticmethod
+    def _get_standard_logging_payload_trace_id(
+        logging_obj: Logging,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Returns the `litellm_trace_id` for this request
+
+        This helps link sessions when multiple requests are made in a single session
+        """
+        dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
+        dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
+
+        # Note: we recommend using `litellm_session_id` for session tracking
+        # `litellm_trace_id` is an internal litellm param
+        if dynamic_litellm_session_id:
+            return str(dynamic_litellm_session_id)
+        elif dynamic_litellm_trace_id:
+            return str(dynamic_litellm_trace_id)
+        else:
+            return logging_obj.litellm_trace_id
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -3427,6 +3675,7 @@ def get_standard_logging_object_payload(
                         litellm_overhead_time_ms=None,
                         batch_models=None,
                         litellm_model_name=None,
+                        usage_object=None,
                     )
                 )
 
@@ -3439,12 +3688,17 @@ def get_standard_logging_object_payload(
             or litellm_params.get("metadata", None)
             or {}
         )
+
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(
-            response_obj=response_obj
+            response_obj=response_obj,
+            combined_usage_object=cast(
+                Optional[Usage], kwargs.get("combined_usage_object")
+            ),
         )
+
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
         _model_id = metadata.get("model_info", {}).get("id", "")
@@ -3483,6 +3737,10 @@ def get_standard_logging_object_payload(
             prompt_integration=kwargs.get("prompt_integration", None),
             applied_guardrails=kwargs.get("applied_guardrails", None),
             mcp_tool_call_metadata=kwargs.get("mcp_tool_call_metadata", None),
+            vector_store_request_metadata=kwargs.get(
+                "vector_store_request_metadata", None
+            ),
+            usage_object=usage.model_dump(),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3532,7 +3790,10 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
-            trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
+            trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
             call_type=call_type or "",
             cache_hit=cache_hit,
             stream=stream,
@@ -3592,7 +3853,7 @@ def emit_standard_logging_payload(payload: StandardLoggingPayload):
 
 
 def get_standard_logging_metadata(
-    metadata: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]],
 ) -> StandardLoggingMetadata:
     """
     Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3623,6 +3884,8 @@ def get_standard_logging_metadata(
         prompt_management_metadata=None,
         applied_guardrails=None,
         mcp_tool_call_metadata=None,
+        vector_store_request_metadata=None,
+        usage_object=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
@@ -3717,6 +3980,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         litellm_overhead_time_ms=None,
         batch_models=None,
         litellm_model_name=None,
+        usage_object=None,
     )
 
     # Convert numeric values to appropriate types
@@ -3740,9 +4004,12 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=response_cost,
         response_cost_failure_debug_info=None,
         status=str("success"),
-        total_tokens=int(30),
-        prompt_tokens=int(20),
-        completion_tokens=int(10),
+        total_tokens=int(
+            DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+            + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+        ),
+        prompt_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT),
+        completion_tokens=int(DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),
         startTime=start_time,
         endTime=end_time,
         completionStartTime=completion_start_time,

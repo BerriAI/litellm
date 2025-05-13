@@ -12,10 +12,10 @@ import {
   Badge,
   Button as TremorButton,
   TextInput,
-  NumberInput,
 } from "@tremor/react";
+import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
-import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call } from "./networking";
+import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call, modelPatchUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
@@ -23,6 +23,7 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import CacheControlSettings from "./add_model/cache_control_settings";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -57,6 +58,7 @@ export default function ModelInfoView({
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
+  const [showCacheControl, setShowCacheControl] = useState(false);
 
   const canEditModel = userRole === "Admin" || modelData.model_info.created_by === userID;
   const isAdmin = userRole === "Admin";
@@ -86,6 +88,11 @@ export default function ModelInfoView({
       console.log("modelInfoResponse, ", modelInfoResponse);
       let specificModelData = modelInfoResponse.data[0];
       setLocalModelData(specificModelData);
+      
+      // Check if cache control is enabled
+      if (specificModelData?.litellm_params?.cache_control_injection_points) {
+        setShowCacheControl(true);
+      }
     }
     getExistingCredential();
     getModelInfo();
@@ -111,35 +118,46 @@ export default function ModelInfoView({
     try {
       if (!accessToken) return;
       setIsSaving(true);
+
+      console.log("values.model_name, ", values.model_name);
+      
+      let updatedLitellmParams = {
+        ...localModelData.litellm_params,
+        model: values.litellm_model_name,
+        api_base: values.api_base,
+        custom_llm_provider: values.custom_llm_provider,
+        organization: values.organization,
+        tpm: values.tpm,
+        rpm: values.rpm,
+        max_retries: values.max_retries,
+        timeout: values.timeout,
+        stream_timeout: values.stream_timeout,
+        input_cost_per_token: values.input_cost / 1_000_000,
+        output_cost_per_token: values.output_cost / 1_000_000,
+      };
+      
+      // Handle cache control settings
+      if (values.cache_control && values.cache_control_injection_points?.length > 0) {
+        updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
+      } else {
+        delete updatedLitellmParams.cache_control_injection_points;
+      }
       
       const updateData = {
         model_name: values.model_name,
-        litellm_params: {
-          ...localModelData.litellm_params,
-          model: values.litellm_model_name,
-          api_base: values.api_base,
-          custom_llm_provider: values.custom_llm_provider,
-          organization: values.organization,
-          tpm: values.tpm,
-          rpm: values.rpm,
-          max_retries: values.max_retries,
-          timeout: values.timeout,
-          stream_timeout: values.stream_timeout,
-          input_cost_per_token: values.input_cost / 1_000_000,
-          output_cost_per_token: values.output_cost / 1_000_000,
-        },
+        litellm_params: updatedLitellmParams,
         model_info: {
           id: modelId,
         }
       };
 
-      await modelUpdateCall(accessToken, updateData);
+      await modelPatchUpdateCall(accessToken, updateData, modelId);
       
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updateData.litellm_params
+        litellm_params: updatedLitellmParams
       };
       
       setLocalModelData(updatedModelData);
@@ -337,6 +355,8 @@ export default function ModelInfoView({
                     (localModelData.litellm_params.input_cost_per_token * 1_000_000) : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
                   output_cost: localModelData.litellm_params?.output_cost_per_token ? 
                     (localModelData.litellm_params.output_cost_per_token * 1_000_000) : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                  cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
+                  cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                 }}
                 layout="vertical"
                 onValuesChange={() => setIsDirty(true)}
@@ -369,7 +389,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="input_cost" className="mb-0">
-                          <NumberInput placeholder="Enter input cost" />
+                          <NumericalInput placeholder="Enter input cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -384,7 +404,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                       {isEditing ? (
                         <Form.Item name="output_cost" className="mb-0">
-                          <NumberInput placeholder="Enter output cost" />
+                          <NumericalInput placeholder="Enter output cost" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -438,7 +458,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">TPM (Tokens per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="tpm" className="mb-0">
-                          <NumberInput placeholder="Enter TPM" />
+                          <NumericalInput placeholder="Enter TPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -451,7 +471,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">RPM (Requests per Minute)</Text>
                       {isEditing ? (
                         <Form.Item name="rpm" className="mb-0">
-                          <NumberInput placeholder="Enter RPM" />
+                          <NumericalInput placeholder="Enter RPM" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -464,7 +484,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Max Retries</Text>
                       {isEditing ? (
                         <Form.Item name="max_retries" className="mb-0">
-                          <NumberInput placeholder="Enter max retries" />
+                          <NumericalInput placeholder="Enter max retries" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -477,7 +497,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="timeout" className="mb-0">
-                          <NumberInput placeholder="Enter timeout" />
+                          <NumericalInput placeholder="Enter timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -490,7 +510,7 @@ export default function ModelInfoView({
                       <Text className="font-medium">Stream Timeout (seconds)</Text>
                       {isEditing ? (
                         <Form.Item name="stream_timeout" className="mb-0">
-                          <NumberInput placeholder="Enter stream timeout" />
+                          <NumericalInput placeholder="Enter stream timeout" />
                         </Form.Item>
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
@@ -498,6 +518,37 @@ export default function ModelInfoView({
                         </div>
                       )}
                     </div>
+
+                    {/* Cache Control Section */}
+                    {isEditing ? (
+                      <CacheControlSettings 
+                        form={form}
+                        showCacheControl={showCacheControl}
+                        onCacheControlChange={(checked) => setShowCacheControl(checked)}
+                      />
+                    ) : (
+                      <div>
+                        <Text className="font-medium">Cache Control</Text>
+                        <div className="mt-1 p-2 bg-gray-50 rounded">
+                          {localModelData.litellm_params?.cache_control_injection_points ? (
+                            <div>
+                              <p>Enabled</p>
+                              <div className="mt-2">
+                                {localModelData.litellm_params.cache_control_injection_points.map((point: any, i: number) => (
+                                  <div key={i} className="text-sm text-gray-600 mb-1">
+                                    Location: {point.location}, 
+                                    {point.role && <span> Role: {point.role}</span>}
+                                    {point.index !== undefined && <span> Index: {point.index}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            "Disabled"
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div>
                       <Text className="font-medium">Team ID</Text>

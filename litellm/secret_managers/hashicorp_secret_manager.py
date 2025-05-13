@@ -6,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -39,8 +40,14 @@ class HashicorpSecretManager(BaseSecretManager):
 
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
-        _refresh_interval = os.environ.get("HCP_VAULT_REFRESH_INTERVAL", 86400)
-        _refresh_interval = int(_refresh_interval) if _refresh_interval else 86400
+        _refresh_interval = os.environ.get(
+            "HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL
+        )
+        _refresh_interval = (
+            int(_refresh_interval)
+            if _refresh_interval
+            else SECRET_MANAGER_REFRESH_INTERVAL
+        )
         self.cache = InMemoryCache(
             default_ttl=_refresh_interval
         )  # store in memory for 1 day

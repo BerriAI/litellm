@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Enterprise
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
@@ -6,6 +8,8 @@ Get free 7-day trial key [here](https://www.litellm.ai/#trial)
 :::
 
 Includes all enterprise features.
+
+<Image img={require('../img/enterprise_vs_oss.png')} />
 
 [**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 

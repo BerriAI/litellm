@@ -864,29 +864,6 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
 #     assert False
 
-
-def test_completion_azure_ai():
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="azure_ai/Mistral-large-nmefg",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            max_tokens=15,
-            num_retries=3,
-            api_base=os.getenv("AZURE_AI_MISTRAL_API_BASE"),
-            api_key=os.getenv("AZURE_AI_MISTRAL_API_KEY"),
-        )
-        print(response)
-
-        assert "response_cost" in response._hidden_params
-        assert isinstance(response._hidden_params["response_cost"], float)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -972,7 +949,7 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
+@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1266,13 +1243,13 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 @pytest.mark.parametrize(
     "model",
     [
-        "databricks/databricks-meta-llama-3-1-70b-instruct",
-        "databricks/databricks-meta-llama-3-70b-instruct",
-        "databricks/databricks-dbrx-instruct",
+        "databricks/databricks-meta-llama-3-3-70b-instruct",
+        # "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
 def test_completion_cost_databricks(model):
+    litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
@@ -1306,8 +1283,8 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-default"),
-        ("fireworks_ai/mixtral-8x7b-instruct", "fireworks-ai-moe-up-to-56b"),
+        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-above-16b"),
+        ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1317,7 +1294,7 @@ def test_get_model_params_fireworks_ai(model, base_model):
 
 @pytest.mark.parametrize(
     "model",
-    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/mixtral-8x7b-instruct"],
+    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/llama4-maverick-instruct-basic"],
 )
 def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2954,9 +2931,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
-
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032

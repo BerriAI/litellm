@@ -4,7 +4,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import httpx  # type: ignore
 
@@ -21,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -30,15 +29,16 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
     ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -302,12 +302,17 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            litellm_params=litellm_params,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
+        if config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
 
         data = config.transform_request(
             model=model,
@@ -487,49 +492,29 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-        usage_block = AnthropicChatCompletionUsageBlock(
-            prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
-            completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
-            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
-            + anthropic_usage_chunk.get("output_tokens", 0),
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        return AnthropicConfig().calculate_usage(
+            usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
-
-        cache_creation_input_tokens = anthropic_usage_chunk.get(
-            "cache_creation_input_tokens"
-        )
-        if cache_creation_input_tokens is not None and isinstance(
-            cache_creation_input_tokens, int
-        ):
-            usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
-
-        cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
-        if cache_read_input_tokens is not None and isinstance(
-            cache_read_input_tokens, int
-        ):
-            usage_block["cache_read_input_tokens"] = cache_read_input_tokens
-
-        return usage_block
 
     def _content_block_delta_helper(
         self, chunk: dict
     ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
-        List[ChatCompletionThinkingBlock],
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
         Dict[str, Any],
     ]:
         """
         Helper function to handle the content block delta
         """
-
         text = ""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         provider_specific_fields = {}
         content_block = ContentBlockDelta(**chunk)  # type: ignore
-        thinking_blocks: List[ChatCompletionThinkingBlock] = []
+        thinking_blocks: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
 
         self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
@@ -558,20 +543,25 @@ class ModelResponseIterator:
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
+
         return text, tool_use, thinking_blocks, provider_specific_fields
 
     def _handle_reasoning_content(
-        self, thinking_blocks: List[ChatCompletionThinkingBlock]
+        self,
+        thinking_blocks: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ],
     ) -> Optional[str]:
         """
         Handle the reasoning content
         """
         reasoning_content = None
         for block in thinking_blocks:
+            thinking_content = cast(Optional[str], block.get("thinking"))
             if reasoning_content is None:
                 reasoning_content = ""
-            if "thinking" in block:
-                reasoning_content += block["thinking"]
+            if thinking_content is not None:
+                reasoning_content += thinking_content
         return reasoning_content
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -581,10 +571,16 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
-            thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+            thinking_blocks: Optional[
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+            ] = None
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -622,6 +618,15 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                elif (
+                    content_block_start["content_block"]["type"] == "redacted_thinking"
+                ):
+                    thinking_blocks = [
+                        ChatCompletionRedactedThinkingBlock(
+                            type="redacted_thinking",
+                            data=content_block_start["content_block"]["data"],
+                        )
+                    ]
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block

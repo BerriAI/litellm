@@ -1,10 +1,8 @@
-import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
+
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -13,6 +11,7 @@ sys.path.insert(
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
     OpenRouterException,
+    OpenrouterConfig,
 )
 
 
@@ -79,3 +78,20 @@ class TestOpenRouterChatCompletionStreamingHandler:
 
         assert "KeyError" in str(exc_info.value)
         assert exc_info.value.status_code == 400
+
+
+def test_openrouter_extra_body_transformation():
+
+    transformed_request = OpenrouterConfig().transform_request(
+        model="openrouter/deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        optional_params={"extra_body": {"provider": {"order": ["DeepSeek"]}}},
+        litellm_params={},
+        headers={},
+    )
+
+    # https://github.com/BerriAI/litellm/issues/8425, validate its not contained in extra_body still
+    assert transformed_request["provider"]["order"] == ["DeepSeek"]
+    assert transformed_request["messages"] == [
+        {"role": "user", "content": "Hello, world!"}
+    ]
