@@ -1170,3 +1170,21 @@ def test_just_system_message():
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+def test_anthropic_websearch():
+    litellm._turn_on_debug()
+    litellm.modify_params = True
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [{"role": "system", "content": "You are a helpful assistant."}],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5
+        }]
+    }
+
+    response = litellm.completion(**params)
+
+    assert response is not None
