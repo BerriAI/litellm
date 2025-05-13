@@ -65,10 +65,27 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        default_headers = {
+            "Content-Type": "application/json",
+        }
+        if api_key:
+            default_headers["Authorization"] = f"Bearer {api_key}"
+        headers = {**default_headers, **headers}
         return headers
 
     def _is_v3_model(self, model: str) -> bool:
         return "3" in model
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        return api_base or "https://api.cohere.ai/v2/embed"
 
     def _transform_request(
         self, model: str, input: List[str], inference_params: dict
@@ -175,10 +192,11 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         """
         embeddings = response_json["embeddings"]
         output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
+        for k, embedding_list in embeddings.items():
+            for idx, embedding in enumerate(embedding_list):
+                output_data.append(
+                    {"object": "embedding", "index": idx, "embedding": embedding}
+                )
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model
@@ -213,7 +231,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             model_response=model_response,
             model=model,
             encoding=litellm.encoding,
-            input=request_data["input"],
+            input=logging_obj.model_call_details["input"],
         )
 
     def get_error_class(

@@ -2016,7 +2016,11 @@ class BaseLLMHTTPHandler:
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
-        error_text = getattr(e, "text", str(e))
+        if isinstance(e, httpx.HTTPStatusError):
+            error_text = e.response.text
+            status_code = e.response.status_code
+        else:
+            error_text = getattr(e, "text", str(e))
         error_response = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
@@ -2026,6 +2030,7 @@ class BaseLLMHTTPHandler:
             error_headers = dict(error_headers)
         else:
             error_headers = {}
+
         raise provider_config.get_error_class(
             error_message=error_text,
             status_code=status_code,
