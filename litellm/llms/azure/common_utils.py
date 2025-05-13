@@ -272,6 +272,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         client_initialization_params: dict = locals()
+        client_initialization_params["is_async"] = _is_async
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,
@@ -339,7 +340,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         if (
             not api_key
             and azure_ad_token_provider is None
-            and tenant_id and client_id and client_secret
+            and tenant_id
+            and client_id
+            and client_secret
         ):
             verbose_logger.debug(
                 "Using Azure AD Token Provider from Entra ID for Azure Auth"
@@ -349,7 +352,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_id=client_id,
                 client_secret=client_secret,
             )
-        if azure_ad_token_provider is None and azure_username and azure_password and client_id:
+        if (
+            azure_ad_token_provider is None
+            and azure_username
+            and azure_password
+            and client_id
+        ):
             verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
