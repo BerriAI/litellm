@@ -7,8 +7,8 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     ollama_pt,
+    BedrockConverseMessagesProcessor,
 )
-
 
 def test_ollama_pt_simple_messages():
     """Test basic functionality with simple text messages"""
@@ -42,6 +42,41 @@ def test_ollama_pt_consecutive_user_messages():
     expected_prompt = "### User:\nHello\n\n### Assistant:\nHow can I help you?\n\n### User:\nHow are you?\n\n### Assistant:\nI'm good, thanks!\n\n### User:\nI am well too.\n\n"
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
+
+@pytest.mark.asyncio
+async def test_anthropic_bedrock_thinking_blocks_with_none_content():
+    """
+    Test the specific function that processes thinking_blocks when content is None
+    """
+    mock_assistant_message = {
+        "content": "None",  # content is None
+        "role": "assistant",
+        "thinking_blocks": [
+            {
+                "type": "thinking",
+                "thinking": "This is a test thinking block",
+                "signature": "test-signature"
+            }
+        ],
+        "reasoning_content": "This is the reasoning content"
+    }
+    messages = [
+        {"role": "user", "content": "What is the capital of France?"},
+        mock_assistant_message
+    ]
+
+    # test _bedrock_converse_messages_pt_async
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        llm_provider="bedrock"
+    )
+
+
+    # verify the result
+    assert len(result) == 2
+    assert result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"] == "This is a test thinking block"
+
 
 
 # def test_ollama_pt_consecutive_system_messages():

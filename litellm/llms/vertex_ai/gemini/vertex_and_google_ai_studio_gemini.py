@@ -29,7 +29,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -571,6 +570,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "BLOCKLIST": "The token generation was stopped as the response was flagged for the terms which are included from the terminology blocklist.",
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
+            "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+        }
+
+    def get_finish_reason_mapping(self) -> Dict[str, OpenAIChatCompletionFinishReason]:
+        """
+        Return Dictionary of finish reasons which indicate response was flagged
+
+        and what it means
+        """
+        return {
+            "FINISH_REASON_UNSPECIFIED": "stop",  # openai doesn't have a way of representing this
+            "STOP": "stop",
+            "MAX_TOKENS": "length",
+            "SAFETY": "content_filter",
+            "RECITATION": "content_filter",
+            "LANGUAGE": "content_filter",
+            "OTHER": "content_filter",
+            "BLOCKLIST": "content_filter",
+            "PROHIBITED_CONTENT": "content_filter",
+            "SPII": "content_filter",
+            "MALFORMED_FUNCTION_CALL": "stop",  # openai doesn't have a way of representing this
+            "IMAGE_SAFETY": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -820,17 +841,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _check_finish_reason(
         self,
-        chat_completion_message: ChatCompletionResponseMessage,
+        chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
     ) -> OpenAIChatCompletionFinishReason:
-        if chat_completion_message.get("function_call"):
+        mapped_finish_reason = self.get_finish_reason_mapping()
+        if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
-        elif chat_completion_message.get("tool_calls"):
+        elif chat_completion_message and chat_completion_message.get("tool_calls"):
             return "tool_calls"
-        elif finish_reason and (
-            finish_reason == "SAFETY" or finish_reason == "RECITATION"
+        elif (
+            finish_reason and finish_reason in mapped_finish_reason.keys()
         ):  # vertex ai
-            return "content_filter"
+            return mapped_finish_reason[finish_reason]
         else:
             return "stop"
 
@@ -1586,8 +1608,9 @@ class ModelResponseIterator:
                     )
 
             if gemini_chunk and "finishReason" in gemini_chunk:
-                finish_reason = map_finish_reason(
-                    finish_reason=gemini_chunk["finishReason"]
+                finish_reason = VertexGeminiConfig()._check_finish_reason(
+                    chat_completion_message=None,
+                    finish_reason=gemini_chunk["finishReason"],
                 )
                 ## DO NOT SET 'is_finished' = True
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
