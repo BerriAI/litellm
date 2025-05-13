@@ -7,10 +7,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.litellm_pii import (
-    PiiAction,
-    PiiEntityType,
-)
+from litellm.types.guardrails import PiiAction, PiiEntityType
 
 
 class LitellmPIIGuardrail(CustomGuardrail):

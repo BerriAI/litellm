@@ -4,7 +4,8 @@ import io, asyncio
 import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.litellm_pii import LitellmPIIGuardrail, PiiAction, PiiEntityType
+from litellm.types.guardrails import PiiAction, PiiEntityType
+from litellm.proxy.guardrails.guardrail_hooks.litellm_pii import LitellmPIIGuardrail
 
 
 def test_litellm_pii_phone_number():

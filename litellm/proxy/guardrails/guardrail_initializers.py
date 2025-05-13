@@ -86,6 +86,18 @@ def initialize_presidio(litellm_params, guardrail):
         litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 
 
+def initialize_litellm_pii(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_pii import LitellmPIIGuardrail
+
+    _litellm_pii_callback = LitellmPIIGuardrail(
+        guardrail_name=guardrail["guardrail_name"],
+        event_hook=litellm_params["mode"],
+        default_on=litellm_params["default_on"],
+        entities_config=litellm_params.get("entities_config", None),
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_litellm_pii_callback)
+
+
 def initialize_hide_secrets(litellm_params, guardrail):
     from enterprise.enterprise_hooks.secret_detection import _ENTERPRISE_SecretDetection
 
