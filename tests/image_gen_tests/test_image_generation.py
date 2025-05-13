@@ -240,3 +240,4 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+

@@ -7,15 +7,17 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
-from typing import Optional, Literal
-import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
+from typing import Literal, Optional
+
 import aiohttp
-from litellm.utils import get_formatted_prompt
+from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
+from litellm.utils import get_formatted_prompt
 
 litellm.set_verbose = True
 

@@ -211,6 +211,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
     "meta_llama",
     "nscale",
 ]
@@ -305,6 +306,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
     "meta_llama",
     "nscale",
 ]
