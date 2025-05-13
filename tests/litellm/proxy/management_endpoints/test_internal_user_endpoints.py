@@ -153,3 +153,19 @@ async def test_get_users_includes_timestamps(mocker):
     assert user_response.created_at == mock_user_data["created_at"]
     assert user_response.updated_at == mock_user_data["updated_at"]
     assert user_response.key_count == 0
+
+
+def test_validate_sort_params():
+    """
+    Test that validate_sort_params returns None if sort_by is None
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _validate_sort_params,
+    )
+
+    assert _validate_sort_params(None, "asc") is None
+    assert _validate_sort_params(None, "desc") is None
+    assert _validate_sort_params("user_id", "asc") == {"user_id": "asc"}
+    assert _validate_sort_params("user_id", "desc") == {"user_id": "desc"}
+    with pytest.raises(Exception):
+        _validate_sort_params("user_id", "invalid")

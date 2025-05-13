@@ -50,7 +50,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, Discriminator, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -376,6 +376,10 @@ class CreateBatchRequest(TypedDict, total=False):
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
+
+
+class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
+    model: str
 
 
 class RetrieveBatchRequest(TypedDict, total=False):
@@ -809,10 +813,12 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     ]
 
 
-class ChatCompletionUsageBlock(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+class ChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    prompt_tokens_details: Optional[dict]
+    completion_tokens_details: Optional[dict]
 
 
 class OpenAIChatCompletionChunk(ChatCompletionChunk):
@@ -874,8 +880,9 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
-    class Config:
-        extra = "allow"  # This allows the model to accept additional fields
+    model_config = {
+        "extra": "allow"
+    }  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
@@ -891,6 +898,20 @@ OpenAIAudioTranscriptionOptionalParams = Literal[
 
 
 OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
+
+
+OpenAIImageGenerationOptionalParams = Literal[
+    "background",
+    "moderation",
+    "n",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "style",
+    "user",
+]
 
 
 class ComputerToolParam(TypedDict, total=False):
@@ -1012,6 +1033,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     RESPONSE_COMPLETED = "response.completed"
     RESPONSE_FAILED = "response.failed"
     RESPONSE_INCOMPLETE = "response.incomplete"
+
+    # Part added
+    RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1200,6 +1224,12 @@ class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     param: Optional[str]
 
 
+class GenericEvent(BaseLiteLLMOpenAIResponseObject):
+    type: str
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
 # Union type for all possible streaming responses
 ResponsesAPIStreamingResponse = Annotated[
     Union[
@@ -1226,6 +1256,7 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
         ErrorEvent,
+        GenericEvent,
     ],
     Discriminator("type"),
 ]
@@ -1248,4 +1279,79 @@ class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
 
 OpenAIRealtimeStreamList = List[
     Union[OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents]
+]
+
+
+class ImageGenerationRequestQuality(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    AUTO = "auto"
+    STANDARD = "standard"
+    HD = "hd"
+
+
+class OpenAIModerationResult(BaseLiteLLMOpenAIResponseObject):
+    categories: Optional[Dict]
+    category_applied_input_types: Optional[Dict]
+    category_scores: Optional[Dict]
+    flagged: Optional[bool]
+
+
+class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
+    """
+    Response from the OpenAI Moderation API.
+    """
+
+    id: str
+    """The unique identifier for the moderation request."""
+
+    model: str
+    """The model used to generate the moderation results."""
+
+    results: List[OpenAIModerationResult]
+    """A list of moderation objects."""
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
+
+
+class OpenAIChatCompletionLogprobs(TypedDict, total=False):
+    content: List[OpenAIChatCompletionLogprobsContent]
+    refusal: List[OpenAIChatCompletionLogprobsContent]
+
+
+class OpenAIChatCompletionChoices(TypedDict, total=False):
+    finish_reason: Required[str]
+    index: Required[int]
+    logprobs: Optional[OpenAIChatCompletionLogprobs]
+    message: Required[ChatCompletionResponseMessage]
+
+
+class OpenAIChatCompletionResponse(TypedDict, total=False):
+    id: Required[str]
+    object: Required[str]
+    created: Required[int]
+    model: Required[str]
+    choices: Required[List[OpenAIChatCompletionChoices]]
+    usage: Required[ChatCompletionUsageBlock]
+    system_fingerprint: str
+    service_tier: str
+
+
+OpenAIChatCompletionFinishReason = Literal[
+    "stop", "content_filter", "function_call", "tool_calls", "length"
 ]

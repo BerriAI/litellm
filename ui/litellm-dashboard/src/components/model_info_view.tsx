@@ -15,7 +15,7 @@ import {
 } from "@tremor/react";
 import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
-import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call } from "./networking";
+import { modelDeleteCall, modelUpdateCall, CredentialItem, credentialGetCall, credentialCreateCall, modelInfoCall, modelInfoV1Call, modelPatchUpdateCall } from "./networking";
 import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
@@ -118,6 +118,8 @@ export default function ModelInfoView({
     try {
       if (!accessToken) return;
       setIsSaving(true);
+
+      console.log("values.model_name, ", values.model_name);
       
       let updatedLitellmParams = {
         ...localModelData.litellm_params,
@@ -149,7 +151,7 @@ export default function ModelInfoView({
         }
       };
 
-      await modelUpdateCall(accessToken, updateData);
+      await modelPatchUpdateCall(accessToken, updateData, modelId);
       
       const updatedModelData = {
         ...localModelData,

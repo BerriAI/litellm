@@ -133,7 +133,13 @@ def test_initialize_with_tenant_credentials(setup_mocks):
     assert "azure_ad_token_provider" in result
 
 
-def test_initialize_with_username_password(setup_mocks):
+def test_initialize_with_username_password(monkeypatch, setup_mocks):
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+
     # Test with azure_username, azure_password, and client_id provided
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={
@@ -148,6 +154,14 @@ def test_initialize_with_username_password(setup_mocks):
         is_async=False,
     )
 
+    # Print the call arguments for debugging
+    print("\nDebug - Call arguments for all mocks:")
+    print("username_password_token:", setup_mocks["username_password_token"].call_args)
+    print("entra_token:", setup_mocks["entra_token"].call_args)
+    print("oidc_token:", setup_mocks["oidc_token"].call_args)
+    print("token_provider:", setup_mocks["token_provider"].call_args)
+    print("\nResult:", result)
+
     # Verify that get_azure_ad_token_from_username_password was called
     setup_mocks["username_password_token"].assert_called_once_with(
         azure_username="test-username",
@@ -159,7 +173,9 @@ def test_initialize_with_username_password(setup_mocks):
     assert "azure_ad_token_provider" in result
 
 
-def test_initialize_with_oidc_token(setup_mocks):
+def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
     # Test with azure_ad_token that starts with "oidc/"
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={"azure_ad_token": "oidc/test-token"},
@@ -171,10 +187,113 @@ def test_initialize_with_oidc_token(setup_mocks):
     )
 
     # Verify that get_azure_ad_token_from_oidc was called
-    setup_mocks["oidc_token"].assert_called_once_with("oidc/test-token")
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+    )
 
     # Verify expected result
     assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_oidc_token_and_client_params(setup_mocks):
+    # Test with azure_ad_token that starts with "oidc/" and explicit client/tenant IDs
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token": "oidc/test-token",
+            "client_id": "test-client-id",
+            "tenant_id": "test-tenant-id",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_oidc was called with the correct parameters
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="test-client-id",
+        azure_tenant_id="test-tenant-id",
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
+    # Set environment variables
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id")
+    monkeypatch.setenv("AZURE_TENANT_ID", "env-tenant-id")
+
+    # Test with azure_ad_token that starts with "oidc/" but no explicit client/tenant IDs
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token": "oidc/test-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_oidc was called with environment variables
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="env-client-id",
+        azure_tenant_id="env-tenant-id",
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
+    # Clear environment variables
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Test with azure_ad_token that starts with "oidc/" but no credentials anywhere
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token": "oidc/test-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_oidc was called with None values
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
+    # Clear environment variables
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Test with custom azure_ad_token_provider
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token_provider": lambda: "mock-custom-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token_provider"]() == "mock-custom-token"
 
 
 def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):

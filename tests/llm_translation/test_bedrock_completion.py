@@ -1070,7 +1070,7 @@ async def test_bedrock_custom_prompt_template():
             pass
 
         print(f"mock_client_post.call_args: {mock_client_post.call_args}")
-        assert "prompt" in mock_client_post.call_args.kwargs["data"]
+        assert "prompt" in json.loads(mock_client_post.call_args.kwargs["data"])
 
         prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
         assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
@@ -2972,6 +2972,30 @@ def test_bedrock_application_inference_profile():
     client = HTTPHandler()
     client2 = HTTPHandler()
 
+    tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                }
+            }
+        }
+    ]
+
+
     with patch.object(client, "post") as mock_post, patch.object(
         client2, "post"
     ) as mock_post2:
@@ -2981,6 +3005,7 @@ def test_bedrock_application_inference_profile():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
+                tools=tools
             )
         except Exception as e:
             print(e)
@@ -2990,6 +3015,7 @@ def test_bedrock_application_inference_profile():
                 model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 client=client2,
+                tools=tools
             )
         except Exception as e:
             print(e)
@@ -3002,3 +3028,65 @@ def test_bedrock_application_inference_profile():
             "https://bedrock-runtime.eu-central-1.amazonaws.com/"
         )
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
+
+
+def return_mocked_response(model: str):
+    if model == "bedrock/mistral.mistral-large-2407-v1:0":
+        return {
+            "metrics": {"latencyMs": 316},
+            "output": {
+                "message": {
+                    "content": [{"text": "Hello! How are you doing today? How can"}],
+                    "role": "assistant",
+                }
+            },
+            "stopReason": "max_tokens",
+            "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
+        }
+
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/mistral.mistral-large-2407-v1:0",
+    ],
+)
+@pytest.mark.asyncio()
+async def test_bedrock_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to bedrock models
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    litellm.set_verbose = True
+
+    client = AsyncHTTPHandler()
+
+    mock_response = return_mocked_response(model)
+    _model = model.split("/")[1]
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
+            "additionalModelRequestFields": {},
+            "system": [],
+            "inferenceConfig": {"maxTokens": 10},
+        }

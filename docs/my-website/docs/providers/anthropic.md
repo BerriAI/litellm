@@ -750,7 +750,11 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
-### Computer Tools
+### Anthropic Hosted Tools (Computer, Text Editor, Web Search)
+
+
+<Tabs>
+<TabItem value="computer" label="Computer">
 
 ```python
 from litellm import completion
@@ -780,6 +784,131 @@ resp = completion(
 
 print(resp)
 ```
+
+</TabItem>
+<TabItem value="text_editor" label="Text Editor">
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "text_editor_20250124",
+    "name": "str_replace_editor"
+}]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-5-sonnet-latest
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-latest
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}],
+    "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+<TabItem value="web_search" label="Web Search">
+
+:::info
+
+Unified web search (same param across OpenAI + Anthropic) coming soon!
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 5
+}]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-5-sonnet-latest
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-latest
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}],
+    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
 
 ## Usage - Vision 
 
@@ -1095,7 +1224,7 @@ response = completion(
 print(response.choices[0])
 ```
 </TabItem>
-<TabItem value="proxy" lable="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 1. Add model to config 
 

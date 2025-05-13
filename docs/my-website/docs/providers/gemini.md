@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | Google AI Studio is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `gemini/` |
-| Provider Doc | [Google AI Studio ↗](https://ai.google.dev/aistudio) |
+| Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
 | Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
 | Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
@@ -655,7 +655,7 @@ import os
 
 os.environ["GEMINI_API_KEY"] = ".."
 
-tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+tools = [{"googleSearch": {}}] # 👈 ADD GOOGLE SEARCH
 
 response = completion(
     model="gemini/gemini-2.0-flash",
@@ -691,7 +691,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -d '{
   "model": "gemini-2.0-flash",
   "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
-  "tools": [{"googleSearchRetrieval": {}}]
+  "tools": [{"googleSearch": {}}]
 }
 '
 ```

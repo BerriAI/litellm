@@ -16,7 +16,9 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
 )
 
@@ -100,3 +102,76 @@ def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
     assert sanitized == {
         "b": {"a": {}}
     }  # Should return empty dict for circular reference
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_vector_store_request_for_spend_logs_payload_store_prompts_true(
+    mock_should_store,
+):
+    # When _should_store_prompts_and_responses_in_spend_logs returns True
+    mock_should_store.return_value = True
+
+    # Sample vector store request metadata
+    vector_store_request = [
+        {
+            "vector_store_search_response": {
+                "data": [
+                    {"content": [{"text": "sensitive information", "type": "text"}]}
+                ]
+            }
+        }
+    ]
+
+    # When store_prompts is True, the original data should be returned unchanged
+    result = _get_vector_store_request_for_spend_logs_payload(vector_store_request)
+    assert result == vector_store_request
+    assert (
+        result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"]
+        == "sensitive information"
+    )
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_vector_store_request_for_spend_logs_payload_store_prompts_false(
+    mock_should_store,
+):
+    # When _should_store_prompts_and_responses_in_spend_logs returns False
+    mock_should_store.return_value = False
+
+    # Sample vector store request metadata
+    vector_store_request = [
+        {
+            "vector_store_search_response": {
+                "data": [
+                    {"content": [{"text": "sensitive information", "type": "text"}]}
+                ]
+            }
+        }
+    ]
+
+    # When store_prompts is False, text should be redacted
+    result = _get_vector_store_request_for_spend_logs_payload(vector_store_request)
+    assert result is not None
+    assert (
+        result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"]
+        == REDACTED_BY_LITELM_STRING
+    )
+    # Ensure other fields are unchanged
+    assert (
+        result[0]["vector_store_search_response"]["data"][0]["content"][0]["type"]
+        == "text"
+    )
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_store):
+    # When input is None
+    mock_should_store.return_value = False
+    result = _get_vector_store_request_for_spend_logs_payload(None)
+    assert result is None

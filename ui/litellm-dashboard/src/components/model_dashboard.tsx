@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Card,
   Title,
@@ -95,6 +95,7 @@ import {
   FilterIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  TableIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -112,6 +113,7 @@ import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import { all_admin_roles } from "@/utils/roles";
+import { Table as TableInstance } from '@tanstack/react-table';
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -246,6 +248,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [editModel, setEditModel] = useState<boolean>(false);
 
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+
+  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
+
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<TableInstance<any>>(null);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -268,7 +279,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       "endTime:",
       endTime
     );
-    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
+    setSelectedModelGroup(modelGroup);
 
     let selected_token = selectedAPIKey?.token;
     if (selected_token === undefined) {
@@ -288,7 +299,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     endTime.setHours(23);
     endTime.setMinutes(59);
     endTime.setSeconds(59);
-
 
     try {
       const modelMetricsResponse = await modelMetricsCall(
@@ -394,7 +404,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       dateValue.from,
       dateValue.to
     );
-  }, [selectedAPIKey, selectedCustomer]);
+  }, [selectedAPIKey, selectedCustomer, selectedTeam]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -424,8 +445,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
-            const jsonStr = e.target.result as string;
+            const jsonStr = e.target.result as string; 
+            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
+            console.log("Form values right after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
@@ -434,6 +457,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return false;
     },
     onChange(info) {
+      console.log("Upload onChange triggered with values:", info);
+      console.log("Current form values:", form.getFieldsValue());
+      
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
@@ -642,7 +668,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed]);
+  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -812,125 +838,95 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </SelectItem>
                         );
                       }
-                      return null; // Add this line to handle the case when the condition is not met
+                      return null;
                     })}
                   </Select>
           
+              <Text className="mt-1">
+                Select Customer Name
+              </Text>
+              
+              <Select defaultValue="all-customers">
+                <SelectItem
+                  key="all-customers"
+                  value="all-customers"
+                  onClick={() => {
+                    setSelectedCustomer(null);
+                  }}
+                >
+                  All Customers
+                </SelectItem>
+                {
+                  allEndUsers?.map((user: any, index: number) => {
+                    return (
+                      <SelectItem
+                        key={index}
+                        value={user}
+                        onClick={() => {
+                          setSelectedCustomer(user);
+                        }}
+                      >
+                        {user}
+                      </SelectItem>
+                    );
+                  })
+                }
+              </Select>
 
-          <Text className="mt-1">
-            Select Customer Name
-          </Text>
-          
-          <Select defaultValue="all-customers">
-          <SelectItem
-            key="all-customers"
-            value="all-customers"
-            onClick={() => {
-              setSelectedCustomer(null);
-            }}
-          >
-            All Customers
-            </SelectItem>
-            {
-              allEndUsers?.map((user: any, index: number) => {
-                return (
+              <Text className="mt-1">
+                Select Team
+              </Text>
+              
+              <Select
+                className="w-64 relative z-50"
+                defaultValue="all"
+                value={selectedTeamFilter ?? "all"}
+                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+              >
+                <SelectItem value="all">All Teams</SelectItem>
+                {teams?.filter(team => team.team_id).map((team) => (
                   <SelectItem
-                    key={index}
-                    value={user}
-                    onClick={() => {
-                      setSelectedCustomer(user);
-                    }}
+                    key={team.team_id}
+                    value={team.team_id}
                   >
-                    {user}
+                    {team.team_alias 
+                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                      : `Team ${team.team_id.slice(0, 8)}...`
+                    }
                   </SelectItem>
-                );
-              })
-            }
-          </Select>
-            
+                ))}
+              </Select>
             </div>
           ): (
             <div>
-
-<Select defaultValue="all-keys">
+              {/* ... existing non-premium user content ... */}
+              <Text className="mt-1">
+                Select Team
+              </Text>
+              
+              <Select
+                className="w-64 relative z-50"
+                defaultValue="all"
+                value={selectedTeamFilter ?? "all"}
+                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+              >
+                <SelectItem value="all">All Teams</SelectItem>
+                {teams?.filter(team => team.team_id).map((team) => (
                   <SelectItem
-                    key="all-keys"
-                    value="all-keys"
-                    onClick={() => {
-                      setSelectedAPIKey(null);
-                    }}
+                    key={team.team_id}
+                    value={team.team_id}
                   >
-                    All Keys
+                    {team.team_alias 
+                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                      : `Team ${team.team_id.slice(0, 8)}...`
+                    }
                   </SelectItem>
-                    {keys?.map((key: any, index: number) => {
-                      if (
-                        key &&
-                        key["key_alias"] !== null &&
-                        key["key_alias"].length > 0
-                      ) {
-                        return (
-                          
-                          <SelectItem
-                            key={index}
-                            value={String(index)}
-                            // @ts-ignore
-                            disabled={true}
-                            onClick={() => {
-                              setSelectedAPIKey(key);
-                            }}
-                          >
-                            ✨ {key["key_alias"]} (Enterprise only Feature)
-                          </SelectItem>
-                        );
-                      }
-                      return null; // Add this line to handle the case when the condition is not met
-                    })}
-                  </Select>
-          
-
-          <Text className="mt-1">
-            Select Customer Name
-          </Text>
-          
-          <Select defaultValue="all-customers">
-          <SelectItem
-            key="all-customers"
-            value="all-customers"
-            onClick={() => {
-              setSelectedCustomer(null);
-            }}
-          >
-            All Customers
-            </SelectItem>
-            {
-              allEndUsers?.map((user: any, index: number) => {
-                return (
-                  <SelectItem
-                    key={index}
-                    value={user}
-                    // @ts-ignore
-                    disabled={true}
-                    onClick={() => {
-                      setSelectedCustomer(user);
-                    }}
-                  >
-                    ✨ {user} (Enterprise only Feature)
-                  </SelectItem>
-                );
-              })
-            }
-          </Select>
-            
+                ))}
+              </Select>
             </div>
           )
         }
-        
-
-        
-            
-
-        </div>
-
+      </div>
   );
 
   const customTooltip = (props: any) => {
@@ -1088,63 +1084,146 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <TabPanels>
             <TabPanel>
               <Grid>
-              <div className="flex justify-between items-center mb-6">
-                {/* Left side - Title and description */}
-                <div>
-                  <Title>Model Management</Title>
-                  {!all_admin_roles.includes(userRole) ? (
-                    <Text className="text-tremor-content">
-                      Add models for teams you are an admin for.
-                    </Text>
-                  ) : (
-                    <Text className="text-tremor-content">
-                      Add and manage models for the proxy
-                    </Text>
-                  )}
-                </div>
+                <div className="flex flex-col space-y-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <div>
+                      <Title>Model Management</Title>
+                      {!all_admin_roles.includes(userRole) ? (
+                        <Text className="text-tremor-content">
+                          Add models for teams you are an admin for.
+                        </Text>
+                      ) : (
+                        <Text className="text-tremor-content">
+                          Add and manage models for the proxy
+                        </Text>
+                      )}
+                    </div>
+                  </div>
 
-                {/* Right side - Filter */}
-                <div className="flex items-center gap-2">
-                  <Text>Filter by Public Model Name:</Text>
-                  <Select
-                    className="w-64"
-                    defaultValue={selectedModelGroup ?? "all"}
-                    onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
-                    value={selectedModelGroup ?? "all"}
-                  >
-                    <SelectItem value="all">All Models</SelectItem>
-                    {availableModelGroups.map((group, idx) => (
-                      <SelectItem
-                        key={idx}
-                        value={group}
-                        onClick={() => setSelectedModelGroup(group)}
-                      >
-                        {group}
-                      </SelectItem>
-                    ))}
-                  </Select>
+                  <div className="bg-white rounded-lg shadow">
+                    <div className="border-b px-6 py-4">
+                      <div className="flex flex-col space-y-4">
+                        {/* Search and Filter Controls */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {/* Model Name Filter */}
+                            <div className="flex items-center gap-2">
+                              <Text>Filter by Public Model Name:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue={selectedModelGroup ?? "all"}
+                                onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                                value={selectedModelGroup ?? "all"}
+                              >
+                                <SelectItem value="all">All Models</SelectItem>
+                                {availableModelGroups.map((group, idx) => (
+                                  <SelectItem
+                                    key={idx}
+                                    value={group}
+                                  >
+                                    {group}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                            </div>
+
+                            {/* Team Filter */}
+                            <div className="flex items-center gap-2">
+                              <Text>Filter by Team:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue="all"
+                                value={selectedTeamFilter ?? "all"}
+                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+                              >
+                                <SelectItem value="all">All Teams</SelectItem>
+                                {teams?.filter(team => team.team_id).map((team) => (
+                                  <SelectItem
+                                    key={team.team_id}
+                                    value={team.team_id}
+                                  >
+                                    {team.team_alias 
+                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                                      : `Team ${team.team_id.slice(0, 8)}...`
+                                    }
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                            </div>
+                          </div>
+                          
+                          {/* Column Selector will be rendered here */}
+                          {/* <div className="relative" ref={dropdownRef}>
+                            <button
+                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                            >
+                              <TableIcon className="h-4 w-4" />
+                              Columns
+                            </button>
+                            {isDropdownOpen && tableRef.current && (
+                              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                                <div className="py-1">
+                                  {tableRef.current.getAllLeafColumns().map((column: any) => {
+                                    if (column.id === 'actions') return null;
+                                    return (
+                                      <div
+                                        key={column.id}
+                                        className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+                                        onClick={() => column.toggleVisibility()}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={column.getIsVisible()}
+                                          onChange={() => column.toggleVisibility()}
+                                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span className="ml-2">
+                                          {typeof column.columnDef.header === 'string' 
+                                            ? column.columnDef.header 
+                                            : column.columnDef.header?.props?.children || column.id}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div> */}
+                        </div>
+
+                        {/* Results Count */}
+                        <div className="flex justify-between items-center">
+                          <Text className="text-sm text-gray-700">
+                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                          </Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <ModelDataTable
+                      columns={columns(
+                        userRole,
+                        userID,
+                        premiumUser,
+                        setSelectedModelId,
+                        setSelectedTeamId,
+                        getDisplayModelName,
+                        handleEditClick,
+                        handleRefreshClick,
+                        setEditModel,
+                      )}
+                      data={modelData.data.filter(
+                        (model: any) => (
+                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
+                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
+                        )
+                      )}
+                      isLoading={false}
+                      table={tableRef}
+                    />
+                  </div>
                 </div>
-              </div>
-              <ModelDataTable
-                columns={columns(
-                  userRole,
-                  userID,
-                  premiumUser,
-                  setSelectedModelId,
-                  setSelectedTeamId,
-                  getDisplayModelName,
-                  handleEditClick,
-                  handleRefreshClick,
-                  setEditModel,
-                )}
-                data={modelData.data.filter(
-                  (model: any) =>
-                    selectedModelGroup === "all" ||
-                    model.model_name === selectedModelGroup ||
-                    !selectedModelGroup
-                )}
-                isLoading={false} // Add loading state if needed
-              />
               </Grid>
             </TabPanel>
             <TabPanel className="h-full">

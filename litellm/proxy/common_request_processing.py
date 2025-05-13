@@ -108,7 +108,16 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
         proxy_config: ProxyConfig,
-        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        route_type: Literal[
+            "acompletion",
+            "aresponses",
+            "_arealtime",
+            "aget_responses",
+            "adelete_responses",
+            "acreate_batch",
+            "aretrieve_batch",
+            "afile_content",
+        ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
         user_temperature: Optional[float] = None,
@@ -157,7 +166,7 @@ class ProxyBaseLLMRequestProcessing:
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=self.data, call_type="completion"
+            user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -178,7 +187,13 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal["acompletion", "aresponses", "_arealtime"],
+        route_type: Literal[
+            "acompletion",
+            "aresponses",
+            "_arealtime",
+            "aget_responses",
+            "adelete_responses",
+        ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,

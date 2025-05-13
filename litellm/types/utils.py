@@ -2,7 +2,17 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -40,6 +50,11 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse
+
+if TYPE_CHECKING:
+    from .vector_stores import VectorStoreSearchResponse
+else:
+    VectorStoreSearchResponse = Any
 
 
 def _generate_id():  # private helper function
@@ -1705,6 +1720,42 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     """
 
 
+class StandardLoggingVectorStoreRequest(TypedDict, total=False):
+    """
+    Logging information for a vector store request/payload
+    """
+
+    vector_store_id: Optional[str]
+    """
+    ID of the vector store
+    """
+
+    custom_llm_provider: Optional[str]
+    """
+    Custom LLM provider the vector store is associated with eg. bedrock, openai, anthropic, etc.
+    """
+
+    query: Optional[str]
+    """
+    Query to the vector store
+    """
+
+    vector_store_search_response: Optional[VectorStoreSearchResponse]
+    """
+    OpenAI format vector store search response
+    """
+
+    start_time: Optional[float]
+    """
+    Start time of the vector store request
+    """
+
+    end_time: Optional[float]
+    """
+    End time of the vector store request
+    """
+
+
 class StandardBuiltInToolsParams(TypedDict, total=False):
     """
     Standard built-in OpenAItools parameters
@@ -1736,6 +1787,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
 
@@ -1988,6 +2040,8 @@ all_litellm_params = [
     "merge_reasoning_content_in_choices",
     "litellm_credential_name",
     "allowed_openai_params",
+    "litellm_session_id",
+    "use_litellm_proxy",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2092,16 +2146,20 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
+    LLAMA = "meta_llama"
+    NSCALE = "nscale"
 
 
 # Create a set of all provider values for quick lookup
@@ -2252,11 +2310,29 @@ class ExtractedFileData(TypedDict):
 
 class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
-    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{};target_model_names,{};llm_output_file_id,{};llm_output_file_model_id,{}"
 
-    LITELLM_MANAGED_RESPONSE_COMPLETE_STR = "litellm:model_id:{};response_id:{}"
+    LITELLM_MANAGED_RESPONSE_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
+    )
+
+    LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
 
 LLMResponseTypes = Union[
-    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject, LiteLLMBatch
 ]
+
+
+class DynamicPromptManagementParamLiteral(str, Enum):
+    """
+    If any of these params are passed, the user is trying to use dynamic prompt management
+    """
+
+    CACHE_CONTROL_INJECTION_POINTS = "cache_control_injection_points"
+    KNOWLEDGE_BASES = "knowledge_bases"
+    VECTOR_STORE_IDS = "vector_store_ids"
+
+    @classmethod
+    def list_all_params(cls):
+        return [param.value for param in cls]

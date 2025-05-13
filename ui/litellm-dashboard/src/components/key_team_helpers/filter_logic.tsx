@@ -1,45 +1,87 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { Organization } from "../networking";
+import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
 import { Setter } from "@/types";
-
+import { debounce } from "lodash";
+import { defaultPageSize } from "../constants";
 
 export interface FilterState {
   'Team ID': string;
   'Organization ID': string;
   'Key Alias': string;
   [key: string]: string;
+  'User ID': string;
+  'Sort By': string;
+  'Sort Order': string;
 }
+
+
 
 export function useFilterLogic({
   keys,
   teams,
   organizations,
   accessToken,
-  setSelectedTeam,
-  setCurrentOrg,
-  setSelectedKeyAlias
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
   organizations: Organization[] | null;
   accessToken: string | null;
-  setSelectedTeam: (team: Team | null) => void;
-  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
-  setSelectedKeyAlias: Setter<string | null>
 }) {
-  const [filters, setFilters] = useState<FilterState>({
+  const defaultFilters: FilterState = {
     'Team ID': '',
     'Organization ID': '',
-    'Key Alias': ''
-  });
+    'Key Alias': '',
+    'User ID': '',
+    'Sort By': 'created_at',
+    'Sort Order': 'desc'
+  }
+  const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
-
+  const lastSearchTimestamp = useRef(0);
+  const debouncedSearch = useCallback(
+    debounce(async (filters: FilterState) => {
+      if (!accessToken) {
+        return;
+      }
+  
+      const currentTimestamp = Date.now();
+      lastSearchTimestamp.current = currentTimestamp;
+  
+      try {
+        // Make the API call using userListCall with all filter parameters
+        const data = await keyListCall(
+          accessToken,
+          filters["Organization ID"] || null,
+          filters["Team ID"] || null,
+          filters["Key Alias"] || null,
+          filters["User ID"] || null,
+          filters["Key Hash"] || null,
+          1, // Reset to first page when searching
+          defaultPageSize,
+          filters["Sort By"] || null,
+          filters["Sort Order"] || null
+        );
+        
+        // Only update state if this is the most recent search
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          if (data) {
+            setFilteredKeys(data.keys);
+            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+            console.log("called from debouncedSearch data:", JSON.stringify(data));
+          }
+        }
+      } catch (error) {
+        console.error("Error searching users:", error);
+      }
+    }, 300),
+    [accessToken]
+  );
   // Apply filters to keys whenever keys or filters change
   useEffect(() => {
     if (!keys) {
@@ -120,43 +162,26 @@ export function useFilterLogic({
     setFilters({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
-      'Key Alias': newFilters['Key Alias'] || ''
+      'Key Alias': newFilters['Key Alias'] || '',
+      'User ID': newFilters['User ID'] || '',
+      'Sort By': newFilters['Sort By'] || 'created_at',
+      'Sort Order': newFilters['Sort Order'] || 'desc'
     });
-  
-    // Handle Team change
-    if (newFilters['Team ID']) {
-      const selectedTeamData = allTeams?.find(team => team.team_id === newFilters['Team ID']);
-      if (selectedTeamData) {
-        setSelectedTeam(selectedTeamData);
-      }
-    }
-  
-    // Handle Org change
-    if (newFilters['Organization ID']) {
-      const selectedOrg = allOrganizations?.find(org => org.organization_id === newFilters['Organization ID']);
-      if (selectedOrg) {
-        setCurrentOrg(selectedOrg);
-      }
-    }
 
-    const keyAlias = newFilters['Key Alias'];
-    const selectedKeyAlias = keyAlias
-      ? allKeyAliases.find((k) => k === keyAlias) || null
-      : null;
-    setSelectedKeyAlias(selectedKeyAlias)
+    // Fetch keys based on new filters
+    const updatedFilters = {
+      ...filters,
+      ...newFilters
+    }
+    debouncedSearch(updatedFilters);
   };
 
   const handleFilterReset = () => {
     // Reset filters state
-    setFilters({
-      'Team ID': '',
-      'Organization ID': '',
-      'Key Alias': ''
-    });
+    setFilters(defaultFilters);
     
-    // Reset team and org selections
-    setSelectedTeam(null);
-    setCurrentOrg(null);
+    // Reset selections
+    debouncedSearch(defaultFilters);
   };
 
   return {

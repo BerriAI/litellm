@@ -14,7 +14,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
@@ -22,16 +22,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -43,48 +42,11 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    UserListResponse,
+)
 
 router = APIRouter()
-
-
-async def create_internal_user_audit_log(
-    user_id: str,
-    action: AUDIT_ACTIONS,
-    litellm_changed_by: Optional[str],
-    user_api_key_dict: UserAPIKeyAuth,
-    litellm_proxy_admin_name: Optional[str],
-    before_value: Optional[str] = None,
-    after_value: Optional[str] = None,
-):
-    """
-    Create an audit log for an internal user.
-
-    Parameters:
-    - user_id: str - The id of the user to create the audit log for.
-    - action: AUDIT_ACTIONS - The action to create the audit log for.
-    - user_row: LiteLLM_UserTable - The user row to create the audit log for.
-    - litellm_changed_by: Optional[str] - The user id of the user who is changing the user.
-    - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
-    - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
-    """
-    if not litellm.store_audit_logs:
-        return
-
-    await create_audit_log_for_update(
-        request_data=LiteLLM_AuditLogs(
-            id=str(uuid.uuid4()),
-            updated_at=datetime.now(timezone.utc),
-            changed_by=litellm_changed_by
-            or user_api_key_dict.user_id
-            or litellm_proxy_admin_name,
-            changed_by_api_key=user_api_key_dict.api_key,
-            table_name=LitellmTableNames.USER_TABLE_NAME,
-            object_id=user_id,
-            action=action,
-            updated_values=after_value,
-            before_value=before_value,
-        )
-    )
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -92,9 +54,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     is_internal_user = False
     if data.user_role and data.user_role.is_internal_user_role:
@@ -199,6 +161,7 @@ async def new_user(
     - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
+    - sso_user_id: Optional[str] - The id of the user in the SSO provider.
 
     Returns:
     - key: (str) The generated api key for the user
@@ -219,12 +182,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            litellm_proxy_admin_name,
-            prisma_client,
-            proxy_logging_obj,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         # Check for duplicate email
         await _check_duplicate_user_email(data.user_email, prisma_client)
@@ -280,62 +238,7 @@ async def new_user(
                 else:
                     raise e
 
-        if data.send_invite_email is True:
-            # check if user has setup email alerting
-            if "email" not in general_settings.get("alerting", []):
-                raise ValueError(
-                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
-                )
-
-            event = WebhookEvent(
-                event="internal_user_created",
-                event_group="internal_user",
-                event_message="Welcome to LiteLLM Proxy",
-                token=response.get("token", ""),
-                spend=response.get("spend", 0.0),
-                max_budget=response.get("max_budget", 0.0),
-                user_id=response.get("user_id", None),
-                user_email=response.get("user_email", None),
-                team_id=response.get("team_id", "Default Team"),
-                key_alias=response.get("key_alias", None),
-            )
-
-            # If user configured email alerting - send an Email letting their end-user know the key was created
-            asyncio.create_task(
-                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                    webhook_event=event,
-                )
-            )
-
-        try:
-            if prisma_client is None:
-                raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
-            )
-
-            user_row_litellm_typed = LiteLLM_UserTable(
-                **user_row.model_dump(exclude_none=True)
-            )
-            asyncio.create_task(
-                create_internal_user_audit_log(
-                    user_id=user_row_litellm_typed.user_id,
-                    action="created",
-                    litellm_changed_by=user_api_key_dict.user_id,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    before_value=None,
-                    after_value=user_row_litellm_typed.model_dump_json(
-                        exclude_none=True
-                    ),
-                )
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
-            )
-
-        return NewUserResponse(
+        new_user_response = NewUserResponse(
             key=response.get("token", ""),
             expires=response.get("expires", None),
             max_budget=response["max_budget"],
@@ -352,6 +255,22 @@ async def new_user(
             budget_duration=response.get("budget_duration", None),
             model_max_budget=response.get("model_max_budget", None),
         )
+
+        #########################################################
+        ########## USER CREATED HOOK ################
+        #########################################################
+        asyncio.create_task(
+            UserManagementEventHooks.async_user_created_hook(
+                data=data,
+                response=new_user_response,
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+        #########################################################
+        ########## END USER CREATED HOOK ################
+        #########################################################
+
+        return new_user_response
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/new: Exception occured - {}".format(str(e))
@@ -647,9 +566,11 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         is_internal_user = True
 
     if "budget_duration" in non_default_values:
-        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
-        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = user_reset_at
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        non_default_values["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=non_default_values["budget_duration"]
+        )
 
     if "max_budget" not in non_default_values:
         if (
@@ -661,14 +582,14 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
-            duration_s = duration_in_seconds(
-                duration=non_default_values["budget_duration"]
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
             )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            non_default_values["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=non_default_values["budget_duration"]
+            )
 
     return non_default_values
 
@@ -814,7 +735,7 @@ async def user_update(
                     **user_row.model_dump(exclude_none=True)
                 )
                 asyncio.create_task(
-                    create_internal_user_audit_log(
+                    UserManagementEventHooks.create_internal_user_audit_log(
                         user_id=user_row_litellm_typed.user_id,
                         action="updated",
                         litellm_changed_by=user_api_key_dict.user_id,
@@ -899,15 +820,47 @@ async def get_user_key_counts(
     return result
 
 
-@router.get(
-    "/user/get_users",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
+def _validate_sort_params(
+    sort_by: Optional[str], sort_order: str
+) -> Optional[Dict[str, str]]:
+    order_by: Dict[str, str] = {}
+
+    if sort_by is None:
+        return None
+    # Validate sort_by is a valid column
+    valid_columns = [
+        "user_id",
+        "user_email",
+        "created_at",
+        "spend",
+        "user_alias",
+        "user_role",
+    ]
+    if sort_by not in valid_columns:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort column. Must be one of: {', '.join(valid_columns)}"
+            },
+        )
+
+    # Validate sort_order
+    if sort_order.lower() not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid sort order. Must be 'asc' or 'desc'"},
+        )
+
+    order_by[sort_by] = sort_order.lower()
+
+    return order_by
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserListResponse,
 )
 async def get_users(
     role: Optional[str] = fastapi.Query(
@@ -916,15 +869,29 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(
         default=None, description="Get list of users by user_ids"
     ),
+    sso_user_ids: Optional[str] = fastapi.Query(
+        default=None, description="Get list of users by sso_user_id"
+    ),
+    user_email: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by partial email match"
+    ),
+    team: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by team id"
+    ),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
+    sort_by: Optional[str] = fastapi.Query(
+        default=None,
+        description="Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')",
+    ),
+    sort_order: str = fastapi.Query(
+        default="asc", description="Sort order ('asc' or 'desc')"
+    ),
 ):
     """
-    Get a paginated list of users, optionally filtered by role.
-
-    Used by the UI to populate the user lists.
+    Get a paginated list of users with filtering and sorting options.
 
     Parameters:
         role: Optional[str]
@@ -935,17 +902,20 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
+        sso_ids: Optional[str]
+            Get list of users by sso_ids. Comma separated list of sso_ids.
+        user_email: Optional[str]
+            Filter users by partial email match
+        team: Optional[str]
+            Filter users by team id. Will match if user has this team in their teams array.
         page: int
             The page number to return
         page_size: int
             The number of items per page
-
-    Currently - admin-only endpoint.
-
-    Example curl:
-    ```
-    http://0.0.0.0:4000/user/list?user_ids=default_user_id,693c1a4a-1cc0-4c7c-afe8-b5d2c8d52e17
-    ```
+        sort_by: Optional[str]
+            Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')
+        sort_order: Optional[str]
+            Sort order ('asc' or 'desc')
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -958,35 +928,57 @@ async def get_users(
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
-    # Prepare the query conditions
     # Build where conditions based on provided parameters
     where_conditions: Dict[str, Any] = {}
 
     if role:
-        where_conditions["user_role"] = {
-            "contains": role,
-            "mode": "insensitive",  # Case-insensitive search
-        }
+        where_conditions["user_role"] = role  # Exact match instead of contains
 
     if user_ids and isinstance(user_ids, str):
         user_id_list = [uid.strip() for uid in user_ids.split(",") if uid.strip()]
         where_conditions["user_id"] = {
-            "in": user_id_list,  # Now passing a list of strings as required by Prisma
+            "in": user_id_list,
         }
 
-    users: Optional[
-        List[LiteLLM_UserTable]
-    ] = await prisma_client.db.litellm_usertable.find_many(
+    if user_email is not None and isinstance(user_email, str):
+        where_conditions["user_email"] = {
+            "contains": user_email,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if team is not None and isinstance(team, str):
+        where_conditions["teams"] = {
+            "has": team  # Array contains for string arrays in Prisma
+        }
+
+    if sso_user_ids is not None and isinstance(sso_user_ids, str):
+        sso_id_list = [sid.strip() for sid in sso_user_ids.split(",") if sid.strip()]
+        where_conditions["sso_user_id"] = {
+            "in": sso_id_list,
+        }
+
+    ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
+    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+
+    # Build order_by conditions
+
+    order_by: Optional[Dict[str, str]] = (
+        _validate_sort_params(sort_by, sort_order)
+        if sort_by is not None and isinstance(sort_by, str)
+        else None
+    )
+
+    users = await prisma_client.db.litellm_usertable.find_many(
         where=where_conditions,
         skip=skip,
         take=page_size,
-        order={"created_at": "desc"},
+        order=(
+            order_by if order_by else {"created_at": "desc"}
+        ),  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
-    total_count = await prisma_client.db.litellm_usertable.count(
-        where=where_conditions  # type: ignore
-    )
+    total_count = await prisma_client.db.litellm_usertable.count(where=where_conditions)
 
     # Get key count for each user
     if users is not None:
@@ -1009,7 +1001,7 @@ async def get_users(
                 LiteLLM_UserTableWithKeyCount(
                     **user.model_dump(), key_count=user_key_counts.get(user.user_id, 0)
                 )
-            )  # Return full key object
+            )
     else:
         user_list = []
 
@@ -1235,13 +1227,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:

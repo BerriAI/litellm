@@ -12,7 +12,9 @@ export async function makeOpenAIChatCompletionRequest(
     signal?: AbortSignal,
     onReasoningContent?: (content: string) => void,
     onTimingData?: (timeToFirstToken: number) => void,
-    onUsageData?: (usage: TokenUsage) => void
+    onUsageData?: (usage: TokenUsage) => void,
+    traceId?: string,
+    vector_store_ids?: string[]
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -23,11 +25,18 @@ export async function makeOpenAIChatCompletionRequest(
     const proxyBaseUrl = isLocal
       ? "http://localhost:4000"
       : window.location.origin;
+      
+    // Prepare headers with tags and trace ID
+    const headers: Record<string, string> = {};
+    if (tags && tags.length > 0) {
+      headers['x-litellm-tags'] = tags.join(',');
+    }
+    
     const client = new openai.OpenAI({
       apiKey: accessToken,
       baseURL: proxyBaseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
+      defaultHeaders: headers,
     });
   
     try {
@@ -38,14 +47,17 @@ export async function makeOpenAIChatCompletionRequest(
       // For collecting complete response text
       let fullResponseContent = "";
       let fullReasoningContent = "";
-
+      
+      // @ts-ignore
       const response = await client.chat.completions.create({
         model: selectedModel,
         stream: true,
         stream_options: {
           include_usage: true,
         },
+        litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
+        ...(vector_store_ids ? { vector_store_ids } : {}),
       }, { signal });
   
       for await (const chunk of response) {

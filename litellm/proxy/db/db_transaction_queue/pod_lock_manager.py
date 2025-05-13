@@ -56,7 +56,7 @@ class PodLockManager:
                 ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
             )
             if acquired:
-                verbose_proxy_logger.debug(
+                verbose_proxy_logger.info(
                     "Pod %s successfully acquired Redis lock for cronjob_id=%s",
                     self.pod_id,
                     cronjob_id,
@@ -70,7 +70,7 @@ class PodLockManager:
                     if isinstance(current_value, bytes):
                         current_value = current_value.decode("utf-8")
                     if current_value == self.pod_id:
-                        verbose_proxy_logger.debug(
+                        verbose_proxy_logger.info(
                             "Pod %s already holds the Redis lock for cronjob_id=%s",
                             self.pod_id,
                             cronjob_id,
@@ -111,7 +111,7 @@ class PodLockManager:
                 if current_value == self.pod_id:
                     result = await self.redis_cache.async_delete_cache(lock_key)
                     if result == 1:
-                        verbose_proxy_logger.debug(
+                        verbose_proxy_logger.info(
                             "Pod %s successfully released Redis lock for cronjob_id=%s",
                             self.pod_id,
                             cronjob_id,

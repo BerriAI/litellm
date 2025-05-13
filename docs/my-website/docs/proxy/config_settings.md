@@ -299,6 +299,9 @@ router_settings:
 |------|-------------|
 | ACTIONS_ID_TOKEN_REQUEST_TOKEN | Token for requesting ID in GitHub Actions
 | ACTIONS_ID_TOKEN_REQUEST_URL | URL for requesting ID token in GitHub Actions
+| AGENTOPS_ENVIRONMENT | Environment for AgentOps logging integration
+| AGENTOPS_API_KEY | API Key for AgentOps logging integration
+| AGENTOPS_SERVICE_NAME | Service Name for AgentOps logging integration
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
@@ -367,6 +370,7 @@ router_settings:
 | DOCS_TITLE | Title of the documentation pages
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_SUPPORT_CONTACT | Support contact email address
+| EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
@@ -439,6 +443,7 @@ router_settings:
 | LITELLM_EMAIL | Email associated with LiteLLM account
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
+| LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
@@ -458,6 +463,7 @@ router_settings:
 | NO_DOCS | Flag to disable documentation generation
 | NO_PROXY | List of addresses to bypass proxy
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
+| OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API
 | OPENAI_API_KEY | API key for OpenAI services
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI

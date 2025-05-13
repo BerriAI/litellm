@@ -6,12 +6,14 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -30,6 +32,35 @@ DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
+
+
+def handle_any_messages_to_chat_completion_str_messages_conversion(
+    messages: Any,
+) -> List[Dict[str, str]]:
+    """
+    Handles any messages to chat completion str messages conversion
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
+    """
+    import json
+
+    if isinstance(messages, list):
+        try:
+            return cast(
+                List[Dict[str, str]],
+                handle_messages_with_content_list_to_str_conversion(messages),
+            )
+        except Exception:
+            return [{"input": json.dumps(message, default=str)} for message in messages]
+    elif isinstance(messages, dict):
+        try:
+            return [{"input": json.dumps(messages, default=str)}]
+        except Exception:
+            return [{"input": str(messages)}]
+    elif isinstance(messages, str):
+        return [{"input": messages}]
+    else:
+        return [{"input": str(messages)}]
 
 
 def handle_messages_with_content_list_to_str_conversion(
@@ -68,7 +99,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -313,14 +346,14 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
-    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        convert_b64_uid_to_unified_uid,
+    )
 
     if not file_id:
         return None
     try:
-        transformed_file_id = (
-            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
-        )
+        transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
         if transformed_file_id.startswith(
             SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
         ):
@@ -527,3 +560,16 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
             return mime_type
 
     return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names: List[str] = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_name = tool.get("function", {}).get("name")
+            if tool_call_name:
+                tool_call_names.append(tool_call_name)
+    return tool_call_names
