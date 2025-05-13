@@ -11,6 +11,8 @@ sys.path.insert(
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from litellm.proxy.management_endpoints.key_management_endpoints import _list_key_helper
 from litellm.proxy.proxy_server import app
 
@@ -98,3 +100,65 @@ async def test_key_token_handling(monkeypatch):
         assert (
             response.token == response.token_id
         ), "Token should equal token_id if token_id exists"
+
+
+@pytest.mark.asyncio
+async def test_budget_reset_at_first_of_month(monkeypatch):
+    """
+    Test that when budget_duration is "1mo", budget_reset_at is set to first of next month
+    """
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+
+    from datetime import datetime, timezone
+
+    import pytest
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Use monkeypatch to set the prisma_client
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test key generation with budget_duration="1mo"
+    response = await generate_key_helper_fn(
+        request_type="user",
+        budget_duration="1mo",
+        user_id="test_user",
+    )
+
+    print(f"response: {response}\n")
+    # Get the current date
+    now = datetime.now(timezone.utc)
+
+    # Calculate expected reset date (first of next month)
+    if now.month == 12:
+        expected_month = 1
+        expected_year = now.year + 1
+    else:
+        expected_month = now.month + 1
+        expected_year = now.year
+
+    expected_reset_at = datetime(expected_year, expected_month, 1, tzinfo=timezone.utc)
+
+    # Verify budget_reset_at is set to first of next month
+    assert (
+        response["budget_reset_at"] == expected_reset_at.isoformat()
+    ), f"Expected budget_reset_at to be {expected_reset_at.isoformat()}, got {response['budget_reset_at']}"
