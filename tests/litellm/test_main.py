@@ -136,7 +136,7 @@ def test_completion_missing_role(openai_api_response):
         "gemini/gemini-1.5-flash",
         "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "anthropic/claude-3-5-sonnet"
+        "anthropic/claude-3-5-sonnet",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
