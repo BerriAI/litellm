@@ -264,6 +264,7 @@ model LiteLLM_SpendLogs {
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
+  @@index([session_id])
 }
 
 // View spend, model, api_key per request
@@ -361,14 +362,14 @@ model LiteLLM_DailyUserSpend {
   model               String   
   model_group         String?  
   custom_llm_provider String?  
-  prompt_tokens       Int      @default(0)
-  completion_tokens   Int      @default(0)
-  cache_read_input_tokens     Int      @default(0)
-  cache_creation_input_tokens Int      @default(0)
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
   spend               Float    @default(0.0)
-  api_requests        Int      @default(0)
-  successful_requests Int      @default(0)
-  failed_requests     Int      @default(0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -388,14 +389,14 @@ model LiteLLM_DailyTeamSpend {
   model               String   
   model_group         String?  
   custom_llm_provider String?  
-  prompt_tokens       Int      @default(0)
-  completion_tokens   Int      @default(0)
-  cache_read_input_tokens     Int      @default(0)
-  cache_creation_input_tokens Int      @default(0)
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
   spend               Float    @default(0.0)
-  api_requests        Int      @default(0)
-  successful_requests Int      @default(0)
-  failed_requests     Int      @default(0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -415,14 +416,14 @@ model LiteLLM_DailyTagSpend {
   model               String   
   model_group         String?  
   custom_llm_provider String?  
-  prompt_tokens       Int      @default(0)
-  completion_tokens   Int      @default(0)
-  cache_read_input_tokens     Int      @default(0)
-  cache_creation_input_tokens Int      @default(0)
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
   spend               Float    @default(0.0)
-  api_requests        Int      @default(0)
-  successful_requests Int      @default(0)
-  failed_requests     Int      @default(0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 

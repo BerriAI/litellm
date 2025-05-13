@@ -51,7 +51,7 @@ async def acreate_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
 

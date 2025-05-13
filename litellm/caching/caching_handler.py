@@ -515,9 +515,11 @@ class LLMCachingHandler:
             )
         )
         cached_result: Optional[Any] = None
-        if call_type == CallTypes.aembedding.value and isinstance(
-            new_kwargs["input"], list
-        ):
+        if call_type == CallTypes.aembedding.value:
+            if isinstance(new_kwargs["input"], str):
+                new_kwargs["input"] = [new_kwargs["input"]]
+            elif not isinstance(new_kwargs["input"], list):
+                raise ValueError("input must be a string or a list")
             tasks = []
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(
@@ -700,6 +702,7 @@ class LLMCachingHandler:
         Raises:
             None
         """
+
         if litellm.cache is None:
             return
 
