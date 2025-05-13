@@ -115,6 +115,47 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
+     def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        messages = self._transform_messages(messages=messages, model=model)
+        model_id = optional_params.get("model_id", None)
+        request_data = {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+        if model_id:
+            del request_data["model"]
+        return request_data
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        transformed_messages = await self._transform_messages(
+            messages=messages, model=model, is_async=True
+        )
+        model_id = optional_params.get("model_id", None)
+
+        request_data = {
+            "model": model,
+            "messages": transformed_messages,
+            **o
+        }
+        if model_id:
+            del request_data["model"]
+        return request_data
+
     @property
     def has_custom_stream_wrapper(self) -> bool:
         return True

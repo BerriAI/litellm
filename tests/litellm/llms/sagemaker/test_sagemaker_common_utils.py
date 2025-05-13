@@ -136,17 +136,18 @@ class TestSagemakerChatTransform:
     def setup_method(self):
         self.config = SagemakerChatConfig()
         self.model = "test"
+        self.messages = []
+        self.optional_params = {"model_id": "test"}
         self.logging_obj = MagicMock()
 
     def test_inference_component_header(self):
         """Test that inference component headers are present"""
-        test_params = {"model_id": "test"}
 
         result = self.config.validate_environment(
             headers={},
             model=self.model,
             messages=[],
-            optional_params=test_params,
+            optional_params=self.optional_params,
             litellm_params={},
         )
         assert result == {"X-Amzn-SageMaker-Inference-Component": "test"}
