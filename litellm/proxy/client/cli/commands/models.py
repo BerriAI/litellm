@@ -81,26 +81,8 @@ def models() -> None:
 def list_models(ctx: click.Context, output_format: Literal["table", "json"], sort_by: Optional[str], sort_order: str) -> None:
     """List all available models"""
     client = create_client(ctx)
-    models_list = client.models.list()
+    models_list = client.models.list(sort_by=sort_by, sort_order=sort_order)
     assert isinstance(models_list, list)
-
-    # Sorting logic
-    if sort_by:
-        reverse = sort_order == "desc"
-        if sort_by == "model_name":
-            models_list = sorted(models_list, key=lambda m: str(m.get("id", "")).lower(), reverse=reverse)
-        elif sort_by == "created":
-            def parse_created(m):
-                val = m.get("created")
-                if isinstance(val, int):
-                    return val
-                if isinstance(val, str):
-                    try:
-                        return int(val)
-                    except Exception:
-                        return 0
-                return 0
-            models_list = sorted(models_list, key=parse_created, reverse=reverse)
 
     if output_format == "json":
         rich.print_json(data=models_list)

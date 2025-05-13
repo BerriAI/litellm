@@ -1,7 +1,7 @@
 # stdlib imports
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # third party imports
 from click.testing import CliRunner
@@ -203,9 +203,24 @@ def make_models():
     ]
 
 
-def test_models_list_sort_by_model_name_asc(cli_runner, mock_models_list):
-    mock_models_list.return_value.models.list.return_value = make_models()
-    result = cli_runner.invoke(cli, ["models", "list", "--sort-by", "model_name", "--sort-order", "asc"])
+def _mock_send_with_models(models):
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"data": models}
+    return lambda *args, **kwargs: mock_response
+
+
+@pytest.fixture
+def mock_models_http_response():
+    with patch("requests.Session.send", new=_mock_send_with_models(make_models())):
+        yield
+
+
+def test_models_list_sort_by_model_name_asc(cli_runner, mock_models_http_response):
+    result = cli_runner.invoke(cli, [
+        "models", "list",
+        "--sort-by=model_name", "--sort-order=asc",
+    ])
     assert result.exit_code == 0
     # Should be a-model, b-model, c-model in order
     idx_a = result.output.find("a-model")
@@ -214,8 +229,7 @@ def test_models_list_sort_by_model_name_asc(cli_runner, mock_models_list):
     assert 0 <= idx_a < idx_b < idx_c
 
 
-def test_models_list_sort_by_model_name_desc(cli_runner, mock_models_list):
-    mock_models_list.return_value.models.list.return_value = make_models()
+def test_models_list_sort_by_model_name_desc(cli_runner, mock_models_http_response):
     result = cli_runner.invoke(cli, ["models", "list", "--sort-by", "model_name", "--sort-order", "desc"])
     assert result.exit_code == 0
     # Should be c-model, b-model, a-model in order
@@ -225,8 +239,7 @@ def test_models_list_sort_by_model_name_desc(cli_runner, mock_models_list):
     assert 0 <= idx_c < idx_b < idx_a
 
 
-def test_models_list_sort_by_created_asc(cli_runner, mock_models_list):
-    mock_models_list.return_value.models.list.return_value = make_models()
+def test_models_list_sort_by_created_asc(cli_runner, mock_models_http_response):
     result = cli_runner.invoke(cli, ["models", "list", "--sort-by", "created", "--sort-order", "asc"])
     assert result.exit_code == 0
     # Should be a-model (100), b-model (200), c-model (300)
@@ -236,8 +249,7 @@ def test_models_list_sort_by_created_asc(cli_runner, mock_models_list):
     assert 0 <= idx_a < idx_b < idx_c
 
 
-def test_models_list_sort_by_created_desc(cli_runner, mock_models_list):
-    mock_models_list.return_value.models.list.return_value = make_models()
+def test_models_list_sort_by_created_desc(cli_runner, mock_models_http_response):
     result = cli_runner.invoke(cli, ["models", "list", "--sort-by", "created", "--sort-order", "desc"])
     assert result.exit_code == 0
     # Should be c-model (300), b-model (200), a-model (100)
