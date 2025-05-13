@@ -150,7 +150,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         request_data = {
             "model": model,
             "messages": transformed_messages,
-            **o
+             **optional_params,
         }
         if model_id:
             del request_data["model"]
