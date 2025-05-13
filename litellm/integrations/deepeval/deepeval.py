@@ -135,12 +135,12 @@ class DeepEvalLogger(CustomLogger):
             output = str(standard_logging_object.get("error_string", ""))
         return BaseApiSpan(
             uuid=standard_logging_object.get("id", uuid.uuid4()),
-            name="litellm_success_callback"
-            if is_success
-            else "litellm_failure_callback",
-            status=TraceSpanApiStatus.SUCCESS
-            if is_success
-            else TraceSpanApiStatus.ERRORED,
+            name=(
+                "litellm_success_callback" if is_success else "litellm_failure_callback"
+            ),
+            status=(
+                TraceSpanApiStatus.SUCCESS if is_success else TraceSpanApiStatus.ERRORED
+            ),
             type=SpanApiType.LLM,
             traceUuid=standard_logging_object.get("trace_id", uuid.uuid4()),
             startTime=str(start_time),
@@ -149,9 +149,9 @@ class DeepEvalLogger(CustomLogger):
             output=output,
             model=standard_logging_object.get("model", None),
             inputTokenCount=usage.get("prompt_tokens", None) if is_success else None,
-            outputTokenCount=usage.get("completion_tokens", None)
-            if is_success
-            else None,
+            outputTokenCount=(
+                usage.get("completion_tokens", None) if is_success else None
+            ),
         )
 
     def _create_trace_api(
