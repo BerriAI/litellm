@@ -34,6 +34,7 @@ from typing import (
     Type,
     Union,
     cast,
+    get_args,
 )
 
 import dotenv
@@ -73,7 +74,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
@@ -1220,6 +1221,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
             tenant_id=kwargs.get("tenant_id"),
@@ -2663,19 +2665,21 @@ def completion(  # type: ignore # noqa: PLR0915
             response = _model_response
         elif custom_llm_provider == "sagemaker_chat":
             # boto3 reads keys from .env
-            model_response = sagemaker_chat_completion.completion(
+            model_response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                custom_llm_provider="sagemaker_chat",
                 timeout=timeout,
-                custom_prompt_dict=custom_prompt_dict,
-                logger_fn=logger_fn,
+                headers=headers,
                 encoding=encoding,
-                logging_obj=logging,
-                acompletion=acompletion,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
 
@@ -3324,7 +3328,6 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-
         if (
             response is not None
             and isinstance(response, EmbeddingResponse)
@@ -4658,9 +4661,11 @@ def image_generation(  # noqa: PLR0915
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
         headers: dict = kwargs.get("headers", None) or {}
+        base_model = kwargs.get("base_model", None)
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        dynamic_api_key: Optional[str] = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,  # type: ignore
@@ -4694,8 +4699,20 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
+        image_generation_config: Optional[BaseImageGenerationConfig] = None
+        if (
+            custom_llm_provider is not None
+            and custom_llm_provider in LlmProviders._member_map_.values()
+        ):
+            image_generation_config = (
+                ProviderConfigManager.get_provider_image_generation_config(
+                    model=base_model or model,
+                    provider=LlmProviders(custom_llm_provider),
+                )
+            )
+
         optional_params = get_optional_params_image_gen(
-            model=model,
+            model=base_model or model,
             n=n,
             quality=quality,
             response_format=response_format,
@@ -4703,6 +4720,7 @@ def image_generation(  # noqa: PLR0915
             style=style,
             user=user,
             custom_llm_provider=custom_llm_provider,
+            provider_config=image_generation_config,
             **non_default_params,
         )
 
@@ -4788,7 +4806,7 @@ def image_generation(  # noqa: PLR0915
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
-                api_key=api_key,
+                api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
@@ -5372,6 +5390,7 @@ def speech(  # noqa: PLR0915
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     response_format: Optional[str] = None,
     speed: Optional[int] = None,
+    instructions: Optional[str] = None,
     client=None,
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5393,7 +5412,8 @@ def speech(  # noqa: PLR0915
         optional_params["response_format"] = response_format
     if speed is not None:
         optional_params["speed"] = speed  # type: ignore
-
+    if instructions is not None:
+        optional_params["instructions"] = instructions
     if timeout is None:
         timeout = litellm.request_timeout
 

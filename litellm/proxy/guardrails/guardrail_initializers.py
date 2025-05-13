@@ -27,6 +27,8 @@ def initialize_bedrock(litellm_params, guardrail):
         guardrailIdentifier=litellm_params["guardrailIdentifier"],
         guardrailVersion=litellm_params["guardrailVersion"],
         default_on=litellm_params["default_on"],
+        mask_request_content=litellm_params.get("mask_request_content", None),
+        mask_response_content=litellm_params.get("mask_response_content", None),
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
 
@@ -85,7 +87,9 @@ def initialize_presidio(litellm_params, guardrail):
 
 
 def initialize_hide_secrets(litellm_params, guardrail):
-    from enterprise.enterprise_hooks.secret_detection import _ENTERPRISE_SecretDetection
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _ENTERPRISE_SecretDetection,
+    )
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.get("detect_secrets_config"),

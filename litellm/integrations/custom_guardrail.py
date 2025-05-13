@@ -15,6 +15,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = None,
         default_on: bool = False,
+        mask_request_content: bool = False,
+        mask_response_content: bool = False,
         **kwargs,
     ):
         """
@@ -25,6 +27,8 @@ class CustomGuardrail(CustomLogger):
             supported_event_hooks: The event hooks that the guardrail supports
             event_hook: The event hook to run the guardrail on
             default_on: If True, the guardrail will be run by default on all requests
+            mask_request_content: If True, the guardrail will mask the request content
+            mask_response_content: If True, the guardrail will mask the response content
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -32,6 +36,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = event_hook
         self.default_on: bool = default_on
+        self.mask_request_content: bool = mask_request_content
+        self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

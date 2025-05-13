@@ -161,7 +161,9 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
     "meta_llama",
+    "nscale",
 ]
 
 
@@ -223,6 +225,7 @@ openai_compatible_endpoints: List = [
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
+    "inference.api.nscale.com/v1",
 ]
 
 
@@ -253,7 +256,9 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
     "meta_llama",
+    "nscale",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

@@ -1,28 +1,38 @@
 ============================= test session starts ==============================
-platform darwin -- Python 3.11.4, pytest-7.4.1, pluggy-1.2.0 -- /Library/Frameworks/Python.framework/Versions/3.11/bin/python3
+platform darwin -- Python 3.13.1, pytest-8.3.5, pluggy-1.5.0 -- /Users/krrishdholakia/Documents/litellm/myenv/bin/python3.13
 cachedir: .pytest_cache
-rootdir: /Users/krrishdholakia/Documents/litellm/tests/litellm
-plugins: snapshot-0.9.0, cov-5.0.0, timeout-2.2.0, respx-0.21.1, asyncio-0.21.1, langsmith-0.3.4, anyio-4.8.0, mock-3.11.1, Faker-25.9.2
-asyncio: mode=Mode.STRICT
-collecting ... collected 4 items
+rootdir: /Users/krrishdholakia/Documents/litellm
+configfile: pyproject.toml
+plugins: respx-0.22.0, postgresql-7.0.1, anyio-4.4.0, asyncio-0.26.0, mock-3.14.0, ddtrace-2.19.0rc1, xdist-3.6.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 8 items
 
-test_main.py::test_url_with_format_param[True-gemini/gemini-1.5-flash] PASSED [ 25%]
-test_main.py::test_url_with_format_param[True-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 50%]
-test_main.py::test_url_with_format_param[False-gemini/gemini-1.5-flash] PASSED [ 75%]
-test_main.py::test_url_with_format_param[False-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [100%]
+test_main.py::test_url_with_format_param[False-anthropic/claude-3-5-sonnet] PASSED [ 12%]
+test_main.py::test_url_with_format_param[False-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 25%]
+test_main.py::test_url_with_format_param[False-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 37%]
+test_main.py::test_url_with_format_param[False-gemini/gemini-1.5-flash] PASSED [ 50%]
+test_main.py::test_url_with_format_param[True-anthropic/claude-3-5-sonnet] PASSED [ 62%]
+test_main.py::test_url_with_format_param[True-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 75%]
+test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 87%]
+test_main.py::test_url_with_format_param[True-gemini/gemini-1.5-flash] PASSED [100%]
 
 =============================== warnings summary ===============================
-../../../../../../Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pydantic/_internal/_config.py:295
-  /Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/pydantic/_internal/_config.py:295: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.10/migration/
-    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+tests/litellm/test_main.py::test_url_with_format_param[False-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0]
+tests/litellm/test_main.py::test_url_with_format_param[False-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
+tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0]
+tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/botocore/auth.py:425: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    datetime_now = datetime.datetime.utcnow()
 
-../../litellm/litellm_core_utils/get_model_cost_map.py:24
-  /Users/krrishdholakia/Documents/litellm/litellm/litellm_core_utils/get_model_cost_map.py:24: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
-    with importlib.resources.open_text(
+tests/litellm/test_main.py::test_url_with_format_param[True-anthropic/claude-3-5-sonnet]
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/pydantic/main.py:421: UserWarning: Pydantic serializer warnings:
+    Expected `str` but got `MagicMock` with value `<MagicMock name='mock().j...em__()' id='5209845984'>` - serialized value may not be as expected
+    return self.__pydantic_serializer__.to_python(
 
-../../litellm/utils.py:168
-  /Users/krrishdholakia/Documents/litellm/litellm/utils.py:168: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
-    with resources.open_text(
+tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/pydantic/main.py:421: UserWarning: Pydantic serializer warnings:
+    Expected `str` but got `MagicMock` with value `<MagicMock name='mock().j...em__()' id='5210168288'>` - serialized value may not be as expected
+    return self.__pydantic_serializer__.to_python(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 4 passed, 3 warnings in 2.80s =========================
+======================== 8 passed, 6 warnings in 2.33s =========================

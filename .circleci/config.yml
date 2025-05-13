@@ -16,6 +16,14 @@ commands:
             echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
             echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
             echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
+  setup_litellm_enterprise_pip:
+    steps:
+      - run:
+          name: "Install local version of litellm-enterprise"
+          command: |
+            cd enterprise
+            python -m pip install -e .
+            cd ..
 
 jobs:
   # Add Windows testing job
@@ -111,6 +119,7 @@ jobs:
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==13.1.0"
             pip uninstall posthog -y
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -228,6 +237,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -334,6 +344,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -445,6 +456,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -589,6 +601,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-postgresql==7.0.1"
             pip install "fakeredis==2.28.1"
+      - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ./venv
@@ -646,6 +659,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -861,7 +875,7 @@ jobs:
             pip install "mcp==1.5.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
-
+      - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1088,6 +1102,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -1135,6 +1150,7 @@ jobs:
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
             pip install jsonschema
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
