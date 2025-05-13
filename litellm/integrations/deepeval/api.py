@@ -1,6 +1,5 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import aiohttp
 import httpx
 from enum import Enum
 from litellm._logging import verbose_logger
