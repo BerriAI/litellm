@@ -1118,7 +1118,9 @@ class BaseLLMHTTPHandler:
 
         headers, signed_json_body = anthropic_messages_provider_config.sign_request(
             headers=headers,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=dict(
+                litellm_params
+            ),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
             api_base=request_url,
             stream=stream,

@@ -6,7 +6,6 @@ from typing import Any, List, Optional, Union
 import aiohttp
 import httpx
 from pydantic import BaseModel
-import inspect
 
 import litellm
 from litellm import verbose_logger
@@ -142,13 +141,6 @@ class OllamaChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        value = non_default_params["response_format"]
-        if inspect.isclass(value) and issubclass(value, BaseModel):
-            non_default_params["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"schema": value.model_json_schema()}
-            }
-
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
@@ -164,9 +156,17 @@ class OllamaChatConfig(OpenAIGPTConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_object":
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value.get("type") == "json_object"
+            ):
                 optional_params["format"] = "json"
-            if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_schema":
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value.get("type") == "json_schema"
+            ):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
@@ -207,8 +207,8 @@ class OllamaChatConfig(OpenAIGPTConfig):
                     litellm.add_function_to_prompt = (
                         True  # so that main.py adds the function call to the prompt
                     )
-                    optional_params["functions_unsupported_model"] = non_default_params.get(
-                        "functions"
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.get("functions")
                     )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
