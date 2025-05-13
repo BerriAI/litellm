@@ -171,7 +171,6 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
 @click.option("--max-budget", type=float, help="Max budget for key")
 @click.option("--model-max-budget", type=str, help="JSON string of model-specific budgets")
 @click.option("--budget-duration", type=str, help="Budget reset period (e.g. '30d', '1h')")
-@click.option("--soft-budget", type=float, help="Soft budget limit")
 @click.option("--max-parallel-requests", type=int, help="Rate limit for parallel requests")
 @click.option("--metadata", type=str, help="JSON string of metadata for key")
 @click.option("--tpm-limit", type=int, help="Tokens per minute limit")
@@ -181,7 +180,6 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
 @click.option("--allowed-cache-controls", type=str, help="Comma-separated list of allowed cache controls")
 @click.option("--duration", type=str, help="Key validity duration (e.g. '30d', '1h')")
 @click.option("--permissions", type=str, help="JSON string of key-specific permissions")
-@click.option("--send-invite-email", is_flag=True, help="Send invite email to user_id")
 @click.option("--guardrails", type=str, help="Comma-separated list of guardrails")
 @click.option("--blocked", is_flag=True, help="Whether the key is blocked")
 @click.option("--aliases", type=str, help="JSON string of model aliases for the key")
@@ -204,7 +202,6 @@ def update(
     max_budget: Optional[float],
     model_max_budget: Optional[str],
     budget_duration: Optional[str],
-    soft_budget: Optional[float],
     max_parallel_requests: Optional[int],
     metadata: Optional[str],
     tpm_limit: Optional[int],
@@ -214,7 +211,6 @@ def update(
     allowed_cache_controls: Optional[str],
     duration: Optional[str],
     permissions: Optional[str],
-    send_invite_email: bool,
     guardrails: Optional[str],
     blocked: bool,
     aliases: Optional[str],
