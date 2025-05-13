@@ -807,3 +807,14 @@ class LiteLLMUnknownProvider(BadRequestError):
 
     def __str__(self):
         return self.message
+
+
+class BlockedPiiEntityError(Exception):
+    def __init__(
+        self,
+        entity_type: str,
+        guardrail_name: Optional[str] = None,
+    ):
+        self.entity_type = entity_type
+        self.message = f"Blocked entity detected: {entity_type} by {guardrail_name}. This entity is not allowed to be used in this request."
+        super().__init__(self.message)

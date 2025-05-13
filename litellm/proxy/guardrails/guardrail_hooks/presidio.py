@@ -20,6 +20,7 @@ import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -28,6 +29,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
+    PresidioAnalyzeResponseItem,
 )
 from litellm.utils import (
     EmbeddingResponse,
@@ -182,7 +184,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         presidio_config: Optional[PresidioPerRequestConfig],
         request_data: dict,
-    ) -> Any:
+    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
         """
         Send text to the Presidio analyzer endpoint and get analysis results
         """
@@ -210,7 +212,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 async with session.post(analyze_url, json=analyze_payload) as response:
                     analyze_results = await response.json()
-                    return analyze_results
+                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+                    final_results = []
+                    for item in analyze_results:
+                        final_results.append(PresidioAnalyzeResponseItem(**item))
+                    return final_results
         except Exception as e:
             raise e
 
@@ -259,6 +265,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
+    def raise_exception_if_blocked_entities_detected(
+        self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
+    ):
+        """
+        Raise an exception if blocked entities are detected
+        """
+        if self.pii_entities_config is None:
+            return
+
+        if isinstance(analyze_results, Dict):
+            # if mock testing is enabled, analyze_results is a dict
+            # we don't need to raise an exception in this case
+            return
+
+        for result in analyze_results:
+            entity_type = result.get("entity_type")
+            if (
+                entity_type is not None
+                and entity_type in self.pii_entities_config
+                and self.pii_entities_config[entity_type] == PiiAction.BLOCK
+            ):
+                raise BlockedPiiEntityError(
+                    entity_type=entity_type,
+                    guardrail_name=self.guardrail_name,
+                )
+
     async def check_pii(
         self,
         text: str,
@@ -267,7 +299,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         request_data: dict,
     ) -> str:
         """
-        [TODO] make this more performant for high-throughput scenario
+        Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
         try:
             if self.mock_redacted_text is not None:
@@ -278,6 +310,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     text=text,
                     presidio_config=presidio_config,
                     request_data=request_data,
+                )
+                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+
+                ####################################################
+                # Blocked Entities check
+                ####################################################
+                self.raise_exception_if_blocked_entities_detected(
+                    analyze_results=analyze_results
                 )
 
                 # Then anonymize the text using the analysis results
