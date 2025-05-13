@@ -91,9 +91,11 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=signed_json_body
-                    if signed_json_body is not None
-                    else json.dumps(data),
+                    data=(
+                        signed_json_body
+                        if signed_json_body is not None
+                        else json.dumps(data)
+                    ),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -149,9 +151,11 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=signed_json_body
-                    if signed_json_body is not None
-                    else json.dumps(data),
+                    data=(
+                        signed_json_body
+                        if signed_json_body is not None
+                        else json.dumps(data)
+                    ),
                     timeout=timeout,
                     stream=stream,
                     logging_obj=logging_obj,
@@ -1111,7 +1115,9 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=dict(
+                litellm_params
+            ),  # this uses the invoke config, which expects aws_* params in optional_params
             litellm_params=dict(litellm_params),
             stream=stream,
         )

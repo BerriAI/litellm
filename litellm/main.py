@@ -1221,6 +1221,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
             tenant_id=kwargs.get("tenant_id"),
@@ -2725,9 +2726,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3327,7 +3328,6 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-
         if (
             response is not None
             and isinstance(response, EmbeddingResponse)
@@ -4451,9 +4451,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5921,9 +5921,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5934,9 +5934,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk

@@ -282,3 +282,27 @@ def test_all_model_configs():
         optional_params={},
         drop_params=False,
     ) == {"max_output_tokens": 10}
+
+
+def test_anthropic_web_search_in_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    supported_models = [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-3-5-sonnet-20241022",
+        "anthropic/claude-3-5-haiku-20241022",
+        "anthropic/claude-3-5-haiku-latest",
+    ]
+    for model in supported_models:
+        from litellm.utils import get_model_info
+
+        model_info = get_model_info(model)
+        assert model_info is not None
+        assert (
+            model_info["supports_web_search"] is True
+        ), f"Model {model} should support web search"
+        assert (
+            model_info["search_context_cost_per_query"] is not None
+        ), f"Model {model} should have a search context cost per query"
