@@ -815,6 +815,10 @@ class BlockedPiiEntityError(Exception):
         entity_type: str,
         guardrail_name: Optional[str] = None,
     ):
+        """
+        Raised when a blocked entity is detected by a guardrail.
+        """
         self.entity_type = entity_type
-        self.message = f"Blocked entity detected: {entity_type} by {guardrail_name}. This entity is not allowed to be used in this request."
+        self.guardrail_name = guardrail_name
+        self.message = f"Blocked entity detected: {entity_type} by Guardrail: {guardrail_name}. This entity is not allowed to be used in this request."
         super().__init__(self.message)
