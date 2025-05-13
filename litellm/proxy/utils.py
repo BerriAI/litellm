@@ -1217,12 +1217,6 @@ class PrismaClient:
             # Default to success if metadata parsing fails
             return "success"
 
-    def hash_token(self, token: str):
-        # Hash the string using SHA-256
-        hashed_token = hashlib.sha256(token.encode()).hexdigest()
-
-        return hashed_token
-
     def jsonify_object(self, data: dict) -> dict:
         db_data = copy.deepcopy(data)
 
@@ -1512,7 +1506,7 @@ class PrismaClient:
                             for t in token:
                                 assert isinstance(t, str)
                                 if t.startswith("sk-"):
-                                    new_token = self.hash_token(token=t)
+                                    new_token = hash_token(token=t)
                                     hashed_tokens.append(new_token)
                                 else:
                                     hashed_tokens.append(t)
@@ -1784,7 +1778,7 @@ class PrismaClient:
                 token = data["token"]
                 # Only hash if it's a secret key, not a pre-hashed value
                 if isinstance(token, str) and token.startswith("sk-"):
-                    hashed_token = self.hash_token(token=token)
+                    hashed_token = hash_token(token=token)
                 else:
                     hashed_token = token
                 db_data = self.jsonify_object(data=data)
@@ -2043,7 +2037,7 @@ class PrismaClient:
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):  # type: ignore
-                        t.token = self.hash_token(token=t.token)  # type: ignore
+                        t.token = hash_token(token=t.token)  # type: ignore
                     try:
                         data_json = self.jsonify_object(
                             data=t.model_dump(exclude_none=True)
@@ -2165,7 +2159,7 @@ class PrismaClient:
                 hashed_tokens = []
                 for token in tokens:
                     if isinstance(token, str) and token.startswith("sk-"):
-                        hashed_token = self.hash_token(token=token)
+                        hashed_token = hash_token(token=token)
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
