@@ -1649,34 +1649,46 @@ class ModelResponseIterator:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
-
+            # Successfully parsed a self-contained JSON chunk.
+            if not self.sent_first_chunk:
+                self.sent_first_chunk = True
+            # Ensure any prior accumulation is cleared (though it shouldn't exist if in 'valid_json' mode)
+            self.accumulated_json = "" 
+            return self.chunk_parser(chunk=json_chunk)
         except json.JSONDecodeError as e:
-            if (
-                self.sent_first_chunk is False
-            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
-                self.chunk_type = "accumulated_json"
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-            raise e
-
-        if self.sent_first_chunk is False:
-            self.sent_first_chunk = True
-
-        return self.chunk_parser(chunk=json_chunk)
+            # Failed to parse, assume it's part of a multi-line JSON object.
+            # Switch to accumulation mode for the current event.
+            self.chunk_type = "accumulated_json"
+            # Start accumulation with the current chunk.
+            self.accumulated_json = chunk # Initialize with the failed chunk
+            # Return empty, expecting more parts for this event.
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
 
     def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
-        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-        message = chunk.replace("\n\n", "")
+        # This method is called when self.chunk_type is "accumulated_json".
+        # 'chunk' is the new piece of data for the currently accumulating event.
+        # Note: _strip_sse_data_from_chunk is already called in _common_chunk_parsing_logic
+        
+        self.accumulated_json += chunk # Append the new piece to what's already accumulated
 
-        # Accumulate JSON data
-        self.accumulated_json += message
-
-        # Try to parse the accumulated JSON
         try:
             _data = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # reset after successful parsing
+            # Successfully parsed the complete JSON for the current event.
+            self.accumulated_json = ""  # Reset accumulation buffer for the next event.
+            self.chunk_type = "valid_json"  # Reset mode for the next event.
+            if not self.sent_first_chunk:
+                self.sent_first_chunk = True
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next event
+            # The accumulated data is still not a complete JSON object.
+            # Continue accumulating, return an empty chunk for now.
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
