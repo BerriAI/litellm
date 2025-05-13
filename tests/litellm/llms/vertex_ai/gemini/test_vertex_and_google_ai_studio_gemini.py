@@ -315,3 +315,30 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+
+def test_streaming_chunk_includes_reasoning_tokens():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+    # Simulate a streaming chunk as would be received from Gemini
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "Hello"}]
+                }
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 12,
+            "thoughtsTokenCount": 3,
+        }
+    }
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    streaming_chunk = iterator.chunk_parser(chunk)
+    assert streaming_chunk["usage"] is not None
+    assert streaming_chunk["usage"]["prompt_tokens"] == 5
+    assert streaming_chunk["usage"]["completion_tokens"] == 7
+    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert streaming_chunk["usage"]["reasoning_tokens"] == 3
