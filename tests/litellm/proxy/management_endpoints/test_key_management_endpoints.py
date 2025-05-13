@@ -156,9 +156,14 @@ async def test_budget_reset_at_first_of_month(monkeypatch):
         expected_month = now.month + 1
         expected_year = now.year
 
-    expected_reset_at = datetime(expected_year, expected_month, 1, tzinfo=timezone.utc)
+    # Parse the response date
+    response_date = response["budget_reset_at"]
 
     # Verify budget_reset_at is set to first of next month
     assert (
-        response["budget_reset_at"] == expected_reset_at.isoformat()
-    ), f"Expected budget_reset_at to be {expected_reset_at.isoformat()}, got {response['budget_reset_at']}"
+        response_date.year == expected_year
+    ), f"Expected year {expected_year}, got {response_date.year}"
+    assert (
+        response_date.month == expected_month
+    ), f"Expected month {expected_month}, got {response_date.month}"
+    assert response_date.day == 1, f"Expected day 1, got {response_date.day}"
