@@ -52,9 +52,9 @@ from .llms.openai import (
 from .rerank import RerankResponse
 
 if TYPE_CHECKING:
-    from .vector_stores import VectorStorSearchResponse
+    from .vector_stores import VectorStoreSearchResponse
 else:
-    VectorStorSearchResponse = Any
+    VectorStoreSearchResponse = Any
 
 
 def _generate_id():  # private helper function
@@ -1740,9 +1740,19 @@ class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     Query to the vector store
     """
 
-    vector_store_search_response: Optional[VectorStorSearchResponse]
+    vector_store_search_response: Optional[VectorStoreSearchResponse]
     """
     OpenAI format vector store search response
+    """
+
+    start_time: Optional[float]
+    """
+    Start time of the vector store request
+    """
+
+    end_time: Optional[float]
+    """
+    End time of the vector store request
     """
 
 
@@ -2031,6 +2041,7 @@ all_litellm_params = [
     "litellm_credential_name",
     "allowed_openai_params",
     "litellm_session_id",
+    "use_litellm_proxy",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2140,12 +2151,15 @@ class LlmProviders(str, Enum):
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
     SNOWFLAKE = "snowflake"
+    LLAMA = "meta_llama"
+    NSCALE = "nscale"
 
 
 # Create a set of all provider values for quick lookup
@@ -2296,15 +2310,17 @@ class ExtractedFileData(TypedDict):
 
 class SpecialEnums(Enum):
     LITELM_MANAGED_FILE_ID_PREFIX = "litellm_proxy"
-    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{}"
+    LITELLM_MANAGED_FILE_COMPLETE_STR = "litellm_proxy:{};unified_id,{};target_model_names,{};llm_output_file_id,{};llm_output_file_model_id,{}"
 
     LITELLM_MANAGED_RESPONSE_COMPLETE_STR = (
         "litellm:custom_llm_provider:{};model_id:{};response_id:{}"
     )
 
+    LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
+
 
 LLMResponseTypes = Union[
-    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject
+    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject, LiteLLMBatch
 ]
 
 

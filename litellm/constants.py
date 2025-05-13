@@ -97,6 +97,8 @@ FIREWORKS_AI_176_B_MOE = 176
 FIREWORKS_AI_4_B = 4
 FIREWORKS_AI_16_B = 16
 FIREWORKS_AI_80_B = 80
+#### Logging callback constants ####
+REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -159,6 +161,9 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
+    "meta_llama",
+    "nscale",
 ]
 
 
@@ -219,6 +224,8 @@ openai_compatible_endpoints: List = [
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
+    "api.llama.com/compat/v1/",
+    "inference.api.nscale.com/v1",
 ]
 
 
@@ -249,12 +256,16 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "novita",
+    "meta_llama",
+    "nscale",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
+        "meta_llama",
         "llamafile",
     ]
 )

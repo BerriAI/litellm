@@ -73,7 +73,7 @@ def test_client_initialization():
         api_key="test-key",
         timeout=60,
     )
-    
+
     # Check that http client is initialized correctly
     assert isinstance(client.http, HTTPClient)
     assert client.http._base_url == "http://localhost:4000"
@@ -87,12 +87,12 @@ def test_client_default_timeout():
         base_url="http://localhost:4000",
         api_key="test-key",
     )
-    
+
     assert client.http._timeout == 30
 
 
 def test_client_without_api_key():
     """Test that the client works without an API key."""
     client = Client(base_url="http://localhost:4000")
-    
+
     assert client.http._api_key is None

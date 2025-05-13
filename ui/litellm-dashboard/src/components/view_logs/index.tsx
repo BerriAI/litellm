@@ -8,7 +8,7 @@ import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
-import { RequestResponsePanel } from "./columns";
+import { RequestResponsePanel } from './RequestResponsePanel';
 import { ErrorViewer } from './ErrorViewer';
 import { internalUserRoles } from "../../utils/roles";
 import { ConfigInfoMessage } from './ConfigInfoMessage';
@@ -16,6 +16,7 @@ import { Tooltip } from "antd";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
 import { SessionView } from './SessionView';
+import { VectorStoreViewer } from './VectorStoreViewer';
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -690,8 +691,6 @@ export default function SpendLogsTable({
             data={filteredData}
             renderSubComponent={RequestViewer}
             getRowCanExpand={() => true}
-            onRowExpand={handleRowExpand}
-            expandedRequestId={expandedRequestId}
           />
         </div>
         </>
@@ -724,8 +723,9 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   };
 
   // Extract error information from metadata if available
-  const hasError = row.original.metadata?.status === "failure";
-  const errorInfo = hasError ? row.original.metadata?.error_information : null;
+  const metadata = row.original.metadata || {};
+  const hasError = metadata.status === "failure";
+  const errorInfo = hasError ? metadata.error_information : null;
   
   // Check if request/response data is missing
   const hasMessages = row.original.messages && 
@@ -747,6 +747,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     }
     return formatData(row.original.response);
   };
+  
+  // Extract vector store request metadata if available
+  const hasVectorStoreData = metadata.vector_store_request_metadata && 
+    Array.isArray(metadata.vector_store_request_metadata) && 
+    metadata.vector_store_request_metadata.length > 0;
 
   return (
     <div className="p-6 bg-gray-50 space-y-6">
@@ -770,6 +775,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span>{row.original.model_id}</span>
             </div>
             <div className="flex">
+              <span className="font-medium w-1/3">Call Type:</span>
+              <span>{row.original.call_type}</span>
+            </div>
+            <div className="flex">
               <span className="font-medium w-1/3">Provider:</span>
               <span>{row.original.custom_llm_provider || "-"}</span>
             </div>
@@ -779,10 +788,12 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 <span className="max-w-[15ch] truncate block">{row.original.api_base || "-"}</span>
               </Tooltip>
             </div>
-            <div className="flex">
-              <span className="font-medium w-1/3">Start Time:</span>
-              <span>{row.original.startTime}</span>
-            </div>
+            {row?.original?.requester_ip_address && (
+              <div className="flex">
+                <span className="font-medium w-1/3">IP Address:</span>
+                <span>{row?.original?.requester_ip_address}</span>
+              </div>
+            )}
 
           </div>
           <div className="space-y-2">
@@ -798,12 +809,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Cache Hit:</span>
               <span>{row.original.cache_hit}</span>
             </div>
-            {row?.original?.requester_ip_address && (
-              <div className="flex">
-                <span className="font-medium w-1/3">IP Address:</span>
-                <span>{row?.original?.requester_ip_address}</span>
-              </div>
-            )}
+            
             <div className="flex">
               <span className="font-medium w-1/3">Status:</span>
               <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
@@ -814,6 +820,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
               
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Start Time:</span>
+              <span>{row.original.startTime}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
@@ -827,60 +837,20 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <ConfigInfoMessage show={missingData} />
 
       {/* Request/Response Panel */}
-      <div className="grid grid-cols-2 gap-4">
-        {/* Request Side */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="flex justify-between items-center p-4 border-b">
-            <h3 className="text-lg font-medium">Request</h3>
-            <button 
-              onClick={() => navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2))}
-              className="p-1 hover:bg-gray-200 rounded"
-              title="Copy request"
-              disabled={!hasMessages}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
-          </div>
-          <div className="p-4 overflow-auto max-h-96">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(getRawRequest(), null, 2)}</pre>
-          </div>
-        </div>
+      <RequestResponsePanel
+        row={row}
+        hasMessages={hasMessages}
+        hasResponse={hasResponse}
+        hasError={hasError}
+        errorInfo={errorInfo}
+        getRawRequest={getRawRequest}
+        formattedResponse={formattedResponse}
+      />
 
-        {/* Response Side */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="flex justify-between items-center p-4 border-b">
-            <h3 className="text-lg font-medium">
-              Response
-              {hasError && (
-                <span className="ml-2 text-sm text-red-600">
-                  • HTTP code {errorInfo?.error_code || 400}
-                </span>
-              )}
-            </h3>
-            <button 
-              onClick={() => navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2))}
-              className="p-1 hover:bg-gray-200 rounded"
-              title="Copy response"
-              disabled={!hasResponse}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
-          </div>
-          <div className="p-4 overflow-auto max-h-96 bg-gray-50">
-            {hasResponse ? (
-              <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
-            ) : (
-              <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* Vector Store Request Data - Show only if present */}
+      {hasVectorStoreData && (
+        <VectorStoreViewer data={metadata.vector_store_request_metadata} />
+      )}
 
       {/* Error Card - Only show for failures */}
       {hasError && errorInfo && <ErrorViewer errorInfo={errorInfo} />}
