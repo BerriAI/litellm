@@ -241,7 +241,16 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     }
   ],
-  [Providers.Ollama]: [], // No specific fields needed
+  [Providers.Ollama]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "http://localhost:11434",
+      defaultValue: "http://localhost:11434",
+      required: false,
+      tooltip: "The base URL for your Ollama server. Defaults to http://localhost:11434 if not specified."
+    }
+  ],
   [Providers.Anthropic]: [{
     key: "api_key",
     label: "API Key",
