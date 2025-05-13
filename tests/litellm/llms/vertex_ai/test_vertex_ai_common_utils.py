@@ -292,3 +292,227 @@ def test_process_items_basic():
     }
     process_items(schema)
     assert schema["properties"]["nested"]["items"] == {"type": "object"}
+
+
+def test_vertex_ai_complex_response_schema():
+    import json
+    from copy import deepcopy
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    non_default_params = {
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "generic_schema",
+                "schema": {
+                    "$id": "https://example.com/schema",
+                    "type": "object",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "required": ["field1", "field2", "field3"],
+                    "properties": {
+                        "field3": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["subfield1", "subfield2"],
+                                "properties": {
+                                    "subfield1": {
+                                        "type": "string",
+                                        "description": "string field",
+                                    },
+                                    "subfield2": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "oneOf": [
+                                                {
+                                                    "title": "Type1",
+                                                    "required": ["Type1"],
+                                                },
+                                                {
+                                                    "title": "Type2",
+                                                    "required": ["Type2"],
+                                                },
+                                                {
+                                                    "title": "Type3",
+                                                    "required": ["Type3"],
+                                                },
+                                            ],
+                                            "properties": {
+                                                "Type1": {
+                                                    "type": "object",
+                                                    "required": ["prop1", "prop2"],
+                                                    "properties": {
+                                                        "prop1": {
+                                                            "type": "string",
+                                                            "description": "string value",
+                                                        },
+                                                        "prop2": {
+                                                            "type": "string",
+                                                            "description": "string value",
+                                                        },
+                                                    },
+                                                    "additionalProperties": False,
+                                                },
+                                                "Type3": {
+                                                    "type": "object",
+                                                    "required": ["prop1", "prop3"],
+                                                    "properties": {
+                                                        "prop1": {
+                                                            "type": "string",
+                                                            "description": "string value",
+                                                        },
+                                                        "prop3": {
+                                                            "type": "array",
+                                                            "items": {
+                                                                "type": "object",
+                                                                "required": [
+                                                                    "item1",
+                                                                    "item2",
+                                                                ],
+                                                                "properties": {
+                                                                    "item1": {
+                                                                        "type": "string",
+                                                                        "description": "string value",
+                                                                    },
+                                                                    "item2": {
+                                                                        "type": "boolean",
+                                                                        "description": "boolean value",
+                                                                    },
+                                                                },
+                                                                "additionalProperties": False,
+                                                            },
+                                                        },
+                                                    },
+                                                    "additionalProperties": False,
+                                                },
+                                                "Type2": {
+                                                    "type": "object",
+                                                    "required": ["prop1", "prop3"],
+                                                    "properties": {
+                                                        "prop1": {
+                                                            "type": "string",
+                                                            "description": "string value",
+                                                        },
+                                                        "prop3": {
+                                                            "type": "array",
+                                                            "items": {
+                                                                "type": "object",
+                                                                "required": [
+                                                                    "item1",
+                                                                    "item2",
+                                                                ],
+                                                                "properties": {
+                                                                    "item1": {
+                                                                        "type": "string",
+                                                                        "description": "string value",
+                                                                    },
+                                                                    "item2": {
+                                                                        "type": "boolean",
+                                                                        "description": "boolean value",
+                                                                    },
+                                                                },
+                                                                "additionalProperties": False,
+                                                            },
+                                                        },
+                                                    },
+                                                    "additionalProperties": False,
+                                                },
+                                            },
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
+                        "field1": {"type": "string", "description": "string field"},
+                        "field2": {"type": "string", "description": "string field"},
+                    },
+                    "additionalProperties": False,
+                },
+                "strict": True,
+                "description": "Generic schema for testing",
+            },
+        },
+    }
+    original_non_default_params = deepcopy(non_default_params)
+    optional_params = {}
+
+    v.apply_response_schema_transformation(
+        value=non_default_params["response_format"], optional_params=optional_params
+    )
+
+    # Assertions for the transformed schema
+    transformed_schema = optional_params["response_schema"]
+
+    # Check top level structure
+    assert transformed_schema["type"] == "object"
+    assert "propertyOrdering" in transformed_schema
+    assert transformed_schema["propertyOrdering"] == ["field3", "field1", "field2"]
+    assert set(transformed_schema["required"]) == {"field1", "field2", "field3"}
+
+    # Check field3 structure (array of objects)
+    field3 = transformed_schema["properties"]["field3"]
+    assert field3["type"] == "array"
+
+    # Check field3 items structure
+    field3_items = field3["items"]
+    assert field3_items["type"] == "object"
+    assert "propertyOrdering" in field3_items
+    assert field3_items["propertyOrdering"] == ["subfield1", "subfield2"]
+    assert set(field3_items["required"]) == {"subfield1", "subfield2"}
+
+    # Check subfield2 structure (array of objects)
+    subfield2 = field3_items["properties"]["subfield2"]
+    assert subfield2["type"] == "array"
+
+    # Check subfield2 items structure
+    subfield2_items = subfield2["items"]
+    assert subfield2_items["type"] == "object"
+    assert "propertyOrdering" in subfield2_items
+    assert subfield2_items["propertyOrdering"] == ["Type1", "Type3", "Type2"]
+
+    # Check Type1 structure
+    type1 = subfield2_items["properties"]["Type1"]
+    assert type1["type"] == "object"
+    assert "propertyOrdering" in type1
+    assert type1["propertyOrdering"] == ["prop1", "prop2"]
+    assert set(type1["required"]) == {"prop1", "prop2"}
+
+    # Check Type2 structure
+    type2 = subfield2_items["properties"]["Type2"]
+    assert type2["type"] == "object"
+    assert "propertyOrdering" in type2
+    assert type2["propertyOrdering"] == ["prop1", "prop3"]
+    assert set(type2["required"]) == {"prop1", "prop3"}
+
+    # Check Type3 structure
+    type3 = subfield2_items["properties"]["Type3"]
+    assert type3["type"] == "object"
+    assert "propertyOrdering" in type3
+    assert type3["propertyOrdering"] == ["prop1", "prop3"]
+    assert set(type3["required"]) == {"prop1", "prop3"}
+
+    # Check nested items in Type3's prop3
+    type3_prop3 = type3["properties"]["prop3"]
+    assert type3_prop3["type"] == "array"
+    type3_prop3_items = type3_prop3["items"]
+    assert type3_prop3_items["type"] == "object"
+    assert "propertyOrdering" in type3_prop3_items
+    assert type3_prop3_items["propertyOrdering"] == ["item1", "item2"]
+    assert set(type3_prop3_items["required"]) == {"item1", "item2"}
+
+    # Verify additionalProperties were removed during transformation
+    assert "additionalProperties" not in transformed_schema
+    assert "additionalProperties" not in field3_items
+    assert "additionalProperties" not in subfield2_items
+    assert "additionalProperties" not in type1
+    assert "additionalProperties" not in type2
+    assert "additionalProperties" not in type3
+    assert "additionalProperties" not in type3_prop3_items
