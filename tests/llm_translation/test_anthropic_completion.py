@@ -1174,7 +1174,6 @@ def test_just_system_message():
 
 def test_anthropic_websearch():
     litellm._turn_on_debug()
-    litellm.modify_params = True
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
         "messages": [{"role": "system", "content": "You are a helpful assistant."}],
@@ -1185,6 +1184,26 @@ def test_anthropic_websearch():
         }]
     }
 
+    response = litellm.completion(**params)
+
+    assert response is not None
+
+def test_anthropic_text_editor():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": "There'\''s a syntax error in my primes.py file. Can you help me fix it?"
+            }
+        ],
+        "tools": [{
+            "type": "text_editor_20250124",
+            "name": "str_replace_editor"
+        }]
+    }
+    
     response = litellm.completion(**params)
 
     assert response is not None
