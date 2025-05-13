@@ -8,15 +8,19 @@ from typing import Any, Dict, List, Optional, Union
 from anyio import BrokenResourceError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from prisma.models import LiteLLM_MCPServerTable
 from pydantic import ConfigDict, ValidationError
 
 from litellm._version import version
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers, get_all_mcp_servers_for_user
+from litellm.proxy._types import MCPAuth, MCPSpecVersion, MCPTransport, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.mcp_management_endpoints import get_prisma_client_or_throw
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
 
@@ -235,7 +239,9 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
-    async def list_tool_rest_api() -> List[ListMCPToolsRestAPIResponseObject]:
+    async def list_tool_rest_api(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> List[ListMCPToolsRestAPIResponseObject]:
         """
         List all available tools with information about the server they belong to.
 
@@ -262,8 +268,25 @@ if MCP_AVAILABLE:
             }
         ]
         """
+        # perform authz check to filter the mcp servers user has access to
+        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        
+        db_mcp_servers: List[LiteLLM_MCPServerTable] = []
+        
+        # Check the db for the mcp server list TODO: reuse same logic as in the mcp_endpoint
+        if _user_has_admin_view(user_api_key_dict):
+            db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        else:
+            db_mcp_servers = await get_all_mcp_servers_for_user(
+                prisma_client,
+                user_api_key_dict,
+            )
+        # ensure the global_mcp_server_manager is up to date with the db
+        for server in db_mcp_servers:
+            global_mcp_server_manager.add_server(server)
+
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
-        for server in global_mcp_server_manager.mcp_servers:
+        for server in global_mcp_server_manager.get_registry().values():
             try:
                 tools = await global_mcp_server_manager._get_tools_from_server(server)
                 for tool in tools:

@@ -825,7 +825,7 @@ class MCPAuth(str, enum.Enum):
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
-MCPAuthType = Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
+MCPAuthType = Optional[Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]]
 
 
 # MCP Proxy Request Types
