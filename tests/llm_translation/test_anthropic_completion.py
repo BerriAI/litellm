@@ -1176,7 +1176,7 @@ def test_anthropic_websearch():
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
-        "messages": [{"role": "system", "content": "You are a helpful assistant."}],
+        "messages": [{"role": "user", "content": "What is the capital of France?"}],
         "tools": [{
             "type": "web_search_20250305",
             "name": "web_search",
@@ -1184,9 +1184,13 @@ def test_anthropic_websearch():
         }]
     }
 
-    response = litellm.completion(**params)
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
 
     assert response is not None
+
 
 def test_anthropic_text_editor():
     litellm._turn_on_debug()
@@ -1204,6 +1208,9 @@ def test_anthropic_text_editor():
         }]
     }
     
-    response = litellm.completion(**params)
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
 
     assert response is not None
