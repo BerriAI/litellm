@@ -115,7 +115,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-     def transform_request(
+    def transform_request(
         self,
         model: str,
         messages: List[AllMessageValues],
