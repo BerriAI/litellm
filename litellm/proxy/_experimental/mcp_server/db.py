@@ -3,7 +3,7 @@ from typing import Dict, Iterable, List, Literal, Optional, Set, Union, cast
 import uuid
 
 from prisma.models import LiteLLM_MCPServerTable, LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
-from litellm.proxy._types import NewMCPServerRequest, SpecialMCPServerName, UserAPIKeyAuth
+from litellm.proxy._types import NewMCPServerRequest, SpecialMCPServerName, UpdateMCPServerRequest, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient
 
 
@@ -170,13 +170,30 @@ async def delete_mcp_server(prisma_client: PrismaClient, server_id: str) -> Opti
 
 
 async def create_mcp_server(prisma_client: PrismaClient, data: NewMCPServerRequest, touched_by: str) -> LiteLLM_MCPServerTable:
-    if data.server_id is None:
-        data.server_id = str(uuid.uuid4())
-
     """
     Create a new mcp server record in the db
     """
+    if data.server_id is None:
+        data.server_id = str(uuid.uuid4())
+
     mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
+        data={
+            **data.model_dump(),
+            'created_by': touched_by,
+            'updated_by': touched_by,
+        }
+    )
+    return mcp_server_record
+
+
+async def update_mcp_server(prisma_client: PrismaClient, data: UpdateMCPServerRequest, touched_by: str) -> LiteLLM_MCPServerTable:
+    """
+    Update a new mcp server record in the db
+    """
+    mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
+        where={
+            'server_id': data.server_id,
+        },
         data={
             **data.model_dump(),
             'created_by': touched_by,

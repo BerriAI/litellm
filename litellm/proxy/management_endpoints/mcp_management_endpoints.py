@@ -23,6 +23,7 @@ from litellm.constants import (
 )
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
+    update_mcp_server,
     delete_mcp_server,
     get_all_mcp_servers,
     get_all_mcp_servers_for_user,
@@ -31,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import (
     LitellmUserRoles,
     NewMCPServerRequest,
+    UpdateMCPServerRequest,
     SpecialMCPServerName,
     UserAPIKeyAuth,
 )
@@ -281,3 +283,59 @@ async def remove_mcp_server(
     # TODO: Delete from teams
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+@router.put(
+    "/server",
+    description="Allows deleting mcp serves in the db",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_MCPServerTable,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@management_endpoint_wrapper
+async def edit_mcp_server(
+    payload: UpdateMCPServerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Updates the MCP Server in the db.
+
+    Parameters:
+    - payload: UpdateMCPServerRequest - Required. The updated mcp server data.
+    ```
+    curl -X "PUT" --location 'http://localhost:4000/v1/mcp/server' \
+    --header 'Authorization: Bearer your_api_key_here'
+    ```
+    """
+    prisma_client = get_prisma_client_or_throw(
+        "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+    )
+
+    # Authz - restrict only admins to delete mcp servers
+    if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Call not allowed to update MCP server. User is not a proxy admin. route={}".format(
+                    "PUT /v1/mcp/server"
+                )
+            },
+        )
+
+    # try to delete the mcp server
+    mcp_server_record_updated = await update_mcp_server(prisma_client, payload, touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME)
+
+    if mcp_server_record_updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
+        )
+
+    # TODO: Enterprise: Finish audit log trail
+    if litellm.store_audit_logs:
+        pass
+
+    return mcp_server_record_updated
