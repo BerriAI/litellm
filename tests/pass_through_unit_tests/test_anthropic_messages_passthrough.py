@@ -64,10 +64,12 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
 
 def _validate_anthropic_response(response: Dict[str, Any]):
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    """
+    Validate that the response matches the structure defined in the Anthropic Messages API
+    https://docs.anthropic.com/claude/reference/messages_post
+    """
+    from anthropic.types.message import Message
+    Message.model_validate(response)
 
 
 @pytest.mark.asyncio
@@ -88,15 +90,12 @@ async def test_anthropic_messages_non_streaming():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
     )
 
-    # Verify response
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    # Verify response structure
+    _validate_anthropic_response(response)
 
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
@@ -147,15 +146,71 @@ async def test_anthropic_messages_streaming():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
         stream=True,
         client=async_httpx_client,
     )
 
+    # Expected event types according to Anthropic's documentation
+    expected_events = {"message_start", "content_block_start", "content_block_delta", 
+                      "content_block_stop", "message_delta", "message_stop"}
+    
+    # Track received event types
+    received_event_types = set()
+    
+    # For streaming, collect chunks and validate
+    collected_chunks = []
+    text_content = []
+    
     if isinstance(response, AsyncIterator):
         async for chunk in response:
             print("chunk=", chunk)
+            collected_chunks.append(chunk)
+            
+            # Handle bytes format (SSE)
+            if isinstance(chunk, bytes):
+                chunk_str = chunk.decode("utf-8")
+                # Process SSE format (data: {...})
+                for line in chunk_str.split("\n"):
+                    if line.startswith("data: "):
+                        try:
+                            json_data = json.loads(line[6:])  # Skip 'data: ' prefix
+                            
+                            # Add event type to our tracking set
+                            if "type" in json_data:
+                                received_event_types.add(json_data["type"])
+                            
+                            # Extract text content from content_block_delta events
+                            if json_data.get("type") == "content_block_delta" and \
+                               json_data.get("delta", {}).get("type") == "text_delta":
+                                text_content.append(json_data["delta"]["text"])
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse JSON from: {line[6:]} - Error: {e}")
+            else:
+                # If not bytes, try to extract event type and content
+                if hasattr(chunk, "type"):
+                    received_event_types.add(chunk.type)
+                
+                # Try to extract text from the chunk
+                if hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                    text_content.append(chunk.delta.text)
+    
+    # Print summary of what we received
+    print(f"Received event types: {received_event_types}")
+    print(f"Text content: {''.join(text_content)}")
+    
+    # Validate that we received at least one chunk
+    assert len(collected_chunks) > 0, "No streaming chunks received"
+    
+    # Check that we received the expected event types
+    # Note: We might not receive all event types in a single response
+    common_events = received_event_types.intersection(expected_events)
+    assert len(common_events) > 0, f"Didn't receive any expected event types. Got: {received_event_types}"
+    
+    # If we got content_block_delta events, we should have collected some text
+    if "content_block_delta" in received_event_types:
+        assert len(text_content) > 0, "Received content_block_delta events but no text content"
 
 
 @pytest.mark.asyncio
@@ -198,7 +253,7 @@ async def test_anthropic_messages_streaming_with_bad_request():
         response = await litellm.anthropic.messages.acreate(
             messages=["hi"],
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-            model="claude-3-haiku-20240307",
+            model="claude-3-5-haiku-20241022",
             max_tokens=100,
             stream=True,
         )
@@ -222,7 +277,7 @@ async def test_anthropic_messages_router_streaming_with_bad_request():
                 {
                     "model_name": "claude-special-alias",
                     "litellm_params": {
-                        "model": "claude-3-haiku-20240307",
+                        "model": "claude-3-5-haiku-20241022",
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     },
                 }
@@ -255,7 +310,7 @@ async def test_anthropic_messages_litellm_router_non_streaming():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -272,11 +327,8 @@ async def test_anthropic_messages_litellm_router_non_streaming():
         max_tokens=100,
     )
 
-    # Verify response
-    assert "id" in response
-    assert "content" in response
-    assert "model" in response
-    assert response["role"] == "assistant"
+    # Verify response structure
+    _validate_anthropic_response(response)
 
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
@@ -309,7 +361,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -336,7 +388,7 @@ async def test_anthropic_messages_litellm_router_non_streaming_with_logging():
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
         test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
+        == "claude-3-5-haiku-20241022"
     )
 
     # check logged usage + spend
@@ -366,7 +418,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
             {
                 "model_name": "claude-special-alias",
                 "litellm_params": {
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "api_key": os.getenv("ANTHROPIC_API_KEY"),
                 },
             }
@@ -468,7 +520,7 @@ async def test_anthropic_messages_litellm_router_streaming_with_logging():
     assert test_custom_logger.logged_standard_logging_payload["response"] is not None
     assert (
         test_custom_logger.logged_standard_logging_payload["model"]
-        == "claude-3-haiku-20240307"
+        == "claude-3-5-haiku-20241022"
     )
 
     # check logged usage + spend
@@ -511,7 +563,7 @@ async def test_anthropic_messages_with_extra_headers():
                 "text": "Why did the chicken cross the road? To get to the other side!",
             }
         ],
-        "model": "claude-3-haiku-20240307",
+        "model": "claude-3-5-haiku-20241022",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
@@ -524,7 +576,7 @@ async def test_anthropic_messages_with_extra_headers():
     response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
-        model="claude-3-haiku-20240307",
+        model="claude-3-5-haiku-20241022",
         max_tokens=100,
         client=mock_client,
         provider_specific_header={
