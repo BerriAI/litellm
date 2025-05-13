@@ -6450,7 +6450,7 @@ class ProviderConfigManager:
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
-    ) -> BaseEmbeddingConfig:
+    ) -> Optional[BaseEmbeddingConfig]:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
@@ -6459,11 +6459,14 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
-        elif litellm.LlmProviders.COHERE == provider:
+        elif (
+            litellm.LlmProviders.COHERE == provider
+            or litellm.LlmProviders.COHERE_CHAT == provider
+        ):
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
-        raise ValueError(f"Provider {provider.value} does not support embedding config")
+        return None
 
     @staticmethod
     def get_provider_rerank_config(

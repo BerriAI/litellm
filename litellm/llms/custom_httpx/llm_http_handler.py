@@ -711,6 +711,10 @@ class BaseLLMHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+        if provider_config is None:
+            raise ValueError(
+                f"Provider {custom_llm_provider} does not support embedding"
+            )
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
