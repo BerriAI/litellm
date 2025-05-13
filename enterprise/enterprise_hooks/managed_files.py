@@ -144,7 +144,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
-        print("REACHES async_pre_call_hook, call_type:", call_type)
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
