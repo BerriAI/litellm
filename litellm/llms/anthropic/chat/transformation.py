@@ -39,7 +39,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import CompletionTokensDetailsWrapper
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper
+from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -662,7 +662,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
-            web_search_requests=web_search_requests,
         )
         completion_token_details = (
             CompletionTokensDetailsWrapper(
@@ -674,6 +673,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else None
         )
         total_tokens = prompt_tokens + completion_tokens
+
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -682,6 +682,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
+            server_tool_use=ServerToolUse(web_search_requests=web_search_requests)
+            if web_search_requests is not None
+            else None,
         )
         return usage
 

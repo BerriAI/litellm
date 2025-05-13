@@ -135,4 +135,4 @@ def test_server_tool_use_usage():
         "server_tool_use": {"web_search_requests": 1},
     }
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
-    assert usage.prompt_tokens_details.web_search_requests == 1
+    assert usage.server_tool_use.web_search_requests == 1

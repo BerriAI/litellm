@@ -846,6 +846,10 @@ class PromptTokensDetailsWrapper(
             del self.web_search_requests
 
 
+class ServerToolUse(BaseModel):
+    web_search_requests: Optional[int]
+
+
 class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -853,6 +857,8 @@ class Usage(CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+
+    server_tool_use: Optional[ServerToolUse] = None
 
     def __init__(
         self,
@@ -864,6 +870,7 @@ class Usage(CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
+        server_tool_use: Optional[ServerToolUse] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -919,7 +926,13 @@ class Usage(CompletionUsage):
             total_tokens=total_tokens or 0,
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
+            server_tool_use=server_tool_use,
         )
+
+        if (
+            server_tool_use is None
+        ):  # maintain openai compatibility in usage object if possible
+            del self.server_tool_use
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(

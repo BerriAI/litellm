@@ -1243,7 +1243,7 @@ def test_anthropic_websearch():
     assert response is not None
 
     print(f"response: {response}\n")
-    assert response.usage.prompt_tokens_details.web_search_requests == 1
+    assert response.usage.server_tool_use.web_search_requests == 1
 
 
 def test_anthropic_text_editor():
