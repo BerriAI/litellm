@@ -1170,3 +1170,47 @@ def test_just_system_message():
     response = litellm.completion(**params)
 
     assert response is not None
+
+
+def test_anthropic_websearch():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [{"role": "user", "content": "What is the capital of France?"}],
+        "tools": [{
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5
+        }]
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+
+def test_anthropic_text_editor():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": "There'\''s a syntax error in my primes.py file. Can you help me fix it?"
+            }
+        ],
+        "tools": [{
+            "type": "text_editor_20250124",
+            "name": "str_replace_editor"
+        }]
+    }
+    
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None

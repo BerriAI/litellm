@@ -58,6 +58,9 @@ else:
     LoggingClass = Any
 
 
+ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor"]
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -212,16 +215,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _computer_tool["display_number"] = _display_number
 
             returned_tool = _computer_tool
-        elif tool["type"].startswith("bash_") or tool["type"].startswith(
-            "text_editor_"
-        ):
-            function_name = tool["function"].get("name")
-            if function_name is None:
+        elif any(tool["type"].startswith(t) for t in ANTHROPIC_HOSTED_TOOLS):
+            function_name = tool.get("name", tool.get("function", {}).get("name"))
+            if function_name is None or not isinstance(function_name, str):
                 raise ValueError("Missing required parameter: name")
 
+            additional_tool_params = {}
+            for k, v in tool.items():
+                if k != "type" and k != "name":
+                    additional_tool_params[k] = v
+
             returned_tool = AnthropicHostedTools(
-                type=tool["type"],
-                name=function_name,
+                type=tool["type"], name=function_name, **additional_tool_params  # type: ignore
             )
         if returned_tool is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
