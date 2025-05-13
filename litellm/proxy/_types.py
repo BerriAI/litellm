@@ -46,6 +46,27 @@ else:
     Span = Any
 
 
+def hash_token(token: str):
+    import hashlib
+
+    # Hash the string using SHA-256
+    hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+    return hashed_token
+
+
+def _hash_token_if_needed(token: str) -> str:
+    """
+    Hash the token if it's a string and starts with "sk-"
+
+    Else return the token as is
+    """
+    if token.startswith("sk-"):
+        return hash_token(token=token)
+    else:
+        return token
+
+
 class LiteLLMTeamRoles(enum.Enum):
     # team admin
     TEAM_ADMIN = "admin"
@@ -1597,11 +1618,7 @@ class UserAPIKeyAuth(
     def check_api_key(cls, values):
         api_key = values.get("api_key")
         if api_key is not None:
-            if isinstance(api_key, str) and api_key.startswith("sk-"):
-                values.update({"token": hash_token(api_key)})
-            else:
-                # Assume already hashed
-                values.update({"token": api_key})
+            values.update({"token": _hash_token_if_needed(api_key)})
         return values
 
 

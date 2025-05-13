@@ -24,6 +24,8 @@ from typing import (
 
 from litellm.constants import MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
+    hash_token,
+    _hash_token_if_needed,
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -2415,27 +2417,6 @@ async def send_email(receiver_email, subject, html):
 
     except Exception as e:
         print_verbose("An error occurred while sending the email:" + str(e))
-
-
-def hash_token(token: str):
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
-
-
-def _hash_token_if_needed(token: str) -> str:
-    """
-    Hash the token if it's a string and starts with "sk-"
-
-    Else return the token as is
-    """
-    if token.startswith("sk-"):
-        return hash_token(token=token)
-    else:
-        return token
 
 
 class ProxyUpdateSpend:
