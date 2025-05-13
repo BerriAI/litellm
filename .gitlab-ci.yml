@@ -35,7 +35,7 @@ Sync Upstream:
     - git fetch upstream
     - git checkout update
     - git merge upstream/main --no-edit || echo "Manual conflict resolution needed"
-    - git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" update
+    - git push "https://thomas.dandelot:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" update
   only:
     - schedules
 
@@ -89,7 +89,7 @@ Build LiteLLM Image Dev:
       git config --global user.email "ccoe-dis@thalesgroup.com"; 
       git config --global user.name "Thales DIS CCoE"; 
       git tag -a "$VERSION" -m "Auto-tag for successful dev build"; 
-      git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
+      git push "https://thomas.dandelot:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
   artifacts:
     reports:
       dotenv: version.env
@@ -132,7 +132,7 @@ Promote LiteLLM Image to Prod:
       git config --global user.email "ccoe-dis@thalesgroup.com" &&
       git config --global user.name "Thales DIS CCoE" &&
       git tag -a "$VERSION" -m "Auto-tag from commit message" && 
-      git push "https://gitlab-ci-token:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
+      git push "https://thomas.dandelot:${GITLAB_API_TOKEN}@gitlab.sre.ops.gcloud.thalescloud.io/ccoe/synapse/litellm.git" "$VERSION";
 
     - >
       echo "Promoting image $SOURCE_TAG → $VERSION to prod..."; 
