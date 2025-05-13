@@ -1215,6 +1215,8 @@ class PrismaClient:
         except (json.JSONDecodeError, AttributeError):
             # Default to success if metadata parsing fails
             return "success"
+        
+    hash_token = hash_token
 
     def jsonify_object(self, data: dict) -> dict:
         db_data = copy.deepcopy(data)
