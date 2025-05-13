@@ -86,10 +86,10 @@ def list(
 @click.option("--models", type=str, help="Comma-separated list of allowed models")
 @click.option("--aliases", type=str, help="JSON string of model alias mappings")
 @click.option("--spend", type=float, help="Maximum spend limit for this key")
-@click.option("--duration", type=str, help="Duration for which the key is valid (e.g. '24h', '7d')")
-@click.option("--key-alias", type=str, help="Alias/name for the key")
-@click.option("--key-name", type=str, help="Display/abbreviation name for the key (separate from key_alias)")
-@click.option("--token", type=str, help="Pre-hashed token to use as the key's hash (advanced)")
+@click.option("--duration", type=str, help="Duration for which the key is valid (e.g., \"24h\", \"7d\")")
+@click.option("--key-alias", type=str, help="Alias/name for the key (e.g., \"john-key-1\")")
+@click.option("--key-name", type=str, help="Display/abbreviation name for the key (e.g., \"sk-12.....2oA\")")
+@click.option("--token", type=str, help="[Advanced] Pre-hashed (w/ SHA-256) 64 character token (e.g., \"60980d9c682a44cecdb4462f512b57e48fc63288680725962e87b9f764eae47a\")")
 @click.option("--team-id", type=str, help="Team ID to associate the key with")
 @click.option("--user-id", type=str, help="User ID to associate the key with")
 @click.option("--budget-id", type=str, help="Budget ID to associate the key with")
@@ -109,7 +109,7 @@ def generate(
     budget_id: Optional[str],
     config: Optional[str],
 ):
-    """Generate a new API key"""
+    """Generate a new LiteLLM API key"""
     client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
     try:
         models_list = [m.strip() for m in models.split(",")] if models else None
