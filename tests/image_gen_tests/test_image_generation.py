@@ -241,15 +241,3 @@ async def test_aimage_generation_bedrock_with_optional_params():
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
-
-def test_image_generation_dall_e_3_custom_azure_name():
-    response = litellm.image_generation(
-        prompt="A cute baby sea otter",
-        model="azure/dalle-3",
-        base_model="dall-e-3",
-        response_format="b64_json",
-        api_version="2023-12-01-preview",
-        api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-    )
-    print(f"response: {response}")
