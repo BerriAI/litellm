@@ -27,7 +27,7 @@ class TestNovitaConfig:
         config = NovitaConfig()
         headers = {}
         api_key = "fake-novita-key"
-        
+
         result = config.validate_environment(
             headers=headers,
             model="novita/meta-llama/llama-3.3-70b-instruct",
@@ -35,9 +35,9 @@ class TestNovitaConfig:
             optional_params={},
             litellm_params={},
             api_key=api_key,
-            api_base="https://api.novita.ai/v3/openai"
+            api_base="https://api.novita.ai/v3/openai",
         )
-        
+
         # Verify headers
         assert result["Authorization"] == f"Bearer {api_key}"
         assert result["Content-Type"] == "application/json"
@@ -46,7 +46,7 @@ class TestNovitaConfig:
     def test_missing_api_key(self):
         """Test error handling when API key is missing"""
         config = NovitaConfig()
-        
+
         with pytest.raises(ValueError) as excinfo:
             config.validate_environment(
                 headers={},
@@ -55,15 +55,16 @@ class TestNovitaConfig:
                 optional_params={},
                 litellm_params={},
                 api_key=None,
-                api_base="https://api.novita.ai/v3/openai"
+                api_base="https://api.novita.ai/v3/openai",
             )
-        
+
         assert "Missing Novita AI API Key" in str(excinfo.value)
 
     def test_inheritance(self):
         """Test proper inheritance from OpenAIGPTConfig"""
         config = NovitaConfig()
-        
+
         from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
         assert isinstance(config, OpenAIGPTConfig)
-        assert hasattr(config, "get_supported_openai_params") 
+        assert hasattr(config, "get_supported_openai_params")
