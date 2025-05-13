@@ -1,16 +1,21 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
 import aiohttp
-import requests
+import httpx
 from enum import Enum
 from litellm._logging import verbose_logger
-import backoff
 
 DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"
 DEEPEVAL_BASE_URL_EU = "https://eu.deepeval.confident-ai.com"
 API_BASE_URL = "https://api.confident-ai.com"
 API_BASE_URL_EU = "https://eu.api.confident-ai.com"
-retryable_exceptions = requests.exceptions.SSLError
+retryable_exceptions = httpx.HTTPError
+
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 def log_retry_error(details):
@@ -53,27 +58,26 @@ class Api:
         }
         # using the global non-eu variable for base url
         self.base_api_url = base_url or API_BASE_URL
-
-    @staticmethod
-    @backoff.on_exception(
-        backoff.expo,
-        retryable_exceptions,
-        max_tries=2,  # initial + 1 retry
-        max_time=10,
-        jitter=backoff.full_jitter,
-        on_backoff=log_retry_error,
-    )
-    def _http_request(method: str, url: str, headers=None, json=None, params=None):
-        session = requests.Session()
-        return session.request(
-            method=method,
-            url=url,
-            headers=headers,
-            json=json,
-            params=params,
-            verify=True,  # SSL verification is always enabled
+        self.sync_http_handler = HTTPHandler()
+        self.async_http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
+    def _http_request(self, method: str, url: str, headers=None, json=None, params=None):
+        if method != 'POST':
+            raise Exception("Only POST requests are supported")
+        try: 
+            self.sync_http_handler.post(
+                url=url,
+                headers=headers,
+                json=json,
+                params=params,
+            )
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"DeepEval logging error: {e.response.text}")
+        except Exception as e:
+            raise e
+    
     def send_request(
         self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
     ):
@@ -98,25 +102,18 @@ class Api:
     async def a_send_request(
         self, method: HttpMethods, endpoint: Endpoints, body=None, params=None
     ):
+        if method != HttpMethods.POST:
+            raise Exception("Only POST requests are supported")
+        
         url = f"{self.base_api_url}{endpoint.value}"
-        async with aiohttp.ClientSession() as session:
-            async with session.request(
-                method=method.value,
+        try:
+            await self.async_http_handler.post(
                 url=url,
                 headers=self._headers,
                 json=body,
                 params=params,
-                ssl=True,  # SSL verification enabled
-            ) as res:
-                if res.status == 200:
-                    try:
-                        return await res.json()
-                    except aiohttp.ContentTypeError:
-                        return await res.text()
-                else:
-                    try:
-                        error_data = await res.json()
-                        error_message = error_data.get("error", await res.text())
-                    except aiohttp.ContentTypeError:
-                        error_message = await res.text()
-                    raise Exception(error_message)
+            )
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"DeepEval logging error: {e.response.text}")
+        except Exception as e:
+            raise e
