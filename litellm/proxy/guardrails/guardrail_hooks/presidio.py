@@ -132,58 +132,66 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
-    async def check_pii(
+    async def analyze_text(
         self,
         text: str,
-        output_parse_pii: bool,
         presidio_config: Optional[PresidioPerRequestConfig],
         request_data: dict,
-    ) -> str:
+    ) -> Any:
         """
-        [TODO] make this more performant for high-throughput scenario
+        Send text to the Presidio analyzer endpoint and get analysis results
         """
         try:
             async with aiohttp.ClientSession() as session:
                 if self.mock_redacted_text is not None:
-                    redacted_text = self.mock_redacted_text
-                else:
-                    # Make the first request to /analyze
-                    # Construct Request 1
-                    analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                    analyze_payload = {"text": text, "language": "en"}
-                    if presidio_config and presidio_config.language:
-                        analyze_payload["language"] = presidio_config.language
-                    if self.ad_hoc_recognizers is not None:
-                        analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
-                    # End of constructing Request 1
-                    analyze_payload.update(
-                        self.get_guardrail_dynamic_request_body_params(
-                            request_data=request_data
-                        )
-                    )
-                    redacted_text = None
-                    verbose_proxy_logger.debug(
-                        "Making request to: %s with payload: %s",
-                        analyze_url,
-                        analyze_payload,
-                    )
-                    async with session.post(
-                        analyze_url, json=analyze_payload
-                    ) as response:
-                        analyze_results = await response.json()
+                    return self.mock_redacted_text
 
-                    # Make the second request to /anonymize
-                    anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                    verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                    anonymize_payload = {
-                        "text": text,
-                        "analyzer_results": analyze_results,
-                    }
+                # Make the request to /analyze
+                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+                analyze_payload = {"text": text, "language": "en"}
+                if presidio_config and presidio_config.language:
+                    analyze_payload["language"] = presidio_config.language
+                if self.ad_hoc_recognizers is not None:
+                    analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
 
-                    async with session.post(
-                        anonymize_url, json=anonymize_payload
-                    ) as response:
-                        redacted_text = await response.json()
+                analyze_payload.update(
+                    self.get_guardrail_dynamic_request_body_params(
+                        request_data=request_data
+                    )
+                )
+
+                verbose_proxy_logger.debug(
+                    "Making request to: %s with payload: %s",
+                    analyze_url,
+                    analyze_payload,
+                )
+
+                async with session.post(analyze_url, json=analyze_payload) as response:
+                    analyze_results = await response.json()
+                    return analyze_results
+        except Exception as e:
+            raise e
+
+    async def anonymize_text(
+        self, text: str, analyze_results: Any, output_parse_pii: bool
+    ) -> str:
+        """
+        Send analysis results to the Presidio anonymizer endpoint to get redacted text
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Make the request to /anonymize
+                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+                anonymize_payload = {
+                    "text": text,
+                    "analyzer_results": analyze_results,
+                }
+
+                async with session.post(
+                    anonymize_url, json=anonymize_payload
+                ) as response:
+                    redacted_text = await response.json()
 
                 new_text = text
                 if redacted_text is not None:
@@ -206,6 +214,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     return redacted_text["text"]
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
+        except Exception as e:
+            raise e
+
+    async def check_pii(
+        self,
+        text: str,
+        output_parse_pii: bool,
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> str:
+        """
+        [TODO] make this more performant for high-throughput scenario
+        """
+        try:
+            if self.mock_redacted_text is not None:
+                redacted_text = self.mock_redacted_text
+            else:
+                # First get analysis results
+                analyze_results = await self.analyze_text(
+                    text=text,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+
+                # Then anonymize the text using the analysis results
+                return await self.anonymize_text(
+                    text=text,
+                    analyze_results=analyze_results,
+                    output_parse_pii=output_parse_pii,
+                )
+
+            return redacted_text["text"]
         except Exception as e:
             raise e
 
