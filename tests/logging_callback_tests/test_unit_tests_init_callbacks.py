@@ -2,7 +2,11 @@ import json
 import os
 import sys
 from datetime import datetime
+import threading
 from unittest.mock import AsyncMock
+
+from litellm.litellm_core_utils.dd_tracing import contextmanager
+from litellm.utils import executor
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -305,6 +309,7 @@ def test_dynamic_logging_global_callback():
                 start_time=datetime.now(),
                 end_time=datetime.now(),
                 cache_hit=False,
+                synchronous=True,
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -331,3 +336,72 @@ def test_get_combined_callback_list():
     assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
+
+
+
+@pytest.mark.parametrize("sync_logging", [True, False])
+def test_success_handler_sync_async(sync_logging):
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import ModelResponse, Choices, Message
+
+    cl = CustomLogger()
+
+    litellm_logging = LiteLLMLoggingObj(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    litellm.sync_logging = sync_logging
+
+    result = ModelResponse(
+        id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
+        created=1732306261,
+        model="claude-3-opus-20240229",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="hello",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+    )
+
+
+    with (
+        patch.object(cl, "log_success_event") as mock_log_success_event,
+        patch.object(
+            executor, "submit",
+            side_effect=lambda *args: args[0](*args[1:])
+        ) as mock_executor,
+    ):
+        litellm.success_callback = [cl]
+
+        litellm_logging.success_handler(
+            result=result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+        )
+
+        if sync_logging:
+            mock_executor.assert_not_called()
+            mock_log_success_event.assert_called_once()
+            assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]
+        else:
+
+            # Wait for the thread to finish
+            mock_executor.assert_called_once()
+            mock_log_success_event.assert_called_once()
+            assert "standard_logging_object" in mock_log_success_event.call_args.kwargs["kwargs"]
