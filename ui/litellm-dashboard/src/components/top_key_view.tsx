@@ -33,8 +33,9 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
       const transformedKeyData = transformKeyInfo(keyInfo);
+
       setKeyData(transformedKeyData);
-      setSelectedKey(item.key);
+      setSelectedKey(item.api_key);
       setIsModalOpen(true);  // Open modal when key is clicked
     } catch (error) {
       console.error("Error fetching key info:", error);
@@ -122,7 +123,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
           <BarChart
             className="mt-4 h-40 cursor-pointer hover:opacity-90"
             data={topKeys}
-            index="key"
+            index="key_alias"
             categories={["spend"]}
             colors={["cyan"]}
             yAxisWidth={80}
@@ -130,9 +131,26 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
             layout="vertical"
             showXAxis={false}
             showLegend={false}
-            valueFormatter={(value) => `$${value.toFixed(2)}`}
+            valueFormatter={(value) => value ? `$${value.toFixed(2)}` : "No Key Alias"}
             onValueChange={(item) => handleKeyClick(item)}
             showTooltip={true}
+            customTooltip={(props) => {
+              const item = props.payload?.[0]?.payload;
+              return (
+                <div className="p-3 bg-black/90 shadow-lg rounded-lg text-white">
+                  <div className="space-y-1.5">
+                    <div className="text-sm">
+                      <span className="text-gray-300">Key: </span>
+                      <span className="font-mono text-gray-100">{item?.api_key?.slice(0, 10)}...</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-gray-300">Spend: </span>
+                      <span className="text-white font-medium">${item?.spend.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }}
           />
         </div>
       ) : (
@@ -148,6 +166,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
       )}
 
       {isModalOpen && selectedKey && keyData && (
+        console.log('Rendering modal with:', { isModalOpen, selectedKey, keyData }),
         <div 
           className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
           onClick={handleOutsideClick}

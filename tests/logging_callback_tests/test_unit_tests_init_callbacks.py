@@ -33,12 +33,18 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.integrations.agentops import AgentOps
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
+from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
 from unittest.mock import patch
 
 # clear prometheus collectors / registry
@@ -73,6 +79,12 @@ callback_class_str_to_classType = {
     "otel": OpenTelemetry,
     "pagerduty": PagerDutyAlerting,
     "gcs_pubsub": GcsPubSubLogger,
+    "anthropic_cache_control_hook": AnthropicCacheControlHook,
+    "agentops": AgentOps,
+    "bedrock_vector_store": BedrockVectorStore,
+    "generic_api": GenericAPILogger,
+    "resend_email": ResendEmailLogger,
+    "smtp_email": SMTPEmailLogger,
 }
 
 expected_env_vars = {

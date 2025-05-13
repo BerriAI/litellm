@@ -1,6 +1,10 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: gpt-4o
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
 
 
+litellm_settings:
+    callbacks: ["smtp_email"]
+  

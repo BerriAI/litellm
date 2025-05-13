@@ -8,17 +8,16 @@ from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
-
     def update_cache_key_with_event_loop(self, key):
         """
         Add the event loop to the cache key, to prevent event loop closed errors.
         If none, use the key as is.
         """
         try:
-            event_loop = asyncio.get_event_loop()
+            event_loop = asyncio.get_running_loop()
             stringified_event_loop = str(id(event_loop))
             return f"{key}-{stringified_event_loop}"
-        except Exception:  # handle no current event loop
+        except RuntimeError:  # handle no current running event loop
             return key
 
     def set_cache(self, key, value, **kwargs):

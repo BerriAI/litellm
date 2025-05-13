@@ -31,7 +31,7 @@ async def test_litellm_gateway_from_sdk():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -374,3 +374,94 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
         assert request_body["query"] == "What is machine learning?"
         assert request_body["model"] == "rerank-english-v2.0"
         assert len(request_body["documents"]) == 2
+
+
+def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
+    litellm.set_verbose = True
+    litellm._turn_on_debug()
+
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    # Create mock response object
+    mock_response = MagicMock()
+    mock_response.headers = {"x-litellm-response-cost": "120"}
+    mock_response.parse.return_value = litellm.ModelResponse(
+        **{
+            "id": "chatcmpl-BEkxQvRGp9VAushfAsOZCbhMFLsoy",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": "Hello! How can I assist you today?",
+                        "refusal": None,
+                        "role": "assistant",
+                        "annotations": [],
+                        "audio": None,
+                        "function_call": None,
+                        "tool_calls": None,
+                    },
+                }
+            ],
+            "created": 1742856796,
+            "model": "gpt-4o-2024-08-06",
+            "object": "chat.completion",
+            "service_tier": "default",
+            "system_fingerprint": "fp_6ec83003ad",
+            "usage": {
+                "completion_tokens": 10,
+                "prompt_tokens": 9,
+                "total_tokens": 19,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0},
+            },
+        }
+    )
+
+    with patch.object(
+        openai_client.chat.completions.with_raw_response,
+        "create",
+        return_value=mock_response,
+    ) as mock_call:
+        response = litellm.completion(
+            model="litellm_proxy/gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            api_base="http://0.0.0.0:4000",
+            api_key="sk-PIp1h0RekR",
+            client=openai_client,
+        )
+
+        # Assert the headers were properly passed through
+        print(f"additional_headers: {response._hidden_params['additional_headers']}")
+        assert (
+            response._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ]
+            == "120"
+        )
+
+        assert response._hidden_params["response_cost"] == 120
+
+
+def test_litellm_gateway_from_sdk_with_thinking_param():
+    try: 
+        response = litellm.completion(
+            model="litellm_proxy/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            messages=[{"role": "user", "content": "Hello world"}],
+            api_base="http://0.0.0.0:4000",
+            api_key="sk-PIp1h0RekR",
+            # client=openai_client,
+            thinking={"type": "enabled", "max_budget": 100},
+        )
+        pytest.fail("Expected an error to be raised")
+    except Exception as e:
+        assert "Connection error." in str(e)
+    
