@@ -60,6 +60,7 @@ def print_version(base_url: str, api_key: Optional[str]):
 def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
+    click.secho(f"Accessing LiteLLM server: {base_url} ...\n", fg="yellow")
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
 
