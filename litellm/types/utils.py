@@ -822,6 +822,9 @@ class PromptTokensDetailsWrapper(
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
 
+    web_search_requests: Optional[int] = None
+    """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -839,6 +842,8 @@ class PromptTokensDetailsWrapper(
             del self.image_count
         if self.video_length_seconds is None:
             del self.video_length_seconds
+        if self.web_search_requests is None:
+            del self.web_search_requests
 
 
 class Usage(CompletionUsage):

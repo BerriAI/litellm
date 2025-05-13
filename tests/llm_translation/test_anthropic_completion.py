@@ -1227,7 +1227,7 @@ def test_anthropic_websearch():
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
-        "messages": [{"role": "user", "content": "What is the capital of France?"}],
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
         "tools": [{
             "type": "web_search_20250305",
             "name": "web_search",
@@ -1241,6 +1241,9 @@ def test_anthropic_websearch():
         print(e)
 
     assert response is not None
+
+    print(f"response: {response}\n")
+    assert response.usage.prompt_tokens_details.web_search_requests == 1
 
 
 def test_anthropic_text_editor():

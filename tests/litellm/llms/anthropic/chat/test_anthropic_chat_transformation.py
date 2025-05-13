@@ -122,3 +122,17 @@ def test_map_tool_helper():
     assert result is not None
     assert result["name"] == "web_search"
     assert result["max_uses"] == 5
+
+
+def test_server_tool_use_usage():
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 15956,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 567,
+        "server_tool_use": {"web_search_requests": 1},
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    assert usage.prompt_tokens_details.web_search_requests == 1

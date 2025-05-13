@@ -648,15 +648,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
-
+        web_search_requests: Optional[int] = None
         if "cache_creation_input_tokens" in _usage:
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
         if "cache_read_input_tokens" in _usage:
             cache_read_input_tokens = _usage["cache_read_input_tokens"]
             prompt_tokens += cache_read_input_tokens
+        if "server_tool_use" in _usage:
+            if "web_search_requests" in _usage["server_tool_use"]:
+                web_search_requests = cast(
+                    int, _usage["server_tool_use"]["web_search_requests"]
+                )
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cache_read_input_tokens
+            cached_tokens=cache_read_input_tokens,
+            web_search_requests=web_search_requests,
         )
         completion_token_details = (
             CompletionTokensDetailsWrapper(
