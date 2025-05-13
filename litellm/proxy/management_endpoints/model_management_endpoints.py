@@ -79,6 +79,7 @@ def update_db_model(
         litellm_params=LiteLLMParamsTypedDict(
             **db_model.litellm_params.model_dump(exclude_none=True)  # type: ignore
         ),
+        model_info=db_model.model_info.model_dump(exclude_none=True),
     )
     # update model name
     if updated_patch.model_name:

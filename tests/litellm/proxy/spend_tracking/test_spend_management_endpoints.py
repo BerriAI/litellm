@@ -485,6 +485,7 @@ class TestSpendLogsPayload:
                     "messages": "{}",
                     "response": "{}",
                     "proxy_server_request": "{}",
+                    "status": "success",
                 }
             )
 
@@ -576,6 +577,7 @@ class TestSpendLogsPayload:
                     "messages": "{}",
                     "response": "{}",
                     "proxy_server_request": "{}",
+                    "status": "success",
                 }
             )
 
@@ -665,6 +667,7 @@ class TestSpendLogsPayload:
                     "messages": "{}",
                     "response": "{}",
                     "proxy_server_request": "{}",
+                    "status": "success",
                 }
             )
 

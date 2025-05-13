@@ -793,6 +793,14 @@ async def test_user_api_key_auth_websocket():
         # Assert that `user_api_key_auth` was called with the correct parameters
         mock_user_api_key_auth.assert_called_once()
 
+        # Get the request object that was passed to user_api_key_auth
+        request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+        
+        # Verify that the request has headers set
+        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
+        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
+        assert request_arg.headers["authorization"] == "Bearer some_api_key"
+
         assert (
             mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
         )

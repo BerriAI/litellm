@@ -135,3 +135,13 @@ def test_gemini_thinking_budget_0():
     )
     print(raw_request)
     assert "0" in json.dumps(raw_request["raw_request_body"])
+
+
+def test_gemini_finish_reason():
+    import os
+    from litellm import completion
+    litellm._turn_on_debug()
+    response = completion(model="gemini/gemini-1.5-pro", messages=[{"role": "user", "content": "give me 3 random words"}], max_tokens=2)
+    print(response)
+    assert response.choices[0].finish_reason is not None
+    assert response.choices[0].finish_reason == "length"

@@ -111,3 +111,14 @@ def test_extract_response_content_with_citations():
 
     _, citations, _, _, _ = config.extract_response_content(completion_response)
     assert citations is not None
+
+
+def test_map_tool_helper():
+    config = AnthropicConfig()
+
+    tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+
+    result = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["name"] == "web_search"
+    assert result["max_uses"] == 5

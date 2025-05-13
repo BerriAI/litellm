@@ -511,3 +511,26 @@ def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
     if metadata and "user_id" in metadata and metadata["user_id"] is not None:
         return str(metadata["user_id"])
     return None
+
+
+def get_model_from_request(
+    request_data: dict, route: str
+) -> Optional[Union[str, List[str]]]:
+    # First try to get model from request_data
+    model = request_data.get("model") or request_data.get("target_model_names")
+
+    if model is not None:
+        model_names = model.split(",")
+        if len(model_names) == 1:
+            model = model_names[0].strip()
+        else:
+            model = [m.strip() for m in model_names]
+
+    # If model not in request_data, try to extract from route
+    if model is None:
+        # Parse model from route that follows the pattern /openai/deployments/{model}/*
+        match = re.match(r"/openai/deployments/([^/]+)", route)
+        if match:
+            model = match.group(1)
+
+    return model

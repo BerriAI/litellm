@@ -553,7 +553,7 @@ async def test_completion_predibase_streaming(sync_mode):
 async def test_completion_ai21_stream():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="ai21_chat/jamba-1.5-large",
+        model="ai21_chat/jamba-mini",
         user="ishaan",
         stream=True,
         seed=123,

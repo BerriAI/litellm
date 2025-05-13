@@ -21,6 +21,7 @@ from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
+    CallTypes,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -126,6 +127,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         parent_otel_span: Optional[Span] = None,
     ) -> List[dict]:
         return healthy_deployments
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+    ) -> Optional[dict]:
+        """
+        Allow modifying the request just before it's sent to the deployment.
+
+        Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
+
+        Used in managed_files.py
+        """
+        pass
 
     async def async_pre_call_check(
         self, deployment: dict, parent_otel_span: Optional[Span]

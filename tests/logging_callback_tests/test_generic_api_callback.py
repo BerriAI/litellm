@@ -28,7 +28,7 @@ from litellm.types.utils import (
 )
 
 verbose_logger.setLevel(logging.DEBUG)
-from enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
+from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
 
 
 
@@ -78,6 +78,9 @@ async def test_generic_api_callback():
     print("##########\n")
     print("logs were flushed to URL", actual_url, "with the following headers", mock_post.call_args[1]["headers"])
     assert actual_url == test_endpoint, f"Expected URL {test_endpoint}, got {actual_url}"
+
+    # Validate headers
+    assert mock_post.call_args[1]["headers"]["Content-Type"] == "application/json", "Content-Type should be application/json"
     
     # For the GenericAPILogger, it sends the payload directly as JSON in the data field
     json_data = mock_post.call_args[1]["data"]

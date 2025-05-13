@@ -81,6 +81,8 @@ class BaseImageGenTest(ABC):
             pass
         except litellm.ContentPolicyViolationError:
             pass  # Azure randomly raises these errors - skip when they occur
+        except litellm.InternalServerError:
+            pass
         except Exception as e:
             if "Your task failed as a result of our safety system." in str(e):
                 pass

@@ -8,10 +8,9 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import re
 import secrets
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -41,6 +40,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
+    get_model_from_request,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -89,6 +89,17 @@ azure_apim_header = APIKeyHeader(
 )
 
 
+def _get_bearer_token_or_received_api_key(api_key: str) -> str:
+    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
+        api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
+    elif api_key.startswith("bearer "):
+        api_key = api_key.replace("bearer ", "")
+
+    return api_key
+
+
 def _get_bearer_token(
     api_key: str,
 ):
@@ -106,7 +117,15 @@ def _get_bearer_token(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    request = Request(scope={"type": "http"})
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [
+                (k.lower().encode(), v.encode()) for k, v in websocket.headers.items()
+            ],
+        }
+    )
+
     request._url = websocket.url
 
     query_params = websocket.query_params
@@ -120,9 +139,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     request.body = return_body  # type: ignore
 
-    # Extract the Authorization header
     authorization = websocket.headers.get("authorization")
-
     # If no Authorization header, try the api-key header
     if not authorization:
         api_key = websocket.headers.get("api-key")
@@ -211,18 +228,51 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
-def get_model_from_request(request_data: dict, route: str) -> Optional[str]:
-    # First try to get model from request_data
-    model = request_data.get("model")
-
-    # If model not in request_data, try to extract from route
-    if model is None:
-        # Parse model from route that follows the pattern /openai/deployments/{model}/*
-        match = re.match(r"/openai/deployments/([^/]+)", route)
-        if match:
-            model = match.group(1)
-
-    return model
+def get_api_key(
+    custom_litellm_key_header: Optional[str],
+    api_key: str,
+    azure_api_key_header: Optional[str],
+    anthropic_api_key_header: Optional[str],
+    google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
+    pass_through_endpoints: Optional[List[dict]],
+    route: str,
+    request: Request,
+) -> Tuple[str, Optional[str]]:
+    """
+    Returns:
+        Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
+    """
+    api_key = api_key
+    passed_in_key: Optional[str] = None
+    if isinstance(custom_litellm_key_header, str):
+        passed_in_key = custom_litellm_key_header
+        api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+    elif isinstance(api_key, str):
+        passed_in_key = api_key
+        api_key = _get_bearer_token(api_key=api_key)
+    elif isinstance(azure_api_key_header, str):
+        passed_in_key = azure_api_key_header
+        api_key = azure_api_key_header
+    elif isinstance(anthropic_api_key_header, str):
+        passed_in_key = anthropic_api_key_header
+        api_key = anthropic_api_key_header
+    elif isinstance(google_ai_studio_api_key_header, str):
+        passed_in_key = google_ai_studio_api_key_header
+        api_key = google_ai_studio_api_key_header
+    elif isinstance(azure_apim_header, str):
+        passed_in_key = azure_apim_header
+        api_key = azure_apim_header
+    elif pass_through_endpoints is not None:
+        for endpoint in pass_through_endpoints:
+            if endpoint.get("path", "") == route:
+                headers: Optional[dict] = endpoint.get("headers", None)
+                if headers is not None:
+                    header_key: str = headers.get("litellm_user_api_key", "")
+                    if request.headers.get(key=header_key) is not None:
+                        api_key = request.headers.get(key=header_key)
+                        passed_in_key = api_key
+    return api_key, passed_in_key
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -268,28 +318,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        if isinstance(custom_litellm_key_header, str):
-            api_key = custom_litellm_key_header
-        elif isinstance(api_key, str):
-            passed_in_key = api_key
-            api_key = _get_bearer_token(api_key=api_key)
-        elif isinstance(azure_api_key_header, str):
-            api_key = azure_api_key_header
-        elif isinstance(anthropic_api_key_header, str):
-            api_key = anthropic_api_key_header
-        elif isinstance(google_ai_studio_api_key_header, str):
-            api_key = google_ai_studio_api_key_header
-        elif isinstance(azure_apim_header, str):
-            api_key = azure_apim_header
-        elif pass_through_endpoints is not None:
-            for endpoint in pass_through_endpoints:
-                if endpoint.get("path", "") == route:
-                    headers: Optional[dict] = endpoint.get("headers", None)
-                    if headers is not None:
-                        header_key: str = headers.get("litellm_user_api_key", "")
-                        if request.headers.get(key=header_key) is not None:
-                            api_key = request.headers.get(key=header_key)
-
+        api_key, passed_in_key = get_api_key(
+            custom_litellm_key_header=custom_litellm_key_header,
+            api_key=api_key,
+            azure_api_key_header=azure_api_key_header,
+            anthropic_api_key_header=anthropic_api_key_header,
+            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+            azure_apim_header=azure_apim_header,
+            pass_through_endpoints=pass_through_endpoints,
+            route=route,
+            request=request,
+        )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
@@ -521,23 +560,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
                         if budget_info.tpm_limit is not None:
-                            end_user_params["end_user_tpm_limit"] = (
-                                budget_info.tpm_limit
-                            )
+                            end_user_params[
+                                "end_user_tpm_limit"
+                            ] = budget_info.tpm_limit
                         if budget_info.rpm_limit is not None:
-                            end_user_params["end_user_rpm_limit"] = (
-                                budget_info.rpm_limit
-                            )
+                            end_user_params[
+                                "end_user_rpm_limit"
+                            ] = budget_info.rpm_limit
                         if budget_info.max_budget is not None:
-                            end_user_params["end_user_max_budget"] = (
-                                budget_info.max_budget
-                            )
+                            end_user_params[
+                                "end_user_max_budget"
+                            ] = budget_info.max_budget
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e

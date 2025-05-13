@@ -27,6 +27,8 @@ def initialize_bedrock(litellm_params, guardrail):
         guardrailIdentifier=litellm_params["guardrailIdentifier"],
         guardrailVersion=litellm_params["guardrailVersion"],
         default_on=litellm_params["default_on"],
+        mask_request_content=litellm_params.get("mask_request_content", None),
+        mask_response_content=litellm_params.get("mask_response_content", None),
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
 
