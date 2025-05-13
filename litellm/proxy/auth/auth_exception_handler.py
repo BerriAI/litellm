@@ -68,6 +68,7 @@ class UserAPIKeyAuthExceptionHandler:
                 key_name="failed-to-connect-to-db",
                 token="failed-to-connect-to-db",
                 user_id=litellm_proxy_admin_name,
+                request_route=route,
             )
         else:
             # raise the exception to the caller
@@ -87,6 +88,7 @@ class UserAPIKeyAuthExceptionHandler:
             user_api_key_dict = UserAPIKeyAuth(
                 parent_otel_span=parent_otel_span,
                 api_key=api_key,
+                request_route=route,
             )
             asyncio.create_task(
                 proxy_logging_obj.post_call_failure_hook(

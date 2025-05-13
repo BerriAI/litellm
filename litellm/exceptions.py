@@ -203,6 +203,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
         headers: Optional[dict] = None,
+        exception_status_code: Optional[int] = None,
     ):
         request = httpx.Request(
             method="POST",
@@ -211,7 +212,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
-        self.status_code = 408
+        self.status_code = exception_status_code or 408
         self.message = "litellm.Timeout: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider

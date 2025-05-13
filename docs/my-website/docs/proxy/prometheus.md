@@ -95,7 +95,14 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 
 ### Initialize Budget Metrics on Startup
 
-If you want to initialize the key/team budget metrics on startup, you can set the `prometheus_initialize_budget_metrics` to `true` in the `config.yaml`
+If you want litellm to emit the budget metrics for all keys, teams irrespective of whether they are getting requests or not, set `prometheus_initialize_budget_metrics` to `true` in the `config.yaml`
+
+**How this works:**
+
+- If the `prometheus_initialize_budget_metrics` is set to `true`
+  - Every 5 minutes litellm runs a cron job to read all keys, teams from the database
+  - It then emits the budget metrics for each key, team
+  - This is used to populate the budget metrics on the `/metrics` endpoint
 
 ```yaml
 litellm_settings:

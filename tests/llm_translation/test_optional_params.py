@@ -217,7 +217,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -396,7 +396,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -597,7 +597,7 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -1410,7 +1410,7 @@ def test_litellm_proxy_thinking_param():
         custom_llm_provider="litellm_proxy",
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
-    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 def test_gemini_modalities_param():
     optional_params = get_optional_params(
@@ -1449,3 +1449,13 @@ def test_anthropic_unified_reasoning_content(model, provider):
     )
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
+
+
+def test_azure_response_format(monkeypatch):
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
+    optional_params = get_optional_params(
+        model="azure/gpt-4o-mini",
+        custom_llm_provider="azure",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params["response_format"] == {"type": "json_object"}

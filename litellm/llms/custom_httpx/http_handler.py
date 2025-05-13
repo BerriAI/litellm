@@ -8,6 +8,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
@@ -31,7 +32,6 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
-_DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
 
 def mask_sensitive_info(error_message):
@@ -647,6 +647,49 @@ class HTTPHandler:
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
+        except Exception as e:
+            raise e
+
+    def delete(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        stream: bool = False,
+    ):
+        try:
+            if timeout is not None:
+                req = self.client.build_request(
+                    "DELETE", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                )
+            else:
+                req = self.client.build_request(
+                    "DELETE", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                )
+            response = self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+            if stream is True:
+                setattr(e, "message", mask_sensitive_info(e.response.read()))
+                setattr(e, "text", mask_sensitive_info(e.response.read()))
+            else:
+                error_text = mask_sensitive_info(e.response.text)
+                setattr(e, "message", error_text)
+                setattr(e, "text", error_text)
+
+            setattr(e, "status_code", e.response.status_code)
+
+            raise e
         except Exception as e:
             raise e
 

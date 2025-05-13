@@ -16,10 +16,10 @@ Use LiteLLM to call all your LLM APIs in the Anthropic `v1/messages` format.
 | Streaming | ✅ | |
 | Fallbacks | ✅ | between anthropic models |
 | Loadbalancing | ✅ | between anthropic models |
+| Support llm providers | - `anthropic` <br/> - `bedrock` (only Anthropic models) | |
 
 Planned improvement:
 - Vertex AI Anthropic support
-- Bedrock Anthropic support
 
 ## Usage 
 ---

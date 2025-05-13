@@ -22,17 +22,23 @@ import {
   Button,
   Divider,
 } from "@tremor/react";
+import { v4 as uuidv4 } from 'uuid';
 
-import { message, Select, Spin, Typography, Tooltip } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
+import { MessageType } from "./chat_ui/types";
+import ReasoningContent from "./chat_ui/ReasoningContent";
+import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -42,8 +48,12 @@ import {
   UserOutlined,
   DeleteOutlined,
   LoadingOutlined,
-  TagsOutlined
+  TagsOutlined,
+  DatabaseOutlined,
+  InfoCircleOutlined
 } from "@ant-design/icons";
+
+const { TextArea } = Input;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -65,7 +75,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   );
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string; isImage?: boolean }[]>([]);
+  const [chatHistory, setChatHistory] = useState<MessageType[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
@@ -76,6 +86,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -132,17 +144,120 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
+    console.log("updateTextUI called with:", role, chunk, model);
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // if the last message is already from this same role, append
+      if (last && last.role === role && !last.isImage) {
+        // build a new object, but only set `model` if it wasn't there already
+        const updated: MessageType = {
+          ...last,
+          content: last.content + chunk,
+          model: last.model ?? model,      // ← only use the passed‐in model on the first chunk
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // otherwise start a brand new assistant bubble
+        return [
+          ...prev,
+          {
+            role,
+            content: chunk,
+            model,                          // model set exactly once here
+          },
+        ];
+      }
+    });
+  };
+
+  const updateReasoningContent = (chunk: string) => {
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === role && !lastMessage.isImage) {
+      
+      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
-          { role, content: lastMessage.content + chunk, model },
+          { 
+            ...lastMessage,
+            reasoningContent: (lastMessage.reasoningContent || "") + chunk 
+          },
         ];
       } else {
-        return [...prevHistory, { role, content: chunk, model }];
+        // If there's no assistant message yet, we'll create one with empty content
+        // but with reasoning content
+        if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
+          return [
+            ...prevHistory,
+            { 
+              role: "assistant", 
+              content: "", 
+              reasoningContent: chunk 
+            }
+          ];
+        }
+        
+        return prevHistory;
       }
+    });
+  };
+
+  const updateTimingData = (timeToFirstToken: number) => {
+    console.log("updateTimingData called with:", timeToFirstToken);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+      console.log("Current last message:", lastMessage);
+      
+      if (lastMessage && lastMessage.role === "assistant") {
+        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
+        const updatedHistory = [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          { 
+            ...lastMessage,
+            timeToFirstToken
+          },
+        ];
+        console.log("Updated chat history:", updatedHistory);
+        return updatedHistory;
+      } 
+      // If the last message is a user message and no assistant message exists yet,
+      // create a new assistant message with empty content
+      else if (lastMessage && lastMessage.role === "user") {
+        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
+        return [
+          ...prevHistory,
+          { 
+            role: "assistant", 
+            content: "", 
+            timeToFirstToken 
+          }
+        ];
+      }
+      
+      console.log("No appropriate message found to update timing");
+      return prevHistory;
+    });
+  };
+
+  const updateUsageData = (usage: TokenUsage) => {
+    console.log("Received usage data:", usage);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+      
+      if (lastMessage && lastMessage.role === "assistant") {
+        console.log("Updating message with usage data:", usage);
+        const updatedMessage = { 
+          ...lastMessage,
+          usage
+        };
+        console.log("Updated message:", updatedMessage);
+        
+        return [
+          ...prevHistory.slice(0, prevHistory.length - 1),
+          updatedMessage
+        ];
+      }
+      
+      return prevHistory;
     });
   };
 
@@ -153,10 +268,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     ]);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault(); // Prevent default to avoid newline
       handleSendMessage();
     }
+    // If Shift+Enter is pressed, the default behavior (inserting a newline) will occur
   };
 
   const handleCancelRequest = () => {
@@ -189,13 +306,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
     
+    // Generate new trace ID for a new conversation or use existing one
+    const traceId = messageTraceId || uuidv4();
+    if (!messageTraceId) {
+      setMessageTraceId(traceId);
+    }
+    
     // Update UI with full message object
     setChatHistory([...chatHistory, newUserMessage]);
     setIsLoading(true);
 
     try {
       if (selectedModel) {
-        // Use EndpointType enum for comparison
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -206,7 +328,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedModel,
             effectiveApiKey,
             selectedTags,
-            signal
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -217,6 +344,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal
+          );
+        } else if (endpointType === EndpointType.RESPONSES) {
+          // Create chat history for API call - strip out model field and isImage field
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          
+          await makeOpenAIResponsesRequest(
+            apiChatHistory,
+            (role, delta, model) => updateTextUI(role, delta, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            updateReasoningContent,
+            updateTimingData,
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
           );
         }
       }
@@ -237,6 +381,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const clearChatHistory = () => {
     setChatHistory([]);
+    setMessageTraceId(null);
     message.success("Chat history cleared.");
   };
 
@@ -312,11 +457,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
-                    ...modelInfo.map((option) => ({
-                      value: option.model_group,
-                      label: option.model_group
-                    })),
-                    { value: 'custom', label: 'Enter custom model' }
+                    ...Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index
+                      })),
+                    { value: 'custom', label: 'Enter custom model', key: 'custom' }
                   ]}
                   style={{ width: "100%" }}
                   showSearch={true}
@@ -358,6 +505,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <TagSelector
                   value={selectedTags}
                   onChange={setSelectedTags}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <DatabaseOutlined className="mr-2" /> Vector Store
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select vector store(s) to use for this LLM API call. You can set up your vector store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <VectorStoreSelector
+                  value={selectedVectorStores}
+                  onChange={setSelectedVectorStores}
                   className="mb-4"
                   accessToken={accessToken || ""}
                 />
@@ -410,7 +578,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </span>
                     )}
                   </div>
-                  <div className="whitespace-pre-wrap break-words max-w-full message-content">
+                  {message.reasoningContent && (
+                    <ReasoningContent reasoningContent={message.reasoningContent} />
+                  )}
+                  <div className="whitespace-pre-wrap break-words max-w-full message-content" 
+                       style={{ 
+                         wordWrap: 'break-word', 
+                         overflowWrap: 'break-word',
+                         wordBreak: 'break-word',
+                         hyphens: 'auto'
+                       }}>
                     {message.isImage ? (
                       <img 
                         src={message.content} 
@@ -432,20 +609,32 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 language={match[1]}
                                 PreTag="div"
                                 className="rounded-md my-2"
+                                wrapLines={true}
+                                wrapLongLines={true}
                                 {...props}
                               >
                                 {String(children).replace(/\n$/, '')}
                               </SyntaxHighlighter>
                             ) : (
-                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
                                 {children}
                               </code>
                             );
-                          }
+                          },
+                          pre: ({ node, ...props }) => (
+                            <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                          )
                         }}
                       >
                         {message.content}
                       </ReactMarkdown>
+                    )}
+                                        
+                    {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
+                      <ResponseMetrics 
+                        timeToFirstToken={message.timeToFirstToken}
+                        usage={message.usage}
+                      />
                     )}
                   </div>
                 </div>
@@ -461,18 +650,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
           
           <div className="p-4 border-t border-gray-200 bg-white">
             <div className="flex items-center">
-              <TextInput
-                type="text"
+              <TextArea
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
-                  endpointType === EndpointType.CHAT 
-                    ? "Type your message..." 
+                  endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
+                    ? "Type your message... (Shift+Enter for new line)" 
                     : "Describe the image you want to generate..."
                 }
                 disabled={isLoading}
                 className="flex-1"
+                autoSize={{ minRows: 1, maxRows: 6 }}
+                style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
               />
               {isLoading ? (
                 <Button

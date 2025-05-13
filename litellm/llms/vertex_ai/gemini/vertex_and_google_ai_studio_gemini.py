@@ -24,6 +24,11 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -31,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -38,6 +44,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
+    OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -45,11 +52,13 @@ from litellm.types.llms.vertex_ai import (
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
+    GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
     ToolConfig,
     Tools,
+    UsageMetadata,
 )
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
@@ -59,7 +68,7 @@ from litellm.types.utils import (
     TopLogprob,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.utils import CustomStreamWrapper, ModelResponse, supports_reasoning
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import VertexAIError, _build_vertex_schema
@@ -190,7 +199,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -207,9 +216,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
-            "top_logprobs",  # Added this to list of supported openAI params
+            "top_logprobs",
             "modalities",
         ]
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        return supported_params
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict]
@@ -313,27 +326,33 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
-                    item = _build_vertex_schema(parameters=item)
+                    item = _build_vertex_schema(
+                        parameters=item, add_property_ordering=True
+                    )
+
         elif isinstance(old_schema, dict):
-            old_schema = _build_vertex_schema(parameters=old_schema)
+            old_schema = _build_vertex_schema(
+                parameters=old_schema, add_property_ordering=True
+            )
         return old_schema
 
     def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+        new_value = deepcopy(value)
         # remove 'additionalProperties' from json schema
-        value = _remove_additional_properties(value)
+        new_value = _remove_additional_properties(new_value)
         # remove 'strict' from json schema
-        value = _remove_strict_from_schema(value)
-        if value["type"] == "json_object":
+        new_value = _remove_strict_from_schema(new_value)
+        if new_value["type"] == "json_object":
             optional_params["response_mime_type"] = "application/json"
-        elif value["type"] == "text":
+        elif new_value["type"] == "text":
             optional_params["response_mime_type"] = "text/plain"
-        if "response_schema" in value:
+        if "response_schema" in new_value:
             optional_params["response_mime_type"] = "application/json"
-            optional_params["response_schema"] = value["response_schema"]
-        elif value["type"] == "json_schema":  # type: ignore
-            if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+            optional_params["response_schema"] = new_value["response_schema"]
+        elif new_value["type"] == "json_schema":  # type: ignore
+            if "json_schema" in new_value and "schema" in new_value["json_schema"]:  # type: ignore
                 optional_params["response_mime_type"] = "application/json"
-                optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
+                optional_params["response_schema"] = new_value["json_schema"]["schema"]  # type: ignore
 
         if "response_schema" in optional_params and isinstance(
             optional_params["response_schema"], dict
@@ -341,6 +360,56 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             optional_params["response_schema"] = self._map_response_schema(
                 value=optional_params["response_schema"]
             )
+
+    @staticmethod
+    def _map_reasoning_effort_to_thinking_budget(
+        reasoning_effort: str,
+    ) -> GeminiThinkingConfig:
+        if reasoning_effort == "low":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "medium":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "high":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        else:
+            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+
+    @staticmethod
+    def _map_thinking_param(
+        thinking_param: AnthropicThinkingParam,
+    ) -> GeminiThinkingConfig:
+        thinking_enabled = thinking_param.get("type") == "enabled"
+        thinking_budget = thinking_param.get("budget_tokens")
+
+        params: GeminiThinkingConfig = {}
+        if thinking_enabled:
+            params["includeThoughts"] = True
+        if thinking_budget is not None and isinstance(thinking_budget, int):
+            params["thinkingBudget"] = thinking_budget
+
+        return params
+
+    def map_response_modalities(self, value: list) -> list:
+        response_modalities = []
+        for modality in value:
+            if modality == "text":
+                response_modalities.append("TEXT")
+            elif modality == "image":
+                response_modalities.append("IMAGE")
+            elif modality == "audio":
+                response_modalities.append("AUDIO")
+            else:
+                response_modalities.append("MODALITY_UNSPECIFIED")
+        return response_modalities
 
     def map_openai_params(
         self,
@@ -398,15 +467,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "seed":
                 optional_params["seed"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+            elif param == "thinking":
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_thinking_param(
+                    cast(AnthropicThinkingParam, value)
+                )
             elif param == "modalities" and isinstance(value, list):
-                response_modalities = []
-                for modality in value:
-                    if modality == "text":
-                        response_modalities.append("TEXT")
-                    elif modality == "image":
-                        response_modalities.append("IMAGE")
-                    else:
-                        response_modalities.append("MODALITY_UNSPECIFIED")
+                response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
 
         if litellm.vertex_ai_safety_settings is not None:
@@ -513,19 +585,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def get_assistant_content_message(
         self, parts: List[HttpxPartType]
-    ) -> Optional[str]:
-        _content_str = ""
+    ) -> Tuple[Optional[str], Optional[str]]:
+        content_str: Optional[str] = None
+        reasoning_content_str: Optional[str] = None
         for part in parts:
+            _content_str = ""
             if "text" in part:
                 _content_str += part["text"]
             elif "inlineData" in part:  # base64 encoded image
                 _content_str += "data:{};base64,{}".format(
                     part["inlineData"]["mimeType"], part["inlineData"]["data"]
                 )
+            if len(_content_str) > 0:
+                if part.get("thought") is True:
+                    if reasoning_content_str is None:
+                        reasoning_content_str = ""
+                    reasoning_content_str += _content_str
+                else:
+                    if content_str is None:
+                        content_str = ""
+                    content_str += _content_str
 
-        if _content_str:
-            return _content_str
-        return None
+        return content_str, reasoning_content_str
 
     def _transform_parts(
         self,
@@ -668,6 +749,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return model_response
 
+    def is_candidate_token_count_inclusive(self, usage_metadata: UsageMetadata) -> bool:
+        """
+        Check if the candidate token count is inclusive of the thinking token count
+
+        if prompttokencount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
+
+        else the candidate token count is exclusive of the thinking token count
+
+        Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
+        """
+        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+            "candidatesTokenCount", 0
+        ) == usage_metadata.get("totalTokenCount", 0):
+            return True
+        else:
+            return False
+
     def _calculate_usage(
         self,
         completion_response: GenerateContentResponseBody,
@@ -676,6 +774,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         audio_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        reasoning_tokens: Optional[int] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
@@ -686,25 +785,54 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     audio_tokens = detail["tokenCount"]
                 elif detail["modality"] == "TEXT":
                     text_tokens = detail["tokenCount"]
-
+        if "thoughtsTokenCount" in completion_response["usageMetadata"]:
+            reasoning_tokens = completion_response["usageMetadata"][
+                "thoughtsTokenCount"
+            ]
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
         )
+
+        completion_tokens = completion_response["usageMetadata"].get(
+            "candidatesTokenCount", 0
+        )
+        if (
+            not self.is_candidate_token_count_inclusive(
+                completion_response["usageMetadata"]
+            )
+            and reasoning_tokens
+        ):
+            completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
+            completion_tokens=completion_tokens,
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
+            reasoning_tokens=reasoning_tokens,
         )
 
         return usage
+
+    def _check_finish_reason(
+        self,
+        chat_completion_message: ChatCompletionResponseMessage,
+        finish_reason: Optional[str],
+    ) -> OpenAIChatCompletionFinishReason:
+        if chat_completion_message.get("function_call"):
+            return "function_call"
+        elif chat_completion_message.get("tool_calls"):
+            return "tool_calls"
+        elif finish_reason and (
+            finish_reason == "SAFETY" or finish_reason == "RECITATION"
+        ):  # vertex ai
+            return "content_filter"
+        else:
+            return "stop"
 
     def _process_candidates(self, _candidates, model_response, litellm_params):
         """Helper method to process candidates and extract metadata"""
@@ -730,11 +858,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 citation_metadata.append(candidate["citationMetadata"])
 
             if "parts" in candidate["content"]:
-                chat_completion_message[
-                    "content"
-                ] = VertexGeminiConfig().get_assistant_content_message(
+                (
+                    content,
+                    reasoning_content,
+                ) = VertexGeminiConfig().get_assistant_content_message(
                     parts=candidate["content"]["parts"]
                 )
+                if content is not None:
+                    chat_completion_message["content"] = content
+                if reasoning_content is not None:
+                    chat_completion_message["reasoning_content"] = reasoning_content
 
                 functions, tools = self._transform_parts(
                     parts=candidate["content"]["parts"],
@@ -748,9 +881,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_logprobs = self._transform_logprobs(
                     logprobs_result=candidate["logprobsResult"]
                 )
-            # Handle avgLogprobs for Gemini Flash 2.0
-            elif "avgLogprobs" in candidate:
-                chat_completion_logprobs = candidate["avgLogprobs"]
 
             if tools:
                 chat_completion_message["tool_calls"] = tools
@@ -759,7 +889,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_message["function_call"] = functions
 
             choice = litellm.Choices(
-                finish_reason=candidate.get("finishReason", "stop"),
+                finish_reason=self._check_finish_reason(
+                    chat_completion_message, candidate.get("finishReason")
+                ),
                 index=candidate.get("index", idx),
                 message=chat_completion_message,  # type: ignore
                 logprobs=chat_completion_logprobs,
