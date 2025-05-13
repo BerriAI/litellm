@@ -104,9 +104,6 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
-        model_id = optional_params.get("model_id", None)
-        if model_id:
-            del request_data["model"]
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,

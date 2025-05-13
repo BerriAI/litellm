@@ -153,25 +153,13 @@ class TestSagemakerChatTransform:
 
     def test_inference_component_model_not_in_request(self):
         """Test that `model` is not part of the request body"""
-        test_params = {"model_id": "test"}
 
-        with patch(
-            "litellm.llms.sagemaker.chat.transformation.SagemakerChatConfig._sign_request"
-        ) as mock_sign_request:
-            self.config.sign_request(
-                headers={"X-Amzn-SageMaker-Inference-Component": "test"},
-                optional_params=test_params,
-                request_data={"model": self.model},
-                api_base="",
-            )
+        result = self.config.transform_request(
+            model=self.model,
+            messages=self.messages,
+            optional_params=self.optional_params,
+            litellm_params=None,
+            headers=None,
+        )
 
-            mock_sign_request.assert_called_once_with(
-                service_name="sagemaker",
-                headers={"X-Amzn-SageMaker-Inference-Component": "test"},
-                optional_params=test_params,
-                request_data={},
-                api_base="",
-                model=None,
-                stream=None,
-                fake_stream=None,
-            )
+        assert "model" not in result

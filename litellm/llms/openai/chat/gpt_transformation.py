@@ -383,11 +383,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
-        return {
+        model_id = optional_params.get("model_id", None)
+        request_data = {
             "model": model,
             "messages": messages,
             **optional_params,
         }
+        if model_id:
+            del request_data["model"]
+            
+        return request_data
 
     async def async_transform_request(
         self,
@@ -401,11 +406,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             messages=messages, model=model, is_async=True
         )
 
-        return {
+        model_id = optional_params.get("model_id", None)
+        request_data = {
             "model": model,
             "messages": transformed_messages,
             **optional_params,
         }
+        if model_id:
+            del request_data["model"]
+
+        return request_data
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None
