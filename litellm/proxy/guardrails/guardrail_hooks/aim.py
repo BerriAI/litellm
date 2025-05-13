@@ -57,6 +57,7 @@ class AimGuardrail(CustomGuardrail):
             "https://", "wss://"
         )
         self.dlp_entities: list[dict] = []
+        self._max_dlp_entities = 100
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -156,7 +157,7 @@ class AimGuardrail(CustomGuardrail):
         if not redaction_result:
             return data
         if analysis_result and analysis_result.get("session_entities"):
-            self.dlp_entities = analysis_result.get("session_entities")
+            self._set_dlp_entities(analysis_result.get("session_entities"))
         data["messages"] = [
             {
                 "role": redaction_result["redacted_new_message"]["role"],
@@ -330,3 +331,7 @@ class AimGuardrail(CustomGuardrail):
                 chunk = json.dumps(chunk)
             await websocket.send(chunk)
         await websocket.send(json.dumps({"done": True}))
+
+
+    def _set_dlp_entities(self, entities: list[dict]) -> None:
+        self.dlp_entities = entities[:self._max_dlp_entities]
