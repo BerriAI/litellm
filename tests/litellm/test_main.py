@@ -176,7 +176,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                 response = await acompletion(**args, client=client)
             print(response)
         except Exception as e:
-            print(e)
+            pass
 
         mock_client.assert_called()
 
@@ -186,6 +186,11 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = mock_client.call_args.kwargs["data"]
         else:
             json_str = json.dumps(mock_client.call_args.kwargs["json"])
+
+        if isinstance(json_str, bytes):
+            json_str = json_str.decode("utf-8")
+
+        print(f"type of json_str: {type(json_str)}")
         assert "png" in json_str
         assert "jpeg" not in json_str
 

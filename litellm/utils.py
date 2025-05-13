@@ -2091,6 +2091,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            if key not in litellm.novita_models:
+                litellm.novita_models.append(key)
     return model_cost
 
 
@@ -2268,7 +2271,7 @@ def get_optional_params_image_gen(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}, {model}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -2659,7 +2662,8 @@ def get_optional_params(  # noqa: PLR0915
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+            custom_llm_provider != "bedrock"
+            and not custom_llm_provider.startswith("sagemaker")
         ):  # allow dynamically setting boto3 init logic
             continue
         elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
@@ -4954,6 +4958,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "novita":
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5042,6 +5051,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif model in litellm.novita_models:
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6383,6 +6397,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.NOVITA == provider:
+            return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6589,6 +6605,12 @@ class ProviderConfigManager:
             )
 
             return get_openai_image_generation_config(model)
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.image_generation import (
+                get_azure_image_generation_config,
+            )
+
+            return get_azure_image_generation_config(model)
         return None
 
 
@@ -6736,6 +6758,7 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
     return non_default_params
 
 

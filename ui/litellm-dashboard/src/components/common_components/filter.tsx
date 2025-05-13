@@ -8,7 +8,6 @@ export interface FilterOption {
   label?: string;
   isSearchable?: boolean;
   searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
-  options?: Array<{ label: string; value: string }>;
 }
 
 interface FilterValues {
@@ -75,13 +74,12 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   // Define the order of filters
   const orderedFilters = [
     'Team ID',
-    'Status',
-    'Model',
     'Organization ID',
     'Key Alias',
     'User ID',
     'Key Hash'
   ];
+
   return (
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">
@@ -124,20 +122,6 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     options={searchOptionsMap[option.name] || []}
                     allowClear
                   />
-                ) : option.options ? (
-                  <Select
-                    className="w-full"
-                    placeholder={`Select ${option.label || option.name}...`}
-                    value={tempValues[option.name] || undefined}
-                    onChange={(value) => handleFilterChange(option.name, value)}
-                    allowClear
-                  >
-                    {option.options.map(opt => (
-                      <Select.Option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </Select.Option>
-                    ))}
-                  </Select>
                 ) : (
                   <Input
                     className="w-full"

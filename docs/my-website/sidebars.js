@@ -18,6 +18,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
+    
     {
       type: "category",
       label: "LiteLLM Proxy Server",
@@ -62,6 +63,7 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/management_client",
+        "proxy/management_cli",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -182,6 +184,95 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Supported Endpoints",
+      link: {
+        type: "generated-index",
+        title: "Supported Endpoints",
+        description:
+          "Learn how to deploy + call models from different providers on LiteLLM",
+        slug: "/supported_endpoints",
+      },
+      items: [
+        {
+          type: "category",
+          label: "/chat/completions",
+          link: {
+            type: "generated-index",
+            title: "Chat Completions",
+            description: "Details on the completion() function",
+            slug: "/completion",
+          },
+          items: [
+            "completion/input",
+            "completion/output",
+            "completion/usage",
+          ],
+        },
+        "response_api",
+        "text_completion",
+        "embedding/supported_embedding",
+        "anthropic_unified",
+        "mcp",
+        {
+          type: "category",
+          label: "/images",
+          items: [
+            "image_generation",
+            "image_variations",
+          ]
+        },
+        {
+          type: "category",
+          label: "/audio",
+          "items": [
+            "audio_transcription",
+            "text_to_speech",
+          ]
+        },
+        {
+          type: "category",
+          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
+          items: [
+            "pass_through/intro",
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/vllm",
+            "pass_through/mistral",
+            "pass_through/openai_passthrough",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/assembly_ai",
+            "pass_through/langfuse",
+            "proxy/pass_through",
+          ],
+        },
+        "rerank",
+        "assistants",
+
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
+        {
+          type: "category",
+          label: "/batches",
+          items: [
+            "batches",
+            "proxy/managed_batches",
+          ]
+        },
+        "realtime",
+        "fine_tuning",
+        "moderation",
+      ],
+    },
+    {
+      type: "category",
       label: "Supported Models & Providers",
       link: {
         type: "generated-index",
@@ -263,6 +354,7 @@ const sidebars = {
         "providers/nlp_cloud",
         "providers/replicate",
         "providers/togetherai",
+        "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
         "providers/aleph_alpha",
@@ -305,88 +397,7 @@ const sidebars = {
 
       ]
     },
-    {
-      type: "category",
-      label: "Supported Endpoints",
-      link: {
-        type: "generated-index",
-        title: "Supported Endpoints",
-        description:
-          "Learn how to deploy + call models from different providers on LiteLLM",
-        slug: "/supported_endpoints",
-      },
-      items: [
-        {
-          type: "category",
-          label: "/chat/completions",
-          link: {
-            type: "generated-index",
-            title: "Chat Completions",
-            description: "Details on the completion() function",
-            slug: "/completion",
-          },
-          items: [
-            "completion/input",
-            "completion/output",
-            "completion/usage",
-          ],
-        },
-        "response_api",
-        "text_completion",
-        "embedding/supported_embedding",
-        "anthropic_unified",
-        "mcp",
-        {
-          type: "category",
-          label: "/images",
-          items: [
-            "image_generation",
-            "image_variations",
-          ]
-        },
-        {
-          type: "category",
-          label: "/audio",
-          "items": [
-            "audio_transcription",
-            "text_to_speech",
-          ]
-        },
-        {
-          type: "category",
-          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
-          items: [
-            "pass_through/intro",
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/vllm",
-            "pass_through/mistral",
-            "pass_through/openai_passthrough",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/assembly_ai",
-            "pass_through/langfuse",
-            "proxy/pass_through",
-          ],
-        },
-        "rerank",
-        "assistants",
-
-        {
-          type: "category",
-          label: "/files",
-          items: [
-            "files_endpoints",
-            "proxy/litellm_managed_files",
-          ],
-        },
-        "batches",
-        "realtime",
-        "fine_tuning",
-        "moderation",
-      ],
-    },
+    
     {
       type: "category",
       label: "Routing, Loadbalancing & Fallbacks",
@@ -485,7 +496,7 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-
+            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",
@@ -553,6 +564,7 @@ const sidebars = {
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
             "projects/pgai",
+            "projects/GPTLocalhost",
           ],
         },
         "proxy/pii_masking",
