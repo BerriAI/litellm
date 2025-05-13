@@ -2291,6 +2291,11 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
         Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
         """
         pass
+    
+    def test_prompt_caching(self):
+        """
+        TODO: Ensure this test passes our base llm test suite
+        """
 
 
 class TestBedrockRerank(BaseLLMRerankTest):
