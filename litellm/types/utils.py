@@ -2041,6 +2041,7 @@ all_litellm_params = [
     "litellm_credential_name",
     "allowed_openai_params",
     "litellm_session_id",
+    "use_litellm_proxy",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -2150,6 +2151,7 @@ class LlmProviders(str, Enum):
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
