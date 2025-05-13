@@ -2382,7 +2382,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
 
     if provider_config is not None:
-        supported_params = provider_config.get_supported_openai_params(model=model)
+        supported_params: Optional[list] = provider_config.get_supported_openai_params(
+            model=model
+        )
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
