@@ -46,27 +46,6 @@ else:
     Span = Any
 
 
-def hash_token(token: str):
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
-
-
-def _hash_token_if_needed(token: str) -> str:
-    """
-    Hash the token if it's a string and starts with "sk-"
-
-    Else return the token as is
-    """
-    if token.startswith("sk-"):
-        return hash_token(token=token)
-    else:
-        return token
-
-
 class LiteLLMTeamRoles(enum.Enum):
     # team admin
     TEAM_ADMIN = "admin"
@@ -194,6 +173,18 @@ def hash_token(token: str):
     hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
+
+
+def _hash_token_if_needed(token: str) -> str:
+    """
+    Hash the token if it's a string and starts with "sk-"
+
+    Else return the token as is
+    """
+    if token.startswith("sk-"):
+        return hash_token(token=token)
+    else:
+        return token
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
