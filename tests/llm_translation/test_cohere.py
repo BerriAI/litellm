@@ -281,3 +281,5 @@ async def test_cohere_request_body_with_allowed_params():
         assert "allowed_openai_params" not in request_data
         assert request_data["response_format"] == test_response_format
         assert request_data["reasoning_effort"] == test_reasoning_effort
+
+
