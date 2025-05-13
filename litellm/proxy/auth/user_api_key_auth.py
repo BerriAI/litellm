@@ -10,7 +10,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 import asyncio
 import secrets
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -87,6 +87,17 @@ azure_apim_header = APIKeyHeader(
     auto_error=False,
     description="The default name of the subscription key header of Azure",
 )
+
+
+def _get_bearer_token_or_received_api_key(api_key: str) -> str:
+    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
+        api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
+    elif api_key.startswith("bearer "):
+        api_key = api_key.replace("bearer ", "")
+
+    return api_key
 
 
 def _get_bearer_token(
@@ -217,6 +228,53 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def get_api_key(
+    custom_litellm_key_header: Optional[str],
+    api_key: str,
+    azure_api_key_header: Optional[str],
+    anthropic_api_key_header: Optional[str],
+    google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
+    pass_through_endpoints: Optional[List[dict]],
+    route: str,
+    request: Request,
+) -> Tuple[str, Optional[str]]:
+    """
+    Returns:
+        Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
+    """
+    api_key = api_key
+    passed_in_key: Optional[str] = None
+    if isinstance(custom_litellm_key_header, str):
+        passed_in_key = custom_litellm_key_header
+        api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+    elif isinstance(api_key, str):
+        passed_in_key = api_key
+        api_key = _get_bearer_token(api_key=api_key)
+    elif isinstance(azure_api_key_header, str):
+        passed_in_key = azure_api_key_header
+        api_key = azure_api_key_header
+    elif isinstance(anthropic_api_key_header, str):
+        passed_in_key = anthropic_api_key_header
+        api_key = anthropic_api_key_header
+    elif isinstance(google_ai_studio_api_key_header, str):
+        passed_in_key = google_ai_studio_api_key_header
+        api_key = google_ai_studio_api_key_header
+    elif isinstance(azure_apim_header, str):
+        passed_in_key = azure_apim_header
+        api_key = azure_apim_header
+    elif pass_through_endpoints is not None:
+        for endpoint in pass_through_endpoints:
+            if endpoint.get("path", "") == route:
+                headers: Optional[dict] = endpoint.get("headers", None)
+                if headers is not None:
+                    header_key: str = headers.get("litellm_user_api_key", "")
+                    if request.headers.get(key=header_key) is not None:
+                        api_key = request.headers.get(key=header_key)
+                        passed_in_key = api_key
+    return api_key, passed_in_key
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -260,28 +318,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        if isinstance(custom_litellm_key_header, str):
-            api_key = custom_litellm_key_header
-        elif isinstance(api_key, str):
-            passed_in_key = api_key
-            api_key = _get_bearer_token(api_key=api_key)
-        elif isinstance(azure_api_key_header, str):
-            api_key = azure_api_key_header
-        elif isinstance(anthropic_api_key_header, str):
-            api_key = anthropic_api_key_header
-        elif isinstance(google_ai_studio_api_key_header, str):
-            api_key = google_ai_studio_api_key_header
-        elif isinstance(azure_apim_header, str):
-            api_key = azure_apim_header
-        elif pass_through_endpoints is not None:
-            for endpoint in pass_through_endpoints:
-                if endpoint.get("path", "") == route:
-                    headers: Optional[dict] = endpoint.get("headers", None)
-                    if headers is not None:
-                        header_key: str = headers.get("litellm_user_api_key", "")
-                        if request.headers.get(key=header_key) is not None:
-                            api_key = request.headers.get(key=header_key)
-
+        api_key, passed_in_key = get_api_key(
+            custom_litellm_key_header=custom_litellm_key_header,
+            api_key=api_key,
+            azure_api_key_header=azure_api_key_header,
+            anthropic_api_key_header=anthropic_api_key_header,
+            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+            azure_apim_header=azure_apim_header,
+            pass_through_endpoints=pass_through_endpoints,
+            route=route,
+            request=request,
+        )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
