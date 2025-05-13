@@ -217,6 +217,53 @@ Example:
 litellm-proxy keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
 ```
 
+#### Update Key
+
+Update an existing API key:
+
+```bash
+litellm-proxy keys update --key <key-hash> [options]
+```
+
+Options:
+
+- `--key`: The key or key hash to update (**required**)
+- `--key-alias`: Alias/name for the key
+- `--user-id`: User ID to associate the key with
+- `--team-id`: Team ID to associate the key with
+- `--budget-id`: Budget ID to associate the key with
+- `--models`: Comma-separated list of allowed models
+- `--tags`: Comma-separated list of tags
+- `--enforced-params`: Comma-separated list of enforced params
+- `--spend`: Amount spent by key
+- `--max-budget`: Max budget for key
+- `--model-max-budget`: JSON string of model-specific budgets
+- `--budget-duration`: Budget reset period (e.g. '30d', '1h')
+- `--soft-budget`: Soft budget limit
+- `--max-parallel-requests`: Rate limit for parallel requests
+- `--metadata`: JSON string of metadata for key
+- `--tpm-limit`: Tokens per minute limit
+- `--rpm-limit`: Requests per minute limit
+- `--model-rpm-limit`: JSON string of model-specific RPM limits
+- `--model-tpm-limit`: JSON string of model-specific TPM limits
+- `--allowed-cache-controls`: Comma-separated list of allowed cache controls
+- `--duration`: Key validity duration (e.g. '30d', '1h')
+- `--permissions`: JSON string of key-specific permissions
+- `--send-invite-email`: Send invite email to user_id (flag)
+- `--guardrails`: Comma-separated list of guardrails
+- `--blocked`: Whether the key is blocked (flag)
+- `--aliases`: JSON string of model aliases for the key
+- `--config`: JSON string of key-specific config
+- `--temp-budget-increase`: Temporary budget increase for the key
+- `--temp-budget-expiry`: Expiry time for the temporary budget increase
+- `--allowed-routes`: Comma-separated list of allowed routes for the key
+
+Example:
+
+```bash
+litellm-proxy keys update --key sk-key1 --max-budget 200 --models gpt-4,gpt-3.5-turbo --metadata '{"env": "prod"}'
+```
+
 #### Delete Keys
 
 Delete API keys by key or alias:

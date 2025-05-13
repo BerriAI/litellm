@@ -251,3 +251,130 @@ class KeysManagementClient:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
+
+    def update(
+        self,
+        key: str,
+        key_alias: Optional[str] = None,
+        user_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        budget_id: Optional[str] = None,
+        models: Optional[list] = None,
+        tags: Optional[list] = None,
+        enforced_params: Optional[list] = None,
+        spend: Optional[float] = None,
+        max_budget: Optional[float] = None,
+        model_max_budget: Optional[dict] = None,
+        budget_duration: Optional[str] = None,
+        soft_budget: Optional[float] = None,
+        max_parallel_requests: Optional[int] = None,
+        metadata: Optional[dict] = None,
+        tpm_limit: Optional[int] = None,
+        rpm_limit: Optional[int] = None,
+        model_rpm_limit: Optional[dict] = None,
+        model_tpm_limit: Optional[dict] = None,
+        allowed_cache_controls: Optional[list] = None,
+        duration: Optional[str] = None,
+        permissions: Optional[dict] = None,
+        send_invite_email: Optional[bool] = None,
+        guardrails: Optional[list] = None,
+        blocked: Optional[bool] = None,
+        aliases: Optional[dict] = None,
+        config: Optional[dict] = None,
+        temp_budget_increase: Optional[float] = None,
+        temp_budget_expiry: Optional[str] = None,
+        allowed_routes: Optional[list] = None,
+        return_request: bool = False,
+    ) -> Union[Dict[str, Any], requests.Request]:
+        """
+        Update an existing API key's parameters via /key/update endpoint.
+        Args:
+            key (str): The key to update (required)
+            ... (other optional fields, see UpdateKeyRequest)
+            return_request (bool): If True, returns the prepared request object instead of executing it
+        Returns:
+            Union[Dict[str, Any], requests.Request]: Either the response from the server or a prepared request object if return_request is True
+        Raises:
+            UnauthorizedError: If the request fails with a 401 status code
+            requests.exceptions.RequestException: If the request fails with any other error
+        """
+        url = f"{self._base_url}/key/update"
+        data = {"key": key}
+        if key_alias is not None:
+            data["key_alias"] = key_alias
+        if user_id is not None:
+            data["user_id"] = user_id
+        if team_id is not None:
+            data["team_id"] = team_id
+        if budget_id is not None:
+            data["budget_id"] = budget_id
+        if models is not None:
+            data["models"] = models
+        if tags is not None:
+            data["tags"] = tags
+        if enforced_params is not None:
+            data["enforced_params"] = enforced_params
+        if spend is not None:
+            data["spend"] = spend
+        if max_budget is not None:
+            data["max_budget"] = max_budget
+        if model_max_budget is not None:
+            data["model_max_budget"] = model_max_budget
+        if budget_duration is not None:
+            data["budget_duration"] = budget_duration
+        if soft_budget is not None:
+            data["soft_budget"] = soft_budget
+        if max_parallel_requests is not None:
+            data["max_parallel_requests"] = max_parallel_requests
+        if metadata is not None:
+            data["metadata"] = metadata
+        if tpm_limit is not None:
+            data["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            data["rpm_limit"] = rpm_limit
+        if model_rpm_limit is not None:
+            data["model_rpm_limit"] = model_rpm_limit
+        if model_tpm_limit is not None:
+            data["model_tpm_limit"] = model_tpm_limit
+        if allowed_cache_controls is not None:
+            data["allowed_cache_controls"] = allowed_cache_controls
+        if duration is not None:
+            data["duration"] = duration
+        if permissions is not None:
+            data["permissions"] = permissions
+        if send_invite_email is not None:
+            data["send_invite_email"] = send_invite_email
+        if guardrails is not None:
+            data["guardrails"] = guardrails
+        if blocked is not None:
+            data["blocked"] = blocked
+        if aliases is not None:
+            data["aliases"] = aliases
+        if config is not None:
+            data["config"] = config
+        if temp_budget_increase is not None:
+            data["temp_budget_increase"] = temp_budget_increase
+        if temp_budget_expiry is not None:
+            data["temp_budget_expiry"] = temp_budget_expiry
+        if allowed_routes is not None:
+            data["allowed_routes"] = allowed_routes
+
+        request = requests.Request(
+            method="POST",
+            url=url,
+            headers=self._get_headers(),
+            json=data,
+        )
+
+        if return_request:
+            return request
+
+        session = requests.Session()
+        try:
+            response = session.send(request.prepare())
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise UnauthorizedError(e)
+            raise
