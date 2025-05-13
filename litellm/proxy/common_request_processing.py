@@ -115,6 +115,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_responses",
             "adelete_responses",
             "acreate_batch",
+            "aretrieve_batch",
+            "afile_content",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,

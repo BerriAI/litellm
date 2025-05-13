@@ -398,6 +398,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return params
 
+    def map_response_modalities(self, value: list) -> list:
+        response_modalities = []
+        for modality in value:
+            if modality == "text":
+                response_modalities.append("TEXT")
+            elif modality == "image":
+                response_modalities.append("IMAGE")
+            elif modality == "audio":
+                response_modalities.append("AUDIO")
+            else:
+                response_modalities.append("MODALITY_UNSPECIFIED")
+        return response_modalities
+
     def map_openai_params(
         self,
         non_default_params: Dict,
@@ -465,14 +478,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cast(AnthropicThinkingParam, value)
                 )
             elif param == "modalities" and isinstance(value, list):
-                response_modalities = []
-                for modality in value:
-                    if modality == "text":
-                        response_modalities.append("TEXT")
-                    elif modality == "image":
-                        response_modalities.append("IMAGE")
-                    else:
-                        response_modalities.append("MODALITY_UNSPECIFIED")
+                response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
 
         if litellm.vertex_ai_safety_settings is not None:

@@ -102,8 +102,15 @@ def get_llm_provider(  # noqa: PLR0915
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
     try:
+        if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
+            litellm_params=litellm_params
+        ):
+            return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
+                model=model, api_base=api_base, api_key=api_key
+            )
+
         ## IF LITELLM PARAMS GIVEN ##
-        if litellm_params is not None:
+        if litellm_params:
             assert (
                 custom_llm_provider is None and api_base is None and api_key is None
             ), "Either pass in litellm_params or the custom_llm_provider/api_base/api_key. Otherwise, these values will be overriden."
@@ -218,6 +225,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.llama.com/compat/v1":
                         custom_llm_provider = "meta_llama"
                         dynamic_api_key = api_key or get_secret_str("LLAMA_API_KEY")
+                    elif endpoint == litellm.NscaleConfig.API_BASE_URL:
+                        custom_llm_provider = "nscale"
+                        dynamic_api_key = litellm.NscaleConfig.get_api_key()
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -535,8 +545,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
         dynamic_api_key = api_key or get_secret_str("GITHUB_API_KEY")
     elif custom_llm_provider == "litellm_proxy":
-        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LiteLLMProxyChatConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
 
     elif custom_llm_provider == "mistral":
         (
@@ -597,6 +611,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+    elif custom_llm_provider == "nscale":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

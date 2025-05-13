@@ -117,6 +117,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bedrock_vector_store",
     "generic_api",
     "resend_email",
+    "smtp_email",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -203,6 +204,9 @@ common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
+use_litellm_proxy: bool = (
+    False  # when True, requests will be sent to the specified litellm proxy endpoint
+)
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
@@ -439,6 +443,7 @@ sambanova_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
 llama_models: List = []
+nscale_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -564,6 +569,8 @@ def add_known_models():
             deepseek_models.append(key)
         elif value.get("litellm_provider") == "meta_llama":
             llama_models.append(key)
+        elif value.get("litellm_provider") == "nscale":
+            nscale_models.append(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
@@ -675,6 +682,7 @@ model_list = (
     + jina_ai_models
     + snowflake_models
     + llama_models
+    + nscale_models
 )
 
 model_list_set = set(model_list)
@@ -733,6 +741,7 @@ models_by_provider: dict = {
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
     "meta_llama": llama_models,
+    "nscale": nscale_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -862,6 +871,9 @@ from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI2
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
+)
+from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaude3MessagesConfig,
 )
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
@@ -995,7 +1007,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimConfig = NvidiaNimConfig()
@@ -1032,6 +1044,7 @@ from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
+from .llms.nscale.chat.transformation import NscaleConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig

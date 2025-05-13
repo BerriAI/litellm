@@ -59,6 +59,7 @@ def get_litellm_params(
     async_call: Optional[bool] = None,
     ssl_verify: Optional[bool] = None,
     merge_reasoning_content_in_choices: Optional[bool] = None,
+    use_litellm_proxy: Optional[bool] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     **kwargs,
@@ -115,5 +116,6 @@ def get_litellm_params(
         "bucket_name": kwargs.get("bucket_name"),
         "vertex_credentials": kwargs.get("vertex_credentials"),
         "vertex_project": kwargs.get("vertex_project"),
+        "use_litellm_proxy": use_litellm_proxy,
     }
     return litellm_params
