@@ -1,33 +1,23 @@
 import moment from "moment";
-import { useCallback, useEffect, useState, useRef } from "react";
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { keyListCall, Organization, uiSpendLogsCall } from "../networking";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
+import { keyListCall, uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
-import { useQuery, UseQueryResult } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
-import { Setter } from "@/types";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { LogEntry } from "./columns";
 
-export interface LogFilterState {
-  'Team ID': string;
-  // 'Key Alias': string;
-  'Key Hash': string;
-  'Request ID': string;
-  'Model': string;
-  'User ID': string; 
-  // 'Cache Hit': 'true' | 'false' | ''; // Example for boolean filter
-  // 'Status': 'success' | 'failure' | ''; // Example for status filter
-}
+export const FILTER_KEYS = {
+  TEAM_ID: "Team ID",
+  KEY_HASH: "Key Hash",
+  REQUEST_ID: "Request ID",
+  MODEL: "Model",
+  USER_ID: "User ID"
+} as const;
 
-// interface PaginatedResponse {
-//   data: LogEntry[];
-//   total: number;
-//   page: number;
-//   page_size: number;
-//   total_pages: number;
-// }
+export type FilterKey = keyof typeof FILTER_KEYS;
+export type LogFilterState = Record<typeof FILTER_KEYS[FilterKey], string>;
 
 export function useLogFilterLogic({
   logs,
@@ -50,68 +40,57 @@ export function useLogFilterLogic({
   isCustomDate: boolean;
   currentPage: number;
 }) {
-  const defaultFilters: LogFilterState = {
-    'Team ID': '',
-    // 'Key Alias': '',
-    'Key Hash': '',
-    'Request ID': '',
-    'Model': '',
-    'User ID': '',
-    // 'Cache Hit': '',
-    // 'Status': '',
-    // ...initialFilters
-  }
+  const defaultFilters = useMemo<LogFilterState>(() => ({
+    [FILTER_KEYS.TEAM_ID]: "",
+    [FILTER_KEYS.KEY_HASH]: "",
+    [FILTER_KEYS.REQUEST_ID]: "",
+    [FILTER_KEYS.MODEL]: "",
+    [FILTER_KEYS.USER_ID]: "",
+  }), []);
+
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
   const [filteredLogs, setFilteredLogs] = useState<LogEntry[]>(logs);
   const lastSearchTimestamp = useRef(0);
-  const debouncedSearch = useCallback(
-    debounce(async (filters: LogFilterState) => {
-      if (!accessToken) {
-        return;
-      }
-  
-      const currentTimestamp = Date.now();
-      lastSearchTimestamp.current = currentTimestamp;
+  const performSearch = useCallback(async (filters: LogFilterState) => {
+    if (!accessToken) return;
 
-      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
-      const formattedEndTime = isCustomDate 
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
-        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+    const currentTimestamp = Date.now();
+    lastSearchTimestamp.current = currentTimestamp;
 
-      const apiKeyParam = filters["Key Hash"] || undefined;
-      const teamIdParam = filters["Team ID"] || undefined;
-      const requestIdParam = filters["Request ID"] || undefined;
-      const userIdParam = filters["User ID"] || undefined;
-  
-      try {
-        // Make the API call using userListCall with all filter parameters
-        const response = await uiSpendLogsCall(
-          accessToken,
-          apiKeyParam,
-          teamIdParam,
-          requestIdParam,
-          formattedStartTime,
-          formattedEndTime,
-          1,
-          pageSize,
-          userIdParam
-          // If uiSpendLogsCall is updated to accept more params (e.g., model), pass them here:
-          // modelParam, 
-        );
-        // Only update state if this is the most recent search
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          if (response.data) {
-            setFilteredLogs(response.data);
-            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-            console.log("called from debouncedSearch data:", JSON.stringify(response.data));
-          }
-        }
-      } catch (error) {
-        console.error("Error searching users:", error);
+    const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+    const formattedEndTime = isCustomDate
+      ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+      : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+    try {
+      const response = await uiSpendLogsCall(
+        accessToken,
+        filters[FILTER_KEYS.KEY_HASH] || undefined,
+        filters[FILTER_KEYS.TEAM_ID] || undefined,
+        filters[FILTER_KEYS.REQUEST_ID] || undefined,
+        formattedStartTime,
+        formattedEndTime,
+        currentPage,
+        pageSize,
+        filters[FILTER_KEYS.USER_ID] || undefined
+      );
+
+      if (currentTimestamp === lastSearchTimestamp.current && response.data) {
+        setFilteredLogs(response.data);
+        console.log("called from debouncedSearch filters:", JSON.stringify(filters));
+        console.log("called from debouncedSearch data:", JSON.stringify(response.data));
       }
-    }, 300),
-    [accessToken]
-  );
+    } catch (error) {
+      console.error("Error searching users:", error);
+    }
+  }, [accessToken]);
+
+  const debouncedSearch = useMemo(() => debounce(performSearch, 300), [performSearch]);
+
+  useEffect(() => {
+    return () => debouncedSearch.cancel();
+  }, [debouncedSearch]);
+
   // Apply filters to keys whenever keys or filters change
   useEffect(() => {
     if (!logs) {
@@ -121,8 +100,8 @@ export function useLogFilterLogic({
   
     let result = [...logs];
   
-    if (filters['Team ID']) {
-      result = result.filter(log => log.team_id === filters['Team ID']);
+    if (filters[FILTER_KEYS.TEAM_ID]) {
+      result = result.filter(log => log.team_id === filters[FILTER_KEYS.TEAM_ID]);
     }
   
     // Only update state if the filteredLogs actually changed
@@ -154,27 +133,26 @@ export function useLogFilterLogic({
     enabled: !!accessToken,
   });
 
-  // const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
-      setFilters(prev => {
-        const updatedFilters = { ...prev, ...newFilters };
-        
-        // Ensure all keys in LogFilterState are present, defaulting to '' if not in newFilters
-        for (const key of Object.keys(defaultFilters) as Array<keyof LogFilterState>) {
-          if (!(key in updatedFilters)) {
-            updatedFilters[key] = defaultFilters[key];
-          }
+  // Update filters state
+  const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
+    setFilters(prev => {
+      const updatedFilters = { ...prev, ...newFilters };
+      
+      // Ensure all keys in LogFilterState are present, defaulting to '' if not in newFilters
+      for (const key of Object.keys(defaultFilters) as Array<keyof LogFilterState>) {
+        if (!(key in updatedFilters)) {
+          updatedFilters[key] = defaultFilters[key];
         }
-        
-        // Only call debouncedSearch if filters have actually changed
-        if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
-          debouncedSearch(updatedFilters);
-        }
-        
-        return updatedFilters as LogFilterState;
-      });
-    };
+      }
+      
+      // Only call debouncedSearch if filters have actually changed
+      if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
+        debouncedSearch(updatedFilters);
+      }
+      
+      return updatedFilters as LogFilterState;
+    });
+  };
     
 
   const handleFilterReset = () => {
