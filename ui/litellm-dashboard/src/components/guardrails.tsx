@@ -257,17 +257,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex justify-between items-center mb-4">
-        <Text className="text-lg">
-          Configured guardrails and their current status. Setup guardrails in config.yaml or add them directly.{" "}
-          <a 
-              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="text-blue-500 hover:text-blue-700 underline"
-          >
-              Docs
-          </a>
-        </Text>
         <Button 
           icon={PlusIcon} 
           onClick={handleAddGuardrail}
@@ -276,8 +265,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
           Add Guardrail
         </Button>
       </div>
-      
-      <Card>
         <div className="rounded-lg custom-border relative">
           <div className="overflow-x-auto">
             <Table className="[&_td]:py-0.5 [&_th]:py-1">
@@ -360,7 +347,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
             </Table>
           </div>
         </div>
-      </Card>
 
       <AddGuardrailForm 
         visible={isAddModalVisible}
