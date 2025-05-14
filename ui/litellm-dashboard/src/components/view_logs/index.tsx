@@ -207,7 +207,6 @@ export default function SpendLogsTable({
     refetchIntervalInBackground: true,
   });
 
-  // const logsData = logs.data?.data || []; // fallback to empty array if undefined
   const logsData = logs.data || {
     data: [],
     total: 0,
