@@ -110,6 +110,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     setCurrentStep(currentStep - 1);
   };
 
+  const resetForm = () => {
+    form.resetFields();
+    setSelectedProvider(null);
+    setSelectedEntities([]);
+    setSelectedActions({});
+    setCurrentStep(0);
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
   const handleSubmit = async () => {
     try {
       setLoading(true);
@@ -181,10 +194,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       message.success('Guardrail created successfully');
       
       // Reset form and close modal
-      form.resetFields();
-      setSelectedEntities([]);
-      setSelectedActions({});
-      setCurrentStep(0);
+      resetForm();
       onSuccess();
       onClose();
     } catch (error) {
@@ -451,7 +461,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         )}
         <Button 
           variant="secondary"
-          onClick={onClose}
+          onClick={handleClose}
         >
           Cancel
         </Button>
@@ -463,7 +473,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     <Modal
       title="Add Guardrail"
       open={visible}
-      onCancel={onClose}
+      onCancel={handleClose}
       footer={null}
       width={700}
     >
