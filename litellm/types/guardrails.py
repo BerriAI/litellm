@@ -210,7 +210,20 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
-class LitellmParams(TypedDict, total=False):
+class PresidioConfigParams(TypedDict, total=False):
+    # Presidio params
+    output_parse_pii: Optional[bool]
+    presidio_ad_hoc_recognizers: Optional[str]
+    mock_redacted_text: Optional[dict]
+    # PII control params
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
+
+    # presidio specific api base
+    presidio_analyzer_api_base: Optional[str]
+    presidio_anonymizer_api_base: Optional[str]
+
+
+class LitellmParams(PresidioConfigParams, total=False):
     guardrail: str
     mode: str
     api_key: Optional[str]
@@ -222,13 +235,6 @@ class LitellmParams(TypedDict, total=False):
     # Bedrock specific params
     guardrailIdentifier: Optional[str]
     guardrailVersion: Optional[str]
-
-    # Presidio params
-    output_parse_pii: Optional[bool]
-    presidio_ad_hoc_recognizers: Optional[str]
-    mock_redacted_text: Optional[dict]
-    # PII control params
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
 
     # hide secrets params
     detect_secrets_config: Optional[dict]
@@ -305,3 +311,9 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: List[PiiAction]
     supported_modes: List[GuardrailEventHooks]
     pii_entity_categories: List[PiiEntityCategoryMap]
+
+
+# mapping of provider specific configuration params to render on the UI
+GuardrailProviderSpecificParams = {
+    SupportedGuardrailIntegrations.PRESIDIO: PresidioConfigParams,
+}
