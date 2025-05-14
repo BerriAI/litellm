@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Typography, Select, Tag, Divider, Input, Modal } from 'antd';
+import React, { useState } from 'react';
+import { Typography, Select, Button, Checkbox, Input } from 'antd';
+import { TextInput } from '@tremor/react';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -40,7 +41,6 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
 }) => {
   const [searchText, setSearchText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [showPiiTypeModal, setShowPiiTypeModal] = useState(false);
   
   // Create a lookup map to quickly find an entity's category
   const entityToCategoryMap = new Map<string, string>();
@@ -57,125 +57,121 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     return matchesSearch && matchesCategory;
   });
   
-  // Open the modal when the user clicks the PII type input
-  const handlePiiTypeClick = () => {
-    setShowPiiTypeModal(true);
-  };
-  
-  // Close the modal
-  const handleModalClose = () => {
-    setShowPiiTypeModal(false);
+  // Select all entities with a specified action
+  const handleSelectAll = (action: string) => {
+    entities.forEach(entity => {
+      if (!selectedEntities.includes(entity)) {
+        onEntitySelect(entity);
+      }
+      onActionSelect(entity, action);
+    });
   };
   
   return (
-    <>
-      <Divider>PII Configuration</Divider>
+    <div className="pii-configuration">
+      <Title level={4} className="mb-4">Configure PII Protection</Title>
       
-      {/* PII Type Selection */}
       <div className="mb-4">
-        <div className="mb-2">
-          <Input 
-            placeholder="Choose PII type"
-            value={selectedEntities.length > 0 ? `${selectedEntities.length} PII type(s) selected` : 'Choose PII type'}
-            readOnly
-            onClick={handlePiiTypeClick}
-            suffix={<i className="fas fa-chevron-down" />}
-          />
+        <Search
+          placeholder="Search PII types..."
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          style={{ width: '100%' }}
+          className="mb-4"
+        />
+        
+        {/* Quick Actions */}
+        <div className="bg-gray-50 p-4 rounded-lg mb-6">
+          <Title level={5} className="mb-3">Quick Actions</Title>
+          <div className="grid grid-cols-2 gap-4">
+            <Button 
+              type="default" 
+              onClick={() => handleSelectAll('MASK')}
+              block
+            >
+              Select All & Mask
+            </Button>
+            <Button 
+              type="default" 
+              onClick={() => handleSelectAll('BLOCK')}
+              block
+            >
+              Select All & Block
+            </Button>
+          </div>
         </div>
       </div>
       
-      {/* PII Type Selection Modal */}
-      <Modal
-        title="Choose PII type"
-        open={showPiiTypeModal}
-        onCancel={handleModalClose}
-        footer={null}
-        width={600}
-      >
-        <div className="mb-4">
-          <Search
-            placeholder="Choose PII type"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: '100%' }}
-          />
-        </div>
-        
-        {/* Category list */}
-        <div className="mb-4">
-          <Title level={5} className="mb-2">Categories</Title>
-          <div className="flex flex-wrap gap-2">
-            <Tag 
-              className="cursor-pointer text-sm py-1 px-3"
-              color={selectedCategory === null ? 'blue' : 'default'}
-              onClick={() => setSelectedCategory(null)}
-            >
-              All
-            </Tag>
-            {entityCategories.map(cat => (
-              <Tag 
-                key={cat.category}
-                className="cursor-pointer text-sm py-1 px-3"
-                color={selectedCategory === cat.category ? 'blue' : 'default'}
-                onClick={() => setSelectedCategory(cat.category)}
-              >
-                {cat.category}
-              </Tag>
-            ))}
+      {/* Tabs */}
+      <div className="mb-4">
+        <div className="flex border-b mb-4">
+          <div className="py-2 px-4 border-b-2 border-blue-500 text-blue-500 font-medium">
+            Categories
+          </div>
+          <div className="py-2 px-4 text-gray-500 font-medium">
+            All PII Types
           </div>
         </div>
         
-        {/* Entity list */}
-        <div>
-          {entityCategories.filter(cat => 
-            selectedCategory === null || selectedCategory === cat.category
-          ).map(category => (
-            <div key={category.category} className="mb-4">
-              <Title level={5} className="ml-2 mb-2">{category.category}</Title>
-              <div className="flex flex-col gap-2">
-                {category.entities
-                  .filter(entity => filteredEntities.includes(entity))
-                  .map(entity => (
-                    <div 
-                      key={entity}
-                      className={`px-4 py-2 flex items-center justify-between cursor-pointer ${selectedEntities.includes(entity) ? 'bg-gray-100' : ''}`}
-                      onClick={() => onEntitySelect(entity)}
-                    >
-                      <Text>{entity.replace(/_/g, ' ')}</Text>
-                      {selectedEntities.includes(entity) && (
-                        <span className="text-blue-500">
-                          <i className="fas fa-check" />
-                        </span>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            </div>
+        {/* Category filters */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button
+            type={selectedCategory === null ? 'primary' : 'default'}
+            onClick={() => setSelectedCategory(null)}
+            className="mr-2"
+          >
+            All
+          </Button>
+          {entityCategories.map(cat => (
+            <Button
+              key={cat.category}
+              type={selectedCategory === cat.category ? 'primary' : 'default'}
+              onClick={() => setSelectedCategory(cat.category)}
+              className="mr-2"
+            >
+              {cat.category}
+            </Button>
           ))}
         </div>
-      </Modal>
-      
-      {/* Action configuration for selected entities */}
-      {selectedEntities.length > 0 && (
-        <div className="mb-4">
-          <Title level={5}>Configure Actions</Title>
-          {selectedEntities.map(entity => (
-            <div key={entity} className="flex items-center justify-between mb-2">
-              <Text>{entity.replace(/_/g, ' ')}</Text>
-              <Select
-                value={selectedActions[entity] || 'MASK'}
-                onChange={(value) => onActionSelect(entity, value)}
-                style={{ width: 120 }}
+        
+        {/* PII Type table */}
+        <div className="border rounded-lg overflow-hidden">
+          <div className="bg-gray-50 px-4 py-3 border-b flex">
+            <Text strong className="flex-1">PII Type</Text>
+            <Text strong className="w-32 text-right">Action</Text>
+          </div>
+          <div className="max-h-[400px] overflow-y-auto">
+            {filteredEntities.map(entity => (
+              <div 
+                key={entity}
+                className={`px-4 py-3 flex items-center justify-between hover:bg-gray-50 border-b ${selectedEntities.includes(entity) ? 'bg-blue-50' : ''}`}
               >
-                {actions.map(action => (
-                  <Option key={action} value={action}>{action}</Option>
-                ))}
-              </Select>
-            </div>
-          ))}
+                <div className="flex items-center flex-1">
+                  <Checkbox 
+                    checked={selectedEntities.includes(entity)} 
+                    onChange={() => onEntitySelect(entity)}
+                    className="mr-3"
+                  />
+                  <Text>{entity.replace(/_/g, ' ')}</Text>
+                </div>
+                <div className="w-32">
+                  <Select
+                    value={selectedEntities.includes(entity) ? (selectedActions[entity] || 'BLOCK') : 'BLOCK'}
+                    onChange={(value) => onActionSelect(entity, value)}
+                    style={{ width: 120 }}
+                    disabled={!selectedEntities.includes(entity)}
+                  >
+                    {actions.map(action => (
+                      <Option key={action} value={action}>{action}</Option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      )}
-    </>
+      </div>
+    </div>
   );
 };
 
