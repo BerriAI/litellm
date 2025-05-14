@@ -1058,6 +1058,7 @@ class BaseLLMChatTest(ABC):
     def test_function_calling_with_tool_response(self):
         from litellm.utils import supports_function_calling
         from litellm import completion
+        litellm._turn_on_debug()
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1077,6 +1078,8 @@ class BaseLLMChatTest(ABC):
                     "name": "get_weather",
                     "description": "Get the weather in a city",
                     "parameters": {
+                        "$id": "https://some/internal/name",
+                        "$schema": "https://json-schema.org/draft-07/schema",
                         "type": "object",
                         "properties": {
                             "city": {
