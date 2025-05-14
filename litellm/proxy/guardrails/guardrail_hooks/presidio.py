@@ -11,7 +11,7 @@
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
 from pydantic import BaseModel
@@ -281,15 +281,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         for result in analyze_results:
             entity_type = result.get("entity_type")
-            if (
-                entity_type is not None
-                and entity_type in self.pii_entities_config
-                and self.pii_entities_config[entity_type] == PiiAction.BLOCK
-            ):
-                raise BlockedPiiEntityError(
-                    entity_type=entity_type,
-                    guardrail_name=self.guardrail_name,
-                )
+
+            if entity_type:
+                casted_entity_type: PiiEntityType = cast(PiiEntityType, entity_type)
+                if (
+                    casted_entity_type in self.pii_entities_config
+                    and self.pii_entities_config[casted_entity_type] == PiiAction.BLOCK
+                ):
+                    raise BlockedPiiEntityError(
+                        entity_type=entity_type,
+                        guardrail_name=self.guardrail_name,
+                    )
 
     async def check_pii(
         self,
