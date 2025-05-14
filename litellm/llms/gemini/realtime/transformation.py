@@ -4,7 +4,7 @@ This file contains the transformation logic for the Gemini realtime API.
 
 import json
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 
@@ -35,7 +35,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
     def transform_realtime_request(self, message: str) -> str:
-        realtime_input_dict = {}
+        realtime_input_dict: Dict[str, Any] = {}
         realtime_input_dict["text"] = message
 
         if len(realtime_input_dict) != 1:
@@ -47,6 +47,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         realtime_input_dict = encode_unserializable_types(realtime_input_dict)
 
         return json.dumps({"realtime_input": realtime_input_dict})
+
+    def transform_realtime_response(self, message: str) -> str:
+        return message
 
     def requires_session_configuration(self) -> bool:
         return True
@@ -77,7 +80,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return json.dumps(
             {
                 "setup": {
-                    "model": "models/gemini-2.0-flash-live-001",
+                    "model": f"models/{model}",
                     "generationConfig": {"responseModalities": ["TEXT"]},
                 }
             }

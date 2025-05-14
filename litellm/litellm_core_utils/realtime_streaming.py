@@ -139,9 +139,16 @@ class RealTimeStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(decode=False)
+                    raw_response = await self.backend_ws.recv(
+                        decode=False
+                    )  # improves performance
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
+
+                if self.provider_config and isinstance(raw_response, str):
+                    raw_response = self.provider_config.transform_realtime_response(
+                        raw_response
+                    )
 
                 await self.websocket.send_text(raw_response)
 
@@ -189,7 +196,10 @@ class RealTimeStreaming:
                     "Session configuration request is None, but requires_session_configuration is True"
                 )
             await self.backend_ws.send(session_configuration_request)
-            verbose_logger.info(await self.backend_ws.recv(decode=False))
+            try:
+                verbose_logger.info(await self.backend_ws.recv(decode=False))
+            except TypeError:
+                verbose_logger.info(await self.backend_ws.recv())
 
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
