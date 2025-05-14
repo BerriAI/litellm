@@ -306,122 +306,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     );
   };
 
-  const renderProviderSpecificConfig = () => {
-    if (!selectedProvider || selectedProvider === 'PresidioPII') return null;
-
-    switch (selectedProvider) {
-      case 'Aporia':
-        return (
-          <Form.Item
-            label="Aporia Configuration"
-            name="config"
-            tooltip="JSON configuration for Aporia"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_aporia_api_key",
-  "project_name": "your_project_name"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'AimSecurity':
-        return (
-          <Form.Item
-            label="Aim Security Configuration"
-            name="config"
-            tooltip="JSON configuration for Aim Security"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_aim_api_key"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'Bedrock':
-        return (
-          <Form.Item
-            label="Amazon Bedrock Configuration"
-            name="config"
-            tooltip="JSON configuration for Amazon Bedrock guardrails"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "guardrail_id": "your_guardrail_id",
-  "guardrail_version": "your_guardrail_version"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'GuardrailsAI':
-        return (
-          <Form.Item
-            label="Guardrails.ai Configuration"
-            name="config"
-            tooltip="JSON configuration for Guardrails.ai"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_guardrails_api_key",
-  "guardrail_id": "your_guardrail_id"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'LakeraAI':
-        return (
-          <Form.Item
-            label="Lakera AI Configuration"
-            name="config"
-            tooltip="JSON configuration for Lakera AI"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_lakera_api_key"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'PromptInjection':
-        return (
-          <Form.Item
-            label="Prompt Injection Configuration"
-            name="config"
-            tooltip="JSON configuration for prompt injection detection"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "threshold": 0.8
-}`}
-            />
-          </Form.Item>
-        );
-      default:
-        return (
-          <Form.Item
-            label="Custom Configuration"
-            name="config"
-            tooltip="JSON configuration for your custom guardrail"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "key1": "value1",
-  "key2": "value2"
-}`}
-            />
-          </Form.Item>
-        );
-    }
-  };
-
   const renderStepContent = () => {
     switch (currentStep) {
       case 0:
@@ -429,8 +313,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       case 1:
         if (selectedProvider === 'PresidioPII') {
           return renderPiiConfiguration();
-        } else {
-          return renderProviderSpecificConfig();
         }
       default:
         return null;
