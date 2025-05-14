@@ -83,6 +83,7 @@ from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
+    StandardLoggingMetadataCustomHeaders,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
@@ -3328,6 +3329,7 @@ class StandardLoggingPayloadSetup:
             List[StandardLoggingVectorStoreRequest]
         ] = None,
         usage_object: Optional[dict] = None,
+        custom_headers: Optional[StandardLoggingMetadataCustomHeaders] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3377,6 +3379,7 @@ class StandardLoggingPayloadSetup:
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
+            requester_custom_headers=custom_headers,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3399,6 +3402,7 @@ class StandardLoggingPayloadSetup:
                 and isinstance(_potential_requester_metadata, dict)
             ):
                 clean_metadata["requester_metadata"] = _potential_requester_metadata
+
         return clean_metadata
 
     @staticmethod
@@ -3730,6 +3734,20 @@ def get_standard_logging_object_payload(
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
         )
+
+        standard_logging_metadata_custom_headers: Optional[
+            StandardLoggingMetadataCustomHeaders
+        ] = None
+        _request_headers = proxy_server_request.get("headers", {})
+        if _request_headers:
+            custom_headers = {
+                k: v for k, v in _request_headers.items() if k.startswith("x-")
+            }
+            if custom_headers:
+                standard_logging_metadata_custom_headers = (
+                    StandardLoggingMetadataCustomHeaders(custom_headers=custom_headers)
+                )
+
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -3741,6 +3759,7 @@ def get_standard_logging_object_payload(
                 "vector_store_request_metadata", None
             ),
             usage_object=usage.model_dump(),
+            custom_headers=standard_logging_metadata_custom_headers,
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3886,6 +3905,7 @@ def get_standard_logging_metadata(
         mcp_tool_call_metadata=None,
         vector_store_request_metadata=None,
         usage_object=None,
+        requester_custom_headers=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
