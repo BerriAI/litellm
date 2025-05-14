@@ -139,6 +139,7 @@ class StandardBuiltInToolCostTracking:
             )
         elif (
             usage is not None
+            and hasattr(usage, "server_tool_use")
             and usage.server_tool_use is not None
             and usage.server_tool_use.web_search_requests is not None
         ):
