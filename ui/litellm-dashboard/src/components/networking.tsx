@@ -5067,3 +5067,30 @@ export const deleteGuardrailCall = async (accessToken: string, guardrailId: stri
     throw error;
   }
 };
+
+export const getGuardrailUISettings = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/add_guardrail_settings` : `/guardrails/ui/add_guardrail_settings`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail UI settings");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail UI settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail UI settings:", error);
+    throw error;
+  }
+};

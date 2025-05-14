@@ -13,6 +13,7 @@ import {
   SwitchVerticalIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  PencilIcon,
 } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import {
@@ -23,7 +24,8 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
+import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
+import EditGuardrailForm from "./edit_guardrail_form";
 
 interface GuardrailItem {
   guardrail_id?: string;
@@ -32,6 +34,8 @@ interface GuardrailItem {
     guardrail: string;
     mode: string;
     default_on: boolean;
+    pii_entities_config?: {[key: string]: string};
+    [key: string]: any;
   };
   guardrail_info: Record<string, any> | null;
   created_at?: string;
@@ -42,22 +46,39 @@ interface GuardrailTableProps {
   guardrailsList: GuardrailItem[];
   isLoading: boolean;
   onDeleteClick: (guardrailId: string, guardrailName: string) => void;
+  accessToken: string | null;
+  onGuardrailUpdated: () => void;
 }
 
 const GuardrailTable: React.FC<GuardrailTableProps> = ({
   guardrailsList,
   isLoading,
   onDeleteClick,
+  accessToken,
+  onGuardrailUpdated,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "created_at", desc: true }
   ]);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedGuardrail, setSelectedGuardrail] = useState<GuardrailItem | null>(null);
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
     return date.toLocaleString();
+  };
+
+  const handleEditClick = (guardrail: GuardrailItem) => {
+    setSelectedGuardrail(guardrail);
+    setEditModalVisible(true);
+  };
+
+  const handleEditSuccess = () => {
+    setEditModalVisible(false);
+    setSelectedGuardrail(null);
+    onGuardrailUpdated();
   };
 
   const columns: ColumnDef<GuardrailItem>[] = [
@@ -162,6 +183,13 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
         const guardrail = row.original;
         return (
           <div className="flex space-x-2">
+            <Icon
+              icon={PencilIcon}
+              size="sm"
+              onClick={() => guardrail.guardrail_id && handleEditClick(guardrail)}
+              className="cursor-pointer hover:text-blue-500"
+              tooltip="Edit guardrail"
+            />
             <Icon
               icon={TrashIcon}
               size="sm"
@@ -269,6 +297,27 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
           </TableBody>
         </Table>
       </div>
+
+      {/* Edit Modal */}
+      {selectedGuardrail && (
+        <EditGuardrailForm
+          visible={editModalVisible}
+          onClose={() => setEditModalVisible(false)}
+          accessToken={accessToken}
+          onSuccess={handleEditSuccess}
+          guardrailId={selectedGuardrail.guardrail_id || ''}
+          initialValues={{
+            guardrail_name: selectedGuardrail.guardrail_name || '',
+            provider: Object.keys(guardrail_provider_map).find(
+              key => guardrail_provider_map[key] === selectedGuardrail?.litellm_params.guardrail
+            ) || '',
+            mode: selectedGuardrail.litellm_params.mode,
+            default_on: selectedGuardrail.litellm_params.default_on,
+            pii_entities_config: selectedGuardrail.litellm_params.pii_entities_config,
+            ...selectedGuardrail.guardrail_info
+          }}
+        />
+      )}
     </div>
   );
 };

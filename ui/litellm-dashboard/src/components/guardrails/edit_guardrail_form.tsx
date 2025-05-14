@@ -1,26 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag } from 'antd';
+import { Form, Typography, Select, Input, Switch, Modal, message, Divider } from 'antd';
 import { Button, TextInput } from '@tremor/react';
-import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map, provider_specific_fields } from './guardrail_info_helpers';
-import { createGuardrailCall, getGuardrailUISettings } from '../networking';
+import { getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
 
-const { Title, Text, Link } = Typography;
+const { Title, Text } = Typography;
 const { Option } = Select;
 
-interface AddGuardrailFormProps {
+interface EditGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
-}
-
-interface LiteLLMParams {
-  guardrail: string;
-  mode: string;
-  default_on: boolean;
-  [key: string]: any; // Allow additional properties for specific guardrails
+  guardrailId: string;
+  initialValues: {
+    guardrail_name: string;
+    provider: string;
+    mode: string;
+    default_on: boolean;
+    pii_entities_config?: {[key: string]: string};
+    [key: string]: any;
+  };
 }
 
 interface GuardrailSettings {
@@ -29,15 +30,17 @@ interface GuardrailSettings {
   supported_modes: string[];
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
-  visible, 
-  onClose, 
+const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
+  visible,
+  onClose,
   accessToken,
-  onSuccess
+  onSuccess,
+  guardrailId,
+  initialValues
 }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(initialValues?.provider || null);
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
@@ -58,6 +61,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     
     fetchGuardrailSettings();
   }, [accessToken]);
+
+  // Initialize selected entities and actions from initialValues
+  useEffect(() => {
+    if (initialValues?.pii_entities_config && Object.keys(initialValues.pii_entities_config).length > 0) {
+      const entities = Object.keys(initialValues.pii_entities_config);
+      setSelectedEntities(entities);
+      setSelectedActions(initialValues.pii_entities_config);
+    }
+  }, [initialValues]);
 
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
@@ -98,13 +110,16 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       
       // Prepare the guardrail data
       const guardrailData = {
-        guardrail_name: values.guardrail_name,
-        litellm_params: {
-          guardrail: guardrailProvider,
-          mode: values.mode,
-          default_on: values.default_on
-        } as LiteLLMParams,
-        guardrail_info: {}
+        guardrail_id: guardrailId,
+        guardrail: {
+          guardrail_name: values.guardrail_name,
+          litellm_params: {
+            guardrail: guardrailProvider,
+            mode: values.mode,
+            default_on: values.default_on
+          },
+          guardrail_info: {}
+        }
       };
 
       // For Presidio PII, add the entity and action configurations
@@ -114,7 +129,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           piiEntitiesConfig[entity] = selectedActions[entity] || 'MASK'; // Default to MASK if no action selected
         });
         
-        guardrailData.litellm_params.pii_entities_config = piiEntitiesConfig;
+        guardrailData.guardrail.litellm_params.pii_entities_config = piiEntitiesConfig;
       }
       // Add config values to the guardrail_info if provided
       else if (values.config) {
@@ -124,14 +139,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           // Especially for providers like Bedrock that need guardrailIdentifier and guardrailVersion
           if (values.provider === 'Bedrock' && configObj) {
             if (configObj.guardrail_id) {
-              guardrailData.litellm_params.guardrailIdentifier = configObj.guardrail_id;
+              guardrailData.guardrail.litellm_params.guardrailIdentifier = configObj.guardrail_id;
             }
             if (configObj.guardrail_version) {
-              guardrailData.litellm_params.guardrailVersion = configObj.guardrail_version;
+              guardrailData.guardrail.litellm_params.guardrailVersion = configObj.guardrail_version;
             }
           } else {
             // For other providers, add the config to guardrail_info
-            guardrailData.guardrail_info = configObj;
+            guardrailData.guardrail.guardrail_info = configObj;
           }
         } catch (error) {
           message.error('Invalid JSON in configuration');
@@ -144,20 +159,32 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         throw new Error("No access token available");
       }
 
-      console.log("Sending guardrail data:", JSON.stringify(guardrailData));
-      await createGuardrailCall(accessToken, guardrailData);
+      console.log("Sending guardrail update data:", JSON.stringify(guardrailData));
       
-      message.success('Guardrail created successfully');
+      // Call the update endpoint
+      const url = `/guardrails/${guardrailId}`;
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(guardrailData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData || "Failed to update guardrail");
+      }
+
+      message.success('Guardrail updated successfully');
       
-      // Reset form and close modal
-      form.resetFields();
-      setSelectedEntities([]);
-      setSelectedActions({});
+      // Reset and close
       onSuccess();
       onClose();
     } catch (error) {
-      console.error("Failed to create guardrail:", error);
-      message.error('Failed to create guardrail: ' + (error instanceof Error ? error.message : String(error)));
+      console.error("Failed to update guardrail:", error);
+      message.error('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }
@@ -301,7 +328,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
   return (
     <Modal
-      title="Add Guardrail"
+      title="Edit Guardrail"
       open={visible}
       onCancel={onClose}
       footer={null}
@@ -310,10 +337,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       <Form
         form={form}
         layout="vertical"
-        initialValues={{
-          mode: guardrailSettings?.supported_modes?.[0] || "pre_call",
-          default_on: false
-        }}
+        initialValues={initialValues}
       >
         <Form.Item
           name="guardrail_name"
@@ -331,6 +355,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Select 
             placeholder="Select a guardrail provider"
             onChange={handleProviderChange}
+            disabled={true} // Disable changing provider in edit mode
           >
             {Object.entries(GuardrailProviders).map(([key, value]) => (
               <Option key={key} value={key}>
@@ -380,7 +405,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             onClick={handleSubmit}
             loading={loading}
           >
-            Create Guardrail
+            Update Guardrail
           </Button>
         </div>
       </Form>
@@ -388,4 +413,4 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   );
 };
 
-export default AddGuardrailForm; 
+export default EditGuardrailForm; 

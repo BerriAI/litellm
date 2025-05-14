@@ -19,6 +19,11 @@ export const guardrail_provider_map: Record<string, string> = {
     PresidioPII: "presidio",
 };
 
+// Define which providers need specific fields
+export const provider_specific_fields: Record<string, string[]> = {
+    PresidioPII: ["pii_entities", "pii_actions"]
+};
+
 const asset_logos_folder = '../ui/assets/logos/';
 
 export const guardrailLogoMap: Record<string, string> = {
@@ -51,3 +56,4 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string,
 
     return { logo, displayName };
 };
+
