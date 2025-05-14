@@ -926,12 +926,11 @@ class Usage(CompletionUsage):
             total_tokens=total_tokens or 0,
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
-            server_tool_use=server_tool_use,
         )
 
-        if (
-            server_tool_use is None
-        ):  # maintain openai compatibility in usage object if possible
+        if server_tool_use is not None:
+            self.server_tool_use = server_tool_use
+        else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
         ## ANTHROPIC MAPPING ##

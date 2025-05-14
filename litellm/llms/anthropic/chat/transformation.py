@@ -350,10 +350,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 AnthropicWebSearchUserLocation.__annotations__.keys()
             )
             user_location_approximate = user_location.get("approximate")
-            for key, user_location_value in user_location_approximate.items():
-                if key in anthropic_user_location_keys and key != "type":
-                    anthropic_user_location[key] = user_location_value
-            hosted_web_search_tool["user_location"] = anthropic_user_location
+            if user_location_approximate is not None:
+                for key, user_location_value in user_location_approximate.items():
+                    if key in anthropic_user_location_keys and key != "type":
+                        anthropic_user_location[key] = user_location_value
+                hosted_web_search_tool["user_location"] = anthropic_user_location
 
         ## MAP SEARCH CONTEXT SIZE
         search_context_size = value_typed.get("search_context_size")
