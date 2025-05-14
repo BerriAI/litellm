@@ -14,26 +14,26 @@ def _should_delete_spend_logs() -> bool:
     Checks if the Pod should delete spend logs based on maximum retention period
 
     This setting enables automatic deletion of old spend logs to manage database size.
-    The maximum_retention_period can be specified in:
+    The maximum_spend_logs_retention_period can be specified in:
     - Days (e.g., "30d")
     - Hours (e.g., "24h")
     - Minutes (e.g., "60m")
     - Seconds (e.g., "3600s" or just "3600")
     """
-    _maximum_retention_period: Optional[Union[int, str]] = general_settings.get(
-        "maximum_retention_period", None
+    _maximum_spend_logs_retention_period: Optional[Union[int, str]] = general_settings.get(
+        "maximum_spend_logs_retention_period", None
     )
     
-    if _maximum_retention_period is None:
+    if _maximum_spend_logs_retention_period is None:
         return False
 
     try:
-        if isinstance(_maximum_retention_period, int):
-            _maximum_retention_period = str(_maximum_retention_period)
-        duration_in_seconds(_maximum_retention_period)
+        if isinstance(_maximum_spend_logs_retention_period, int):
+            _maximum_spend_logs_retention_period = str(_maximum_spend_logs_retention_period)
+        duration_in_seconds(_maximum_spend_logs_retention_period)
         return True
     except ValueError as e:
         verbose_proxy_logger.error(
-            f"Invalid maximum_retention_period value: {_maximum_retention_period}, error: {str(e)}"
+            f"Invalid maximum_spend_logs_retention_period value: {_maximum_spend_logs_retention_period}, error: {str(e)}"
         )
         return False 
