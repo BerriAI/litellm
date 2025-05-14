@@ -18,7 +18,9 @@ class TestArizePhoenixConfig(unittest.TestCase):
         config = ArizePhoenixLogger.get_arize_phoenix_config()
 
         # Verify the configuration
-        self.assertEqual(config.otlp_auth_headers, "Authorization=Bearer test_api_key")
+        self.assertEqual(
+            config.otlp_auth_headers, "Authorization=Bearer%20test_api_key"
+        )
         self.assertEqual(config.endpoint, "http://test.endpoint")
         self.assertEqual(config.protocol, "otlp_http")
 
@@ -34,7 +36,9 @@ class TestArizePhoenixConfig(unittest.TestCase):
         config = ArizePhoenixLogger.get_arize_phoenix_config()
 
         # Verify the configuration
-        self.assertEqual(config.otlp_auth_headers, "Authorization=Bearer test_api_key")
+        self.assertEqual(
+            config.otlp_auth_headers, "Authorization=Bearer%20test_api_key"
+        )
         self.assertEqual(config.endpoint, "grpc://test.endpoint")
         self.assertEqual(config.protocol, "otlp_grpc")
 
