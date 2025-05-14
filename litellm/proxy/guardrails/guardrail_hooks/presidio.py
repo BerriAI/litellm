@@ -238,10 +238,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 tasks = []
 
                 for m in messages:
-                    if isinstance(m["content"], str):
+                    content = m.get("content", None)
+                    if content is None:
+                        continue
+                    if isinstance(content, str):
                         tasks.append(
                             self.check_pii(
-                                text=m["content"],
+                                text=content,
                                 output_parse_pii=self.output_parse_pii,
                                 presidio_config=presidio_config,
                                 request_data=data,
@@ -249,7 +252,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                 responses = await asyncio.gather(*tasks)
                 for index, r in enumerate(responses):
-                    if isinstance(messages[index]["content"], str):
+                    content = messages[index].get("content", None)
+                    if content is None:
+                        continue
+                    if isinstance(content, str):
                         messages[index][
                             "content"
                         ] = r  # replace content with redacted string
@@ -314,10 +320,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             for m in messages:
                 text_str = ""
-                if m["content"] is None:
+                content = m.get("content", None)
+                if content is None:
                     continue
-                if isinstance(m["content"], str):
-                    text_str = m["content"]
+                if isinstance(content, str):
+                    text_str = content
                     tasks.append(
                         self.check_pii(
                             text=text_str,
@@ -328,7 +335,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     )  # need to pass separately b/c presidio has context window limits
             responses = await asyncio.gather(*tasks)
             for index, r in enumerate(responses):
-                if isinstance(messages[index]["content"], str):
+                content = messages[index].get("content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str):
                     messages[index][
                         "content"
                     ] = r  # replace content with redacted string
@@ -373,7 +383,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self, data: dict
     ) -> Optional[PresidioPerRequestConfig]:
         if "metadata" in data:
-            _metadata = data["metadata"]
+            _metadata = data.get("metadata", None)
+            if _metadata is None:
+                return None
             _guardrail_config = _metadata.get("guardrail_config")
             if _guardrail_config:
                 _presidio_config = PresidioPerRequestConfig(**_guardrail_config)
