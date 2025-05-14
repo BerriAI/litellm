@@ -93,6 +93,73 @@ async def list_guardrails():
     return _get_guardrails_list_response(_guardrails_config)
 
 
+@router.get(
+    "/v2/guardrails/list",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ListGuardrailsResponse,
+)
+async def list_guardrails_v2():
+    """
+    List the guardrails that are available in the database using GuardrailRegistry
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/v2/guardrails/list" -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrails": [
+            {
+                "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+                "guardrail_name": "my-bedrock-guard",
+                "litellm_params": {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailVersion": "DRAFT",
+                    "default_on": true
+                },
+                "guardrail_info": {
+                    "description": "Bedrock content moderation guardrail"
+                }
+            }
+        ]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(
+            prisma_client=prisma_client
+        )
+
+        guardrail_configs: List[GuardrailInfoResponse] = []
+        for guardrail in guardrails:
+            guardrail_configs.append(
+                GuardrailInfoResponse(
+                    guardrail_name=guardrail.get("guardrail_name"),
+                    litellm_params=guardrail.get("litellm_params"),
+                    guardrail_info=guardrail.get("guardrail_info"),
+                    created_at=guardrail.get("created_at"),
+                    updated_at=guardrail.get("updated_at"),
+                )
+            )
+
+        return ListGuardrailsResponse(guardrails=guardrail_configs)
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error getting guardrails from db: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class CreateGuardrailRequest(BaseModel):
     guardrail: Guardrail
 

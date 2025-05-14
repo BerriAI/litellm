@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
@@ -178,6 +179,8 @@ class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
     guardrail_info: Optional[Dict]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
 
 class guardrailConfig(TypedDict):
@@ -214,6 +217,8 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_name: str
     litellm_params: GuardrailLiteLLMParamsResponse
     guardrail_info: Optional[Dict]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
