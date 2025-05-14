@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag } from 'antd';
+import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, provider_specific_fields } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, provider_specific_fields, guardrailLogoMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
 
@@ -331,10 +331,33 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Select 
             placeholder="Select a guardrail provider"
             onChange={handleProviderChange}
+            optionLabelProp="label"
           >
             {Object.entries(GuardrailProviders).map(([key, value]) => (
-              <Option key={key} value={key}>
-                {value}
+              <Option 
+                key={key} 
+                value={key}
+                label={value}
+              >
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  {guardrailLogoMap[value] && (
+                    <img 
+                      src={guardrailLogoMap[value]} 
+                      alt=""
+                      style={{ 
+                        height: '20px', 
+                        width: '20px', 
+                        marginRight: '8px',
+                        objectFit: 'contain'
+                      }}
+                      onError={(e) => {
+                        // Hide broken image icon if image fails to load
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  )}
+                  <span>{value}</span>
+                </div>
               </Option>
             ))}
           </Select>
