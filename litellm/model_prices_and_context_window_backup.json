@@ -1578,6 +1578,17 @@
         "supported_output_modalities": ["audio"],
         "supported_endpoints": ["/v1/audio/speech"]
     },
+    "azure/gpt-4o-mini-tts": {
+        "mode": "audio_speech", 
+        "input_cost_per_token": 2.5e-6,
+        "output_cost_per_token": 10e-6,
+        "output_cost_per_audio_token": 12e-6,
+        "output_cost_per_second": 0.00025,
+        "litellm_provider": "azure",
+        "supported_modalities": ["text", "audio"],
+        "supported_output_modalities": ["audio"],
+        "supported_endpoints": ["/v1/audio/speech"]
+    },
     "azure/computer-use-preview": {
         "max_tokens": 1024,
         "max_input_tokens": 8192,
@@ -3432,6 +3443,19 @@
         "mode": "embedding",
         "supports_embedding_image_input": true,
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
+    },
+    "azure_ai/embed-v-4-0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "output_vector_size": 3072,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "mode": "embedding",
+        "supports_embedding_image_input": true,
+        "supported_endpoints": ["/v1/embeddings"],
+        "supported_modalities": ["text", "image"],
+        "source":"https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice"
     },
     "babbage-002": {
         "max_tokens": 16384,
