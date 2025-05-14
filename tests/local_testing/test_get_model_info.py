@@ -101,10 +101,10 @@ def test_get_model_info_ollama_chat():
             }
         ),
     ) as mock_client:
-        info = OllamaConfig().get_model_info("mistral")
+        info = OllamaConfig().get_model_info("unknown-model")
         assert info["supports_function_calling"] is True
 
-        info = get_model_info("ollama/mistral")
+        info = get_model_info("ollama/unknown-model")
         print("info", info)
         assert info["supports_function_calling"] is True
 
@@ -112,7 +112,7 @@ def test_get_model_info_ollama_chat():
 
         print(mock_client.call_args.kwargs)
 
-        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+        assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
 def test_get_model_info_gemini():
@@ -425,6 +425,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_audio_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -488,6 +489,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
+                "output_cost_per_reasoning_token": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -509,6 +511,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "supports_reasoning": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
@@ -549,7 +552,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["text", "image"],
+                        "enum": ["text", "image", "audio", "code"],
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},

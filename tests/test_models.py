@@ -67,7 +67,7 @@ async def add_models(session, model_id="123", model_name="azure-gpt-3.5", key="s
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
             "api_key": "os.environ/AZURE_API_KEY",
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "api_version": "2023-05-15",
@@ -100,7 +100,7 @@ async def update_model(session, model_id="123", model_name="azure-gpt-3.5", key=
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
             "api_key": "os.environ/AZURE_API_KEY",
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "api_version": "2023-05-15",
@@ -292,7 +292,7 @@ async def add_model_for_health_checking(session, model_id="123"):
     data = {
         "model_name": f"azure-model-health-check-{model_id}",
         "litellm_params": {
-            "model": "azure/chatgpt-v-2",
+            "model": "azure/chatgpt-v-3",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
             "api_version": "2023-05-15",
@@ -417,7 +417,7 @@ async def test_add_model_run_health():
 
         assert _health_info["healthy_count"] == 1
         assert (
-            _healthy_endpooint["model"] == "azure/chatgpt-v-2"
+            _healthy_endpooint["model"] == "azure/chatgpt-v-3"
         )  # this is the model that got added
 
         # assert httpx client is is unchanges
@@ -446,6 +446,23 @@ async def test_add_model_run_health():
         # cleanup
         await delete_model(session=session, model_id=model_id)
 
+@pytest.mark.asyncio
+async def test_get_personal_models_for_user():
+    """
+    Test /models endpoint with team
+    """
+    from test_users import new_user
+    async with aiohttp.ClientSession() as session:
+        # Creat a user
+        user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
+        user_id = user_data["user_id"]
+        user_api_key = user_data["key"]
+
+        model_group_info = await get_model_group_info(session=session, key=user_api_key)
+        print(model_group_info)
+
+        assert len(model_group_info["data"]) == 1
+        assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
 
 @pytest.mark.asyncio
 async def test_model_group_info_e2e():

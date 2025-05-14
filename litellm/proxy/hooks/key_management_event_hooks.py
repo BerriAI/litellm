@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
+    Litellm_EntityType,
     LiteLLM_VerificationToken,
     LitellmTableNames,
     ProxyErrorTypes,
@@ -20,7 +21,6 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
-    WebhookEvent,
 )
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
@@ -297,15 +297,19 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_created_email(response: dict):
-        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+        from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+            BaseEmailLogger,
+        )
 
-        if "email" not in general_settings.get("alerting", []):
-            raise ValueError(
-                "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
-            )
-        event = WebhookEvent(
+        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+        from litellm.types.enterprise.enterprise_callbacks.send_emails import (
+            SendKeyCreatedEmailEvent,
+        )
+
+        event = SendKeyCreatedEmailEvent(
+            virtual_key=response.get("key", ""),
             event="key_created",
-            event_group="key",
+            event_group=Litellm_EntityType.KEY,
             event_message="API Key Created",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),
@@ -315,9 +319,33 @@ class KeyManagementEventHooks:
             key_alias=response.get("key_alias", None),
         )
 
-        # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                webhook_event=event,
+        ##########################
+        # v2 integration for emails
+        ##########################
+        initialized_email_loggers = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
             )
         )
+        if len(initialized_email_loggers) > 0:
+            for email_logger in initialized_email_loggers:
+                if isinstance(email_logger, BaseEmailLogger):
+                    await email_logger.send_key_created_email(
+                        send_key_created_email_event=event,
+                    )
+
+        ##########################
+        # v0 integration for emails
+        ##########################
+        else:
+            if "email" not in general_settings.get("alerting", []):
+                raise ValueError(
+                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+                )
+
+            # If user configured email alerting - send an Email letting their end-user know the key was created
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+                    webhook_event=event,
+                )
+            )

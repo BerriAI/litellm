@@ -46,6 +46,12 @@ def get_supported_openai_params(  # noqa: PLR0915
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "meta_llama":
+        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders.LLAMA
+        )
+        if provider_config:
+            return provider_config.get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama_chat":
@@ -149,6 +155,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(
             model=model
         )
+    elif custom_llm_provider == "novita":
+        return litellm.NovitaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("mistral"):
@@ -196,6 +204,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
         return litellm.PerplexityChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "nscale":
+        return litellm.NscaleConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anyscale":
         return [
             "temperature",
@@ -221,6 +231,10 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "voyage":
         return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "infinity":
+        return litellm.InfinityEmbeddingConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "triton":
         if request_type == "embeddings":
             return litellm.TritonEmbeddingConfig().get_supported_openai_params(

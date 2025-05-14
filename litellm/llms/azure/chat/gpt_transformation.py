@@ -125,14 +125,22 @@ class AzureOpenAIConfig(BaseConfig):
     ) -> bool:
         """
         - check if api_version is supported for response_format
+        - returns True if the API version is equal to or newer than the supported version
         """
+        api_year = int(api_version_year)
+        api_month = int(api_version_month)
+        supported_year = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
+        supported_month = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
 
-        is_supported = (
-            int(api_version_year) <= API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT
-            and int(api_version_month) >= API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT
-        )
-
-        return is_supported
+        # If the year is greater than supported year, it's definitely supported
+        if api_year > supported_year:
+            return True
+        # If the year is less than supported year, it's not supported
+        elif api_year < supported_year:
+            return False
+        # If same year, check if month is >= supported month
+        else:
+            return api_month >= supported_month
 
     def map_openai_params(
         self,
@@ -202,6 +210,7 @@ class AzureOpenAIConfig(BaseConfig):
                     is_response_format_supported_api_version
                     and _is_response_format_supported_model
                 )
+
                 optional_params = self._add_response_format_to_tools(
                     optional_params=optional_params,
                     value=value,

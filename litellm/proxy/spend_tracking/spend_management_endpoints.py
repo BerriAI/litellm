@@ -1919,9 +1919,7 @@ async def view_spend_logs(  # noqa: PLR0915
             ):
                 result: dict = {}
                 for record in response:
-                    dt_object = datetime.strptime(
-                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"  # type: ignore
-                    )  # type: ignore
+                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}
@@ -2097,8 +2095,7 @@ async def global_spend_refresh():
         try:
             resp = await prisma_client.db.query_raw(sql_query)
 
-            assert resp[0]["relkind"] == "m"
-            return True
+            return resp[0]["relkind"] == "m"
         except Exception:
             return False
 
@@ -2396,9 +2393,21 @@ async def global_spend_keys(
         return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dKeysBySpend";"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    if limit is None:
+        response = await prisma_client.db.query_raw(sql_query)
+        return response
+    try:
+        limit = int(limit)
+        if limit < 1:
+            raise ValueError("Limit must be greater than 0")
+        sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
+        response = await prisma_client.db.query_raw(sql_query, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail={"error": f"Invalid limit: {limit}, error: {e}"}
+        ) from e
 
     return response
 
@@ -2646,9 +2655,9 @@ async def global_spend_models(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    sql_query = f"""SELECT * FROM "Last30dModelsBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dModelsBySpend" LIMIT $1 ;"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    response = await prisma_client.db.query_raw(sql_query, int(limit))
 
     return response
 
@@ -2849,3 +2858,47 @@ async def ui_get_spend_by_tags(
         )
 
     return {"spend_per_tag": ui_tags}
+
+
+@router.get(
+    "/spend/logs/session/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_session_spend_logs(
+    session_id: str = fastapi.Query(
+        description="Get all spend logs for a particular session",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all spend logs for a particular session
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database not connected",
+            )
+
+        # Build query conditions
+        where_conditions = {"session_id": session_id}
+        # Query the database
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions, order={"startTime": "asc"}
+        )
+        return result
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )

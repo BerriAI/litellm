@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from typing import Optional, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -13,16 +14,52 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
+import litellm
+from litellm.proxy._types import NewTeamRequest
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
+    SSOAuthenticationHandler,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
+    MicrosoftServicePrincipalTeam,
 )
+
+
+def test_microsoft_sso_handler_openid_from_response_user_principal_name():
+    # Arrange
+    # Create a mock response similar to what Microsoft SSO would return
+    mock_response = {
+        "userPrincipalName": "test@example.com",
+        "displayName": "Test User",
+        "id": "user123",
+        "givenName": "Test",
+        "surname": "User",
+        "some_other_field": "value",
+    }
+    expected_team_ids = ["team1", "team2"]
+    # Act
+    # Call the method being tested
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response, team_ids=expected_team_ids
+    )
+
+    # Assert
+
+    # Check that the result is a CustomOpenID object with the expected values
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "test@example.com"
+    assert result.display_name == "Test User"
+    assert result.provider == "microsoft"
+    assert result.id == "user123"
+    assert result.first_name == "Test"
+    assert result.last_name == "User"
+    assert result.team_ids == expected_team_ids
 
 
 def test_microsoft_sso_handler_openid_from_response():
@@ -379,3 +416,175 @@ def test_get_group_ids_from_graph_api_response():
     assert len(result) == 2
     assert "group1" in result
     assert "group2" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_params",
+    [
+        # Test case 1: Using DefaultTeamSSOParams
+        DefaultTeamSSOParams(
+            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
+        ),
+        # Test case 2: Using Dict
+        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+    ],
+)
+async def test_default_team_params(team_params):
+    """
+    When litellm.default_team_params is set, it should be used to create a new team
+    """
+    # Arrange
+    litellm.default_team_params = team_params
+
+    def mock_jsonify_team_object(db_data):
+        return db_data
+
+    # Mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.get_data = AsyncMock(return_value=None)
+    mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        # Act
+        team_id = str(uuid.uuid4())
+        await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
+            service_principal_teams=[
+                MicrosoftServicePrincipalTeam(
+                    principalId=team_id,
+                    principalDisplayName="Test Team",
+                )
+            ]
+        )
+
+        # Assert
+        # Verify team was created with correct parameters
+        mock_prisma.db.litellm_teamtable.create.assert_called_once()
+        print(
+            "mock_prisma.db.litellm_teamtable.create.call_args",
+            mock_prisma.db.litellm_teamtable.create.call_args,
+        )
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
+            "data"
+        ]
+        assert create_call_args["team_id"] == team_id
+        assert create_call_args["team_alias"] == "Test Team"
+        assert create_call_args["max_budget"] == 10
+        assert create_call_args["budget_duration"] == "1d"
+        assert create_call_args["models"] == ["special-gpt-5"]
+
+
+@pytest.mark.asyncio
+async def test_create_team_without_default_params():
+    """
+    Test team creation when litellm.default_team_params is None
+    Should create team with just the basic required fields
+    """
+    # Arrange
+    litellm.default_team_params = None
+
+    def mock_jsonify_team_object(db_data):
+        return db_data
+
+    # Mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.get_data = AsyncMock(return_value=None)
+    mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        # Act
+        team_id = str(uuid.uuid4())
+        await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
+            service_principal_teams=[
+                MicrosoftServicePrincipalTeam(
+                    principalId=team_id,
+                    principalDisplayName="Test Team",
+                )
+            ]
+        )
+
+        # Assert
+        mock_prisma.db.litellm_teamtable.create.assert_called_once()
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
+            "data"
+        ]
+        assert create_call_args["team_id"] == team_id
+        assert create_call_args["team_alias"] == "Test Team"
+        # Should not have any of the optional fields
+        assert "max_budget" not in create_call_args
+        assert "budget_duration" not in create_call_args
+        assert create_call_args["models"] == []
+
+
+def test_apply_user_info_values_to_sso_user_defined_values():
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.ui_sso import (
+        apply_user_info_values_to_sso_user_defined_values,
+    )
+
+    user_info = LiteLLM_UserTable(
+        user_id="123",
+        user_email="test@example.com",
+        user_role="admin",
+    )
+
+    user_defined_values = {
+        "user_id": "456",
+        "user_email": "test@example.com",
+        "user_role": "admin",
+    }
+
+    sso_user_defined_values = apply_user_info_values_to_sso_user_defined_values(
+        user_info=user_info,
+        user_defined_values=user_defined_values,
+    )
+
+    assert sso_user_defined_values["user_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db():
+    """
+    received args in get_user_info_from_db: {'result': CustomOpenID(id='krrishd', email='krrishdholakia@gmail.com', first_name=None, last_name=None, display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce', picture=None, provider=None, team_ids=[]), 'prisma_client': <litellm.proxy.utils.PrismaClient object at 0x14a74e3c0>, 'user_api_key_cache': <litellm.caching.dual_cache.DualCache object at 0x148d37110>, 'proxy_logging_obj': <litellm.proxy.utils.ProxyLogging object at 0x148dd9090>, 'user_email': 'krrishdholakia@gmail.com', 'user_defined_values': {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': None, 'budget_duration': None}}
+    """
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "krrishdholakia@gmail.com"
+    user_defined_values = {
+        "models": [],
+        "user_id": "krrishd",
+        "user_email": "krrishdholakia@gmail.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+    args = {
+        "result": CustomOpenID(
+            id="krrishd",
+            email="krrishdholakia@gmail.com",
+            first_name=None,
+            last_name=None,
+            display_name="a3f1c107-04dc-4c93-ae60-7f32eb4b05ce",
+            picture=None,
+            provider=None,
+            team_ids=[],
+        ),
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+    with patch.object(
+        litellm.proxy.management_endpoints.ui_sso, "get_user_object"
+    ) as mock_get_user_object:
+        user_info = await get_user_info_from_db(**args)
+        mock_get_user_object.assert_called_once()
+        mock_get_user_object.call_args.kwargs["user_id"] = "krrishd"

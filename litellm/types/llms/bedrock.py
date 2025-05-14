@@ -125,8 +125,14 @@ class ConverseResponseBlock(TypedDict):
     usage: ConverseTokenUsageBlock
 
 
+class ToolJsonSchemaBlock(TypedDict, total=False):
+    type: Literal["object"]
+    properties: dict
+    required: List[str]
+
+
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[dict]
+    json: Optional[ToolJsonSchemaBlock]
 
 
 class ToolSpecBlock(TypedDict, total=False):
@@ -179,6 +185,7 @@ class ToolUseBlockStartEvent(TypedDict):
 
 class ContentBlockStartEvent(TypedDict, total=False):
     toolUse: Optional[ToolUseBlockStartEvent]
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class ContentBlockDeltaEvent(TypedDict, total=False):

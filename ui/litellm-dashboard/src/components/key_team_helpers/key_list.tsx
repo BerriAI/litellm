@@ -85,8 +85,9 @@ total_pages: number;
 interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
+selectedKeyAlias: string | null;
 accessToken: string;
-currentPage?: number;
+createClicked: boolean;
 }
 
 interface PaginationData {
@@ -108,9 +109,9 @@ setKeys: Setter<KeyResponse[]>;
 const useKeyList = ({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
-    currentPage = 1,
-
+    createClicked,
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -130,12 +131,18 @@ const useKeyList = ({
             }
             setIsLoading(true);
 
+            const page = typeof params.page === 'number' ? params.page : 1;
+            const pageSize = typeof params.pageSize === 'number' ? params.pageSize : 100;
+
             const data = await keyListCall(
                 accessToken,
-                currentOrg?.organization_id || null,
-                selectedTeam?.team_id || "",
-                params.page as number || 1,
-                50
+                null,
+                null,
+                null,
+                null,
+                null,
+                page,
+                pageSize,
             );
             console.log("data", data);
             setKeyData(data);
@@ -149,8 +156,17 @@ const useKeyList = ({
 
     useEffect(() => {
         fetchKeys();
-        console.log("selectedTeam", selectedTeam, "currentOrg", currentOrg, "accessToken", accessToken);
-    }, [selectedTeam, currentOrg, accessToken]);
+        console.log(
+          'selectedTeam',
+          selectedTeam,
+          'currentOrg',
+          currentOrg,
+          'accessToken',
+          accessToken,
+          'selectedKeyAlias',
+          selectedKeyAlias
+        );
+    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
     const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
         setKeyData(prevData => {

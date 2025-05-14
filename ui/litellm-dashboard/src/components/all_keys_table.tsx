@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { DataTable } from "./view_logs/table";
 import { Select, SelectItem } from "@tremor/react"
@@ -9,12 +9,32 @@ import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
 import FilterComponent from "./common_components/filter";
 import { FilterOption } from "./common_components/filter";
-import { Organization, userListCall } from "./networking";
+import { keyListCall, Organization, userListCall } from "./networking";
 import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
 import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
 import { useFilterLogic } from "./key_team_helpers/filter_logic";
 import { Setter } from "@/types";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import { debounce } from "lodash";
+import { defaultPageSize } from "./constants";
+import { fetchAllTeams } from "./key_team_helpers/filter_helpers";
+import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -30,12 +50,19 @@ interface AllKeysTableProps {
   teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   refresh?: () => void;
+  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  currentSort?: {
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+  };
 }
 
 // Define columns similar to our logs table
@@ -88,6 +115,8 @@ const TeamFilter = ({
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
+
+
 export function AllKeysTable({ 
   keys, 
   setKeys,
@@ -98,17 +127,34 @@ export function AllKeysTable({
   teams,
   selectedTeam,
   setSelectedTeam,
+  selectedKeyAlias,
+  setSelectedKeyAlias,
   accessToken,
   userID,
   userRole,
   organizations,
   setCurrentOrg,
   refresh,
+  onSortChange,
+  currentSort,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
-  
+  const [sorting, setSorting] = React.useState<SortingState>(() => {
+    if (currentSort) {
+      return [{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }];
+    }
+    return [{
+      id: "created_at",
+      desc: true
+    }];
+  });
+
   // Use the filter logic hook
+
   const {
     filters,
     filteredKeys,
@@ -122,9 +168,9 @@ export function AllKeysTable({
     teams,
     organizations,
     accessToken,
-    setSelectedTeam,
-    setCurrentOrg
   });
+
+  
 
   useEffect(() => {
     if (accessToken) {
@@ -168,8 +214,9 @@ export function AllKeysTable({
         ) : null,
     },
     {
-      header: "Key ID",
+      id: "token",
       accessorKey: "token",
+      header: "Key ID",
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
@@ -186,40 +233,46 @@ export function AllKeysTable({
       ),
     },
     {
-      header: "Key Alias",
+      id: "key_alias",
       accessorKey: "key_alias",
+      header: "Key Alias",
       cell: (info) => {
         const value = info.getValue() as string;
         return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
       }
     },
     {
-      header: "Secret Key",
+      id: "key_name",
       accessorKey: "key_name",
+      header: "Secret Key",
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
+      id: "team_alias",
+      accessorKey: "team_id",
       header: "Team Alias",
-      accessorKey: "team_id", // Change to access the team_id
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
-        const team = allTeams?.find(t => t.team_id === teamId);
+        const team = teams?.find(t => t.team_id === teamId);
         return team?.team_alias || "Unknown";
       },
     },
     {
-      header: "Team ID",
+      id: "team_id",
       accessorKey: "team_id",
+      header: "Team ID",
       cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
     },
     {
-      header: "Organization ID",
+      id: "organization_id",
       accessorKey: "organization_id",
+      header: "Organization ID",
       cell: (info) => info.getValue() ? info.renderValue() : "-",
     },
     {
-      header: "User Email",
+      id: "user_email",
       accessorKey: "user_id",
+      header: "User Email",
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
@@ -227,8 +280,9 @@ export function AllKeysTable({
       },
     },
     {
-      header: "User ID",
+      id: "user_id",
       accessorKey: "user_id",
+      header: "User ID",
       cell: (info) => {
         const userId = info.getValue() as string;
         return userId ? (
@@ -239,53 +293,60 @@ export function AllKeysTable({
       },
     },
     {
-      header: "Created At",
+      id: "created_at",
       accessorKey: "created_at",
+      header: "Created At",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
       },
     },
     {
-      header: "Created By",
+      id: "created_by",
       accessorKey: "created_by",
+      header: "Created By",
       cell: (info) => {
         const value = info.getValue();
         return value ? value : "Unknown";
       },
     },
     {
-      header: "Expires",
+      id: "expires",
       accessorKey: "expires",
+      header: "Expires",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
-      header: "Spend (USD)",
+      id: "spend",
       accessorKey: "spend",
+      header: "Spend (USD)",
       cell: (info) => Number(info.getValue()).toFixed(4),
     },
     {
-      header: "Budget (USD)",
+      id: "max_budget",
       accessorKey: "max_budget",
+      header: "Budget (USD)",
       cell: (info) =>
         info.getValue() !== null && info.getValue() !== undefined
           ? info.getValue()
           : "Unlimited",
     },
     {
-      header: "Budget Reset",
+      id: "budget_reset_at",
       accessorKey: "budget_reset_at",
+      header: "Budget Reset",
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleString() : "Never";
       },
     },
     {
-      header: "Models",
+      id: "models",
       accessorKey: "models",
+      header: "Models",
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
@@ -307,6 +368,7 @@ export function AllKeysTable({
       },
     },
     {
+      id: "rate_limits",
       header: "Rate Limits",
       cell: ({ row }) => {
         const key = row.original;
@@ -358,27 +420,91 @@ export function AllKeysTable({
           }));
       }
     },
+    {
+      name: "Key Alias",
+      label: "Key Alias",
+      isSearchable: true,
+      searchFn: async (searchText) => {
+        const filteredKeyAliases = allKeyAliases.filter(key => {
+          return key.toLowerCase().includes(searchText.toLowerCase())
+        });
+
+        return filteredKeyAliases.map((key) => {
+          return {
+            label: key,
+            value: key
+          }
+        });
+      }
+    },
+    {
+      name: 'User ID',
+      label: 'User ID',
+      isSearchable: false,
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
+    }
+
   ];
   
-  
+  console.log(`keys: ${JSON.stringify(keys)}`)
+
+  const table = useReactTable({
+    data: filteredKeys,
+    columns: columns.filter(col => col.id !== 'expander'),
+    state: {
+      sorting,
+    },
+    onSortingChange: (updaterOrValue) => {
+      const newSorting = typeof updaterOrValue === 'function' 
+        ? updaterOrValue(sorting)
+        : updaterOrValue;
+      console.log(`newSorting: ${JSON.stringify(newSorting)}`)
+      setSorting(newSorting);
+      if (newSorting && newSorting.length > 0) {
+        const sortState = newSorting[0];
+        const sortBy = sortState.id;
+        const sortOrder = sortState.desc ? 'desc' : 'asc';
+        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`)
+        handleFilterChange({
+          ...filters,
+          'Sort By': sortBy,
+          'Sort Order': sortOrder
+        });
+        onSortChange?.(sortBy, sortOrder);
+      }
+    },
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableSorting: true,
+    manualSorting: false,
+  });
+
+  // Update local sorting state when currentSort prop changes
+  React.useEffect(() => {
+    if (currentSort) {
+      setSorting([{
+        id: currentSort.sortBy,
+        desc: currentSort.sortOrder === 'desc'
+      }]);
+    }
+  }, [currentSort]);
+
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
         <KeyInfoView 
           keyId={selectedKeyId} 
           onClose={() => setSelectedKeyId(null)}
-          keyData={keys.find(k => k.token === selectedKeyId)}
+          keyData={filteredKeys.find(k => k.token === selectedKeyId)}
           onKeyDataUpdate={(updatedKeyData) => {
             setKeys(keys => keys.map(key => {
               if (key.token === updatedKeyData.token) {
-                // The shape of key is different from that of
-                // updatedKeyData(received from keyUpdateCall in networking.tsx).
-                // Hence, we can't replace key with updatedKeys since it might lead
-                // to unintended bugs/behaviors.
-                // So instead, we only update fields that are present in both.
                 return updateExistingKeys(key, updatedKeyData)
               }
-              
               return key
             }))
           }}
@@ -392,49 +518,123 @@ export function AllKeysTable({
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="flex items-center justify-between w-full mb-2">
+          <div className="w-full mb-6">
             <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
-            <div className="flex items-center gap-4">
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+          </div>
+
+          <div className="flex items-center justify-between w-full mb-4">
+            <span className="inline-flex text-sm text-gray-700">
+              Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+            </span>
+            
+            <div className="inline-flex items-center gap-2">
+              <span className="text-sm text-gray-700">
+                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
               
-              <div className="inline-flex items-center gap-2">
-                <span className="text-sm text-gray-700">
-                  Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
-                </span>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage - 1)}
-                  disabled={isLoading || pagination.currentPage === 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                
-                <button
-                  onClick={() => onPageChange(pagination.currentPage + 1)} 
-                  disabled={isLoading || pagination.currentPage === pagination.totalPages}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
+              <button
+                onClick={() => onPageChange(pagination.currentPage - 1)}
+                disabled={isLoading || pagination.currentPage === 1}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              
+              <button
+                onClick={() => onPageChange(pagination.currentPage + 1)} 
+                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
             </div>
           </div>
           <div className="h-[75vh] overflow-auto">
-            
-            <DataTable
-              columns={columns.filter(col => col.id !== 'expander') as any}
-              data={filteredKeys as any}
-              isLoading={isLoading}
-              getRowCanExpand={() => false}
-              renderSubComponent={() => <></>}
-            />
+            <div className="rounded-lg custom-border relative">
+              <div className="overflow-x-auto">
+                <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                  <TableHead>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <TableRow key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => (
+                          <TableHeaderCell 
+                            key={header.id} 
+                            className={`py-1 h-8 ${
+                              header.id === 'actions' 
+                                ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]' 
+                                : ''
+                            }`}
+                            onClick={header.column.getToggleSortingHandler()}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center">
+                                {header.isPlaceholder ? null : (
+                                  flexRender(
+                                    header.column.columnDef.header,
+                                    header.getContext()
+                                  )
+                                )}
+                              </div>
+                              {header.id !== 'actions' && (
+                                <div className="w-4">
+                                  {header.column.getIsSorted() ? (
+                                    {
+                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                                    }[header.column.getIsSorted() as string]
+                                  ) : (
+                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableHead>
+                  <TableBody>
+                    {isLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>🚅 Loading keys...</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : filteredKeys.length > 0 ? (
+                      table.getRowModel().rows.map((row) => (
+                        <TableRow key={row.id} className="h-8">
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell
+                              key={cell.id}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
+                                cell.column.id === 'actions'
+                                  ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
+                                  : ''
+                              }`}
+                            >
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="h-8 text-center">
+                          <div className="text-center text-gray-500">
+                            <p>No keys found</p>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           </div>
         </div>
       )}
-      
     </div>
   );
 }

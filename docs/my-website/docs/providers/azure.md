@@ -478,12 +478,12 @@ response.stream_to_file(speech_file_path)
 ## **Authentication**
 
 
-### Entrata ID - use `azure_ad_token`
+### Entra ID - use `azure_ad_token`
 
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
 Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
 ```shell
 brew update && brew install azure-cli
 ```
@@ -545,7 +545,7 @@ model_list:
 </TabItem>
 </Tabs>
 
-### Entrata ID - use tenant_id, client_id, client_secret
+### Entra ID - use tenant_id, client_id, client_secret
 
 Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
 ```yaml
@@ -581,7 +581,7 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
-### Entrata ID - use client_id, username, password
+### Entra ID - use client_id, username, password
 
 Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
 ```yaml
@@ -1002,8 +1002,125 @@ Expected Response:
 ```
 
 
+## **Azure Responses API**
 
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Responses API |
+| `custom_llm_provider` on LiteLLM | `azure/` |
+| Supported Operations | `/v1/responses`|
+| Azure OpenAI Responses API | [Azure OpenAI Responses API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/responses?tabs=python-secure) |
+| Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Responses API Requests |
+| Supported OpenAI Params | ✅ All OpenAI params are supported, [See here](https://github.com/BerriAI/litellm/blob/0717369ae6969882d149933da48eeb8ab0e691bd/litellm/llms/openai/responses/transformation.py#L23) |
 
+## Usage
+
+## Create a model response
+
+<Tabs>
+<TabItem value="litellm-sdk" label="LiteLLM SDK">
+
+#### Non-streaming
+
+```python showLineNumbers title="Azure Responses API"
+import litellm
+
+# Non-streaming response
+response = litellm.responses(
+    model="azure/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100,
+    api_key=os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
+    api_base="https://litellm8397336933.openai.azure.com/",
+    api_version="2023-03-15-preview",
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Azure Responses API"
+import litellm
+
+# Streaming response
+response = litellm.responses(
+    model="azure/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True,
+    api_key=os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
+    api_base="https://litellm8397336933.openai.azure.com/",
+    api_version="2023-03-15-preview",
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+<TabItem value="proxy" label="OpenAI SDK with LiteLLM Proxy">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="Azure Responses API"
+model_list:
+  - model_name: o1-pro
+    litellm_params:
+      model: azure/o1-pro
+      api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
+      api_base: https://litellm8397336933.openai.azure.com/
+      api_version: 2023-03-15-preview
+```
+
+Start your LiteLLM proxy:
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+Then use the OpenAI SDK pointed to your proxy:
+
+#### Non-streaming
+```python showLineNumbers
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+</Tabs>
 
 
 
