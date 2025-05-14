@@ -65,11 +65,23 @@ def models() -> None:
     default="table",
     help="Output format (table or json)",
 )
+@click.option(
+    "--sort-by",
+    type=click.Choice(["model_name", "created"]),
+    default=None,
+    help="Sort models by 'model_name' or 'created' (creation date).",
+)
+@click.option(
+    "--sort-order",
+    type=click.Choice(["asc", "desc"]),
+    default="asc",
+    help="Sort order: 'asc' (ascending) or 'desc' (descending).",
+)
 @click.pass_context
-def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> None:
+def list_models(ctx: click.Context, output_format: Literal["table", "json"], sort_by: Optional[str], sort_order: str) -> None:
     """List all available models"""
     client = create_client(ctx)
-    models_list = client.models.list()
+    models_list = client.models.list(sort_by=sort_by, sort_order=sort_order)
     assert isinstance(models_list, list)
 
     if output_format == "json":

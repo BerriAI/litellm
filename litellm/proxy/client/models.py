@@ -27,13 +27,14 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+    def list(self, return_request: bool = False, sort_by: Optional[str] = None, sort_order: str = "asc") -> Union[List[Dict[str, Any]], requests.Request]:
         """
-        Get the list of models supported by the server.
+        Get the list of models supported by the server, with optional sorting.
 
         Args:
             return_request (bool): If True, returns the prepared request object instead of executing it.
-                                 Useful for inspection or modification before sending.
+            sort_by (Optional[str]): Field to sort by ('model_name' or 'created').
+            sort_order (str): 'asc' for ascending, 'desc' for descending.
 
         Returns:
             Union[List[Dict[str, Any]], requests.Request]: Either a list of model information dictionaries
@@ -54,7 +55,26 @@ class ModelsManagementClient:
         try:
             response = session.send(request.prepare())
             response.raise_for_status()
-            return response.json()["data"]
+            models_list = response.json()["data"]
+
+            # Sorting logic
+            if sort_by:
+                reverse = sort_order == "desc"
+                if sort_by == "model_name":
+                    models_list = sorted(models_list, key=lambda m: str(m.get("id", "")).lower(), reverse=reverse)
+                elif sort_by == "created":
+                    def parse_created(m):
+                        val = m.get("created")
+                        if isinstance(val, int):
+                            return val
+                        if isinstance(val, str):
+                            try:
+                                return int(val)
+                            except Exception:
+                                return 0
+                        return 0
+                    models_list = sorted(models_list, key=parse_created, reverse=reverse)
+            return models_list
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
