@@ -372,7 +372,6 @@ router_settings:
 | DOCS_TITLE | Title of the documentation pages
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_SUPPORT_CONTACT | Support contact email address
-| EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
