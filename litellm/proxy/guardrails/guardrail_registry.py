@@ -17,7 +17,7 @@ from .guardrail_initializers import (
     initialize_presidio,
 )
 
-guardrail_registry = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,

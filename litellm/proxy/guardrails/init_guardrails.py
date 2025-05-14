@@ -10,13 +10,14 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 # v2 implementation
 from litellm.types.guardrails import (
     Guardrail,
+    GuardrailEventHooks,
     GuardrailItem,
     GuardrailItemSpec,
     LakeraCategoryThresholds,
     LitellmParams,
 )
 
-from .guardrail_registry import guardrail_registry
+from .guardrail_registry import guardrail_initializer_registry
 
 all_guardrails: List[GuardrailItem] = []
 
@@ -88,9 +89,34 @@ def init_guardrails_v2(
     all_guardrails: List[Dict],
     config_file_path: Optional[str] = None,
 ):
-    guardrail_list = []
+    guardrail_list: List[Guardrail] = []
 
     for guardrail in all_guardrails:
+        initialized_guardrail = InitializeGuardrails.initialize_guardrail(
+            guardrail=guardrail,
+            config_file_path=config_file_path,
+        )
+        if initialized_guardrail:
+            guardrail_list.append(initialized_guardrail)
+
+    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")
+
+
+class InitializeGuardrails:
+    """
+    Class that handles initializing guardrails and adding them to the CallbackManager
+    """
+
+    @staticmethod
+    def initialize_guardrail(
+        guardrail: Dict,
+        config_file_path: Optional[str] = None,
+    ) -> Optional[Guardrail]:
+        """
+        Initialize a guardrail from a dictionary and add it to the litellm callback manager
+
+        Returns a Guardrail object if the guardrail is initialized successfully
+        """
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
@@ -109,55 +135,29 @@ def init_guardrails_v2(
             )
             litellm_params["category_thresholds"] = lakera_category_thresholds
 
-        if litellm_params["api_key"] and litellm_params["api_key"].startswith(
-            "os.environ/"
-        ):
+        api_key: Optional[str] = litellm_params.get("api_key")
+        if api_key and api_key.startswith("os.environ/"):
             litellm_params["api_key"] = str(get_secret(litellm_params["api_key"]))  # type: ignore
 
-        if litellm_params["api_base"] and litellm_params["api_base"].startswith(
-            "os.environ/"
-        ):
+        api_base: Optional[str] = litellm_params.get("api_base")
+        if api_base and api_base.startswith("os.environ/"):
             litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
 
-        guardrail_type = litellm_params["guardrail"]
+        guardrail_type: Optional[str] = litellm_params.get("guardrail")
+        if guardrail_type is None:
+            raise ValueError("guardrail_type is required")
 
-        initializer = guardrail_registry.get(guardrail_type)
+        initializer = guardrail_initializer_registry.get(guardrail_type)
 
         if initializer:
             initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
-            if not config_file_path:
-                raise Exception(
-                    "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
-                )
-
-            _file_name, _class_name = guardrail_type.split(".")
-            verbose_proxy_logger.debug(
-                "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
-                guardrail_type,
-                _file_name,
-                _class_name,
+            InitializeGuardrails.initialize_custom_guardrail(
+                guardrail=guardrail,
+                guardrail_type=guardrail_type,
+                litellm_params=litellm_params,
+                config_file_path=config_file_path,
             )
-
-            directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, _file_name) + ".py"
-
-            spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
-            if not spec:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
-
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            spec.loader.exec_module(module)  # type: ignore
-            _guardrail_class = getattr(module, _class_name)
-
-            _guardrail_callback = _guardrail_class(
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-                default_on=litellm_params["default_on"],
-            )
-            litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
@@ -166,6 +166,56 @@ def init_guardrails_v2(
             litellm_params=litellm_params,
         )
 
-        guardrail_list.append(parsed_guardrail)
+        return parsed_guardrail
 
-    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")
+    @staticmethod
+    def initialize_custom_guardrail(
+        guardrail: Dict,
+        guardrail_type: str,
+        litellm_params: LitellmParams,
+        config_file_path: Optional[str] = None,
+    ) -> None:
+        """
+        Initialize a Custom Guardrail from a python file
+
+        This initializes it by adding it to the litellm callback manager
+        """
+        if not config_file_path:
+            raise Exception(
+                "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
+            )
+
+        _file_name, _class_name = guardrail_type.split(".")
+        verbose_proxy_logger.debug(
+            "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
+            guardrail_type,
+            _file_name,
+            _class_name,
+        )
+
+        directory = os.path.dirname(config_file_path)
+        module_file_path = os.path.join(directory, _file_name) + ".py"
+
+        spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
+        if not spec:
+            raise ImportError(
+                f"Could not find a module specification for {module_file_path}"
+            )
+
+        module = importlib.util.module_from_spec(spec)  # type: ignore
+        spec.loader.exec_module(module)  # type: ignore
+        _guardrail_class = getattr(module, _class_name)
+
+        mode: Optional[str] = litellm_params.get("mode")
+        if mode is None:
+            raise ValueError(
+                f"mode is required for guardrail {guardrail_type} please set mode to one of the following: {', '.join(GuardrailEventHooks)}"
+            )
+
+        default_on: Optional[bool] = litellm_params.get("default_on")
+        _guardrail_callback = _guardrail_class(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=mode,
+            default_on=default_on,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
