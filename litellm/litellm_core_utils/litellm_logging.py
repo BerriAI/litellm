@@ -13,7 +13,18 @@ import traceback
 import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+)
 
 from pydantic import BaseModel
 
@@ -83,7 +94,6 @@ from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
-    StandardLoggingMetadataCustomHeaders,
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
@@ -144,6 +154,13 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
+    )
+
+    EnterpriseStandardLoggingPayloadSetupVAR: Optional[
+        Type[EnterpriseStandardLoggingPayloadSetup]
+    ] = EnterpriseStandardLoggingPayloadSetup
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
@@ -151,6 +168,7 @@ except Exception as e:
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
+    EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
@@ -3329,7 +3347,6 @@ class StandardLoggingPayloadSetup:
             List[StandardLoggingVectorStoreRequest]
         ] = None,
         usage_object: Optional[dict] = None,
-        custom_headers: Optional[StandardLoggingMetadataCustomHeaders] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3379,7 +3396,7 @@ class StandardLoggingPayloadSetup:
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
-            requester_custom_headers=custom_headers,
+            requester_custom_headers=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3735,19 +3752,6 @@ def get_standard_logging_object_payload(
             hidden_params
         )
 
-        standard_logging_metadata_custom_headers: Optional[
-            StandardLoggingMetadataCustomHeaders
-        ] = None
-        _request_headers = proxy_server_request.get("headers", {})
-        if _request_headers:
-            custom_headers = {
-                k: v for k, v in _request_headers.items() if k.startswith("x-")
-            }
-            if custom_headers:
-                standard_logging_metadata_custom_headers = (
-                    StandardLoggingMetadataCustomHeaders(custom_headers=custom_headers)
-                )
-
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -3759,8 +3763,13 @@ def get_standard_logging_object_payload(
                 "vector_store_request_metadata", None
             ),
             usage_object=usage.model_dump(),
-            custom_headers=standard_logging_metadata_custom_headers,
         )
+
+        if EnterpriseStandardLoggingPayloadSetupVAR:
+            clean_metadata = EnterpriseStandardLoggingPayloadSetupVAR.apply_enterprise_specific_metadata(
+                standard_logging_metadata=clean_metadata,
+                proxy_server_request=proxy_server_request,
+            )
 
         _request_body = proxy_server_request.get("body", {})
         end_user_id = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
