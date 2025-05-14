@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -54,6 +55,7 @@ class RealTimeStreaming:
         websocket: Any,
         backend_ws: Any,
         logging_obj: Optional[LiteLLMLogging] = None,
+        provider_config: Optional[BaseRealtimeConfig] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
