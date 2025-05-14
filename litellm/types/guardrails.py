@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
@@ -85,6 +86,20 @@ class PiiAction(str, Enum):
     MASK = "MASK"
 
 
+class PiiEntityCategory(str, Enum):
+    GENERAL = "General"
+    FINANCE = "Finance"
+    USA = "USA"
+    UK = "UK"
+    SPAIN = "Spain"
+    ITALY = "Italy"
+    POLAND = "Poland"
+    SINGAPORE = "Singapore"
+    AUSTRALIA = "Australia"
+    INDIA = "India"
+    FINLAND = "Finland"
+
+
 class PiiEntityType(str, Enum):
     # General
     CREDIT_CARD = "CREDIT_CARD"
@@ -137,7 +152,65 @@ class PiiEntityType(str, Enum):
     FI_PERSONAL_IDENTITY_CODE = "FI_PERSONAL_IDENTITY_CODE"
 
 
-class LitellmParams(TypedDict):
+# Define mappings of PII entity types by category
+PII_ENTITY_CATEGORIES_MAP = {
+    PiiEntityCategory.GENERAL: [
+        PiiEntityType.DATE_TIME,
+        PiiEntityType.EMAIL_ADDRESS,
+        PiiEntityType.IP_ADDRESS,
+        PiiEntityType.NRP,
+        PiiEntityType.LOCATION,
+        PiiEntityType.PERSON,
+        PiiEntityType.PHONE_NUMBER,
+        PiiEntityType.MEDICAL_LICENSE,
+        PiiEntityType.URL,
+    ],
+    PiiEntityCategory.FINANCE: [
+        PiiEntityType.CREDIT_CARD,
+        PiiEntityType.CRYPTO,
+        PiiEntityType.IBAN_CODE,
+    ],
+    PiiEntityCategory.USA: [
+        PiiEntityType.US_BANK_NUMBER,
+        PiiEntityType.US_DRIVER_LICENSE,
+        PiiEntityType.US_ITIN,
+        PiiEntityType.US_PASSPORT,
+        PiiEntityType.US_SSN,
+    ],
+    PiiEntityCategory.UK: [PiiEntityType.UK_NHS, PiiEntityType.UK_NINO],
+    PiiEntityCategory.SPAIN: [PiiEntityType.ES_NIF, PiiEntityType.ES_NIE],
+    PiiEntityCategory.ITALY: [
+        PiiEntityType.IT_FISCAL_CODE,
+        PiiEntityType.IT_DRIVER_LICENSE,
+        PiiEntityType.IT_VAT_CODE,
+        PiiEntityType.IT_PASSPORT,
+        PiiEntityType.IT_IDENTITY_CARD,
+    ],
+    PiiEntityCategory.POLAND: [PiiEntityType.PL_PESEL],
+    PiiEntityCategory.SINGAPORE: [PiiEntityType.SG_NRIC_FIN, PiiEntityType.SG_UEN],
+    PiiEntityCategory.AUSTRALIA: [
+        PiiEntityType.AU_ABN,
+        PiiEntityType.AU_ACN,
+        PiiEntityType.AU_TFN,
+        PiiEntityType.AU_MEDICARE,
+    ],
+    PiiEntityCategory.INDIA: [
+        PiiEntityType.IN_PAN,
+        PiiEntityType.IN_AADHAAR,
+        PiiEntityType.IN_VEHICLE_REGISTRATION,
+        PiiEntityType.IN_VOTER,
+        PiiEntityType.IN_PASSPORT,
+    ],
+    PiiEntityCategory.FINLAND: [PiiEntityType.FI_PERSONAL_IDENTITY_CODE],
+}
+
+
+class PiiEntityCategoryMap(TypedDict):
+    category: PiiEntityCategory
+    entities: List[PiiEntityType]
+
+
+class LitellmParams(TypedDict, total=False):
     guardrail: str
     mode: str
     api_key: Optional[str]
@@ -178,6 +251,8 @@ class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
     guardrail_info: Optional[Dict]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
 
 class guardrailConfig(TypedDict):
@@ -214,6 +289,8 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_name: str
     litellm_params: GuardrailLiteLLMParamsResponse
     guardrail_info: Optional[Dict]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -221,3 +298,10 @@ class GuardrailInfoResponse(BaseModel):
 
 class ListGuardrailsResponse(BaseModel):
     guardrails: List[GuardrailInfoResponse]
+
+
+class GuardrailUIAddGuardrailSettings(BaseModel):
+    supported_entities: List[PiiEntityType]
+    supported_actions: List[PiiAction]
+    supported_modes: List[GuardrailEventHooks]
+    pii_entity_categories: List[PiiEntityCategoryMap]

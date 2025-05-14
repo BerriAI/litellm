@@ -4278,8 +4278,7 @@ export const getProxyUISettings = async (
 
 export const getGuardrailsList = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
-
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4295,10 +4294,9 @@ export const getGuardrailsList = async (accessToken: String) => {
     }
 
     const data = await response.json();
-    console.log("Guardrails list response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to fetch guardrails list:", error);
+    console.error("Failed to get guardrails list:", error);
     throw error;
   }
 };
@@ -5044,3 +5042,57 @@ export const resetEmailEventSettings = async (accessToken: string) => {
 
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
+
+export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
+    
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Delete guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete guardrail:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailUISettings = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/add_guardrail_settings` : `/guardrails/ui/add_guardrail_settings`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail UI settings");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail UI settings response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail UI settings:", error);
+    throw error;
+  }
+};

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
 from litellm.types.guardrails import Guardrail, SupportedGuardrailIntegrations
 
@@ -48,8 +49,8 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params = guardrail.get("litellm_params", {})
-            guardrail_info = guardrail.get("guardrail_info", {})
+            litellm_params: str = safe_dumps(guardrail.get("litellm_params", {}))
+            guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
             created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
