@@ -353,7 +353,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if user_location_approximate is not None:
                 for key, user_location_value in user_location_approximate.items():
                     if key in anthropic_user_location_keys and key != "type":
-                        anthropic_user_location[key] = user_location_value
+                        anthropic_user_location[key] = user_location_value  # type: ignore
                 hosted_web_search_tool["user_location"] = anthropic_user_location
 
         ## MAP SEARCH CONTEXT SIZE
