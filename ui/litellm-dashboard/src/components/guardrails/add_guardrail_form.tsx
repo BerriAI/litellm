@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message } from 'antd';
-import { Button } from '@tremor/react';
+import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
 import { createGuardrailCall } from '../networking';
@@ -257,7 +257,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           label="Guardrail Name"
           rules={[{ required: true, message: 'Please enter a guardrail name' }]}
         >
-          <Input placeholder="Enter a name for this guardrail" />
+          <TextInput placeholder="Enter a name for this guardrail" />
         </Form.Item>
 
         <Form.Item
@@ -301,11 +301,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         {renderProviderSpecificFields()}
 
         <div className="flex justify-end space-x-2 mt-4">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button 
+            variant="secondary"
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
           <Button 
             onClick={handleSubmit}
             loading={loading}
-            color="blue"
           >
             Create Guardrail
           </Button>

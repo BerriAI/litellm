@@ -4,6 +4,7 @@ import {
   Text,
   Button,
   Icon,
+  TextInput,
 } from "@tremor/react";
 import {
   PlusIcon,
