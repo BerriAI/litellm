@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
+    PII_ENTITY_CATEGORIES_MAP,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -440,9 +441,16 @@ async def get_guardrail_ui_settings():
     Returns:
     - Supported entities for guardrails
     - Supported modes for guardrails
+    - PII entity categories for UI organization
     """
+    # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
+    category_maps = []
+    for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
+        category_maps.append({"category": category, "entities": entities})
+
     return GuardrailUIAddGuardrailSettings(
         supported_entities=list(PiiEntityType),
         supported_actions=list(PiiAction),
         supported_modes=list(GuardrailEventHooks),
+        pii_entity_categories=category_maps,
     )
