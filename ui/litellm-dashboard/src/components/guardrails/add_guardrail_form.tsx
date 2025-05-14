@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, provider_specific_fields, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
 
@@ -311,7 +311,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       case 0:
         return renderBasicInfo();
       case 1:
-        if (selectedProvider === 'PresidioPII') {
+        if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
         }
       default:
