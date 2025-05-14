@@ -279,24 +279,50 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     for (let index = 0; index < updatedData.length; index++) {
       const user = updatedData[index];
       try {
-        // Convert teams from comma-separated string to array if provided
-        const processedUser = { ...user };
-        if (processedUser.teams && typeof processedUser.teams === 'string') {
-          processedUser.teams = processedUser.teams.split(',').map(team => team.trim());
+        // Create a clean user object with only non-empty values
+        const cleanUser: Partial<UserData> = {
+          user_email: user.user_email,
+          user_role: user.user_role
+        };
+        
+        // Only add optional fields if they have values
+        if (user.teams && typeof user.teams === 'string' && user.teams.trim() !== '') {
+          cleanUser.teams = user.teams.split(',').map(team => team.trim()).filter(Boolean);
+          // Only include teams if there's at least one valid team
+          if (cleanUser.teams.length === 0) {
+            delete cleanUser.teams;
+          }
         }
         
-        // Convert models from comma-separated string to array if provided
-        if (processedUser.models && typeof processedUser.models === 'string') {
-          processedUser.models = processedUser.models.split(',').map(model => model.trim());
+        // Only add models if provided and non-empty
+        if (user.models && typeof user.models === 'string' && user.models.trim() !== '') {
+          cleanUser.models = user.models.split(',').map(model => model.trim()).filter(Boolean);
+          // Only include models if there's at least one valid model
+          if (cleanUser.models.length === 0) {
+            delete cleanUser.models;
+          }
         }
         
-        // Convert max_budget to number if provided
-        if (processedUser.max_budget && processedUser.max_budget.toString().trim() !== '') {
-          processedUser.max_budget = parseFloat(processedUser.max_budget.toString());
+        // Only add max_budget if it's a valid number
+        if (user.max_budget && user.max_budget.toString().trim() !== '') {
+          const budgetValue = parseFloat(user.max_budget.toString());
+          if (!isNaN(budgetValue) && budgetValue > 0) {
+            cleanUser.max_budget = budgetValue;
+          }
+        }
+        
+        // Only add budget_duration if provided and non-empty
+        if (user.budget_duration && user.budget_duration.trim() !== '') {
+          cleanUser.budget_duration = user.budget_duration.trim();
+        }
+        
+        // Only add metadata if provided and non-empty
+        if (user.metadata && typeof user.metadata === 'string' && user.metadata.trim() !== '') {
+          cleanUser.metadata = user.metadata.trim();
         }
 
-        
-        const response = await userCreateCall(accessToken, null, processedUser);
+        console.log('Sending user data:', cleanUser);
+        const response = await userCreateCall(accessToken, null, cleanUser);
         console.log('Full response:', response);
         
         // Check if response has key or user_id, indicating success
