@@ -130,9 +130,18 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return "langfuse"
 
     def _get_prompt_from_id(
-        self, langfuse_prompt_id: str, langfuse_client: LangfuseClass
+        self,
+        langfuse_prompt_id: str,
+        langfuse_prompt_version: Optional[str],
+        langfuse_prompt_label: Optional[str],
+        langfuse_client: LangfuseClass,
     ) -> PROMPT_CLIENT:
-        return langfuse_client.get_prompt(langfuse_prompt_id)
+        kwargs = {}
+        if langfuse_prompt_label is not None:
+            kwargs["label"] = langfuse_prompt_label
+        if langfuse_prompt_version is not None:
+            kwargs["version"] = langfuse_prompt_version
+        return langfuse_client.get_prompt(langfuse_prompt_id, **kwargs)
 
     def _compile_prompt(
         self,
@@ -173,6 +182,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         non_default_params: dict,
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
@@ -187,12 +198,16 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             non_default_params,
             prompt_id,
             prompt_variables,
+            prompt_version,
+            prompt_label,
             dynamic_callback_params,
         )
 
     def should_run_prompt_management(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         langfuse_client = langfuse_client_init(
@@ -202,13 +217,18 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
+            langfuse_prompt_id=prompt_id,
+            langfuse_prompt_version=prompt_version,
+            langfuse_prompt_label=prompt_label,
+            langfuse_client=langfuse_client,
         )
         return langfuse_prompt_client is not None
 
     def _compile_prompt_helper(
         self,
         prompt_id: str,
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:
@@ -219,7 +239,10 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
+            langfuse_prompt_id=prompt_id,
+            langfuse_prompt_version=prompt_version,
+            langfuse_prompt_label=prompt_label,
+            langfuse_client=langfuse_client,
         )
 
         ## SET PROMPT

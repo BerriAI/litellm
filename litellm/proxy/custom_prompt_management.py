@@ -14,6 +14,8 @@ class X42PromptManagement(CustomPromptManagement):
         non_default_params: dict,
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_version: Optional[str],
+        prompt_label: Optional[str],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """

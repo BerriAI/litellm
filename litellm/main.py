@@ -427,6 +427,8 @@ async def acompletion(
             messages=messages,
             non_default_params=kwargs,
             prompt_id=kwargs.get("prompt_id", None),
+            prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
         )
@@ -973,6 +975,8 @@ def completion(  # type: ignore # noqa: PLR0915
     no_log = kwargs.get("no-log", False)
     ### PROMPT MANAGEMENT ###
     prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_version = cast(Optional[str], kwargs.get("prompt_version", None))
+    prompt_label = cast(Optional[str], kwargs.get("prompt_label", None))
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
@@ -999,6 +1003,8 @@ def completion(  # type: ignore # noqa: PLR0915
             messages=messages,
             non_default_params=non_default_params,
             prompt_id=prompt_id,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
             prompt_variables=prompt_variables,
         )
 
@@ -1216,6 +1222,8 @@ def completion(  # type: ignore # noqa: PLR0915
             disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
             drop_params=kwargs.get("drop_params"),
             prompt_id=prompt_id,
+            prompt_version=prompt_version,
+            prompt_label=prompt_label,
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
             merge_reasoning_content_in_choices=kwargs.get(
