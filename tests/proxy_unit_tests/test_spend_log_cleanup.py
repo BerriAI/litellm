@@ -16,19 +16,39 @@ async def test_should_delete_spend_logs():
     general_settings.clear()
     assert _should_delete_spend_logs() is False
 
-    # Test case 2: Valid integer maximum_retention_period
-    general_settings["maximum_retention_period"] = 30
+    # Test case 2: Valid integer maximum_retention_period (in seconds)
+    general_settings["maximum_retention_period"] = 3600
     assert _should_delete_spend_logs() is True
 
-    # Test case 3: Valid string maximum_retention_period
-    general_settings["maximum_retention_period"] = "30"
+    # Test case 3: Valid duration string - days
+    general_settings["maximum_retention_period"] = "30d"
     assert _should_delete_spend_logs() is True
 
-    # Test case 4: Invalid string maximum_retention_period
+    # Test case 4: Valid duration string - hours
+    general_settings["maximum_retention_period"] = "24h"
+    assert _should_delete_spend_logs() is True
+
+    # Test case 5: Valid duration string - minutes
+    general_settings["maximum_retention_period"] = "60m"
+    assert _should_delete_spend_logs() is True
+
+    # Test case 6: Valid duration string - seconds
+    general_settings["maximum_retention_period"] = "3600s"
+    assert _should_delete_spend_logs() is True
+
+    # Test case 7: Valid duration string - weeks
+    general_settings["maximum_retention_period"] = "1w"
+    assert _should_delete_spend_logs() is True
+
+    # Test case 8: Valid duration string - months
+    general_settings["maximum_retention_period"] = "1mo"
+    assert _should_delete_spend_logs() is True
+
+    # Test case 9: Invalid duration string
     general_settings["maximum_retention_period"] = "invalid"
     assert _should_delete_spend_logs() is False
 
-    # Test case 5: None value
+    # Test case 10: None value
     general_settings["maximum_retention_period"] = None
     assert _should_delete_spend_logs() is False
 
