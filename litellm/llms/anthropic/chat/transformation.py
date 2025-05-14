@@ -114,6 +114,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "response_format",
             "user",
             "reasoning_effort",
+            "web_search_options",
         ]
 
         if "claude-3-7-sonnet" in model:
@@ -392,11 +393,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     value
                 )
+            elif param == "web_search_options":
+                hosted_web_search_tool = AnthropicHostedTools(
+                    type="web_search_20250305",
+                    name="web_search",
+                )
+                optional_params["tools"] = [hosted_web_search_tool]
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=optional_params
         )
+
         return optional_params
 
     def _create_json_tool_call_for_response_format(

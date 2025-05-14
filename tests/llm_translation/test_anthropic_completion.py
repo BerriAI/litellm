@@ -1223,16 +1223,27 @@ async def test_anthropic_api_max_completion_tokens(model: str):
             "model": model.split("/")[-1],
         }
 
-def test_anthropic_websearch():
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        # {
+        #     "tools": [{
+        #         "type": "web_search_20250305",
+        #         "name": "web_search",
+        #         "max_uses": 5
+        #     }]
+        # },
+        {
+            "web_search_options": {} 
+        }
+    ]
+)
+def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
         "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
-        "tools": [{
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }]
+        **optional_params
     }
 
     try:

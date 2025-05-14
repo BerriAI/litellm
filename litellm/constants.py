@@ -206,6 +206,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "reasoning_effort",
     "extra_headers",
     "thinking",
+    "web_search_options",
 ]
 
 openai_compatible_endpoints: List = [

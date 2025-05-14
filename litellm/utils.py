@@ -2655,6 +2655,7 @@ def get_optional_params(  # noqa: PLR0915
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[dict] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2742,6 +2743,7 @@ def get_optional_params(  # noqa: PLR0915
         "messages": None,
         "reasoning_effort": None,
         "thinking": None,
+        "web_search_options": None,
     }
 
     # filter out those parameters that were passed with non-default values
