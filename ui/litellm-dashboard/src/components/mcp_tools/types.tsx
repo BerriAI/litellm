@@ -1,3 +1,25 @@
+export const TRANSPORT = {
+  SSE: "sse",
+  HTTP: "http",
+};
+
+export const handleTransport = (transport?: string): string => {
+  console.log(transport)
+  if (transport === null || transport === undefined) {
+    return TRANSPORT.SSE;
+  }
+
+  return transport;
+};
+
+export const handleAuth = (authType?: string): string => {
+  if (authType === null || authType === undefined) {
+    return "none";
+  }
+
+  return authType;
+};
+
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
     type: string;
@@ -69,3 +91,23 @@ export interface InputSchemaProperty {
     userRole: string | null;
     userID: string | null;
   }
+
+export interface MCPServer {
+  server_id: string;
+  alias?: string | null;
+  description?: string | null;
+  url: string;
+  transport?: string | null;
+  spec_version?: string | null;
+  auth_type?: string | null;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface MCPServerProps {
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+}
