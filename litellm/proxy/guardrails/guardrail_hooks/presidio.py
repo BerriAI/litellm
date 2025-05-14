@@ -173,11 +173,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Check if client side request passed any dynamic params
         if presidio_config and presidio_config.language:
             analyze_payload["language"] = presidio_config.language
-        analyze_payload.update(
+
+        casted_analyze_payload: dict = cast(dict, analyze_payload)
+        casted_analyze_payload.update(
             self.get_guardrail_dynamic_request_body_params(request_data=request_data)
         )
-
-        return analyze_payload
+        return cast(PresidioAnalyzeRequest, casted_analyze_payload)
 
     async def analyze_text(
         self,
