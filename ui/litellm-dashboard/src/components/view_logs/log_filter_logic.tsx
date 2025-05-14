@@ -77,7 +77,7 @@ export function useLogFilterLogic({
     } catch (error) {
       console.error("Error searching users:", error);
     }
-  }, [accessToken]);
+  }, [accessToken, startTime, endTime, isCustomDate, pageSize]);
 
   const debouncedSearch = useMemo(() => debounce(performSearch, 300), [performSearch]);
 

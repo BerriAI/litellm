@@ -226,12 +226,21 @@ export default function SpendLogsTable({
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
-    startTime, // Receive from SpendLogsTable
-    endTime,   // Receive from SpendLogsTable
+    startTime,
+    endTime,
     pageSize,
     isCustomDate,
     setCurrentPage
   })
+
+  // Add this effect to update selectedTeamId when team filter changes
+  useEffect(() => {
+    if (filters['Team ID']) {
+      setSelectedTeamId(filters['Team ID']);
+    } else {
+      setSelectedTeamId("");
+    }
+  }, [filters['Team ID']]);
 
   // Fetch logs for a session if selected
   const sessionLogs = useQuery<PaginatedResponse>({
