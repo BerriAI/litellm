@@ -18,7 +18,7 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
 } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
+import { Tooltip, Modal, message } from "antd";
 import {
   ColumnDef,
   flexRender,
@@ -27,7 +27,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { getGuardrailsList } from "./networking";
+import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 
@@ -56,8 +56,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
   const [guardrailsList, setGuardrailsList] = useState<GuardrailItem[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [guardrailToDelete, setGuardrailToDelete] = useState<{id: string, name: string} | null>(null);
   const [sorting, setSorting] = useState<SortingState>([
-    { id: "guardrail_name", desc: false }
+    { id: "created_at", desc: true }
   ]);
 
   const fetchGuardrails = async () => {
@@ -93,9 +95,36 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
     fetchGuardrails();
   };
 
-  const handleDelete = (guardrailId: string) => {
-    // Implement delete functionality here
-    console.log(`Delete guardrail with ID: ${guardrailId}`);
+  const handleDeleteClick = (guardrailId: string, guardrailName: string) => {
+    setGuardrailToDelete({id: guardrailId, name: guardrailName});
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!guardrailToDelete || !accessToken) return;
+    
+    setIsDeleting(true);
+    try {
+      await deleteGuardrailCall(accessToken, guardrailToDelete.id);
+      message.success(`Guardrail "${guardrailToDelete.name}" deleted successfully`);
+      fetchGuardrails(); // Refresh the list
+    } catch (error) {
+      console.error('Error deleting guardrail:', error);
+      message.error('Failed to delete guardrail');
+    } finally {
+      setIsDeleting(false);
+      setGuardrailToDelete(null);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setGuardrailToDelete(null);
+  };
+
+  // Format date helper function
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    return date.toLocaleString();
   };
 
   const columns: ColumnDef<GuardrailItem>[] = [
@@ -166,6 +195,34 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
       },
     },
     {
+      header: "Created At",
+      accessorKey: "created_at",
+      cell: ({ row }) => {
+        const guardrail = row.original;
+        return (
+          <Tooltip title={guardrail.created_at}>
+            <span className="text-xs">
+              {formatDate(guardrail.created_at)}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      header: "Updated At",
+      accessorKey: "updated_at",
+      cell: ({ row }) => {
+        const guardrail = row.original;
+        return (
+          <Tooltip title={guardrail.updated_at}>
+            <span className="text-xs">
+              {formatDate(guardrail.updated_at)}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       id: "actions",
       header: "",
       cell: ({ row }) => {
@@ -175,8 +232,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
             <Icon
               icon={TrashIcon}
               size="sm"
-              onClick={() => guardrail.guardrail_id && handleDelete(guardrail.guardrail_id)}
-              className="cursor-pointer"
+              onClick={() => guardrail.guardrail_id && handleDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || 'Unnamed Guardrail')}
+              className="cursor-pointer hover:text-red-500"
+              tooltip="Delete guardrail"
             />
           </div>
         );
@@ -310,6 +368,19 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
         accessToken={accessToken}
         onSuccess={handleSuccess}
       />
+
+      <Modal
+        title="Delete Guardrail"
+        open={guardrailToDelete !== null}
+        onOk={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+        confirmLoading={isDeleting}
+        okText="Delete"
+        okButtonProps={{ danger: true }}
+      >
+        <p>Are you sure you want to delete the guardrail "{guardrailToDelete?.name}"?</p>
+        <p>This action cannot be undone.</p>
+      </Modal>
     </div>
   );
 };
