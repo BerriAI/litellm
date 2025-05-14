@@ -12,8 +12,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     Guardrail,
+    GuardrailEventHooks,
     GuardrailInfoResponse,
+    GuardrailUIAddGuardrailSettings,
     ListGuardrailsResponse,
+    PiiAction,
+    PiiEntityType,
 )
 
 #### GUARDRAILS ENDPOINTS ####
@@ -422,3 +426,23 @@ async def delete_guardrail(guardrail_id: str):
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/guardrails/ui/add_guardrail_settings",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_guardrail_ui_settings():
+    """
+    Get the UI settings for the guardrails
+
+    Returns:
+    - Supported entities for guardrails
+    - Supported modes for guardrails
+    """
+    return GuardrailUIAddGuardrailSettings(
+        supported_entities=list(PiiEntityType),
+        supported_actions=list(PiiAction),
+        supported_modes=list(GuardrailEventHooks),
+    )

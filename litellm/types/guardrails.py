@@ -226,3 +226,9 @@ class GuardrailInfoResponse(BaseModel):
 
 class ListGuardrailsResponse(BaseModel):
     guardrails: List[GuardrailInfoResponse]
+
+
+class GuardrailUIAddGuardrailSettings(BaseModel):
+    supported_entities: List[PiiEntityType]
+    supported_actions: List[PiiAction]
+    supported_modes: List[GuardrailEventHooks]
