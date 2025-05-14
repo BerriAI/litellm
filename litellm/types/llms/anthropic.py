@@ -35,6 +35,22 @@ class AnthropicComputerTool(TypedDict, total=False):
     name: Required[str]
 
 
+class AnthropicWebSearchUserLocation(TypedDict, total=False):
+    city: Optional[str]
+    country: Optional[str]
+    region: Optional[str]
+    timezone: Optional[str]
+    type: Required[Literal["approximate"]]
+
+
+class AnthropicWebSearchTool(TypedDict, total=False):
+    name: Required[Literal["web_search"]]
+    type: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    max_uses: Optional[int]
+    user_location: Optional[AnthropicWebSearchUserLocation]
+
+
 class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
     type: Required[str]
     name: Required[str]
@@ -42,7 +58,10 @@ class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_ed
 
 
 AllAnthropicToolsValues = Union[
-    AnthropicComputerTool, AnthropicHostedTools, AnthropicMessagesTool
+    AnthropicComputerTool,
+    AnthropicHostedTools,
+    AnthropicMessagesTool,
+    AnthropicWebSearchTool,
 ]
 
 

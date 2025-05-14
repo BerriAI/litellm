@@ -25,6 +25,8 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
+    AnthropicWebSearchTool,
+    AnthropicWebSearchUserLocation,
 )
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -36,6 +38,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
+    OpenAIWebSearchOptions,
 )
 from litellm.types.utils import CompletionTokensDetailsWrapper
 from litellm.types.utils import Message as LitellmMessage
@@ -330,6 +333,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return _tool
 
+    def map_web_search_tool(
+        self,
+        value: OpenAIWebSearchOptions,
+    ) -> AnthropicWebSearchTool:
+        value_typed = cast(OpenAIWebSearchOptions, value)
+        hosted_web_search_tool = AnthropicWebSearchTool(
+            type="web_search_20250305",
+            name="web_search",
+        )
+        user_location = value_typed.get("user_location")
+        if user_location is not None:
+            anthropic_user_location = {}
+            for key, user_location_value in user_location.items():
+                if (
+                    key in AnthropicWebSearchUserLocation.__annotations__.keys()
+                    and key != "type"
+                ):
+                    anthropic_user_location[key] = user_location_value
+            anthropic_user_location = AnthropicWebSearchUserLocation(
+                **{
+                    **anthropic_user_location,
+                    "type": "approximate",
+                }
+            )
+            hosted_web_search_tool["user_location"] = anthropic_user_location
+
+        return hosted_web_search_tool
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -393,12 +424,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     value
                 )
-            elif param == "web_search_options":
-                hosted_web_search_tool = AnthropicHostedTools(
-                    type="web_search_20250305",
-                    name="web_search",
+            elif param == "web_search_options" and isinstance(value, dict):
+                hosted_web_search_tool = self.map_web_search_tool(
+                    cast(OpenAIWebSearchOptions, value)
                 )
-                optional_params["tools"] = [hosted_web_search_tool]
+                self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[hosted_web_search_tool]
+                )
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(

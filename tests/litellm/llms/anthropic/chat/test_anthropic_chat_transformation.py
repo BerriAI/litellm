@@ -136,3 +136,27 @@ def test_server_tool_use_usage():
     }
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
     assert usage.server_tool_use.web_search_requests == 1
+
+
+def test_web_search_tool_transformation():
+    from litellm.types.llms.openai import OpenAIWebSearchOptions
+
+    config = AnthropicConfig()
+
+    openai_web_search_options = OpenAIWebSearchOptions(
+        user_location={
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    )
+
+    anthropic_web_search_tool = config.map_web_search_tool(openai_web_search_options)
+    assert anthropic_web_search_tool is not None
+    assert anthropic_web_search_tool["user_location"] is not None
+    assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
+    assert (
+        anthropic_web_search_tool["user_location"]["approximate"]["city"]
+        == "San Francisco"
+    )

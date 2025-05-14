@@ -185,6 +185,7 @@ from .types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
+    OpenAIWebSearchOptions,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -835,7 +836,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
-    web_search_options: Optional[dict] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
