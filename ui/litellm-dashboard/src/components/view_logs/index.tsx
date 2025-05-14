@@ -238,12 +238,12 @@ export default function SpendLogsTable({
   useEffect(() => {
     if (filters['Team ID']) {
       setSelectedTeamId(filters['Team ID']);
-      setSelectedStatus(filters['Status'] || "");
+      
     } else {
       setSelectedTeamId("");
-      setSelectedStatus("");
     }
-  }, [filters['Team ID'], filters['Status']]);
+    setSelectedStatus(filters['Status'] || "");
+  }, [filters]);
 
   // Fetch logs for a session if selected
   const sessionLogs = useQuery<PaginatedResponse>({

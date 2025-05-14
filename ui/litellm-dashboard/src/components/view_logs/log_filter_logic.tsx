@@ -49,7 +49,7 @@ export function useLogFilterLogic({
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
   const [filteredLogs, setFilteredLogs] = useState<PaginatedResponse>(logs);
   const lastSearchTimestamp = useRef(0);
-  const performSearch = useCallback(async (filters: LogFilterState) => {
+  const performSearch = useCallback(async (filters: LogFilterState, page = 1) => {
     if (!accessToken) return;
 
     const currentTimestamp = Date.now();
@@ -68,7 +68,7 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.REQUEST_ID] || undefined,
         formattedStartTime,
         formattedEndTime,
-        1,
+        page,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
         filters[FILTER_KEYS.STATUS] || undefined
@@ -82,7 +82,10 @@ export function useLogFilterLogic({
     }
   }, [accessToken, startTime, endTime, isCustomDate, pageSize]);
 
-  const debouncedSearch = useMemo(() => debounce(performSearch, 300), [performSearch]);
+  const debouncedSearch = useMemo(
+    () => debounce((filters: LogFilterState, page: number) => performSearch(filters, page), 300),
+    [performSearch]
+  );
 
   useEffect(() => {
     return () => debouncedSearch.cancel();
@@ -119,7 +122,7 @@ export function useLogFilterLogic({
         }
       );
     }
-  
+    
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
       total: logs.total,
@@ -171,7 +174,7 @@ export function useLogFilterLogic({
       // Only call debouncedSearch if filters have actually changed
       if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
         setCurrentPage(1);
-        debouncedSearch(updatedFilters);
+        debouncedSearch(updatedFilters, 1);
       }
       
       return updatedFilters as LogFilterState;
@@ -184,7 +187,7 @@ export function useLogFilterLogic({
     setFilters(defaultFilters);
     
     // Reset selections
-    debouncedSearch(defaultFilters);
+    debouncedSearch(defaultFilters, 1);
   };
 
   return {
