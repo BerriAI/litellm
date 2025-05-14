@@ -63,14 +63,16 @@ class OpenTelemetryConfig:
             InMemorySpanExporter,
         )
 
-        if os.getenv("OTEL_EXPORTER") == "in_memory":
+        exporter=os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console"))
+        endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", os.getenv("OTEL_ENDPOINT"))
+        headers=os.getenv("OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS"))  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
+
+        if exporter == "in_memory":
             return cls(exporter=InMemorySpanExporter())
         return cls(
-            exporter=os.getenv("OTEL_EXPORTER", "console"),
-            endpoint=os.getenv("OTEL_ENDPOINT"),
-            headers=os.getenv(
-                "OTEL_HEADERS"
-            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
+            exporter=exporter,
+            endpoint=endpoint,
+            headers=headers,  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         )
 
 
@@ -854,7 +856,7 @@ class OpenTelemetry(CustomLogger):
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
-        elif self.OTEL_EXPORTER == "otlp_http":
+        elif self.OTEL_EXPORTER == "otlp_http" or self.OTEL_EXPORTER == "http/protobuf" or self.OTEL_EXPORTER == "http/json":
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -864,7 +866,7 @@ class OpenTelemetry(CustomLogger):
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 ),
             )
-        elif self.OTEL_EXPORTER == "otlp_grpc":
+        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
             verbose_logger.debug(
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
