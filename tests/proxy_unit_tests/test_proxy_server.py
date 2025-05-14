@@ -1347,7 +1347,7 @@ async def test_add_callback_via_key(prisma_client):
                                 "callback_vars": {
                                     "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
                                     "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
-                                    "langfuse_host": "https://us.cloud.langfuse.com",
+                                    "langfuse_host": "https://cloud.langfuse.com",
                                 },
                             }
                         ]
@@ -1451,7 +1451,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
                         "callback_vars": {
                             "langfuse_public_key": "my-mock-public-key",
                             "langfuse_secret_key": "my-mock-secret-key",
-                            "langfuse_host": "https://us.cloud.langfuse.com",
+                            "langfuse_host": "https://cloud.langfuse.com",
                         },
                     }
                 ]
