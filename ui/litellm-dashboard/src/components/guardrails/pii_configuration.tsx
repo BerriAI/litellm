@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Typography, Select, Button, Checkbox, Input } from 'antd';
+import { Typography, Select, Button, Checkbox, Tooltip, Badge, Tag } from 'antd';
 import { TextInput } from '@tremor/react';
+import { SafetyOutlined, CloseOutlined, EyeInvisibleOutlined, StopOutlined, FilterOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
-const { Search } = Input;
 
 interface PiiEntity {
   name: string;
@@ -39,8 +39,7 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
   onActionSelect,
   entityCategories = []
 }) => {
-  const [searchText, setSearchText] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   
   // Create a lookup map to quickly find an entity's category
   const entityToCategoryMap = new Map<string, string>();
@@ -50,11 +49,10 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     });
   });
   
-  // Filter entities based on search text and selected category
+  // Filter entities based on selected categories
   const filteredEntities = entities.filter(entity => {
-    const matchesSearch = searchText === '' || entity.toLowerCase().includes(searchText.toLowerCase());
-    const matchesCategory = !selectedCategory || entityToCategoryMap.get(entity) === selectedCategory;
-    return matchesSearch && matchesCategory;
+    return selectedCategories.length === 0 || 
+           selectedCategories.includes(entityToCategoryMap.get(entity) || '');
   });
   
   // Select all entities with a specified action
@@ -67,34 +65,114 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     });
   };
   
+  // Unselect all entities
+  const handleUnselectAll = () => {
+    selectedEntities.forEach(entity => {
+      onEntitySelect(entity);
+    });
+  };
+
+  // Format entity name for display
+  const formatEntityName = (name: string) => {
+    return name.replace(/_/g, ' ');
+  };
+
+  // Get action icon
+  const getActionIcon = (action: string) => {
+    switch(action) {
+      case 'MASK':
+        return <EyeInvisibleOutlined style={{ marginRight: 4 }} />;
+      case 'BLOCK':
+        return <StopOutlined style={{ marginRight: 4 }} />;
+      default:
+        return null;
+    }
+  };
+  
   return (
     <div className="pii-configuration">
-      <Title level={4} className="mb-4">Configure PII Protection</Title>
+      <div className="flex justify-between items-center mb-5">
+        <div className="flex items-center">
+          <Title level={4} className="mb-0 font-semibold text-gray-800">Configure PII Protection</Title>
+        </div>
+        <Badge 
+          count={selectedEntities.length} 
+          showZero 
+          style={{ backgroundColor: selectedEntities.length > 0 ? '#4f46e5' : '#d9d9d9' }}
+          overflowCount={999}
+        >
+          <Text className="text-gray-500">{selectedEntities.length} items selected</Text>
+        </Badge>
+      </div>
       
-      <div className="mb-4">
-        <Search
-          placeholder="Search PII types..."
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
+      <div className="mb-6">
+        <div className="flex items-center mb-2">
+          <FilterOutlined className="text-gray-500 mr-1" />
+          <Text className="text-gray-500 font-medium">Filter by category</Text>
+        </div>
+        <Select
+          mode="multiple"
+          placeholder="Select categories to filter by"
           style={{ width: '100%' }}
+          onChange={setSelectedCategories}
+          value={selectedCategories}
+          allowClear
+          showSearch
+          optionFilterProp="children"
           className="mb-4"
-        />
+          tagRender={(props) => (
+            <Tag 
+              color="blue" 
+              closable={props.closable}
+              onClose={props.onClose}
+              className="mr-2 mb-2"
+            >
+              {props.label}
+            </Tag>
+          )}
+        >
+          {entityCategories.map(cat => (
+            <Option key={cat.category} value={cat.category}>
+              {cat.category}
+            </Option>
+          ))}
+        </Select>
         
         {/* Quick Actions */}
-        <div className="bg-gray-50 p-4 rounded-lg mb-6">
-          <Title level={5} className="mb-3">Quick Actions</Title>
+        <div className="bg-gray-50 p-5 rounded-lg mb-6 border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center">
+              <Text strong className="text-gray-700 text-base">Quick Actions</Text>
+              <Tooltip title="Apply action to all PII types at once">
+                <div className="ml-2 text-gray-400 cursor-help text-xs">ⓘ</div>
+              </Tooltip>
+            </div>
+            <Button 
+              type="default" 
+              onClick={handleUnselectAll}
+              disabled={selectedEntities.length === 0}
+              icon={<CloseOutlined />}
+              className="border-gray-300 hover:text-red-600 hover:border-red-300"
+            >
+              Unselect All
+            </Button>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <Button 
               type="default" 
               onClick={() => handleSelectAll('MASK')}
+              className="flex items-center justify-center h-10 border-blue-200 hover:border-blue-300 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 text-blue-600"
               block
+              icon={<EyeInvisibleOutlined />}
             >
               Select All & Mask
             </Button>
             <Button 
               type="default" 
               onClick={() => handleSelectAll('BLOCK')}
+              className="flex items-center justify-center h-10 border-red-200 hover:border-red-300 hover:text-red-700 bg-red-50 hover:bg-red-100 text-red-600"
               block
+              icon={<StopOutlined />}
             >
               Select All & Block
             </Button>
@@ -102,49 +180,24 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
         </div>
       </div>
       
-      {/* Tabs */}
-      <div className="mb-4">
-        <div className="flex border-b mb-4">
-          <div className="py-2 px-4 border-b-2 border-blue-500 text-blue-500 font-medium">
-            Categories
-          </div>
-          <div className="py-2 px-4 text-gray-500 font-medium">
-            All PII Types
-          </div>
+      {/* PII Type table */}
+      <div className="border rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-gray-50 px-5 py-3 border-b flex">
+          <Text strong className="flex-1 text-gray-700">PII Type</Text>
+          <Text strong className="w-32 text-right text-gray-700">Action</Text>
         </div>
-        
-        {/* Category filters */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <Button
-            type={selectedCategory === null ? 'primary' : 'default'}
-            onClick={() => setSelectedCategory(null)}
-            className="mr-2"
-          >
-            All
-          </Button>
-          {entityCategories.map(cat => (
-            <Button
-              key={cat.category}
-              type={selectedCategory === cat.category ? 'primary' : 'default'}
-              onClick={() => setSelectedCategory(cat.category)}
-              className="mr-2"
-            >
-              {cat.category}
-            </Button>
-          ))}
-        </div>
-        
-        {/* PII Type table */}
-        <div className="border rounded-lg overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 border-b flex">
-            <Text strong className="flex-1">PII Type</Text>
-            <Text strong className="w-32 text-right">Action</Text>
-          </div>
-          <div className="max-h-[400px] overflow-y-auto">
-            {filteredEntities.map(entity => (
+        <div className="max-h-[400px] overflow-y-auto">
+          {filteredEntities.length === 0 ? (
+            <div className="py-10 text-center text-gray-500">
+              No PII types match your filter criteria
+            </div>
+          ) : (
+            filteredEntities.map(entity => (
               <div 
                 key={entity}
-                className={`px-4 py-3 flex items-center justify-between hover:bg-gray-50 border-b ${selectedEntities.includes(entity) ? 'bg-blue-50' : ''}`}
+                className={`px-5 py-3 flex items-center justify-between hover:bg-gray-50 border-b ${
+                  selectedEntities.includes(entity) ? 'bg-blue-50' : ''
+                }`}
               >
                 <div className="flex items-center flex-1">
                   <Checkbox 
@@ -152,23 +205,35 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
                     onChange={() => onEntitySelect(entity)}
                     className="mr-3"
                   />
-                  <Text>{entity.replace(/_/g, ' ')}</Text>
+                  <Text className={selectedEntities.includes(entity) ? 'font-medium text-gray-900' : 'text-gray-700'}>
+                    {formatEntityName(entity)}
+                  </Text>
+                  {entityToCategoryMap.get(entity) && (
+                    <Tag className="ml-2 text-xs" color="blue">{entityToCategoryMap.get(entity)}</Tag>
+                  )}
                 </div>
                 <div className="w-32">
                   <Select
-                    value={selectedEntities.includes(entity) ? (selectedActions[entity] || 'BLOCK') : 'BLOCK'}
+                    value={selectedEntities.includes(entity) ? (selectedActions[entity] || 'MASK') : 'MASK'}
                     onChange={(value) => onActionSelect(entity, value)}
                     style={{ width: 120 }}
                     disabled={!selectedEntities.includes(entity)}
+                    className={`${!selectedEntities.includes(entity) ? 'opacity-50' : ''}`}
+                    dropdownMatchSelectWidth={false}
                   >
                     {actions.map(action => (
-                      <Option key={action} value={action}>{action}</Option>
+                      <Option key={action} value={action}>
+                        <div className="flex items-center">
+                          {getActionIcon(action)}
+                          {action}
+                        </div>
+                      </Option>
                     ))}
                   </Select>
                 </div>
               </div>
-            ))}
-          </div>
+            ))
+          )}
         </div>
       </div>
     </div>
