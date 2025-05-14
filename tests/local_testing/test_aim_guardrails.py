@@ -15,7 +15,7 @@ from litellm.proxy.guardrails.guardrail_hooks.aim import (
     AimGuardrailMissingSecrets,
 )
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import ModelResponseStream, ModelResponse
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -166,71 +166,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=Response(
-            json={
-                "analysis_result": {
-                    "analysis_time_ms": 10,
-                    "policy_drill_down": {
-                        "PII": {
-                            "detections": [
-                                {
-                                    "message": '"Brian" detected as name',
-                                    "entity": {
-                                        "type": "NAME",
-                                        "content": "Brian",
-                                        "start": 14,
-                                        "end": 19,
-                                        "score": 1.0,
-                                        "certainty": "HIGH",
-                                        "additional_content_index": None,
-                                    },
-                                    "detection_location": None,
-                                }
-                            ]
-                        }
-                    },
-                    "last_message_entities": [
-                        {
-                            "type": "NAME",
-                            "content": "Brian",
-                            "name": "NAME_1",
-                            "start": 14,
-                            "end": 19,
-                            "score": 1.0,
-                            "certainty": "HIGH",
-                            "additional_content_index": None,
-                        }
-                    ],
-                    "session_entities": [
-                        {"type": "NAME", "content": "Brian", "name": "NAME_1"}
-                    ],
-                },
-                "required_action": {
-                    "action_type": "anonymize_action",
-                    "policy_name": "PII",
-                    "chat_redaction_result": {
-                        "all_redacted_messages": [
-                            {
-                                "content": "Hi my name is [NAME_1]",
-                                "role": "user",
-                                "additional_contents": [],
-                                "received_message_id": "0",
-                                "extra_fields": {},
-                            }
-                        ],
-                        "redacted_new_message": {
-                            "content": "Hi my name is [NAME_1]",
-                            "role": "user",
-                            "additional_contents": [],
-                            "received_message_id": "0",
-                            "extra_fields": {},
-                        },
-                    },
-                },
-            },
-            status_code=200,
-            request=Request(method="POST", url="http://aim"),
-        ),
+        return_value=response_with_detections,
     ):
         if mode == "pre_call":
             data = await aim_guardrail.async_pre_call_hook(
@@ -246,6 +182,75 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
                 call_type="completion",
             )
     assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
+
+
+@pytest.mark.asyncio
+async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "pre_call",
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    data = {
+        "messages": [
+            {"role": "user", "content": "Hi my name id Brian"},
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+
+        def mock_post_detect_side_effect(url, *args, **kwargs):
+            if url.endswith("/detect/openai/v2"):
+                return response_with_detections
+            elif url.endswith("/detect/output/v2"):
+                return response_without_detections
+            else:
+                raise ValueError("Unexpected URL: {}".format(url))
+
+        mock_post.side_effect = mock_post_detect_side_effect
+
+        data = await aim_guardrail.async_pre_call_hook(
+            data=data,
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+        assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
+
+        def llm_response() -> ModelResponse:
+            return ModelResponse(
+                choices=[
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "Hello [NAME_1]! How are you?",
+                            "role": "assistant",
+                        },
+                    }
+                ]
+            )
+
+        result = await aim_guardrail.async_post_call_success_hook(
+            data=data, response=llm_response(), user_api_key_dict=UserAPIKeyAuth()
+        )
+        assert result["choices"][0]["message"]["content"] == "Hello Brian! How are you?"
 
 
 @pytest.mark.asyncio
@@ -371,3 +376,84 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         call('{"choices": [{"delta": {"content": "A"}}]}'),
         call('{"done": true}'),
     ]
+
+
+response_with_detections = Response(
+    json={
+        "analysis_result": {
+            "analysis_time_ms": 10,
+            "policy_drill_down": {
+                "PII": {
+                    "detections": [
+                        {
+                            "message": '"Brian" detected as name',
+                            "entity": {
+                                "type": "NAME",
+                                "content": "Brian",
+                                "start": 14,
+                                "end": 19,
+                                "score": 1.0,
+                                "certainty": "HIGH",
+                                "additional_content_index": None,
+                            },
+                            "detection_location": None,
+                        }
+                    ]
+                }
+            },
+            "last_message_entities": [
+                {
+                    "type": "NAME",
+                    "content": "Brian",
+                    "name": "NAME_1",
+                    "start": 14,
+                    "end": 19,
+                    "score": 1.0,
+                    "certainty": "HIGH",
+                    "additional_content_index": None,
+                }
+            ],
+            "session_entities": [
+                {"type": "NAME", "content": "Brian", "name": "NAME_1"}
+            ],
+        },
+        "required_action": {
+            "action_type": "anonymize_action",
+            "policy_name": "PII",
+            "chat_redaction_result": {
+                "all_redacted_messages": [
+                    {
+                        "content": "Hi my name is [NAME_1]",
+                        "role": "user",
+                        "additional_contents": [],
+                        "received_message_id": "0",
+                        "extra_fields": {},
+                    }
+                ],
+                "redacted_new_message": {
+                    "content": "Hi my name is [NAME_1]",
+                    "role": "user",
+                    "additional_contents": [],
+                    "received_message_id": "0",
+                    "extra_fields": {},
+                },
+            },
+        },
+    },
+    status_code=200,
+    request=Request(method="POST", url="http://aim"),
+)
+
+response_without_detections = Response(
+    json={
+        "analysis_result": {
+            "analysis_time_ms": 10,
+            "policy_drill_down": {},
+            "last_message_entities": [],
+            "session_entities": [],
+        },
+        "required_action": None,
+    },
+    status_code=200,
+    request=Request(method="POST", url="http://aim"),
+)

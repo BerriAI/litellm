@@ -281,6 +281,7 @@ class AimGuardrail(CustomGuardrail):
                 response.choices[0].message.content = aim_output_guardrail_result.get(
                     "redacted_output"
                 )
+        return response
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -332,6 +333,5 @@ class AimGuardrail(CustomGuardrail):
             await websocket.send(chunk)
         await websocket.send(json.dumps({"done": True}))
 
-
     def _set_dlp_entities(self, entities: list[dict]) -> None:
-        self.dlp_entities = entities[:self._max_dlp_entities]
+        self.dlp_entities = entities[: self._max_dlp_entities]
