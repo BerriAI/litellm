@@ -633,20 +633,24 @@ class Message(OpenAIObject):
         if audio is None:
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            del self.audio
+            if hasattr(self, 'audio'):
+                del self.audio
 
         if annotations is None:
             # ensure default response matches OpenAI spec
             # Some OpenAI compatible APIs raise an error if annotations are passed in
-            del self.annotations
+            if hasattr(self, 'annotations'):
+                del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
-            del self.reasoning_content
+            if hasattr(self, 'reasoning_content'):
+                del self.reasoning_content
 
         if thinking_blocks is None:
             # ensure default response matches OpenAI spec
-            del self.thinking_blocks
+            if hasattr(self, 'thinking_blocks'):
+                del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
