@@ -143,6 +143,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     OpenAITextCompletionUserMessage,
+    OpenAIWebSearchOptions,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
@@ -2655,7 +2656,7 @@ def get_optional_params(  # noqa: PLR0915
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
-    web_search_options: Optional[dict] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
