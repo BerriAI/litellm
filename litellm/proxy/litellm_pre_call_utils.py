@@ -533,8 +533,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
+    # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
+        if isinstance(data["metadata"], str):
+            import json
+            try:
+                data["metadata"] = json.loads(data["metadata"])
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Failed to parse 'metadata' as JSON: {e}. Received value: {data['metadata']}")
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
         )
