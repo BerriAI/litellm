@@ -28,6 +28,10 @@ interface GuardrailSettings {
   supported_entities: string[];
   supported_actions: string[];
   supported_modes: string[];
+  pii_entity_categories: Array<{
+    category: string;
+    entities: string[];
+  }>;
 }
 
 const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
@@ -108,8 +112,20 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
       
-      // Prepare the guardrail data
-      const guardrailData = {
+      // Prepare the guardrail data with proper types for litellm_params
+      const guardrailData: {
+        guardrail_id: string;
+        guardrail: {
+          guardrail_name: string;
+          litellm_params: {
+            guardrail: string;
+            mode: string;
+            default_on: boolean;
+            [key: string]: any; // Allow dynamic properties
+          };
+          guardrail_info: any;
+        }
+      } = {
         guardrail_id: guardrailId,
         guardrail: {
           guardrail_name: values.guardrail_name,
@@ -201,6 +217,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         selectedActions={selectedActions}
         onEntitySelect={handleEntitySelect}
         onActionSelect={handleActionSelect}
+        entityCategories={guardrailSettings.pii_entity_categories}
       />
     );
   };

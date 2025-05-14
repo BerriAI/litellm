@@ -27,6 +27,10 @@ interface GuardrailSettings {
   supported_entities: string[];
   supported_actions: string[];
   supported_modes: string[];
+  pii_entity_categories: Array<{
+    category: string;
+    entities: string[];
+  }>;
 }
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
@@ -96,14 +100,23 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
       
-      // Prepare the guardrail data
-      const guardrailData = {
+      // Prepare the guardrail data with proper typings
+      const guardrailData: {
+        guardrail_name: string;
+        litellm_params: {
+          guardrail: string;
+          mode: string;
+          default_on: boolean;
+          [key: string]: any; // Allow dynamic properties
+        };
+        guardrail_info: any;
+      } = {
         guardrail_name: values.guardrail_name,
         litellm_params: {
           guardrail: guardrailProvider,
           mode: values.mode,
           default_on: values.default_on
-        } as LiteLLMParams,
+        },
         guardrail_info: {}
       };
 
@@ -174,6 +187,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         selectedActions={selectedActions}
         onEntitySelect={handleEntitySelect}
         onActionSelect={handleActionSelect}
+        entityCategories={guardrailSettings.pii_entity_categories}
       />
     );
   };
