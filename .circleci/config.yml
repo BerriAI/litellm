@@ -899,6 +899,7 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+    resource_class: medium+
     working_directory: ~/project
 
     steps:
