@@ -16,10 +16,10 @@ export const guardrail_provider_map: Record<string, string> = {
     GuardrailsAI: "guardrails_ai",
     LakeraAI: "lakera",
     PromptInjection: "detect_prompt_injection",
-    PresidioPII: "presidio_pii",
+    PresidioPII: "presidio",
 };
 
-const asset_logos_folder = '../assets/logos/';
+const asset_logos_folder = '../ui/assets/logos/';
 
 export const guardrailLogoMap: Record<string, string> = {
     [GuardrailProviders.Aporia]: `${asset_logos_folder}aporia.svg`,
@@ -28,7 +28,7 @@ export const guardrailLogoMap: Record<string, string> = {
     [GuardrailProviders.GuardrailsAI]: `${asset_logos_folder}guardrails_ai.svg`,
     [GuardrailProviders.LakeraAI]: `${asset_logos_folder}lakera.svg`,
     [GuardrailProviders.PromptInjection]: `${asset_logos_folder}prompt_injection.svg`,
-    [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio_pii.svg`
+    [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio.svg`
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string, displayName: string } => {
