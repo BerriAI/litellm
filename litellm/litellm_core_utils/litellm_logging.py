@@ -3347,6 +3347,7 @@ class StandardLoggingPayloadSetup:
             List[StandardLoggingVectorStoreRequest]
         ] = None,
         usage_object: Optional[dict] = None,
+        proxy_server_request: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3419,6 +3420,15 @@ class StandardLoggingPayloadSetup:
                 and isinstance(_potential_requester_metadata, dict)
             ):
                 clean_metadata["requester_metadata"] = _potential_requester_metadata
+
+        if (
+            EnterpriseStandardLoggingPayloadSetupVAR
+            and proxy_server_request is not None
+        ):
+            clean_metadata = EnterpriseStandardLoggingPayloadSetupVAR.apply_enterprise_specific_metadata(
+                standard_logging_metadata=clean_metadata,
+                proxy_server_request=proxy_server_request,
+            )
 
         return clean_metadata
 
@@ -3763,13 +3773,8 @@ def get_standard_logging_object_payload(
                 "vector_store_request_metadata", None
             ),
             usage_object=usage.model_dump(),
+            proxy_server_request=proxy_server_request,
         )
-
-        if EnterpriseStandardLoggingPayloadSetupVAR:
-            clean_metadata = EnterpriseStandardLoggingPayloadSetupVAR.apply_enterprise_specific_metadata(
-                standard_logging_metadata=clean_metadata,
-                proxy_server_request=proxy_server_request,
-            )
 
         _request_body = proxy_server_request.get("body", {})
         end_user_id = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
