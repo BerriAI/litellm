@@ -75,7 +75,7 @@ export default function SpendLogsTable({
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState("Team ID");
+  const [selectedStatus, setSelectedStatus] = useState(""); 
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
@@ -147,6 +147,7 @@ export default function SpendLogsTable({
       selectedTeamId,
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
+      selectedStatus
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -175,7 +176,8 @@ export default function SpendLogsTable({
         formattedEndTime,
         currentPage,
         pageSize,
-        filterByCurrentUser ? userID : undefined
+        filterByCurrentUser ? userID : undefined,
+        selectedStatus
       );
 
       // Trigger prefetch for all logs
@@ -232,14 +234,16 @@ export default function SpendLogsTable({
     setCurrentPage
   })
 
-  // Add this effect to update selectedTeamId when team filter changes
+  // Add this effect to update selectedTeamId and selectedStatus when team filter changes
   useEffect(() => {
     if (filters['Team ID']) {
       setSelectedTeamId(filters['Team ID']);
+      setSelectedStatus(filters['Status'] || "");
     } else {
       setSelectedTeamId("");
+      setSelectedStatus("");
     }
-  }, [filters['Team ID']]);
+  }, [filters['Team ID'], filters['Status']]);
 
   // Fetch logs for a session if selected
   const sessionLogs = useQuery<PaginatedResponse>({
@@ -348,6 +352,15 @@ export default function SpendLogsTable({
         }));
       }
     },
+    {
+      name:'Status',
+      label:'Status',
+      isSearchable: false,
+      options: [
+        { label: 'Success', value: 'success' },
+        { label: 'Failure', value: 'failure' }
+      ]
+    }
   ]
 
   // When a session is selected, render the SessionView component

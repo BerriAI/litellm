@@ -13,7 +13,8 @@ export const FILTER_KEYS = {
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
   MODEL: "Model",
-  USER_ID: "User ID"
+  USER_ID: "User ID",
+  STATUS: "Status"
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -42,6 +43,7 @@ export function useLogFilterLogic({
     [FILTER_KEYS.REQUEST_ID]: "",
     [FILTER_KEYS.MODEL]: "",
     [FILTER_KEYS.USER_ID]: "",
+    [FILTER_KEYS.STATUS]: ""
   }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
@@ -68,7 +70,8 @@ export function useLogFilterLogic({
         formattedEndTime,
         1,
         pageSize,
-        filters[FILTER_KEYS.USER_ID] || undefined
+        filters[FILTER_KEYS.USER_ID] || undefined,
+        filters[FILTER_KEYS.STATUS] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -105,6 +108,17 @@ export function useLogFilterLogic({
         log => log.team_id === filters[FILTER_KEYS.TEAM_ID]
       );
     }
+
+    if (filters[FILTER_KEYS.STATUS]) {
+      filteredData = filteredData.filter(
+        log => {
+          if (filters[FILTER_KEYS.STATUS] === 'success') {
+            return !log.status || log.status === 'success';
+          }
+          return log.status === filters[FILTER_KEYS.STATUS];
+        }
+      );
+    }
   
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
@@ -117,7 +131,7 @@ export function useLogFilterLogic({
     if (JSON.stringify(newFilteredLogs) !== JSON.stringify(filteredLogs)) {
       setFilteredLogs(newFilteredLogs);
     }
-  }, [logs, filters]);
+  }, [logs, filters, filteredLogs]);
 
   const queryAllKeysQuery = useQuery({
     queryKey: ['allKeys'],
