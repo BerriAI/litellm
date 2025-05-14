@@ -37,4 +37,3 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string,
 
     return { logo, displayName };
 };
-
