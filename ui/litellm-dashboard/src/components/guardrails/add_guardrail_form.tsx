@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image } from 'antd';
+import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map, provider_specific_fields, guardrailLogoMap } from './guardrail_info_helpers';
@@ -8,19 +8,13 @@ import PiiConfiguration from './pii_configuration';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
+const { Step } = Steps;
 
 interface AddGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
-}
-
-interface LiteLLMParams {
-  guardrail: string;
-  mode: string;
-  default_on: boolean;
-  [key: string]: any; // Allow additional properties for specific guardrails
 }
 
 interface GuardrailSettings {
@@ -31,6 +25,13 @@ interface GuardrailSettings {
     category: string;
     entities: string[];
   }>;
+}
+
+interface LiteLLMParams {
+  guardrail: string;
+  mode: string;
+  default_on: boolean;
+  [key: string]: any; // Allow additional properties for specific guardrails
 }
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
@@ -45,6 +46,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
+  const [currentStep, setCurrentStep] = useState(0);
 
   // Fetch guardrail settings when the component mounts
   useEffect(() => {
@@ -90,6 +92,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       ...prev,
       [entity]: action
     }));
+  };
+
+  const nextStep = async () => {
+    try {
+      // Validate current step fields
+      if (currentStep === 0) {
+        await form.validateFields(['guardrail_name', 'provider', 'mode', 'default_on']);
+      }
+      setCurrentStep(currentStep + 1);
+    } catch (error) {
+      console.error("Form validation failed:", error);
+    }
+  };
+
+  const prevStep = () => {
+    setCurrentStep(currentStep - 1);
   };
 
   const handleSubmit = async () => {
@@ -166,6 +184,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       form.resetFields();
       setSelectedEntities([]);
       setSelectedActions({});
+      setCurrentStep(0);
       onSuccess();
       onClose();
     } catch (error) {
@@ -176,8 +195,89 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     }
   };
 
+  const renderBasicInfo = () => {
+    return (
+      <>
+        <Form.Item
+          name="guardrail_name"
+          label="Guardrail Name"
+          rules={[{ required: true, message: 'Please enter a guardrail name' }]}
+        >
+          <TextInput placeholder="Enter a name for this guardrail" />
+        </Form.Item>
+
+        <Form.Item
+          name="provider"
+          label="Guardrail Provider"
+          rules={[{ required: true, message: 'Please select a provider' }]}
+        >
+          <Select 
+            placeholder="Select a guardrail provider"
+            onChange={handleProviderChange}
+            optionLabelProp="label"
+          >
+            {Object.entries(GuardrailProviders).map(([key, value]) => (
+              <Option 
+                key={key} 
+                value={key}
+                label={value}
+              >
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  {guardrailLogoMap[value] && (
+                    <img 
+                      src={guardrailLogoMap[value]} 
+                      alt=""
+                      style={{ 
+                        height: '20px', 
+                        width: '20px', 
+                        marginRight: '8px',
+                        objectFit: 'contain'
+                      }}
+                      onError={(e) => {
+                        // Hide broken image icon if image fails to load
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  )}
+                  <span>{value}</span>
+                </div>
+              </Option>
+            ))}
+          </Select>
+        </Form.Item>
+
+        <Form.Item
+          name="mode"
+          label="Mode"
+          tooltip="How the guardrail should be applied"
+          rules={[{ required: true, message: 'Please select a mode' }]}
+        >
+          <Select>
+            {guardrailSettings?.supported_modes?.map(mode => (
+              <Option key={mode} value={mode}>{mode}</Option>
+            )) || (
+              <>
+                <Option value="pre_call">pre_call</Option>
+                <Option value="post_call">post_call</Option>
+              </>
+            )}
+          </Select>
+        </Form.Item>
+
+        <Form.Item
+          name="default_on"
+          label="Always On"
+          tooltip="If enabled, this guardrail will be applied to all requests by default"
+          valuePropName="checked"
+        >
+          <Switch />
+        </Form.Item>
+      </>
+    );
+  };
+
   const renderPiiConfiguration = () => {
-    if (!guardrailSettings || !selectedProvider || selectedProvider !== 'PresidioPII') return null;
+    if (!guardrailSettings || selectedProvider !== 'PresidioPII') return null;
     
     return (
       <PiiConfiguration
@@ -192,13 +292,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     );
   };
 
-  const renderProviderSpecificFields = () => {
-    if (!selectedProvider) return null;
-
-    // For Presidio, we use the new PII configuration UI
-    if (selectedProvider === 'PresidioPII') {
-      return renderPiiConfiguration();
-    }
+  const renderProviderSpecificConfig = () => {
+    if (!selectedProvider || selectedProvider === 'PresidioPII') return null;
 
     switch (selectedProvider) {
       case 'Aporia':
@@ -313,6 +408,57 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     }
   };
 
+  const renderStepContent = () => {
+    switch (currentStep) {
+      case 0:
+        return renderBasicInfo();
+      case 1:
+        if (selectedProvider === 'PresidioPII') {
+          return renderPiiConfiguration();
+        } else {
+          return renderProviderSpecificConfig();
+        }
+      default:
+        return null;
+    }
+  };
+
+  const renderStepButtons = () => {
+    return (
+      <div className="flex justify-end space-x-2 mt-4">
+        {currentStep > 0 && (
+          <Button 
+            variant="secondary"
+            onClick={prevStep}
+          >
+            Previous
+          </Button>
+        )}
+        {currentStep < 1 && (
+          <Button 
+            onClick={nextStep}
+          >
+            Next
+          </Button>
+        )}
+        {currentStep === 1 && (
+          <Button 
+            onClick={handleSubmit}
+            loading={loading}
+          >
+            Create Guardrail
+          </Button>
+        )}
+        <Button 
+          variant="secondary"
+          onClick={onClose}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  };
+
   return (
     <Modal
       title="Add Guardrail"
@@ -329,97 +475,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           default_on: false
         }}
       >
-        <Form.Item
-          name="guardrail_name"
-          label="Guardrail Name"
-          rules={[{ required: true, message: 'Please enter a guardrail name' }]}
-        >
-          <TextInput placeholder="Enter a name for this guardrail" />
-        </Form.Item>
-
-        <Form.Item
-          name="provider"
-          label="Guardrail Provider"
-          rules={[{ required: true, message: 'Please select a provider' }]}
-        >
-          <Select 
-            placeholder="Select a guardrail provider"
-            onChange={handleProviderChange}
-            optionLabelProp="label"
-          >
-            {Object.entries(GuardrailProviders).map(([key, value]) => (
-              <Option 
-                key={key} 
-                value={key}
-                label={value}
-              >
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  {guardrailLogoMap[value] && (
-                    <img 
-                      src={guardrailLogoMap[value]} 
-                      alt=""
-                      style={{ 
-                        height: '20px', 
-                        width: '20px', 
-                        marginRight: '8px',
-                        objectFit: 'contain'
-                      }}
-                      onError={(e) => {
-                        // Hide broken image icon if image fails to load
-                        e.currentTarget.style.display = 'none';
-                      }}
-                    />
-                  )}
-                  <span>{value}</span>
-                </div>
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="mode"
-          label="Mode"
-          tooltip="How the guardrail should be applied"
-          rules={[{ required: true, message: 'Please select a mode' }]}
-        >
-          <Select>
-            {guardrailSettings?.supported_modes?.map(mode => (
-              <Option key={mode} value={mode}>{mode}</Option>
-            )) || (
-              <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
-              </>
-            )}
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="default_on"
-          label="Always On"
-          tooltip="If enabled, this guardrail will be applied to all requests by default"
-          valuePropName="checked"
-        >
-          <Switch />
-        </Form.Item>
-
-        {renderProviderSpecificFields()}
-
-        <div className="flex justify-end space-x-2 mt-4">
-          <Button 
-            variant="secondary"
-            onClick={onClose}
-          >
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleSubmit}
-            loading={loading}
-          >
-            Create Guardrail
-          </Button>
-        </div>
+        <Steps current={currentStep} className="mb-6">
+          <Step title="Basic Info" />
+          <Step title={selectedProvider === 'PresidioPII' ? "PII Configuration" : "Provider Configuration"} />
+        </Steps>
+        
+        {renderStepContent()}
+        {renderStepButtons()}
       </Form>
     </Modal>
   );
