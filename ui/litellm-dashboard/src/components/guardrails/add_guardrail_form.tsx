@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Card, Form, Button, Typography, Select, Input, Switch, Tooltip, Modal } from 'antd';
+import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal } from 'antd';
+import { Button } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
 import { createGuardrailCall } from '../networking';
@@ -267,7 +268,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         <div className="flex justify-end space-x-2 mt-4">
           <Button onClick={onClose}>Cancel</Button>
           <Button 
-            type="primary" 
             onClick={handleSubmit}
             loading={loading}
           >
