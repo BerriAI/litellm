@@ -2,6 +2,7 @@
 This file contains the transformation logic for the Gemini realtime API.
 """
 
+import os
 from typing import Optional
 
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -13,13 +14,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> dict:
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, api_base: Optional[str], model: str, api_key: Optional[str] = None
+    ) -> str:
         """
         Example output:
         "BACKEND_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"";
         """
         if api_base is None:
             api_base = "wss://generativelanguage.googleapis.com"
+        if api_key is None:
+            api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key is None:
+            raise ValueError("api_key is required for Gemini API calls")
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
-        return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"

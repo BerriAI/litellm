@@ -133,10 +133,14 @@ class RealTimeStreaming:
 
                 ## LOGGING
                 self.store_message(message)
-        except websockets.exceptions.ConnectionClosed:  # type: ignore
-            pass
-        except Exception:
-            pass
+        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
+            verbose_logger.debug(
+                f"Connection closed in backend to client send messages - {e}"
+            )
+            raise e
+        except Exception as e:
+            verbose_logger.debug(f"Error in backend to client send messages: {e}")
+            raise e
         finally:
             await self.log_messages()
 
@@ -149,13 +153,17 @@ class RealTimeStreaming:
                 ## FORWARD TO BACKEND
                 await self.backend_ws.send(message)
         except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+            verbose_logger.debug("Connection closed")
             pass
+        except Exception as e:
+            verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
         except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+            verbose_logger.debug("Connection closed")
             forward_task.cancel()
         finally:
             if not forward_task.done():

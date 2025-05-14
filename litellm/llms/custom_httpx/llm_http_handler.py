@@ -2057,12 +2057,7 @@ class BaseLLMHTTPHandler:
     ):
         import websockets
 
-        if api_base is None:
-            raise ValueError("api_base is required for Azure OpenAI calls")
-        if api_key is None:
-            raise ValueError("api_key is required for Azure OpenAI calls")
-
-        url = provider_config.get_complete_url(api_base, model)
+        url = provider_config.get_complete_url(api_base, model, api_key)
         headers = provider_config.validate_environment(
             headers=headers,
             model=model,
@@ -2079,8 +2074,10 @@ class BaseLLMHTTPHandler:
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            verbose_logger.debug(f"Error connecting to backend: {e}")
             await websocket.close(code=e.status_code, reason=str(e))
         except Exception as e:
+            verbose_logger.debug(f"Error connecting to backend: {e}")
             try:
                 await websocket.close(
                     code=1011, reason=f"Internal server error: {str(e)}"
