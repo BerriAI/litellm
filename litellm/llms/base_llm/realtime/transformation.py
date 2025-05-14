@@ -47,3 +47,7 @@ class BaseRealtimeConfig(ABC):
             message=error_message,
             headers=headers,
         )
+
+    @abstractmethod
+    def transform_realtime_request(self, message: str) -> str:
+        pass

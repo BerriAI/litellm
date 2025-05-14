@@ -2,10 +2,13 @@
 This file contains the transformation logic for the Gemini realtime API.
 """
 
+import json
 import os
 from typing import Optional
 
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+
+from ..common_utils import encode_unserializable_types
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -30,3 +33,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
+
+    def transform_realtime_request(self, message: str) -> str:
+        realtime_input_dict = {}
+        realtime_input_dict["text"] = message
+
+        if len(realtime_input_dict) != 1:
+            raise ValueError(
+                f"Only one argument can be set, got {len(realtime_input_dict)}:"
+                f" {list(realtime_input_dict.keys())}"
+            )
+
+        realtime_input_dict = encode_unserializable_types(realtime_input_dict)
+
+        return json.dumps({"realtime_input": realtime_input_dict})

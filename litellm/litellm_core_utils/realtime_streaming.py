@@ -73,6 +73,7 @@ class RealTimeStreaming:
         if _logged_real_time_event_types is None:
             _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
         self.logged_real_time_event_types = _logged_real_time_event_types
+        self.provider_config = provider_config
 
     def _should_store_message(
         self,
@@ -151,6 +152,9 @@ class RealTimeStreaming:
                 ## LOGGING
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
+                if self.provider_config:
+                    message = self.provider_config.transform_realtime_request(message)
+
                 await self.backend_ws.send(message)
         except self.websockets.exceptions.ConnectionClosed:  # type: ignore
             verbose_logger.debug("Connection closed")

@@ -2074,10 +2074,10 @@ class BaseLLMHTTPHandler:
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            verbose_logger.debug(f"Error connecting to backend: {e}")
+            verbose_logger.exception(f"Error connecting to backend: {e}")
             await websocket.close(code=e.status_code, reason=str(e))
         except Exception as e:
-            verbose_logger.debug(f"Error connecting to backend: {e}")
+            verbose_logger.exception(f"Error connecting to backend: {e}")
             try:
                 await websocket.close(
                     code=1011, reason=f"Internal server error: {str(e)}"
