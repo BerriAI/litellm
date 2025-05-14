@@ -4303,6 +4303,35 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
+export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guardrail: guardrailData
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("Create guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create guardrail:", error);
+    throw error;
+  }
+};
 
 export const uiSpendLogDetailsCall = async (
   accessToken: string,
