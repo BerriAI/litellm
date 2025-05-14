@@ -1,0 +1,5 @@
+# This file exists to tell nixpacks to use the python provider.
+# This helps PaaS system like Coolify that use nixpacks to build the app corectly.
+# nixpacks gets confused because the project has both a `pyproject.toml` and a
+# `package.json` file so it thinks the app is a Node app.
+providers = ["python"]
