@@ -51,3 +51,13 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def transform_realtime_request(self, message: str) -> str:
         pass
+
+    def requires_session_configuration(
+        self,
+    ) -> bool:  # initial configuration message sent to setup the realtime session
+        return False
+
+    def session_configuration_request(
+        self, model: str
+    ) -> Optional[str]:  # message sent to setup the realtime session
+        return None

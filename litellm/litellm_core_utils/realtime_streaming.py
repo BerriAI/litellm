@@ -27,7 +27,7 @@ async with websockets.connect(  # type: ignore
 import asyncio
 import concurrent.futures
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +38,13 @@ from litellm.types.llms.openai import (
 )
 
 from .litellm_logging import Logging as LiteLLMLogging
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+    CLIENT_CONNECTION_CLASS = ClientConnection
+else:
+    CLIENT_CONNECTION_CLASS = Any
 
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
@@ -53,9 +60,10 @@ class RealTimeStreaming:
     def __init__(
         self,
         websocket: Any,
-        backend_ws: Any,
+        backend_ws: CLIENT_CONNECTION_CLASS,
         logging_obj: Optional[LiteLLMLogging] = None,
         provider_config: Optional[BaseRealtimeConfig] = None,
+        model: str = "",
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -74,6 +82,7 @@ class RealTimeStreaming:
             _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
+        self.model = model
 
     def _should_store_message(
         self,
@@ -129,11 +138,15 @@ class RealTimeStreaming:
 
         try:
             while True:
-                message = await self.backend_ws.recv()
-                await self.websocket.send_text(message)
+                try:
+                    raw_response = await self.backend_ws.recv(decode=False)
+                except TypeError:
+                    raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
+
+                await self.websocket.send_text(raw_response)
 
                 ## LOGGING
-                self.store_message(message)
+                self.store_message(raw_response)
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug(
                 f"Connection closed in backend to client send messages - {e}"
@@ -149,6 +162,7 @@ class RealTimeStreaming:
         try:
             while True:
                 message = await self.websocket.receive_text()
+
                 ## LOGGING
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
@@ -156,17 +170,31 @@ class RealTimeStreaming:
                     message = self.provider_config.transform_realtime_request(message)
 
                 await self.backend_ws.send(message)
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
             verbose_logger.debug("Connection closed")
             pass
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
+        if (
+            self.provider_config
+            and self.provider_config.requires_session_configuration()
+        ):
+            session_configuration_request = (
+                self.provider_config.session_configuration_request(self.model)
+            )
+            if session_configuration_request is None:
+                raise ValueError(
+                    "Session configuration request is None, but requires_session_configuration is True"
+                )
+            await self.backend_ws.send(session_configuration_request)
+            verbose_logger.info(await self.backend_ws.recv(decode=False))
+
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
             verbose_logger.debug("Connection closed")
             forward_task.cancel()
         finally:

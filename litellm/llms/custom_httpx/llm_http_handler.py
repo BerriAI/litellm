@@ -2066,10 +2066,10 @@ class BaseLLMHTTPHandler:
 
         try:
             async with websockets.connect(  # type: ignore
-                url, extra_headers=headers
+                url, additional_headers=headers
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, backend_ws, logging_obj, provider_config
+                    websocket, backend_ws, logging_obj, provider_config, model
                 )
                 await realtime_streaming.bidirectional_forward()
 

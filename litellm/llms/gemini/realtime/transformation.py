@@ -47,3 +47,38 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         realtime_input_dict = encode_unserializable_types(realtime_input_dict)
 
         return json.dumps({"realtime_input": realtime_input_dict})
+
+    def requires_session_configuration(self) -> bool:
+        return True
+
+    def session_configuration_request(self, model: str) -> Optional[str]:
+        """
+
+        ```
+        {
+            "model": string,
+            "generationConfig": {
+                "candidateCount": integer,
+                "maxOutputTokens": integer,
+                "temperature": number,
+                "topP": number,
+                "topK": integer,
+                "presencePenalty": number,
+                "frequencyPenalty": number,
+                "responseModalities": [string],
+                "speechConfig": object,
+                "mediaResolution": object
+            },
+            "systemInstruction": string,
+            "tools": [object]
+        }
+        ```
+        """
+        return json.dumps(
+            {
+                "setup": {
+                    "model": "models/gemini-2.0-flash-live-001",
+                    "generationConfig": {"responseModalities": ["TEXT"]},
+                }
+            }
+        )
