@@ -160,3 +160,31 @@ def test_web_search_tool_transformation():
         anthropic_web_search_tool["user_location"]["approximate"]["city"]
         == "San Francisco"
     )
+
+
+@pytest.mark.parametrize(
+    "search_context_size, expected_max_uses", [("low", 1), ("medium", 5), ("high", 10)]
+)
+def test_web_search_tool_transformation_with_search_context_size(
+    search_context_size, expected_max_uses
+):
+    from litellm.types.llms.openai import OpenAIWebSearchOptions
+
+    config = AnthropicConfig()
+
+    openai_web_search_options = OpenAIWebSearchOptions(
+        user_location={
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        },
+        search_context_size=search_context_size,
+    )
+
+    anthropic_web_search_tool = config.map_web_search_tool(openai_web_search_options)
+    assert anthropic_web_search_tool is not None
+    assert anthropic_web_search_tool["user_location"] is not None
+    assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
+    assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
+    assert anthropic_web_search_tool["max_uses"] == expected_max_uses

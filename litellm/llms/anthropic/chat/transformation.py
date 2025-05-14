@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -344,20 +345,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         user_location = value_typed.get("user_location")
         if user_location is not None:
-            anthropic_user_location = {}
-            for key, user_location_value in user_location.items():
-                if (
-                    key in AnthropicWebSearchUserLocation.__annotations__.keys()
-                    and key != "type"
-                ):
-                    anthropic_user_location[key] = user_location_value
-            anthropic_user_location = AnthropicWebSearchUserLocation(
-                **{
-                    **anthropic_user_location,
-                    "type": "approximate",
-                }
+            anthropic_user_location = AnthropicWebSearchUserLocation(type="approximate")
+            anthropic_user_location_keys = (
+                AnthropicWebSearchUserLocation.__annotations__.keys()
             )
+            user_location_approximate = user_location.get("approximate")
+            for key, user_location_value in user_location_approximate.items():
+                if key in anthropic_user_location_keys and key != "type":
+                    anthropic_user_location[key] = user_location_value
             hosted_web_search_tool["user_location"] = anthropic_user_location
+
+        ## MAP SEARCH CONTEXT SIZE
+        search_context_size = value_typed.get("search_context_size")
+        if search_context_size is not None:
+            hosted_web_search_tool["max_uses"] = ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES[
+                search_context_size
+            ]
 
         return hosted_web_search_tool
 

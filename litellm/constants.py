@@ -100,6 +100,13 @@ FIREWORKS_AI_80_B = 80
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 
+### ANTHROPIC CONSTANTS ###
+ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
+    "low": 1,
+    "medium": 5,
+    "high": 10,
+}
+
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
