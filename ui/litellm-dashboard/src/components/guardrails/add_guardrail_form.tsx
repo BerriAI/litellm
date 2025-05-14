@@ -126,7 +126,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const handleSubmit = async () => {
     try {
       setLoading(true);
-      const values = await form.validateFields();
+      // First validate currently visible fields (step 1)
+      await form.validateFields();
+
+      // After validation, fetch *all* form values (including those from previous steps)
+      const values = form.getFieldsValue(true);
       
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
