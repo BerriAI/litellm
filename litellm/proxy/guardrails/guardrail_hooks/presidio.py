@@ -11,7 +11,7 @@
 import asyncio
 import json
 import uuid
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
 from pydantic import BaseModel
@@ -20,12 +20,17 @@ import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
+    PresidioAnalyzeRequest,
+    PresidioAnalyzeResponseItem,
+)
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -40,6 +45,7 @@ class PresidioPerRequestConfig(BaseModel):
     """
 
     language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -56,6 +62,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
+        pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -67,6 +74,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
+        self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
+            pii_entities_config or {}
+        )
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -132,58 +142,105 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
-    async def check_pii(
+    def _get_presidio_analyze_request_payload(
         self,
         text: str,
-        output_parse_pii: bool,
         presidio_config: Optional[PresidioPerRequestConfig],
         request_data: dict,
-    ) -> str:
+    ) -> PresidioAnalyzeRequest:
         """
-        [TODO] make this more performant for high-throughput scenario
+        Construct the payload for the Presidio analyze request
+
+        API Ref: https://microsoft.github.io/presidio/api-docs/api-docs.html#tag/Analyzer/paths/~1analyze/post
+        """
+        analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
+            text=text,
+            language="en",
+        )
+        ##################################################################
+        ###### Check if user has configured any params for this guardrail
+        ################################################################
+        if self.ad_hoc_recognizers is not None:
+            analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
+
+        if self.pii_entities_config:
+            analyze_payload["entities"] = list(self.pii_entities_config.keys())
+
+        ##################################################################
+        ######### End of adding config params
+        ##################################################################
+
+        # Check if client side request passed any dynamic params
+        if presidio_config and presidio_config.language:
+            analyze_payload["language"] = presidio_config.language
+
+        casted_analyze_payload: dict = cast(dict, analyze_payload)
+        casted_analyze_payload.update(
+            self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+        )
+        return cast(PresidioAnalyzeRequest, casted_analyze_payload)
+
+    async def analyze_text(
+        self,
+        text: str,
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
+        """
+        Send text to the Presidio analyzer endpoint and get analysis results
         """
         try:
             async with aiohttp.ClientSession() as session:
                 if self.mock_redacted_text is not None:
-                    redacted_text = self.mock_redacted_text
-                else:
-                    # Make the first request to /analyze
-                    # Construct Request 1
-                    analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                    analyze_payload = {"text": text, "language": "en"}
-                    if presidio_config and presidio_config.language:
-                        analyze_payload["language"] = presidio_config.language
-                    if self.ad_hoc_recognizers is not None:
-                        analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
-                    # End of constructing Request 1
-                    analyze_payload.update(
-                        self.get_guardrail_dynamic_request_body_params(
-                            request_data=request_data
-                        )
-                    )
-                    redacted_text = None
-                    verbose_proxy_logger.debug(
-                        "Making request to: %s with payload: %s",
-                        analyze_url,
-                        analyze_payload,
-                    )
-                    async with session.post(
-                        analyze_url, json=analyze_payload
-                    ) as response:
-                        analyze_results = await response.json()
+                    return self.mock_redacted_text
 
-                    # Make the second request to /anonymize
-                    anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                    verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                    anonymize_payload = {
-                        "text": text,
-                        "analyzer_results": analyze_results,
-                    }
+                # Make the request to /analyze
+                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
 
-                    async with session.post(
-                        anonymize_url, json=anonymize_payload
-                    ) as response:
-                        redacted_text = await response.json()
+                analyze_payload: PresidioAnalyzeRequest = (
+                    self._get_presidio_analyze_request_payload(
+                        text=text,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+                )
+
+                verbose_proxy_logger.debug(
+                    "Making request to: %s with payload: %s",
+                    analyze_url,
+                    analyze_payload,
+                )
+
+                async with session.post(analyze_url, json=analyze_payload) as response:
+                    analyze_results = await response.json()
+                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+                    final_results = []
+                    for item in analyze_results:
+                        final_results.append(PresidioAnalyzeResponseItem(**item))
+                    return final_results
+        except Exception as e:
+            raise e
+
+    async def anonymize_text(
+        self, text: str, analyze_results: Any, output_parse_pii: bool
+    ) -> str:
+        """
+        Send analysis results to the Presidio anonymizer endpoint to get redacted text
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Make the request to /anonymize
+                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+                anonymize_payload = {
+                    "text": text,
+                    "analyzer_results": analyze_results,
+                }
+
+                async with session.post(
+                    anonymize_url, json=anonymize_payload
+                ) as response:
+                    redacted_text = await response.json()
 
                 new_text = text
                 if redacted_text is not None:
@@ -206,6 +263,74 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     return redacted_text["text"]
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
+        except Exception as e:
+            raise e
+
+    def raise_exception_if_blocked_entities_detected(
+        self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
+    ):
+        """
+        Raise an exception if blocked entities are detected
+        """
+        if self.pii_entities_config is None:
+            return
+
+        if isinstance(analyze_results, Dict):
+            # if mock testing is enabled, analyze_results is a dict
+            # we don't need to raise an exception in this case
+            return
+
+        for result in analyze_results:
+            entity_type = result.get("entity_type")
+
+            if entity_type:
+                casted_entity_type: PiiEntityType = cast(PiiEntityType, entity_type)
+                if (
+                    casted_entity_type in self.pii_entities_config
+                    and self.pii_entities_config[casted_entity_type] == PiiAction.BLOCK
+                ):
+                    raise BlockedPiiEntityError(
+                        entity_type=entity_type,
+                        guardrail_name=self.guardrail_name,
+                    )
+
+    async def check_pii(
+        self,
+        text: str,
+        output_parse_pii: bool,
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> str:
+        """
+        Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
+        """
+        try:
+            if self.mock_redacted_text is not None:
+                redacted_text = self.mock_redacted_text
+            else:
+                # First get analysis results
+                analyze_results = await self.analyze_text(
+                    text=text,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+
+                ####################################################
+                # Blocked Entities check
+                ####################################################
+                self.raise_exception_if_blocked_entities_detected(
+                    analyze_results=analyze_results
+                )
+
+                # Then anonymize the text using the analysis results
+                return await self.anonymize_text(
+                    text=text,
+                    analyze_results=analyze_results,
+                    output_parse_pii=output_parse_pii,
+                )
+
+            return redacted_text["text"]
         except Exception as e:
             raise e
 
