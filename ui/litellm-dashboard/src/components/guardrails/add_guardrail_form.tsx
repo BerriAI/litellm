@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal } from 'antd';
+import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message } from 'antd';
 import { Button } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map } from './guardrail_info_helpers';
@@ -13,6 +13,13 @@ interface AddGuardrailFormProps {
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+}
+
+interface LiteLLMParams {
+  guardrail: string;
+  mode: string;
+  default_on: boolean;
+  [key: string]: any; // Allow additional properties for specific guardrails
 }
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
@@ -38,25 +45,52 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       setLoading(true);
       const values = await form.validateFields();
       
+      // Get the guardrail provider value from the map
+      const guardrailProvider = guardrail_provider_map[values.provider];
+      
       // Prepare the guardrail data
       const guardrailData = {
         guardrail_name: values.guardrail_name,
         litellm_params: {
-          guardrail: guardrail_provider_map[values.provider],
+          guardrail: guardrailProvider,
           mode: values.mode,
           default_on: values.default_on
-        },
-        guardrail_info: {
-          // Parse the config if it's provided as JSON
-          ...(values.config ? JSON.parse(values.config) : {})
-        }
+        } as LiteLLMParams,
+        guardrail_info: {}
       };
+
+      // Add config values to the guardrail_info if provided
+      if (values.config) {
+        try {
+          const configObj = JSON.parse(values.config);
+          // For some guardrails, the config values need to be in litellm_params
+          // Especially for providers like Bedrock that need guardrailIdentifier and guardrailVersion
+          if (values.provider === 'Bedrock' && configObj) {
+            if (configObj.guardrail_id) {
+              guardrailData.litellm_params.guardrailIdentifier = configObj.guardrail_id;
+            }
+            if (configObj.guardrail_version) {
+              guardrailData.litellm_params.guardrailVersion = configObj.guardrail_version;
+            }
+          } else {
+            // For other providers, add the config to guardrail_info
+            guardrailData.guardrail_info = configObj;
+          }
+        } catch (error) {
+          message.error('Invalid JSON in configuration');
+          setLoading(false);
+          return;
+        }
+      }
 
       if (!accessToken) {
         throw new Error("No access token available");
       }
 
+      console.log("Sending guardrail data:", JSON.stringify(guardrailData));
       await createGuardrailCall(accessToken, guardrailData);
+      
+      message.success('Guardrail created successfully');
       
       // Reset form and close modal
       form.resetFields();
@@ -64,6 +98,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to create guardrail:", error);
+      message.error('Failed to create guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }
@@ -270,6 +305,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Button 
             onClick={handleSubmit}
             loading={loading}
+            color="blue"
           >
             Create Guardrail
           </Button>

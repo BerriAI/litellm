@@ -137,7 +137,7 @@ class PiiEntityType(str, Enum):
     FI_PERSONAL_IDENTITY_CODE = "FI_PERSONAL_IDENTITY_CODE"
 
 
-class LitellmParams(TypedDict):
+class LitellmParams(TypedDict, total=False):
     guardrail: str
     mode: str
     api_key: Optional[str]

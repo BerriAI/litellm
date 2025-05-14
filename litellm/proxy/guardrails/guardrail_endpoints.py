@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, cast
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
@@ -160,6 +161,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
         )
         return result
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
