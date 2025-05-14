@@ -29,7 +29,7 @@ interface SpendLogsTableProps {
   allTeams: Team[];
 }
 
-interface PaginatedResponse {
+export interface PaginatedResponse {
   data: LogEntry[];
   total: number;
   page: number;
@@ -89,7 +89,6 @@ export default function SpendLogsTable({
     const fetchKeyInfo = async () => {
       if (selectedKeyIdInfoView && accessToken) {
         const keyData = await keyInfoV1Call(accessToken, selectedKeyIdInfoView);
-        console.log("keyData", keyData);
 
         const keyResponse: KeyResponse = {
           ...keyData["info"],
@@ -208,7 +207,14 @@ export default function SpendLogsTable({
     refetchIntervalInBackground: true,
   });
 
-  const logsData = logs.data?.data || []; // fallback to empty array if undefined
+  // const logsData = logs.data?.data || []; // fallback to empty array if undefined
+  const logsData = logs.data || {
+    data: [],
+    total: 0,
+    page: 1,
+    page_size: pageSize || 10,
+    total_pages: 1
+  };
 
   const {
     filters,
@@ -224,7 +230,7 @@ export default function SpendLogsTable({
     endTime,   // Receive from SpendLogsTable
     pageSize,
     isCustomDate,
-    currentPage
+    setCurrentPage
   })
 
   // Fetch logs for a session if selected
@@ -258,14 +264,11 @@ export default function SpendLogsTable({
   }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
-    console.log(
-      "got None values for one of accessToken, token, userRole, userID",
-    );
     return null;
   }
 
   const filteredData =
-    filteredLogs.filter((log) => {
+    filteredLogs.data.filter((log) => {
       const matchesSearch =
         !searchTerm ||
         log.request_id.includes(searchTerm) ||
@@ -328,7 +331,6 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!allTeams || allTeams.length === 0) return [];
         const filtered = allTeams.filter((team: Team) =>{
-          console.log("team", searchText)
           return team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
           (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
       });
@@ -536,20 +538,20 @@ export default function SpendLogsTable({
                   Showing{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
+                    : filteredLogs
                     ? (currentPage - 1) * pageSize + 1
                     : 0}{" "}
                   -{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
-                    ? Math.min(currentPage * pageSize, logs.data.total)
+                    : filteredLogs
+                    ? Math.min(currentPage * pageSize, filteredLogs.total)
                     : 0}{" "}
                   of{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
-                    ? logs.data.total
+                    : filteredLogs
+                    ? filteredLogs.total
                     : 0}{" "}
                   results
                 </span>
@@ -558,8 +560,8 @@ export default function SpendLogsTable({
                     Page {logs.isLoading ? "..." : currentPage} of{" "}
                     {logs.isLoading
                       ? "..."
-                      : logs.data
-                      ? logs.data.total_pages
+                      : filteredLogs
+                      ? filteredLogs.total_pages
                       : 1}
                   </span>
                   <button
@@ -575,14 +577,14 @@ export default function SpendLogsTable({
                     onClick={() =>
                       setCurrentPage((p) =>
                         Math.min(
-                          logs.data?.total_pages || 1,
+                          filteredLogs.total_pages || 1,
                           p + 1,
                         ),
                       )
                     }
                     disabled={
                       logs.isLoading ||
-                      currentPage === (logs.data?.total_pages || 1)
+                      currentPage === (filteredLogs.total_pages || 1)
                     }
                     className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >

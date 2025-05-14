@@ -1,12 +1,12 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { keyListCall, uiSpendLogsCall } from "../networking";
+import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
-import { LogEntry } from "./columns";
+import { PaginatedResponse } from ".";
 
 export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
@@ -25,20 +25,16 @@ export function useLogFilterLogic({
   startTime, // Receive from SpendLogsTable
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
-  initialPage = 1,
-  initialFilters = {},
   isCustomDate,
-  currentPage
+  setCurrentPage
 }: {
-  logs: LogEntry[];
+  logs: PaginatedResponse;
   accessToken: string | null;
   startTime: string;
   endTime: string;
   pageSize?: number;
-  initialPage?: number;
-  initialFilters?: Partial<LogFilterState>;
   isCustomDate: boolean;
-  currentPage: number;
+  setCurrentPage: (page: number) => void;
 }) {
   const defaultFilters = useMemo<LogFilterState>(() => ({
     [FILTER_KEYS.TEAM_ID]: "",
@@ -49,7 +45,7 @@ export function useLogFilterLogic({
   }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-  const [filteredLogs, setFilteredLogs] = useState<LogEntry[]>(logs);
+  const [filteredLogs, setFilteredLogs] = useState<PaginatedResponse>(logs);
   const lastSearchTimestamp = useRef(0);
   const performSearch = useCallback(async (filters: LogFilterState) => {
     if (!accessToken) return;
@@ -70,15 +66,13 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.REQUEST_ID] || undefined,
         formattedStartTime,
         formattedEndTime,
-        currentPage,
+        1,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
-        setFilteredLogs(response.data);
-        console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-        console.log("called from debouncedSearch data:", JSON.stringify(response.data));
+        setFilteredLogs(response);
       }
     } catch (error) {
       console.error("Error searching users:", error);
@@ -91,22 +85,37 @@ export function useLogFilterLogic({
     return () => debouncedSearch.cancel();
   }, [debouncedSearch]);
 
-  // Apply filters to keys whenever keys or filters change
+  // Apply filters to keys whenever logs or filters change
   useEffect(() => {
-    if (!logs) {
-      setFilteredLogs([]);
+    if (!logs || !logs.data) {
+      setFilteredLogs({
+        data: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 0
+      });
       return;
     }
   
-    let result = [...logs];
+    let filteredData = [...logs.data];
   
     if (filters[FILTER_KEYS.TEAM_ID]) {
-      result = result.filter(log => log.team_id === filters[FILTER_KEYS.TEAM_ID]);
+      filteredData = filteredData.filter(
+        log => log.team_id === filters[FILTER_KEYS.TEAM_ID]
+      );
     }
   
-    // Only update state if the filteredLogs actually changed
-    if (JSON.stringify(result) !== JSON.stringify(filteredLogs)) {
-      setFilteredLogs(result);
+    const newFilteredLogs: PaginatedResponse = {
+      data: filteredData,
+      total: logs.total,
+      page: logs.page,
+      page_size: logs.page_size,
+      total_pages: logs.total_pages,
+    };
+  
+    if (JSON.stringify(newFilteredLogs) !== JSON.stringify(filteredLogs)) {
+      setFilteredLogs(newFilteredLogs);
     }
   }, [logs, filters]);
 
@@ -147,6 +156,7 @@ export function useLogFilterLogic({
       
       // Only call debouncedSearch if filters have actually changed
       if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
+        setCurrentPage(1);
         debouncedSearch(updatedFilters);
       }
       
@@ -169,6 +179,6 @@ export function useLogFilterLogic({
     allKeyAliases,
     allTeams,
     handleFilterChange,
-    handleFilterReset
+    handleFilterReset,
   };
 }
