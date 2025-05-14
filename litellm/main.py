@@ -3658,6 +3658,7 @@ def embedding(  # noqa: PLR0915
                 headers = extra_headers
             else:
                 headers = {}
+
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -3670,7 +3671,8 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={},
+                litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
