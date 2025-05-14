@@ -1168,6 +1168,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     teams: Optional[list] = None,
+    team_member_details: Optional[dict] = None,
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
     send_invite_email: Optional[bool] = None,
