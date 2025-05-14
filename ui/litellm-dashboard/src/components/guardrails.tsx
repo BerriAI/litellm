@@ -134,8 +134,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
         okText="Delete"
         okButtonProps={{ danger: true }}
       >
-        <p>Are you sure you want to delete the guardrail "{guardrailToDelete?.name}"?</p>
-        <p>This action cannot be undone.</p>
       </Modal>
     </div>
   );
