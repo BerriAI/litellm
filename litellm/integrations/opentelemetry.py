@@ -296,7 +296,8 @@ class OpenTelemetry(CustomLogger):
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
             # End Parent OTEL Sspan
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+            if hasattr(parent_otel_span, "is_recording") and parent_otel_span.is_recording():
+                parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace
@@ -339,7 +340,8 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
         if parent_otel_span is not None:
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+            if hasattr(parent_otel_span, "is_recording") and parent_otel_span.is_recording():
+                parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _add_dynamic_span_processor_if_needed(self, kwargs):
         """
@@ -375,9 +377,17 @@ class OpenTelemetry(CustomLogger):
 
             provider = trace.get_tracer_provider()
             if isinstance(provider, TracerProvider):
+                # Avoid duplicates: check if already registered
+                already_added = any(
+                    getattr(sp, "_litellm_dynamic", False)
+                    for sp in getattr(getattr(provider, "_active_span_processor", None), "_span_processors", [])
+                )
+                if already_added:
+                    return
                 span_processor = self._get_span_processor(
                     dynamic_headers=dynamic_headers
                 )
+                span_processor._litellm_dynamic = True  # mark it
                 provider.add_span_processor(span_processor)
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
@@ -401,7 +411,8 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
         if parent_otel_span is not None:
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+            if hasattr(parent_otel_span, "is_recording") and parent_otel_span.is_recording():
+                parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def set_tools_attributes(self, span: Span, tools):
         import json
