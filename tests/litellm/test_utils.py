@@ -306,3 +306,16 @@ def test_anthropic_web_search_in_model_info():
         assert (
             model_info["search_context_cost_per_query"] is not None
         ), f"Model {model} should have a search context cost per query"
+
+
+def test_cohere_embedding_optional_params():
+    from litellm import get_optional_params_embeddings
+
+    optional_params = get_optional_params_embeddings(
+        model="embed-v4.0",
+        custom_llm_provider="cohere",
+        input="Hello, world!",
+        input_type="search_query",
+        dimensions=512,
+    )
+    assert optional_params is not None

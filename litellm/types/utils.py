@@ -1785,6 +1785,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
+    requester_custom_headers: Optional[
+        Dict[str, str]
+    ]  # Log any custom (`x-`) headers sent by the client to the proxy.
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
