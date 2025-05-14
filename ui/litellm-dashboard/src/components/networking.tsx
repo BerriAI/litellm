@@ -4276,8 +4276,7 @@ export const getProxyUISettings = async (
 
 export const getGuardrailsList = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
-
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4293,10 +4292,9 @@ export const getGuardrailsList = async (accessToken: String) => {
     }
 
     const data = await response.json();
-    console.log("Guardrails list response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to fetch guardrails list:", error);
+    console.error("Failed to get guardrails list:", error);
     throw error;
   }
 };
