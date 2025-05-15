@@ -6,9 +6,8 @@ import pytest
 from datetime import datetime, timedelta, UTC
 from unittest.mock import MagicMock, AsyncMock
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
-from litellm.proxy.proxy_server import general_settings
-@pytest.mark.asyncio
 
+@pytest.mark.asyncio
 async def test_should_delete_spend_logs():
     # Test case 1: No retention set
     cleaner = SpendLogCleanup(general_settings={})
