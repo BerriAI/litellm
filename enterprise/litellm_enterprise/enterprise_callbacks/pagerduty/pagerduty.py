@@ -4,6 +4,10 @@ PagerDuty Alerting Integration
 Handles two types of alerts:
 - High LLM API Failure Rate. Configure X fails in Y seconds to trigger an alert.
 - High Number of Hanging LLM Requests. Configure X hangs in Y seconds to trigger an alert.
+
+Note: This is a Free feature on the regular litellm docker image.
+
+However, this is under the enterprise license
 """
 
 import asyncio
