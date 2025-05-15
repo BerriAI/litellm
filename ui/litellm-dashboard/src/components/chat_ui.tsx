@@ -374,7 +374,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
-        updateTextUI("assistant", "Error fetching response");
+        updateTextUI("assistant", "Error fetching response:" + error);
       }
     } finally {
       setIsLoading(false);
