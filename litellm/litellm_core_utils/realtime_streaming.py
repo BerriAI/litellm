@@ -61,7 +61,7 @@ class RealTimeStreaming:
         self,
         websocket: Any,
         backend_ws: CLIENT_CONNECTION_CLASS,
-        logging_obj: Optional[LiteLLMLogging] = None,
+        logging_obj: LiteLLMLogging,
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
     ):
@@ -133,7 +133,9 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
-    async def backend_to_client_send_messages(self):
+    async def backend_to_client_send_messages(
+        self, session_configuration_request: Optional[str] = None
+    ):
         import websockets
 
         try:
@@ -145,22 +147,37 @@ class RealTimeStreaming:
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
-                if self.provider_config and isinstance(raw_response, str):
-                    raw_response = self.provider_config.transform_realtime_response(
-                        raw_response
+                if self.provider_config:
+                    transformed_response = (
+                        self.provider_config.transform_realtime_response(
+                            raw_response,
+                            self.model,
+                            self.logging_obj,
+                            session_configuration_request,
+                        )
                     )
 
-                await self.websocket.send_text(raw_response)
+                    if isinstance(transformed_response, list):
+                        for event in transformed_response:
+                            event_str = json.dumps(event)
+                            ## LOGGING
+                            self.store_message(event_str)
+                            await self.websocket.send_text(event_str)
+                    else:
+                        event_str = json.dumps(transformed_response)
+                        ## LOGGING
+                        self.store_message(event_str)
+                        await self.websocket.send_text(event_str)
 
-                ## LOGGING
-                self.store_message(raw_response)
+                else:
+                    event_str = raw_response
+                    ## LOGGING
+                    self.store_message(event_str)
+                    await self.websocket.send_text(event_str)
+
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
-            verbose_logger.debug(
-                f"Connection closed in backend to client send messages - {e}"
-            )
             raise e
         except Exception as e:
-            verbose_logger.debug(f"Error in backend to client send messages: {e}")
             raise e
         finally:
             await self.log_messages()
@@ -184,6 +201,7 @@ class RealTimeStreaming:
             verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
+        session_configuration_request: Optional[str] = None
         if (
             self.provider_config
             and self.provider_config.requires_session_configuration()
@@ -196,12 +214,10 @@ class RealTimeStreaming:
                     "Session configuration request is None, but requires_session_configuration is True"
                 )
             await self.backend_ws.send(session_configuration_request)
-            try:
-                verbose_logger.info(await self.backend_ws.recv(decode=False))
-            except TypeError:
-                verbose_logger.info(await self.backend_ws.recv())
 
-        forward_task = asyncio.create_task(self.backend_to_client_send_messages())
+        forward_task = asyncio.create_task(
+            self.backend_to_client_send_messages(session_configuration_request)
+        )
         try:
             await self.client_ack_messages()
         except self.websocket.exceptions.ConnectionClosed:  # type: ignore

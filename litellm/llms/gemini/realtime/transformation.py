@@ -4,11 +4,26 @@ This file contains the transformation logic for the Gemini realtime API.
 
 import json
 import os
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any, Dict, List, Optional, Union
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.types.llms.gemini import (
+    BidiGenerateContentServerContent,
+    BidiGenerateContentSetupComplete,
+)
+from litellm.types.llms.openai import (
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeStreamSession,
+    OpenAIRealtimeStreamSessionEvents,
+)
 
 from ..common_utils import encode_unserializable_types
+
+MAP_GEMINI_FIELD_TO_OPENAI_EVENT = {
+    "setupComplete": "session.created",
+}
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -48,8 +63,67 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return json.dumps({"realtime_input": realtime_input_dict})
 
-    def transform_realtime_response(self, message: str) -> str:
-        return message
+    def transform_session_created_event(
+        self,
+        message: BidiGenerateContentSetupComplete,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> OpenAIRealtimeStreamSessionEvents:
+        if session_configuration_request is None:
+            raise ValueError(
+                "session_configuration_request is required for Gemini API calls"
+            )
+
+        session_configuration_request_dict = json.loads(session_configuration_request)
+        _model = session_configuration_request_dict.get("model") or model
+        _modalities = session_configuration_request_dict.get(
+            "generationConfig", {}
+        ).get("responseModalities", ["TEXT"])
+        _system_instruction = session_configuration_request_dict.get(
+            "systemInstruction"
+        )
+        session = OpenAIRealtimeStreamSession(
+            id=logging_session_id,
+            modalities=_modalities,
+        )
+        if _system_instruction is not None and isinstance(_system_instruction, str):
+            session["instructions"] = _system_instruction
+        if _model is not None and isinstance(_model, str):
+            session["model"] = _model
+
+        return OpenAIRealtimeStreamSessionEvents(
+            type="session.created",
+            session=session,
+            event_id=str(uuid.uuid4()),
+        )
+
+    def transform_realtime_response(
+        self,
+        message: Union[str, bytes],
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        session_configuration_request: Optional[str] = None,
+    ) -> Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]]:
+        try:
+            json_message = json.loads(message)
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON message: {message}")
+
+        logging_session_id = logging_obj.litellm_trace_id
+        for key, value in json_message.items():
+            if key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT:
+                openai_event = MAP_GEMINI_FIELD_TO_OPENAI_EVENT[key]
+                if openai_event == "session.created":
+                    transformed_message = self.transform_session_created_event(
+                        BidiGenerateContentSetupComplete(**json_message),  # type: ignore
+                        model,
+                        logging_session_id,
+                        session_configuration_request,
+                    )
+                    return transformed_message
+
+        raise ValueError(f"Unknown message type: {message}")
 
     def requires_session_configuration(self) -> bool:
         return True

@@ -61,3 +61,7 @@ class BidiGenerateContentServerContent(TypedDict):
 
     modelTurn: HttpxContentType
     """Output only. The content that the model is currently generating."""
+
+
+class BidiGenerateContentSetupComplete(TypedDict):
+    setupComplete: dict

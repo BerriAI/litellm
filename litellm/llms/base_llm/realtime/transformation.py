@@ -1,11 +1,10 @@
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.types.llms.gemini import BidiGenerateContentServerContent
-from litellm.types.llms.openai import OpenAIRealtimeStreamResponseBaseObject
+from litellm.types.llms.openai import OpenAIRealtimeEvents
 
 from ..chat.transformation import BaseLLMException
 
@@ -63,15 +62,14 @@ class BaseRealtimeConfig(ABC):
     ) -> Optional[str]:  # message sent to setup the realtime session
         return None
 
+    @abstractmethod
     def transform_realtime_response(
-        self, message: str
-    ) -> str:  # message sent to setup the realtime session
-        try:
-            message = json.loads(message)
-        except json.JSONDecodeError:
-            return message
-
-        if "modelTurn" in message:
-            message = BidiGenerateContentServerContent(**message)  # type: ignore
-
-        return message
+        self,
+        message: Union[str, bytes],
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        session_configuration_request: Optional[str] = None,
+    ) -> Union[
+        OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]
+    ]:  # message sent to setup the realtime session
+        pass
