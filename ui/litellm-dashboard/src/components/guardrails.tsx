@@ -76,12 +76,14 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
   };
 
   const handleDeleteClick = (guardrailId: string, guardrailName: string) => {
+    console.log(`Delete clicked for guardrail: ${guardrailId} - ${guardrailName}`);
     setGuardrailToDelete({id: guardrailId, name: guardrailName});
   };
 
   const handleDeleteConfirm = async () => {
     if (!guardrailToDelete || !accessToken) return;
     
+    console.log(`Confirming delete for: ${guardrailToDelete.id}`);
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.id);
@@ -127,16 +129,20 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
         onSuccess={handleSuccess}
       />
 
-      <Modal
-        title="Delete Guardrail"
-        open={guardrailToDelete !== null}
-        onOk={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
-        confirmLoading={isDeleting}
-        okText="Delete"
-        okButtonProps={{ danger: true }}
-      >
-      </Modal>
+      {guardrailToDelete && (
+        <Modal
+          title="Delete Guardrail"
+          open={guardrailToDelete !== null}
+          onOk={handleDeleteConfirm}
+          onCancel={handleDeleteCancel}
+          confirmLoading={isDeleting}
+          okText="Delete"
+          okButtonProps={{ danger: true }}
+        >
+          <p>Are you sure you want to delete guardrail "{guardrailToDelete.name}"?</p>
+          <p>This action cannot be undone.</p>
+        </Modal>
+      )}
     </div>
   );
 };
