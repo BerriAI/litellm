@@ -35,7 +35,7 @@ def test_gemini_realtime_transformation_session_created():
         logging_obj,
         session_configuration_request_str,
     )
-    assert transformed_message["type"] == "session.created"
+    assert transformed_message["response"]["type"] == "session.created"
 
 
 def test_gemini_realtime_transformation_content_delta():
@@ -62,12 +62,13 @@ def test_gemini_realtime_transformation_content_delta():
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id.return_value = "123"
 
-    transformed_message = config.transform_realtime_response(
+    returned_object = config.transform_realtime_response(
         session_created_message_str,
         "gemini-1.5-flash",
         logging_obj,
         session_configuration_request_str,
     )
+    transformed_message = returned_object["response"]
     assert isinstance(transformed_message, list)
     print(transformed_message)
     transformed_message_str = json.dumps(transformed_message)

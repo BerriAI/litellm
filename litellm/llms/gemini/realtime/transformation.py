@@ -23,12 +23,14 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
 )
+from litellm.types.realtime import RealtimeResponseTypedDict
 
 from ..common_utils import encode_unserializable_types
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT = {
     "setupComplete": "session.created",
-    "serverContent": "response.text.delta",
+    "serverContent.modelTurn": "response.text.delta",
+    "serverContent.generationComplete": "response.text.done",
 }
 
 
@@ -208,10 +210,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         response_id: str,
     ) -> OpenAIRealtimeResponseTextDelta:
         delta = ""
-        if "parts" in message["modelTurn"]:
-            for part in message["modelTurn"]["parts"]:
-                if "text" in part:
-                    delta += part["text"]
+        try:
+            if "parts" in message["modelTurn"]:
+                for part in message["modelTurn"]["parts"]:
+                    if "text" in part:
+                        delta += part["text"]
+        except Exception as e:
+            raise ValueError(
+                f"Error transforming content delta events: {e}, got message: {message}"
+            )
 
         return OpenAIRealtimeResponseTextDelta(
             type="response.text.delta",
@@ -223,51 +230,93 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             delta=delta,
         )
 
+    @staticmethod
+    def get_nested_value(obj: dict, path: str) -> Any:
+        keys = path.split(".")
+        current = obj
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            else:
+                return None
+        return current
+
     def transform_realtime_response(
         self,
         message: Union[str, bytes],
         model: str,
         logging_obj: LiteLLMLoggingObj,
         session_configuration_request: Optional[str] = None,
-        previous_messages: Optional[List[OpenAIRealtimeEvents]] = None,
-    ) -> Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]]:
+        current_output_item_id: Optional[
+            str
+        ] = None,  # used to check if this is a new content.delta or a continuation of a previous content.delta
+        current_response_id: Optional[
+            str
+        ] = None,  # used to check if this is a new content.delta or a continuation of a previous content.delta
+    ) -> RealtimeResponseTypedDict:
         try:
             json_message = json.loads(message)
         except json.JSONDecodeError:
             raise ValueError(f"Invalid JSON message: {message}")
 
         logging_session_id = logging_obj.litellm_trace_id
+        returned_message: Optional[
+            Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]]
+        ] = None
         for key, value in json_message.items():
-            if key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT:
-                openai_event = MAP_GEMINI_FIELD_TO_OPENAI_EVENT[key]
-                if openai_event == "session.created":
-                    transformed_message = self.transform_session_created_event(
-                        model,
-                        logging_session_id,
-                        session_configuration_request,
-                    )
-                    return transformed_message
-                elif openai_event == "response.text.delta":
-                    # check if this is a new content.delta or a continuation of a previous content.delta
-                    if self._is_new_content_delta(previous_messages):
-                        # send the list of standard 'new' content.delta events
-                        response_id = "resp_{}".format(uuid.uuid4())
-                        output_item_id = "item_{}".format(uuid.uuid4())
-                        response_items = self.return_new_content_delta_events(
-                            session_configuration_request=session_configuration_request,
-                            response_id=response_id,
-                            output_item_id=output_item_id,
+            # Check if this key or any nested key matches our mapping
+            for map_key, openai_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
+                if map_key == key or (
+                    "." in map_key
+                    and GeminiRealtimeConfig.get_nested_value(json_message, map_key)
+                    is not None
+                ):
+                    if openai_event == "session.created":
+                        transformed_message = self.transform_session_created_event(
+                            model,
+                            logging_session_id,
+                            session_configuration_request,
                         )
+                        returned_message = transformed_message
+                    elif openai_event == "response.text.delta":
+                        # check if this is a new content.delta or a continuation of a previous content.delta
+                        if not current_output_item_id:
+                            # send the list of standard 'new' content.delta events
+                            current_response_id = (
+                                current_response_id or "resp_{}".format(uuid.uuid4())
+                            )
+                            current_output_item_id = "item_{}".format(uuid.uuid4())
+                            response_items = self.return_new_content_delta_events(
+                                session_configuration_request=session_configuration_request,
+                                response_id=current_response_id,
+                                output_item_id=current_output_item_id,
+                            )
 
-                        transformed_message = self.transform_content_delta_events(
-                            BidiGenerateContentServerContent(**json_message[key]),  # type: ignore
-                            output_item_id,
-                            response_id,
-                        )
-                        response_items.append(transformed_message)
-                        return response_items
-
-        raise ValueError(f"Unknown message type: {message}")
+                            transformed_message = self.transform_content_delta_events(
+                                BidiGenerateContentServerContent(**json_message[key]),  # type: ignore
+                                current_output_item_id,
+                                current_response_id,
+                            )
+                            response_items.append(transformed_message)
+                            returned_message = response_items
+                        else:
+                            current_response_id = (
+                                current_response_id or "resp_{}".format(uuid.uuid4())
+                            )
+                            # send the list of standard 'new' content.delta events
+                            transformed_message = self.transform_content_delta_events(
+                                BidiGenerateContentServerContent(**json_message[key]),  # type: ignore
+                                current_output_item_id,
+                                current_response_id,
+                            )
+                            returned_message = transformed_message
+        if returned_message is None:
+            raise ValueError(f"Unknown message type: {message}")
+        return {
+            "response": returned_message,
+            "current_output_item_id": current_output_item_id,
+            "current_response_id": current_response_id,
+        }
 
     def requires_session_configuration(self) -> bool:
         return True

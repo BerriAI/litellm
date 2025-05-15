@@ -82,31 +82,31 @@ class RealTimeStreaming:
 
     def _should_store_message(
         self,
-        message_obj: Union[
-            dict,
-            OpenAIRealtimeStreamSessionEvents,
-            OpenAIRealtimeStreamResponseBaseObject,
-        ],
+        message_obj: Union[dict, OpenAIRealtimeEvents],
     ) -> bool:
-        _msg_type = message_obj["type"]
+        _msg_type = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
             return True
-        if _msg_type in self.logged_real_time_event_types:
+        if _msg_type and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes]):
+    def store_message(self, message: Union[str, bytes, OpenAIRealtimeEvents]):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
-        message_obj = json.loads(message)
+        if isinstance(message, dict):
+            message_obj = message
+        else:
+            message_obj = json.loads(message)
         try:
             if (
-                message_obj.get("type") == "session.created"
+                not isinstance(message, dict)
+                or message_obj.get("type") == "session.created"
                 or message_obj.get("type") == "session.updated"
             ):
                 message_obj = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
-            else:
+            elif not isinstance(message, dict):
                 message_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
         except Exception as e:
             verbose_logger.debug(f"Error parsing message for logging: {e}")
@@ -134,6 +134,8 @@ class RealTimeStreaming:
     ):
         import websockets
 
+        current_output_item_id = None
+        current_response_id = None
         try:
             while True:
                 try:
@@ -144,14 +146,18 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
                 if self.provider_config:
-                    transformed_response = (
-                        self.provider_config.transform_realtime_response(
-                            raw_response,
-                            self.model,
-                            self.logging_obj,
-                            session_configuration_request,
-                        )
+                    returned_object = self.provider_config.transform_realtime_response(
+                        raw_response,
+                        self.model,
+                        self.logging_obj,
+                        session_configuration_request,
+                        current_output_item_id,
+                        current_response_id,
                     )
+
+                    transformed_response = returned_object["response"]
+                    current_output_item_id = returned_object["current_output_item_id"]
+                    current_response_id = returned_object["current_response_id"]
 
                     if isinstance(transformed_response, list):
                         for event in transformed_response:

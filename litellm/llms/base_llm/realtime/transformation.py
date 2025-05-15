@@ -1,10 +1,10 @@
-import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
 from litellm.types.llms.openai import OpenAIRealtimeEvents
+from litellm.types.realtime import RealtimeResponseTypedDict
 
 from ..chat.transformation import BaseLLMException
 
@@ -69,7 +69,7 @@ class BaseRealtimeConfig(ABC):
         model: str,
         logging_obj: LiteLLMLoggingObj,
         session_configuration_request: Optional[str] = None,
-    ) -> Union[
-        OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]
-    ]:  # message sent to setup the realtime session
+        current_output_item_id: Optional[str] = None,
+        current_response_id: Optional[str] = None,
+    ) -> RealtimeResponseTypedDict:  # message sent to setup the realtime session
         pass
