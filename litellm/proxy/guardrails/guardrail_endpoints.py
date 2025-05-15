@@ -151,6 +151,7 @@ async def list_guardrails_v2():
         for guardrail in guardrails:
             guardrail_configs.append(
                 GuardrailInfoResponse(
+                    guardrail_id=guardrail.get("guardrail_id"),
                     guardrail_name=guardrail.get("guardrail_name"),
                     litellm_params=guardrail.get("litellm_params"),
                     guardrail_info=guardrail.get("guardrail_info"),
