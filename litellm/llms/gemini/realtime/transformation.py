@@ -407,7 +407,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: Optional[str],
         current_conversation_id: Optional[str],
         current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
-        output_items: List[OpenAIRealtimeOutputItemDone],
+        output_items: Optional[List[OpenAIRealtimeOutputItemDone]],
         session_configuration_request: Optional[str] = None,
     ) -> OpenAIRealtimeDoneEvent:
         if (
@@ -446,7 +446,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 object="realtime.response",
                 id=current_response_id,
                 status="completed",
-                output=[output_item["item"] for output_item in output_items],
+                output=[output_item["item"] for output_item in output_items]
+                if output_items
+                else [],
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
                 temperature=temperature,
