@@ -219,6 +219,9 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
+        
+        # Clear cache and reload models
+        await clear_cache()
 
         return updated_model
 
@@ -879,3 +882,26 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             unique_models.append(model)
             seen_ids.add(model_id)
     return unique_models
+
+async def clear_cache():
+    """
+    Clear router caches and reload models.
+    """
+    from litellm.proxy.proxy_server import (
+        proxy_config,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        verbose_proxy_logger,
+    )
+    try:
+        llm_router.model_list.clear()
+        
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, 
+            proxy_logging_obj=proxy_logging_obj
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to clear cache and reload models. Due to error - {str(e)}"
+        )
