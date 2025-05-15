@@ -529,14 +529,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception:
             pass
 
-    async def apply_guardrail(self, input_text: str) -> str:
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
         text = await self.check_pii(
-            text=input_text,
+            text=text,
             output_parse_pii=self.output_parse_pii,
             presidio_config=None,
             request_data={},

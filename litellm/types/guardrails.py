@@ -316,10 +316,12 @@ class PresidioPerRequestConfig(BaseModel):
     entities: Optional[List[PiiEntityType]] = None
 
 
-class MaskPIIRequest(BaseModel):
+class ApplyGuardrailRequest(BaseModel):
+    guardrail_name: str
     text: str
-    presidio_config: Optional[PresidioPerRequestConfig] = None
+    language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
 
 
-class MaskPIIResponse(BaseModel):
-    redacted_text: str
+class ApplyGuardrailResponse(BaseModel):
+    response_text: str

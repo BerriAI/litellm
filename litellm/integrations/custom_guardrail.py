@@ -219,21 +219,28 @@ class CustomGuardrail(CustomLogger):
                 "unable to log guardrail information. No metadata found in request_data"
             )
 
-    def mask_pii(
+    async def apply_guardrail(
         self,
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
     ) -> str:
         """
-        Mask PII from a given text
+        Apply your guardrail logic to the given text
 
         Args:
-            text: The text to mask
+            text: The text to apply the guardrail to
             language: The language of the text
             entities: The entities to mask, optional
 
-        Any of the custom guardrails can override this method to provide custom masking logic
+        Any of the custom guardrails can override this method to provide custom guardrail logic
+
+        Returns the text with the guardrail applied
+
+        Raises:
+            Exception:
+                - If the guardrail raises an exception
+
         """
         return text
 
