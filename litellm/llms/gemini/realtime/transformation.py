@@ -71,7 +71,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def transform_session_created_event(
         self,
-        message: BidiGenerateContentSetupComplete,
         model: str,
         logging_session_id: str,
         session_configuration_request: Optional[str] = None,
@@ -243,13 +242,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 openai_event = MAP_GEMINI_FIELD_TO_OPENAI_EVENT[key]
                 if openai_event == "session.created":
                     transformed_message = self.transform_session_created_event(
-                        BidiGenerateContentSetupComplete(**json_message),  # type: ignore
                         model,
                         logging_session_id,
                         session_configuration_request,
                     )
                     return transformed_message
-                elif openai_event == "content.delta":
+                elif openai_event == "response.text.delta":
                     # check if this is a new content.delta or a continuation of a previous content.delta
                     if self._is_new_content_delta(previous_messages):
                         # send the list of standard 'new' content.delta events
@@ -262,7 +260,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
 
                         transformed_message = self.transform_content_delta_events(
-                            BidiGenerateContentServerContent(**json_message),  # type: ignore
+                            BidiGenerateContentServerContent(**json_message[key]),  # type: ignore
                             output_item_id,
                             response_id,
                         )
