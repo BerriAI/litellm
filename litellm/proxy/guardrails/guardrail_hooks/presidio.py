@@ -14,7 +14,6 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
-from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
