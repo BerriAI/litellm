@@ -1271,6 +1271,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
@@ -1391,6 +1392,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=response_api_optional_request_params.get("extra_headers", {}) or {},
             model=model,
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
@@ -1512,6 +1514,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=extra_headers or {},
             model="None",
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
@@ -1596,6 +1599,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=extra_headers or {},
             model="None",
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
@@ -1681,6 +1685,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=extra_headers or {},
             model="None",
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
@@ -1749,6 +1754,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             headers=extra_headers or {},
             model="None",
+            litellm_params=dict(litellm_params)
         )
 
         if extra_headers:
