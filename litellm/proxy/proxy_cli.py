@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 import click
 import httpx
 from dotenv import load_dotenv
-
+import urllib.parse
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -664,8 +664,14 @@ def run_server(  # noqa: PLR0915
                     and database_password
                     and database_name
                 ):
+                    # Handle the problem of special character escaping in the database URL
+                    database_username_enc = urllib.parse.quote_plus(database_username)
+                    database_password_enc = urllib.parse.quote_plus(database_password)
+                    database_name_enc = urllib.parse.quote_plus(database_name)
+
                     # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
