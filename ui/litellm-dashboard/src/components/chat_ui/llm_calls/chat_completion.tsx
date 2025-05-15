@@ -122,8 +122,6 @@ export async function makeOpenAIChatCompletionRequest(
     } catch (error) {
       if (signal?.aborted) {
         console.log("Chat completion request was cancelled");
-      } else {
-        message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
       }
       throw error; // Re-throw to allow the caller to handle the error
     }
