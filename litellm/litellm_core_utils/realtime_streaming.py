@@ -33,6 +33,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
+    OpenAIRealtimeEvents,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
@@ -68,12 +69,7 @@ class RealTimeStreaming:
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages: List[
-            Union[
-                OpenAIRealtimeStreamResponseBaseObject,
-                OpenAIRealtimeStreamSessionEvents,
-            ]
-        ] = []
+        self.messages: List[OpenAIRealtimeEvents] = []
         self.input_message: Dict = {}
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
@@ -170,15 +166,16 @@ class RealTimeStreaming:
                         await self.websocket.send_text(event_str)
 
                 else:
-                    event_str = raw_response
                     ## LOGGING
-                    self.store_message(event_str)
-                    await self.websocket.send_text(event_str)
+                    self.store_message(raw_response)
+                    await self.websocket.send_text(raw_response)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
-            raise e
+            verbose_logger.exception(
+                f"Connection closed in backend to client send messages - {e}"
+            )
         except Exception as e:
-            raise e
+            verbose_logger.exception(f"Error in backend to client send messages: {e}")
         finally:
             await self.log_messages()
 

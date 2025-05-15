@@ -1344,14 +1344,119 @@ class OpenAIRealtimeStreamSessionEvents(TypedDict):
     type: Union[Literal["session.created"], Literal["session.updated"]]
 
 
+class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
+    audio: str
+    """Base64-encoded audio bytes, used for 'input_audio' content types"""
+    id: str
+    """The ID of the previous conversation item for reference"""
+    text: str
+    """The text content, used for 'input_text' and 'text' content types"""
+    transcript: str
+    """The transcript content, used for 'input_audio' content types"""
+    type: Literal["input_audio", "input_text", "text", "item_reference"]
+    """The type of content"""
+
+
+class OpenAIRealtimeStreamResponseOutputItem(TypedDict, total=False):
+    arguments: str
+    """For function call items"""
+
+    call_id: str
+    """The ID of the function call"""
+
+    id: str
+    """The ID of the previous conversation item for reference"""
+
+    content: List[OpenAIRealtimeStreamResponseOutputItemContent]
+
+    name: str
+    """The name of the function call"""
+
+    object: Literal["realtime.item"]
+    """The object type"""
+
+    role: Literal["assistant", "user", "system"]
+    """The role of the item, only used for 'message' items"""
+
+    status: Literal["completed", "incomplete", "in_progress"]
+    """The status of the item"""
+
+    output: str
+    """The output of the function call"""
+
+    type: Literal["function_call", "message", "function_call_output"]
+    """The type of item"""
+
+
+class OpenAIRealtimeStreamResponseOutputItemAdded(TypedDict):
+    type: Literal["response.output_item.added"]
+    response_id: str
+    output_index: int
+    item: OpenAIRealtimeStreamResponseOutputItem
+
+
 class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
     event_id: str
     response: dict
     type: str
 
 
+class OpenAIRealtimeConversationObject(TypedDict, total=False):
+    id: str
+    object: Required[Literal["realtime.conversation"]]
+
+
+class OpenAIRealtimeConversationItemCreated(TypedDict, total=False):
+    type: Required[Literal["conversation.item.created"]]
+    item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: str
+    previous_item_id: str
+
+
+class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
+    audio: str
+    """Base64-encoded audio bytes, if type is 'audio'"""
+
+    text: str
+    """The text content, if type is 'text'"""
+
+    transcript: str
+    """The transcript content, if type is 'audio'"""
+
+    type: Literal["audio", "text"]
+    """The type of content"""
+
+
+class OpenAIRealtimeResponseContentPartAdded(TypedDict):
+    type: Literal["response.content_part.added"]
+    content_index: int
+    event_id: str
+    item_id: str
+    output_index: int
+    part: OpenAIRealtimeResponseContentPart
+    response_id: str
+
+
+class OpenAIRealtimeResponseTextDelta(TypedDict):
+    content_index: int
+    delta: str
+    event_id: str
+    item_id: str
+    output_index: int
+    response_id: str
+    type: Literal["response.text.delta"]
+
+
 OpenAIRealtimeEvents = Union[
-    OpenAIRealtimeStreamResponseBaseObject, OpenAIRealtimeStreamSessionEvents
+    OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeStreamResponseOutputItemAdded,
+    OpenAIRealtimeResponseContentPartAdded,
+    OpenAIRealtimeConversationItemCreated,
+    OpenAIRealtimeConversationObject,
+    OpenAIRealtimeResponseContentPart,
+    OpenAIRealtimeResponseContentPartAdded,
+    OpenAIRealtimeResponseTextDelta,
 ]
 
 OpenAIRealtimeStreamList = List[OpenAIRealtimeEvents]
