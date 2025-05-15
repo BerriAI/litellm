@@ -84,7 +84,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   userID,
   teams,
 }) => {
-  console.log("userRole", userRole)
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [editModalVisible, setEditModalVisible] = useState(false);
