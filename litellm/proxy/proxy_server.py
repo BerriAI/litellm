@@ -3303,7 +3303,7 @@ class ProxyStartupEvent:
         scheduler.add_job(
             spend_log_cleanup.cleanup_old_spend_logs,
             "interval",
-            seconds=20,  # Run once per day
+            days=1,  # Run once per day
             args=[prisma_client],
         )
 
