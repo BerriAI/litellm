@@ -3306,7 +3306,6 @@ class ProxyStartupEvent:
             seconds=20,  # Run once per day
             args=[prisma_client],
         )
-        print("Scheduled cleanup job")
 
         scheduler.start()
 
