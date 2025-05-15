@@ -14,7 +14,8 @@ export async function makeOpenAIChatCompletionRequest(
     onTimingData?: (timeToFirstToken: number) => void,
     onUsageData?: (usage: TokenUsage) => void,
     traceId?: string,
-    vector_store_ids?: string[]
+    vector_store_ids?: string[],
+    guardrails?: string[]
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -58,6 +59,7 @@ export async function makeOpenAIChatCompletionRequest(
         litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
         ...(vector_store_ids ? { vector_store_ids } : {}),
+        ...(guardrails ? { guardrails } : {}),
       }, { signal });
   
       for await (const chunk of response) {

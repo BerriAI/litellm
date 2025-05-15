@@ -17,7 +17,7 @@ from .guardrail_initializers import (
     initialize_presidio,
 )
 
-guardrail_registry = {
+guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
@@ -114,8 +114,9 @@ class GuardrailRegistry:
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {str(e)}")
 
+    @staticmethod
     async def get_all_guardrails_from_db(
-        self, prisma_client: PrismaClient
+        prisma_client: PrismaClient,
     ) -> List[Guardrail]:
         """
         Get all guardrails from the database

@@ -813,9 +813,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1142,9 +1142,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2676,12 +2676,48 @@ class ProxyConfig:
                     db_general_settings=db_general_settings.param_value,
                 )
 
-            # initialize vector stores table in db
-            await self._init_vector_stores_in_db(prisma_client=prisma_client)
+            # initialize vector stores, guardrails, etc. table in db
+            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
 
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
+        """
+        Use this to read non-llm objects from the db and initialize them
+
+        ex. Vector Stores, Guardrails, MCP tools, etc.
+        """
+        await self._init_guardrails_in_db(prisma_client=prisma_client)
+        await self._init_vector_stores_in_db(prisma_client=prisma_client)
+
+    async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.guardrails.guardrail_registry import (
+            Guardrail,
+            GuardrailRegistry,
+        )
+        from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
+
+        try:
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
+            )
+            verbose_proxy_logger.debug(
+                "guardrails from the DB %s", str(guardrails_in_db)
+            )
+            for guardrail in guardrails_in_db:
+                InitializeGuardrails.initialize_guardrail(
+                    guardrail=dict(guardrail),
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
                     str(e)
                 )
             )
@@ -2868,9 +2904,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -7874,9 +7910,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
