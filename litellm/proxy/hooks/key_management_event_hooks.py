@@ -43,9 +43,10 @@ class KeyManagementEventHooks:
         - Storing Audit Logs for key generation
         - Storing Generated Key in DB
         """
-        from litellm.proxy.management_helpers.audit_logs import (
+        from litellm_enterprise.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
         )
+
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if data.send_invite_email is True:
@@ -93,9 +94,10 @@ class KeyManagementEventHooks:
         Handles the following:
         - Storing Audit Logs for key update
         """
-        from litellm.proxy.management_helpers.audit_logs import (
+        from litellm_enterprise.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
         )
+
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
@@ -156,9 +158,10 @@ class KeyManagementEventHooks:
         Handles the following:
         - Storing Audit Logs for key deletion
         """
-        from litellm.proxy.management_helpers.audit_logs import (
+        from litellm_enterprise.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
         )
+
         from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
