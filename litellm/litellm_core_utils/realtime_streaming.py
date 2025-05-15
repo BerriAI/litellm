@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger

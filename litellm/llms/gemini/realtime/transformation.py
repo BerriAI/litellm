@@ -272,14 +272,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def return_additional_content_done_events(
         self,
-        current_output_item_id: str,
-        current_response_id: str,
+        current_output_item_id: Optional[str],
+        current_response_id: Optional[str],
         delta_done_event: OpenAIRealtimeResponseTextDone,
     ) -> List[OpenAIRealtimeEvents]:
         """
         - return response.content_part.done
         - return response.output_item.done
         """
+        if current_output_item_id is None or current_response_id is None:
+            raise ValueError(
+                "current_output_item_id and current_response_id cannot be None for a 'done' event."
+            )
         returned_items: List[OpenAIRealtimeEvents] = []
         # response.content_part.done
         response_content_part_done = OpenAIRealtimeContentPartDone(
@@ -400,11 +404,20 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def transform_response_done_event(
         self,
         message: BidiGenerateContentServerMessage,
-        current_response_id: str,
-        current_conversation_id: str,
+        current_response_id: Optional[str],
+        current_conversation_id: Optional[str],
+        current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
         output_items: List[OpenAIRealtimeOutputItemDone],
         session_configuration_request: Optional[str] = None,
     ) -> OpenAIRealtimeDoneEvent:
+        if (
+            current_conversation_id is None
+            or current_response_id is None
+            or current_item_chunks is None
+        ):
+            raise ValueError(
+                "current_conversation_id and current_response_id and current_item_chunks cannot be None for a 'done' event."
+            )
         if session_configuration_request is None:
             raise ValueError(
                 "session_configuration_request is required for Gemini API calls"
@@ -538,13 +551,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             )
                         )
                         returned_message = [transformed_content_done_event]
-                        if (
-                            current_output_item_id is None
-                            or current_response_id is None
-                        ):
-                            raise ValueError(
-                                "current_output_item_id and current_response_id cannot be None for a 'done' event."
-                            )
+
                         additional_items = self.return_additional_content_done_events(
                             current_output_item_id=current_output_item_id,
                             current_response_id=current_response_id,
@@ -552,14 +559,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                         returned_message.extend(additional_items)
                     elif openai_event == "response.done":
-                        if (
-                            current_conversation_id is None
-                            or current_response_id is None
-                            or current_item_chunks is None
-                        ):
-                            raise ValueError(
-                                "current_conversation_id and current_response_id and current_item_chunks cannot be None for a 'done' event."
-                            )
                         transformed_response_done_event = self.transform_response_done_event(
                             message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
                             current_response_id=current_response_id,
