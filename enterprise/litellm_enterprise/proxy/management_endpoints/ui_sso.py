@@ -40,7 +40,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -61,6 +61,7 @@ from litellm.proxy.management_endpoints.team_endpoints import new_team, team_mem
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_helpers.utils import (
     get_disabled_non_admin_personal_key_creation,
+    get_existing_user_info_from_db,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
@@ -312,31 +313,6 @@ async def add_missing_team_member(
         verbose_proxy_logger.debug(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
         )
-
-
-async def get_existing_user_info_from_db(
-    user_id: Optional[str],
-    user_email: Optional[str],
-    prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
-    proxy_logging_obj: ProxyLogging,
-) -> Optional[LiteLLM_UserTable]:
-    try:
-        user_info = await get_user_object(
-            user_id=user_id,
-            user_email=user_email,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            sso_user_id=user_id,
-        )
-    except Exception as e:
-        verbose_proxy_logger.debug(f"Error getting user object: {e}")
-        user_info = None
-
-    return user_info
 
 
 async def get_user_info_from_db(

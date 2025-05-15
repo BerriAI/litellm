@@ -587,7 +587,7 @@ async def test_get_user_info_from_db():
         "user_defined_values": user_defined_values,
     }
     with patch.object(
-        litellm_enterprise.proxy.management_endpoints.ui_sso, "get_user_object"
+        litellm.proxy.management_helpers.utils, "get_user_object"
     ) as mock_get_user_object:
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()

@@ -3,12 +3,13 @@
 import uuid
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     DeleteCustomerRequest,
     DeleteTeamRequest,
@@ -28,6 +29,11 @@ from litellm.proxy._types import (  # key request types; user request types; tea
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
+else:
+    ProxyLogging = Any
 
 
 def get_new_internal_user_defaults(
@@ -379,3 +385,35 @@ def get_disabled_non_admin_personal_key_creation():
     )
     allowed_user_roles = personal_key_generation.get("allowed_user_roles") or []
     return bool("proxy_admin" in allowed_user_roles)
+
+
+async def get_existing_user_info_from_db(
+    user_id: Optional[str],
+    user_email: Optional[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[LiteLLM_UserTable]:
+    """
+    Helper function to safely get an existing user info from db
+
+    Looks up user by user_id or user_email
+    """
+    from litellm.proxy.auth.auth_checks import get_user_object
+
+    try:
+        user_info = await get_user_object(
+            user_id=user_id,
+            user_email=user_email,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            sso_user_id=user_id,
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error getting user object: {e}")
+        user_info = None
+
+    return user_info
