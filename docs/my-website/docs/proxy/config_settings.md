@@ -1,6 +1,5 @@
 # All settings
 
-
 ```yaml
 environment_variables: {}
 
@@ -95,6 +94,7 @@ general_settings:
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
+  maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
 
   # Database Settings
   database_url: string
@@ -211,6 +211,7 @@ general_settings:
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
+| maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 
 ### router_settings - Reference
 
