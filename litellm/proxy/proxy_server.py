@@ -2708,7 +2708,9 @@ class ProxyConfig:
             ] = await GuardrailRegistry.get_all_guardrails_from_db(
                 prisma_client=prisma_client
             )
-            verbose_proxy_logger.debug("guardrails from the DB: ", guardrails_in_db)
+            verbose_proxy_logger.debug(
+                "guardrails from the DB %s", str(guardrails_in_db)
+            )
             for guardrail in guardrails_in_db:
                 InitializeGuardrails.initialize_guardrail(
                     guardrail=dict(guardrail),

@@ -31,6 +31,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
+from litellm.types.utils import CallTypes as LitellmCallTypes
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -357,8 +358,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-
-            if call_type == "completion":  # /chat/completions requests
+            if call_type in [
+                LitellmCallTypes.completion.value,
+                LitellmCallTypes.acompletion.value,
+            ]:
                 messages = data["messages"]
                 tasks = []
 
@@ -388,6 +391,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
                 data["messages"] = messages
+            else:
+                verbose_proxy_logger.debug(
+                    f"Not running async_pre_call_hook for call_type={call_type}"
+                )
             return data
         except Exception as e:
             raise e
