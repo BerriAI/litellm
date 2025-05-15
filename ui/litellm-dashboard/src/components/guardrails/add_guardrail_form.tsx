@@ -109,10 +109,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           
           if (selectedProvider === 'PresidioPII') {
             fieldsToValidate.push('presidio_analyzer_api_base', 'presidio_anonymizer_api_base');
-          } else if (selectedProvider === 'Bedrock') {
-            fieldsToValidate.push('config');
           }
-          
           await form.validateFields(fieldsToValidate);
         }
       }
@@ -193,18 +190,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         try {
           const configObj = JSON.parse(values.config);
           // For some guardrails, the config values need to be in litellm_params
-          // Especially for providers like Bedrock that need guardrailIdentifier and guardrailVersion
-          if (values.provider === 'Bedrock' && configObj) {
-            if (configObj.guardrail_id) {
-              guardrailData.litellm_params.guardrailIdentifier = configObj.guardrail_id;
-            }
-            if (configObj.guardrail_version) {
-              guardrailData.litellm_params.guardrailVersion = configObj.guardrail_version;
-            }
-          } else {
-            // For other providers, add the config to guardrail_info
-            guardrailData.guardrail_info = configObj;
-          }
+          guardrailData.guardrail_info = configObj;
         } catch (error) {
           message.error('Invalid JSON in configuration');
           setLoading(false);
