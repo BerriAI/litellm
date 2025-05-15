@@ -226,6 +226,12 @@ LITELLM_CHAT_PROVIDERS = [
     "nscale",
 ]
 
+LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
+    "openai",
+    "azure",
+    "hosted_vllm"
+]
+
 
 OPENAI_CHAT_COMPLETION_PARAMS = [
     "functions",
