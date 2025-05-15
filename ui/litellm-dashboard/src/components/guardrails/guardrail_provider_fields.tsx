@@ -36,17 +36,6 @@ const GUARDRAIL_PROVIDER_FIELDS: Record<string, ProviderField[]> = {
       tooltip: "The base URL for your Presidio Anonymizer API",
       required: true
     }
-  ],
-  // Add more provider specific fields here as needed
-  Bedrock: [
-    {
-      key: "config",
-      label: "Configuration",
-      placeholder: '{"guardrail_id": "...", "guardrail_version": "..."}',
-      tooltip: "JSON configuration for Bedrock guardrail including guardrail_id and guardrail_version",
-      type: "text",
-      required: false
-    }
   ]
 };
 
