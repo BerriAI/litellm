@@ -452,7 +452,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         try:
             json_message = json.loads(message)
         except json.JSONDecodeError:
-            raise ValueError(f"Invalid JSON message: {message}")
+            if isinstance(message, bytes):
+                message_str = message.decode("utf-8", errors="replace")
+            else:
+                message_str = str(message)
+            raise ValueError(f"Invalid JSON message: {message_str}")
 
         logging_session_id = logging_obj.litellm_trace_id
         current_output_item_id = realtime_response_transform_input[
@@ -566,7 +570,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         returned_message = transformed_response_done_event
 
         if returned_message is None:
-            raise ValueError(f"Unknown message type: {message}")
+            if isinstance(message, bytes):
+                message_str = message.decode("utf-8", errors="replace")
+            else:
+                message_str = str(message)
+            raise ValueError(f"Unknown message type: {message_str}")
 
         current_delta_chunks = self.update_current_delta_chunks(
             transformed_message=returned_message,

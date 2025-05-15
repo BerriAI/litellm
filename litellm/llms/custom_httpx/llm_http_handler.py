@@ -2056,6 +2056,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[float] = None,
     ):
         import websockets
+        from websockets.asyncio.client import ClientConnection
 
         url = provider_config.get_complete_url(api_base, model, api_key)
         headers = provider_config.validate_environment(
@@ -2069,7 +2070,11 @@ class BaseLLMHTTPHandler:
                 url, additional_headers=headers
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, backend_ws, logging_obj, provider_config, model
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    provider_config,
+                    model,
                 )
                 await realtime_streaming.bidirectional_forward()
 
