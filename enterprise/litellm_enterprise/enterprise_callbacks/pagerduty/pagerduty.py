@@ -57,7 +57,7 @@ class PagerDutyAlerting(SlackAlerting):
 
         self.api_key: str = _api_key
         alerting_args = alerting_args or {}
-        self.alerting_args: AlertingConfig = AlertingConfig(
+        self.pagerduty_alerting_args: AlertingConfig = AlertingConfig(
             failure_threshold=alerting_args.get(
                 "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
             ),
@@ -119,8 +119,10 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_args.get("failure_threshold_window_seconds", 60)
-        threshold = self.alerting_args.get("failure_threshold", 1)
+        window_seconds = self.pagerduty_alerting_args.get(
+            "failure_threshold_window_seconds", 60
+        )
+        threshold = self.pagerduty_alerting_args.get("failure_threshold", 1)
 
         # If threshold is crossed, send PD alert for failures
         await self._send_alert_if_thresholds_crossed(
@@ -166,10 +168,10 @@ class PagerDutyAlerting(SlackAlerting):
         If not, we classify it as a hanging request.
         """
         verbose_logger.debug(
-            f"Inside Hanging Response Handler!..sleeping for {self.alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
+            f"Inside Hanging Response Handler!..sleeping for {self.pagerduty_alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
         )
         await asyncio.sleep(
-            self.alerting_args.get(
+            self.pagerduty_alerting_args.get(
                 "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
             )
         )
@@ -197,11 +199,11 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_args.get(
+        window_seconds = self.pagerduty_alerting_args.get(
             "hanging_threshold_window_seconds",
             PAGERDUTY_DEFAULT_HANGING_THRESHOLD_WINDOW_SECONDS,
         )
-        threshold: int = self.alerting_args.get(
+        threshold: int = self.pagerduty_alerting_args.get(
             "hanging_threshold_fails", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
         )
 
