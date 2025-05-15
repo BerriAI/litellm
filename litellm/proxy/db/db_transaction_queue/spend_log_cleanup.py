@@ -52,7 +52,11 @@ class SpendLogCleanup:
                 verbose_proxy_logger.info("Skipping cleanup — invalid or missing retention setting.")
                 return
 
-            cutoff_date = datetime.now(UTC) - timedelta(seconds=self.retention_seconds)
+            if self.retention_seconds is None:
+                verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
+                return
+
+            cutoff_date = datetime.now(UTC) - timedelta(seconds=float(self.retention_seconds))
             verbose_proxy_logger.info(f"🧹 Deleting logs older than {cutoff_date.isoformat()}")
 
             total_deleted = 0
