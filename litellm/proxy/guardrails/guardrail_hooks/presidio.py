@@ -14,7 +14,6 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
-from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
@@ -26,7 +25,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.guardrails import (
+    GuardrailEventHooks,
+    PiiAction,
+    PiiEntityType,
+    PresidioPerRequestConfig,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
@@ -38,15 +42,6 @@ from litellm.utils import (
     ModelResponse,
     StreamingChoices,
 )
-
-
-class PresidioPerRequestConfig(BaseModel):
-    """
-    presdio params that can be controlled per request, api key
-    """
-
-    language: Optional[str] = None
-    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -533,14 +528,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception:
             pass
 
-    async def apply_guardrail(self, input_text: str) -> str:
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
         text = await self.check_pii(
-            text=input_text,
+            text=text,
             output_parse_pii=self.output_parse_pii,
             presidio_config=None,
             request_data={},
