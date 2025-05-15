@@ -116,6 +116,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
         guardrailsList={guardrailsList}
         isLoading={isLoading}
         onDeleteClick={handleDeleteClick}
+        accessToken={accessToken}
+        onGuardrailUpdated={fetchGuardrails}
       />
 
       <AddGuardrailForm 
