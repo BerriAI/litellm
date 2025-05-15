@@ -384,6 +384,7 @@ router_settings:
 | DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
 | DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
+| DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
 | DEFAULT_MAX_TOKENS | Default maximum tokens for LLM calls. Default is 4096
 | DEFAULT_MAX_TOKENS_FOR_TRITON | Default maximum tokens for Triton models. Default is 2000
