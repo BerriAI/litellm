@@ -392,7 +392,9 @@ except Exception:
 ###################
 # Import enterprise routes
 try:
-    from litellm_enterprise.proxy.enterprise_routes import router as enterprise_router
+    from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+
+    enterprise_router = _enterprise_router
 except ImportError:
     # use default enterprise_router = APIRouter()
     pass
