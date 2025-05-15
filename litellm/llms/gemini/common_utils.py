@@ -5,6 +5,7 @@ from typing import List, Optional, Union
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -86,7 +87,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
         )
 
 
-def encode_unserializable_types(data: dict[str, object]) -> dict[str, object]:
+def encode_unserializable_types(
+    data: dict[str, object], depth: int = 0
+) -> dict[str, object]:
     """Converts unserializable types in dict to json.dumps() compatible types.
 
     This function is called in models.py after calling convert_to_dict(). The
@@ -100,6 +103,8 @@ def encode_unserializable_types(data: dict[str, object]) -> dict[str, object]:
       A dictionary with json.dumps() incompatible type (e.g. bytes datetime)
       to compatible type (e.g. base64 encoded string, isoformat date string).
     """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return data
     processed_data: dict[str, object] = {}
     if not isinstance(data, dict):
         return data
@@ -109,7 +114,7 @@ def encode_unserializable_types(data: dict[str, object]) -> dict[str, object]:
         elif isinstance(value, datetime.datetime):
             processed_data[key] = value.isoformat()
         elif isinstance(value, dict):
-            processed_data[key] = encode_unserializable_types(value)
+            processed_data[key] = encode_unserializable_types(value, depth + 1)
         elif isinstance(value, list):
             if all(isinstance(v, bytes) for v in value):
                 processed_data[key] = [
@@ -118,7 +123,9 @@ def encode_unserializable_types(data: dict[str, object]) -> dict[str, object]:
             if all(isinstance(v, datetime.datetime) for v in value):
                 processed_data[key] = [v.isoformat() for v in value]
             else:
-                processed_data[key] = [encode_unserializable_types(v) for v in value]
+                processed_data[key] = [
+                    encode_unserializable_types(v, depth + 1) for v in value
+                ]
         else:
             processed_data[key] = value
     return processed_data
