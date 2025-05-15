@@ -73,6 +73,8 @@ def initialize_presidio(litellm_params, guardrail):
         mock_redacted_text=litellm_params.get("mock_redacted_text") or None,
         default_on=litellm_params["default_on"],
         pii_entities_config=litellm_params.get("pii_entities_config"),
+        presidio_analyzer_api_base=litellm_params.get("presidio_analyzer_api_base"),
+        presidio_anonymizer_api_base=litellm_params.get("presidio_anonymizer_api_base"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
 
