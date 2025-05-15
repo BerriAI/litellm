@@ -14,15 +14,16 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
-import litellm
-from litellm.proxy._types import NewTeamRequest
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.management_endpoints.ui_sso import (
+from litellm_enterprise.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
 )
+
+import litellm
+from litellm.proxy._types import NewTeamRequest
+from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -254,7 +255,7 @@ async def test_get_user_groups_from_graph_api():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_enterprise.proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -306,7 +307,7 @@ async def test_get_user_groups_pagination():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_enterprise.proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -338,7 +339,7 @@ async def test_get_user_groups_empty_response():
         return mock
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_enterprise.proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -360,7 +361,7 @@ async def test_get_user_groups_error_handling():
         raise Exception("API Error")
 
     with patch(
-        "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        "litellm_enterprise.proxy.management_endpoints.ui_sso.get_async_httpx_client"
     ) as mock_client:
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
@@ -521,10 +522,11 @@ async def test_create_team_without_default_params():
 
 
 def test_apply_user_info_values_to_sso_user_defined_values():
-    from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.management_endpoints.ui_sso import (
+    from litellm_enterprise.proxy.management_endpoints.ui_sso import (
         apply_user_info_values_to_sso_user_defined_values,
     )
+
+    from litellm.proxy._types import LiteLLM_UserTable
 
     user_info = LiteLLM_UserTable(
         user_id="123",
@@ -551,7 +553,9 @@ async def test_get_user_info_from_db():
     """
     received args in get_user_info_from_db: {'result': CustomOpenID(id='krrishd', email='krrishdholakia@gmail.com', first_name=None, last_name=None, display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce', picture=None, provider=None, team_ids=[]), 'prisma_client': <litellm.proxy.utils.PrismaClient object at 0x14a74e3c0>, 'user_api_key_cache': <litellm.caching.dual_cache.DualCache object at 0x148d37110>, 'proxy_logging_obj': <litellm.proxy.utils.ProxyLogging object at 0x148dd9090>, 'user_email': 'krrishdholakia@gmail.com', 'user_defined_values': {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': None, 'budget_duration': None}}
     """
-    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+    from litellm_enterprise.proxy.management_endpoints.ui_sso import (
+        get_user_info_from_db,
+    )
 
     prisma_client = MagicMock()
     user_api_key_cache = MagicMock()
@@ -583,7 +587,7 @@ async def test_get_user_info_from_db():
         "user_defined_values": user_defined_values,
     }
     with patch.object(
-        litellm.proxy.management_endpoints.ui_sso, "get_user_object"
+        litellm_enterprise.proxy.management_endpoints.ui_sso, "get_user_object"
     ) as mock_get_user_object:
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
