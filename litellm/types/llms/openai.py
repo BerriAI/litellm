@@ -1406,6 +1406,12 @@ class OpenAIRealtimeConversationObject(TypedDict, total=False):
     object: Required[Literal["realtime.conversation"]]
 
 
+class OpenAIRealtimeConversationCreated(TypedDict, total=False):
+    type: Required[Literal["conversation.created"]]
+    conversation: OpenAIRealtimeConversationObject
+    event_id: str
+
+
 class OpenAIRealtimeConversationItemCreated(TypedDict, total=False):
     type: Required[Literal["conversation.item.created"]]
     item: OpenAIRealtimeStreamResponseOutputItem
@@ -1447,16 +1453,25 @@ class OpenAIRealtimeResponseTextDelta(TypedDict):
     type: Literal["response.text.delta"]
 
 
+class OpenAIRealtimeResponseTextDone(TypedDict):
+    content_index: int
+    event_id: str
+    item_id: str
+    output_index: int
+    response_id: str
+    text: str
+    type: Literal["response.text.done"]
+
+
 OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeConversationItemCreated,
-    OpenAIRealtimeConversationObject,
-    OpenAIRealtimeResponseContentPart,
-    OpenAIRealtimeResponseContentPartAdded,
+    OpenAIRealtimeConversationCreated,
     OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseTextDone,
 ]
 
 OpenAIRealtimeStreamList = List[OpenAIRealtimeEvents]

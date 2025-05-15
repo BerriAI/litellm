@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 import os
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -18,6 +18,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
@@ -31,6 +32,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT = {
     "setupComplete": "session.created",
     "serverContent.modelTurn": "response.text.delta",
     "serverContent.generationComplete": "response.text.done",
+    "serverContent.turnComplete": "response.done",
 }
 
 
@@ -230,6 +232,30 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             delta=delta,
         )
 
+    def transform_content_done_event(
+        self,
+        delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]],
+        current_output_item_id: Optional[str],
+        current_response_id: Optional[str],
+    ) -> OpenAIRealtimeResponseTextDone:
+        if delta_chunks:
+            delta = "".join([delta_chunk["delta"] for delta_chunk in delta_chunks])
+        else:
+            delta = ""
+        if current_output_item_id is None or current_response_id is None:
+            raise ValueError(
+                "current_output_item_id and current_response_id cannot be None for a 'done' event."
+            )
+        return OpenAIRealtimeResponseTextDone(
+            type="response.text.done",
+            content_index=0,
+            event_id="event_{}".format(uuid.uuid4()),
+            item_id=current_output_item_id,
+            output_index=0,
+            response_id=current_response_id,
+            text=delta,
+        )
+
     @staticmethod
     def get_nested_value(obj: dict, path: str) -> Any:
         keys = path.split(".")
@@ -240,6 +266,35 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else:
                 return None
         return current
+
+    def update_current_delta_chunks(
+        self,
+        transformed_message: Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]],
+        current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]],
+    ) -> Optional[List[OpenAIRealtimeResponseTextDelta]]:
+        if isinstance(transformed_message, list):
+            current_delta_chunks = []
+            any_delta_chunk = False
+            for event in transformed_message:
+                if event["type"] == "response.text.delta":
+                    current_delta_chunks.append(
+                        cast(OpenAIRealtimeResponseTextDelta, event)
+                    )
+                    any_delta_chunk = True
+            if not any_delta_chunk:
+                current_delta_chunks = (
+                    None  # reset current_delta_chunks if no delta chunks
+                )
+        else:
+            if transformed_message["type"] == "response.text.delta":
+                if current_delta_chunks is None:
+                    current_delta_chunks = []
+                current_delta_chunks.append(
+                    cast(OpenAIRealtimeResponseTextDelta, transformed_message)
+                )
+            else:
+                current_delta_chunks = None
+        return current_delta_chunks
 
     def transform_realtime_response(
         self,
@@ -253,6 +308,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: Optional[
             str
         ] = None,  # used to check if this is a new content.delta or a continuation of a previous content.delta
+        current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]] = None,
     ) -> RealtimeResponseTypedDict:
         try:
             json_message = json.loads(message)
@@ -278,6 +334,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             session_configuration_request,
                         )
                         returned_message = transformed_message
+
                     elif openai_event == "response.text.delta":
                         # check if this is a new content.delta or a continuation of a previous content.delta
                         if not current_output_item_id:
@@ -310,12 +367,24 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 current_response_id,
                             )
                             returned_message = transformed_message
+                    elif openai_event == "response.text.done":
+                        returned_message = self.transform_content_done_event(
+                            current_output_item_id=current_output_item_id,
+                            current_response_id=current_response_id,
+                            delta_chunks=current_delta_chunks,
+                        )
         if returned_message is None:
             raise ValueError(f"Unknown message type: {message}")
+
+        current_delta_chunks = self.update_current_delta_chunks(
+            transformed_message=returned_message,
+            current_delta_chunks=current_delta_chunks,
+        )
         return {
             "response": returned_message,
             "current_output_item_id": current_output_item_id,
             "current_response_id": current_response_id,
+            "current_delta_chunks": current_delta_chunks,
         }
 
     def requires_session_configuration(self) -> bool:

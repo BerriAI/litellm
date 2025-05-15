@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.types.llms.openai import OpenAIRealtimeEvents
+from litellm.types.llms.openai import OpenAIRealtimeResponseTextDelta
 from litellm.types.realtime import RealtimeResponseTypedDict
 
 from ..chat.transformation import BaseLLMException
@@ -71,5 +71,6 @@ class BaseRealtimeConfig(ABC):
         session_configuration_request: Optional[str] = None,
         current_output_item_id: Optional[str] = None,
         current_response_id: Optional[str] = None,
+        current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]] = None,
     ) -> RealtimeResponseTypedDict:  # message sent to setup the realtime session
         pass

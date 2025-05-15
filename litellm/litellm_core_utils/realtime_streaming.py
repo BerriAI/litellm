@@ -1,29 +1,3 @@
-"""
-async with websockets.connect(  # type: ignore
-                url,
-                extra_headers={
-                    "api-key": api_key,  # type: ignore
-                },
-            ) as backend_ws:
-                forward_task = asyncio.create_task(
-                    forward_messages(websocket, backend_ws)
-                )
-
-                try:
-                    while True:
-                        message = await websocket.receive_text()
-                        await backend_ws.send(message)
-                except websockets.exceptions.ConnectionClosed:  # type: ignore
-                    forward_task.cancel()
-                finally:
-                    if not forward_task.done():
-                        forward_task.cancel()
-                        try:
-                            await forward_task
-                        except asyncio.CancelledError:
-                            pass
-"""
-
 import asyncio
 import concurrent.futures
 import json
@@ -34,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
+    OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
@@ -79,6 +54,11 @@ class RealTimeStreaming:
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
         self.model = model
+        self.current_delta_chunks: Optional[
+            List[OpenAIRealtimeResponseTextDelta]
+        ] = None
+        self.current_output_item_id: Optional[str] = None
+        self.current_response_id: Optional[str] = None
 
     def _should_store_message(
         self,
@@ -134,8 +114,6 @@ class RealTimeStreaming:
     ):
         import websockets
 
-        current_output_item_id = None
-        current_response_id = None
         try:
             while True:
                 try:
@@ -151,13 +129,17 @@ class RealTimeStreaming:
                         self.model,
                         self.logging_obj,
                         session_configuration_request,
-                        current_output_item_id,
-                        current_response_id,
+                        self.current_output_item_id,
+                        self.current_response_id,
+                        self.current_delta_chunks,
                     )
 
                     transformed_response = returned_object["response"]
-                    current_output_item_id = returned_object["current_output_item_id"]
-                    current_response_id = returned_object["current_response_id"]
+                    self.current_output_item_id = returned_object[
+                        "current_output_item_id"
+                    ]
+                    self.current_response_id = returned_object["current_response_id"]
+                    self.current_delta_chunks = returned_object["current_delta_chunks"]
 
                     if isinstance(transformed_response, list):
                         for event in transformed_response:
