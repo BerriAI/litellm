@@ -83,6 +83,16 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
 
   const columns: ColumnDef<GuardrailItem>[] = [
     {
+      header: "ID",
+      accessorKey: "guardrail_id",
+      cell: ({ row }) => {
+        const guardrail = row.original;
+        return (
+          <span className="text-xs">{guardrail.guardrail_id || "-"}</span>
+        );
+      },
+    },
+    {
       header: "Name",
       accessorKey: "guardrail_name",
       cell: ({ row }) => {
@@ -129,22 +139,6 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
           <span className="text-xs">
             {guardrail.litellm_params.mode}
           </span>
-        );
-      },
-    },
-    {
-      header: "Status",
-      accessorKey: "litellm_params.default_on",
-      cell: ({ row }) => {
-        const guardrail = row.original;
-        return (
-          <div className={`inline-flex rounded-full px-2 py-1 text-xs font-medium
-              ${guardrail.litellm_params.default_on 
-              ? 'bg-green-100 text-green-800'  // Always On styling
-              : 'bg-gray-100 text-gray-800'    // Per Request styling
-              }`}>
-              {guardrail.litellm_params.default_on ? 'Always On' : 'Per Request'}
-          </div>
         );
       },
     },
