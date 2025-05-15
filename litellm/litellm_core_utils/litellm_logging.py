@@ -1725,17 +1725,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if callback == "deepeval":
-                        global deepevalLogger
-                        if deepevalLogger is None:
-                            deepevalLogger = DeepEvalLogger()
-                        print_verbose("reaches deepeval for success logging!")
-                        deepevalLogger.log_success_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2769,9 +2758,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
-            elif callback == "deepeval":
-                deepevalLogger = DeepEvalLogger()
-                print_verbose("Initialized DeepEval Logger")
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
