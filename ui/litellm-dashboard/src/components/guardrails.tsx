@@ -83,7 +83,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
   const handleDeleteConfirm = async () => {
     if (!guardrailToDelete || !accessToken) return;
     
-    console.log(`Confirming delete for: ${guardrailToDelete.id}`);
+    // Log removed to maintain clean production code
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.id);
