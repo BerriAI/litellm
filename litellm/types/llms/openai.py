@@ -1355,3 +1355,20 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
 OpenAIChatCompletionFinishReason = Literal[
     "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
+
+
+class OpenAIWebSearchUserLocationApproximate(TypedDict):
+    city: str
+    country: str
+    region: str
+    timezone: str
+
+
+class OpenAIWebSearchUserLocation(TypedDict):
+    approximate: OpenAIWebSearchUserLocationApproximate
+    type: Literal["approximate"]
+
+
+class OpenAIWebSearchOptions(TypedDict, total=False):
+    search_context_size: Optional[Literal["low", "medium", "high"]]
+    user_location: Optional[OpenAIWebSearchUserLocation]
