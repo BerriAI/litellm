@@ -59,6 +59,9 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
+from litellm.proxy.management_helpers.utils import (
+    get_disabled_non_admin_personal_key_creation,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
@@ -309,17 +312,6 @@ async def add_missing_team_member(
         verbose_proxy_logger.debug(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
         )
-
-
-def get_disabled_non_admin_personal_key_creation():
-    key_generation_settings = litellm.key_generation_settings
-    if key_generation_settings is None:
-        return False
-    personal_key_generation = (
-        key_generation_settings.get("personal_key_generation") or {}
-    )
-    allowed_user_roles = personal_key_generation.get("allowed_user_roles") or []
-    return bool("proxy_admin" in allowed_user_roles)
 
 
 async def get_existing_user_info_from_db(
