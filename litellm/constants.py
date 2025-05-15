@@ -153,6 +153,13 @@ FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 
+### ANTHROPIC CONSTANTS ###
+ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
+    "low": 1,
+    "medium": 5,
+    "high": 10,
+}
+
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
@@ -259,6 +266,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "reasoning_effort",
     "extra_headers",
     "thinking",
+    "web_search_options",
 ]
 
 openai_compatible_endpoints: List = [
