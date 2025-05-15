@@ -1626,6 +1626,11 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
+                    completion_tokens_details={
+                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                            "thoughtsTokenCount", 0
+                        )
+                    }
                 )
 
             returned_chunk = GenericStreamingChunk(
