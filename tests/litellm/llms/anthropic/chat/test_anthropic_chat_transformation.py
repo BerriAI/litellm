@@ -156,10 +156,7 @@ def test_web_search_tool_transformation():
     assert anthropic_web_search_tool is not None
     assert anthropic_web_search_tool["user_location"] is not None
     assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
-    assert (
-        anthropic_web_search_tool["user_location"]["approximate"]["city"]
-        == "San Francisco"
-    )
+    assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
 
 
 @pytest.mark.parametrize(
