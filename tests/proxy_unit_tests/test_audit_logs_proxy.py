@@ -46,7 +46,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm_enterprise.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
 from litellm.caching.caching import DualCache
 from unittest.mock import patch, AsyncMock

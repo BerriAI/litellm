@@ -16,6 +16,9 @@ import uuid
 from typing import Dict, List, Literal, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from litellm_enterprise.proxy.management_helpers.audit_logs import (
+    create_object_audit_log,
+)
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -41,7 +44,6 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     update_team,
 )
-from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import (
     Deployment,
