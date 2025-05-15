@@ -26,7 +26,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.guardrails import (
+    GuardrailEventHooks,
+    PiiAction,
+    PiiEntityType,
+    PresidioPerRequestConfig,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
@@ -38,15 +43,6 @@ from litellm.utils import (
     ModelResponse,
     StreamingChoices,
 )
-
-
-class PresidioPerRequestConfig(BaseModel):
-    """
-    presdio params that can be controlled per request, api key
-    """
-
-    language: Optional[str] = None
-    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):

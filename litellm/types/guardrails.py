@@ -305,3 +305,21 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: List[PiiAction]
     supported_modes: List[GuardrailEventHooks]
     pii_entity_categories: List[PiiEntityCategoryMap]
+
+
+class PresidioPerRequestConfig(BaseModel):
+    """
+    presdio params that can be controlled per request, api key
+    """
+
+    language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
+
+
+class MaskPIIRequest(BaseModel):
+    text: str
+    presidio_config: Optional[PresidioPerRequestConfig] = None
+
+
+class MaskPIIResponse(BaseModel):
+    redacted_text: str
