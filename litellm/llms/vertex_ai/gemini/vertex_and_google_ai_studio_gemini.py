@@ -1615,14 +1615,23 @@ class ModelResponseIterator:
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
-                    prompt_tokens=processed_chunk["usageMetadata"].get("promptTokenCount", 0),
-                    completion_tokens=processed_chunk["usageMetadata"].get("candidatesTokenCount", 0),
-                    total_tokens=processed_chunk["usageMetadata"].get("totalTokenCount", 0),
+                    prompt_tokens=processed_chunk["usageMetadata"].get(
+                        "promptTokenCount", 0
+                    ),
+                    completion_tokens=processed_chunk["usageMetadata"].get(
+                        "candidatesTokenCount", 0
+                    ),
+                    total_tokens=processed_chunk["usageMetadata"].get(
+                        "totalTokenCount", 0
+                    ),
+                    completion_tokens_details={
+                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                            "thoughtsTokenCount", 0
+                        )
+                    }
                 )
 
-            # This chunk represents a data event, not the end of the stream itself.
-            # is_finished will be True only for the [DONE] signal.
-            return GenericStreamingChunk(
+            returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
                 is_finished=False, 

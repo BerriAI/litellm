@@ -150,6 +150,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "extra_headers",
             "parallel_tool_calls",
             "audio",
+            "web_search_options",
         ]  # works across all models
 
         model_specific_params = []
