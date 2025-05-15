@@ -1463,6 +1463,24 @@ class OpenAIRealtimeResponseTextDone(TypedDict):
     type: Literal["response.text.done"]
 
 
+class OpenAIRealtimeContentPartDone(TypedDict):
+    content_index: int
+    event_id: str
+    item_id: str
+    output_index: int
+    response_id: str
+    part: OpenAIRealtimeResponseContentPart
+    type: Literal["response.content_part.done"]
+
+
+class OpenAIRealtimeOutputItemDone(TypedDict):
+    event_id: str
+    item: OpenAIRealtimeStreamResponseOutputItem
+    output_index: int
+    response_id: str
+    type: Literal["response.output_item.done"]
+
+
 OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -1472,6 +1490,8 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeConversationCreated,
     OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeResponseTextDone,
+    OpenAIRealtimeContentPartDone,
+    OpenAIRealtimeOutputItemDone,
 ]
 
 OpenAIRealtimeStreamList = List[OpenAIRealtimeEvents]

@@ -14,8 +14,10 @@ from litellm.types.llms.gemini import (
     BidiGenerateContentSetupComplete,
 )
 from litellm.types.llms.openai import (
+    OpenAIRealtimeContentPartDone,
     OpenAIRealtimeConversationItemCreated,
     OpenAIRealtimeEvents,
+    OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeResponseTextDone,
@@ -256,6 +258,54 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             text=delta,
         )
 
+    def return_additional_content_done_events(
+        self,
+        current_output_item_id: str,
+        current_response_id: str,
+        delta_done_event: OpenAIRealtimeResponseTextDone,
+    ) -> List[OpenAIRealtimeEvents]:
+        """
+        - return response.content_part.done
+        - return response.output_item.done
+        """
+        returned_items: List[OpenAIRealtimeEvents] = []
+        # response.content_part.done
+        response_content_part_done = OpenAIRealtimeContentPartDone(
+            type="response.content_part.done",
+            content_index=0,
+            event_id="event_{}".format(uuid.uuid4()),
+            item_id=current_output_item_id,
+            output_index=0,
+            part={
+                "type": "text",
+                "text": delta_done_event["text"],
+            },
+            response_id=current_response_id,
+        )
+        returned_items.append(response_content_part_done)
+        # response.output_item.done
+        response_output_item_done = OpenAIRealtimeOutputItemDone(
+            type="response.output_item.done",
+            event_id="event_{}".format(uuid.uuid4()),
+            output_index=0,
+            response_id=current_response_id,
+            item={
+                "id": current_output_item_id,
+                "object": "realtime.item",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": delta_done_event["text"],
+                    }
+                ],
+            },
+        )
+        returned_items.append(response_output_item_done)
+        return returned_items
+
     @staticmethod
     def get_nested_value(obj: dict, path: str) -> Any:
         keys = path.split(".")
@@ -272,29 +322,34 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         transformed_message: Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]],
         current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]],
     ) -> Optional[List[OpenAIRealtimeResponseTextDelta]]:
-        if isinstance(transformed_message, list):
-            current_delta_chunks = []
-            any_delta_chunk = False
-            for event in transformed_message:
-                if event["type"] == "response.text.delta":
-                    current_delta_chunks.append(
-                        cast(OpenAIRealtimeResponseTextDelta, event)
+        try:
+            if isinstance(transformed_message, list):
+                current_delta_chunks = []
+                any_delta_chunk = False
+                for event in transformed_message:
+                    if event["type"] == "response.text.delta":
+                        current_delta_chunks.append(
+                            cast(OpenAIRealtimeResponseTextDelta, event)
+                        )
+                        any_delta_chunk = True
+                if not any_delta_chunk:
+                    current_delta_chunks = (
+                        None  # reset current_delta_chunks if no delta chunks
                     )
-                    any_delta_chunk = True
-            if not any_delta_chunk:
-                current_delta_chunks = (
-                    None  # reset current_delta_chunks if no delta chunks
-                )
-        else:
-            if transformed_message["type"] == "response.text.delta":
-                if current_delta_chunks is None:
-                    current_delta_chunks = []
-                current_delta_chunks.append(
-                    cast(OpenAIRealtimeResponseTextDelta, transformed_message)
-                )
             else:
-                current_delta_chunks = None
-        return current_delta_chunks
+                if transformed_message["type"] == "response.text.delta":
+                    if current_delta_chunks is None:
+                        current_delta_chunks = []
+                    current_delta_chunks.append(
+                        cast(OpenAIRealtimeResponseTextDelta, transformed_message)
+                    )
+                else:
+                    current_delta_chunks = None
+            return current_delta_chunks
+        except Exception as e:
+            raise ValueError(
+                f"Error updating current delta chunks: {e}, got transformed_message: {transformed_message}"
+            )
 
     def transform_realtime_response(
         self,
@@ -368,11 +423,28 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             )
                             returned_message = transformed_message
                     elif openai_event == "response.text.done":
-                        returned_message = self.transform_content_done_event(
+                        transformed_content_done_event = (
+                            self.transform_content_done_event(
+                                current_output_item_id=current_output_item_id,
+                                current_response_id=current_response_id,
+                                delta_chunks=current_delta_chunks,
+                            )
+                        )
+                        returned_message = [transformed_content_done_event]
+                        if (
+                            current_output_item_id is None
+                            or current_response_id is None
+                        ):
+                            raise ValueError(
+                                "current_output_item_id and current_response_id cannot be None for a 'done' event."
+                            )
+                        additional_items = self.return_additional_content_done_events(
                             current_output_item_id=current_output_item_id,
                             current_response_id=current_response_id,
-                            delta_chunks=current_delta_chunks,
+                            delta_done_event=transformed_content_done_event,
                         )
+                        returned_message.extend(additional_items)
+
         if returned_message is None:
             raise ValueError(f"Unknown message type: {message}")
 
