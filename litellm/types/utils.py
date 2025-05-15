@@ -446,6 +446,7 @@ class HiddenParams(OpenAIObject):
     original_response: Optional[Union[str, Any]] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
+    _response_ms: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -467,6 +468,12 @@ class HiddenParams(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+    def model_dump(self, **kwargs):
+        # Override model_dump to include private attributes
+        data = super().model_dump(**kwargs)
+        data["_response_ms"] = self._response_ms
+        return data
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
@@ -633,23 +640,23 @@ class Message(OpenAIObject):
         if audio is None:
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, 'audio'):
+            if hasattr(self, "audio"):
                 del self.audio
 
         if annotations is None:
             # ensure default response matches OpenAI spec
             # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, 'annotations'):
+            if hasattr(self, "annotations"):
                 del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
-            if hasattr(self, 'reasoning_content'):
+            if hasattr(self, "reasoning_content"):
                 del self.reasoning_content
 
         if thinking_blocks is None:
             # ensure default response matches OpenAI spec
-            if hasattr(self, 'thinking_blocks'):
+            if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
