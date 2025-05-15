@@ -9,16 +9,24 @@ from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.types.llms.gemini import (
     BidiGenerateContentServerContent,
-    BidiGenerateContentSetupComplete,
+    BidiGenerateContentServerMessage,
 )
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeConversationItemCreated,
+    OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseContentPartAdded,
+    OpenAIRealtimeResponseDoneObject,
     OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeStreamResponseBaseObject,
@@ -26,7 +34,10 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
 )
-from litellm.types.realtime import RealtimeResponseTypedDict
+from litellm.types.realtime import (
+    RealtimeResponseTransformInput,
+    RealtimeResponseTypedDict,
+)
 
 from ..common_utils import encode_unserializable_types
 
@@ -125,6 +136,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self,
         response_id: str,
         output_item_id: str,
+        conversation_id: str,
         session_configuration_request: Optional[str] = None,
     ) -> List[OpenAIRealtimeEvents]:
         if session_configuration_request is None:
@@ -154,7 +166,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "id": response_id,
                 "status": "in_progress",
                 "output": [],
-                "conversation_id": "conv_{}".format(uuid.uuid4()),
+                "conversation_id": conversation_id,
                 "modalities": _modalities,
                 "temperature": _temperature,
                 "max_output_tokens": _max_output_tokens,
@@ -215,7 +227,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> OpenAIRealtimeResponseTextDelta:
         delta = ""
         try:
-            if "parts" in message["modelTurn"]:
+            if "modelTurn" in message and "parts" in message["modelTurn"]:
                 for part in message["modelTurn"]["parts"]:
                     if "text" in part:
                         delta += part["text"]
@@ -351,19 +363,91 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 f"Error updating current delta chunks: {e}, got transformed_message: {transformed_message}"
             )
 
+    def update_current_item_chunks(
+        self,
+        transformed_message: Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]],
+        current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
+    ) -> Optional[List[OpenAIRealtimeOutputItemDone]]:
+        try:
+            if isinstance(transformed_message, list):
+                current_item_chunks = []
+                any_item_chunk = False
+                for event in transformed_message:
+                    if event["type"] == "response.output_item.done":
+                        current_item_chunks.append(
+                            cast(OpenAIRealtimeOutputItemDone, event)
+                        )
+                        any_item_chunk = True
+                if not any_item_chunk:
+                    current_item_chunks = (
+                        None  # reset current_item_chunks if no item chunks
+                    )
+            else:
+                if transformed_message["type"] == "response.output_item.done":
+                    if current_item_chunks is None:
+                        current_item_chunks = []
+                    current_item_chunks.append(
+                        cast(OpenAIRealtimeOutputItemDone, transformed_message)
+                    )
+                else:
+                    current_item_chunks = None
+            return current_item_chunks
+        except Exception as e:
+            raise ValueError(
+                f"Error updating current item chunks: {e}, got transformed_message: {transformed_message}"
+            )
+
+    def transform_response_done_event(
+        self,
+        message: BidiGenerateContentServerMessage,
+        current_response_id: str,
+        current_conversation_id: str,
+        output_items: List[OpenAIRealtimeOutputItemDone],
+        session_configuration_request: Optional[str] = None,
+    ) -> OpenAIRealtimeDoneEvent:
+        if session_configuration_request is None:
+            raise ValueError(
+                "session_configuration_request is required for Gemini API calls"
+            )
+
+        session_configuration_request_dict = json.loads(session_configuration_request)
+        temperature = session_configuration_request_dict.get(
+            "generationConfig", {}
+        ).get("temperature")
+        max_output_tokens = session_configuration_request_dict.get(
+            "generationConfig", {}
+        ).get("maxOutputTokens")
+        _modalities = session_configuration_request_dict.get(
+            "generationConfig", {}
+        ).get("responseModalities", ["TEXT"])
+        _chat_completion_usage = VertexGeminiConfig()._calculate_usage(
+            completion_response=message,
+        )
+        responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            _chat_completion_usage,
+        )
+        return OpenAIRealtimeDoneEvent(
+            type="response.done",
+            event_id="event_{}".format(uuid.uuid4()),
+            response=OpenAIRealtimeResponseDoneObject(
+                object="realtime.response",
+                id=current_response_id,
+                status="completed",
+                output=[output_item["item"] for output_item in output_items],
+                conversation_id=current_conversation_id,
+                modalities=_modalities,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                usage=responses_api_usage.model_dump(),
+            ),
+        )
+
     def transform_realtime_response(
         self,
         message: Union[str, bytes],
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        session_configuration_request: Optional[str] = None,
-        current_output_item_id: Optional[
-            str
-        ] = None,  # used to check if this is a new content.delta or a continuation of a previous content.delta
-        current_response_id: Optional[
-            str
-        ] = None,  # used to check if this is a new content.delta or a continuation of a previous content.delta
-        current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]] = None,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
         try:
             json_message = json.loads(message)
@@ -371,6 +455,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Invalid JSON message: {message}")
 
         logging_session_id = logging_obj.litellm_trace_id
+        current_output_item_id = realtime_response_transform_input[
+            "current_output_item_id"
+        ]
+        current_response_id = realtime_response_transform_input["current_response_id"]
+        current_conversation_id = realtime_response_transform_input[
+            "current_conversation_id"
+        ]
+        current_delta_chunks = realtime_response_transform_input["current_delta_chunks"]
+        session_configuration_request = realtime_response_transform_input[
+            "session_configuration_request"
+        ]
+        current_item_chunks = realtime_response_transform_input["current_item_chunks"]
         returned_message: Optional[
             Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]]
         ] = None
@@ -386,7 +482,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         transformed_message = self.transform_session_created_event(
                             model,
                             logging_session_id,
-                            session_configuration_request,
+                            realtime_response_transform_input[
+                                "session_configuration_request"
+                            ],
                         )
                         returned_message = transformed_message
 
@@ -398,10 +496,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 current_response_id or "resp_{}".format(uuid.uuid4())
                             )
                             current_output_item_id = "item_{}".format(uuid.uuid4())
+                            current_conversation_id = (
+                                current_conversation_id
+                                or "conv_{}".format(uuid.uuid4())
+                            )
                             response_items = self.return_new_content_delta_events(
                                 session_configuration_request=session_configuration_request,
                                 response_id=current_response_id,
                                 output_item_id=current_output_item_id,
+                                conversation_id=current_conversation_id,
                             )
 
                             transformed_message = self.transform_content_delta_events(
@@ -444,6 +547,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             delta_done_event=transformed_content_done_event,
                         )
                         returned_message.extend(additional_items)
+                    elif openai_event == "response.done":
+                        if (
+                            current_conversation_id is None
+                            or current_response_id is None
+                            or current_item_chunks is None
+                        ):
+                            raise ValueError(
+                                "current_conversation_id and current_response_id and current_item_chunks cannot be None for a 'done' event."
+                            )
+                        transformed_response_done_event = self.transform_response_done_event(
+                            message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
+                            current_response_id=current_response_id,
+                            current_conversation_id=current_conversation_id,
+                            session_configuration_request=session_configuration_request,
+                            output_items=current_item_chunks,
+                        )
+                        returned_message = transformed_response_done_event
 
         if returned_message is None:
             raise ValueError(f"Unknown message type: {message}")
@@ -452,11 +572,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             transformed_message=returned_message,
             current_delta_chunks=current_delta_chunks,
         )
+        current_item_chunks = self.update_current_item_chunks(
+            transformed_message=returned_message,
+            current_item_chunks=current_item_chunks,
+        )
         return {
             "response": returned_message,
             "current_output_item_id": current_output_item_id,
             "current_response_id": current_response_id,
             "current_delta_chunks": current_delta_chunks,
+            "current_conversation_id": current_conversation_id,
+            "current_item_chunks": current_item_chunks,
         }
 
     def requires_session_configuration(self) -> bool:

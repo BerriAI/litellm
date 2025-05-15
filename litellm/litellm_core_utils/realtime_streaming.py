@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
+    OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -59,6 +60,8 @@ class RealTimeStreaming:
         ] = None
         self.current_output_item_id: Optional[str] = None
         self.current_response_id: Optional[str] = None
+        self.current_conversation_id: Optional[str] = None
+        self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
 
     def _should_store_message(
         self,
@@ -128,10 +131,14 @@ class RealTimeStreaming:
                         raw_response,
                         self.model,
                         self.logging_obj,
-                        session_configuration_request,
-                        self.current_output_item_id,
-                        self.current_response_id,
-                        self.current_delta_chunks,
+                        realtime_response_transform_input={
+                            "session_configuration_request": session_configuration_request,
+                            "current_output_item_id": self.current_output_item_id,
+                            "current_response_id": self.current_response_id,
+                            "current_delta_chunks": self.current_delta_chunks,
+                            "current_conversation_id": self.current_conversation_id,
+                            "current_item_chunks": self.current_item_chunks,
+                        },
                     )
 
                     transformed_response = returned_object["response"]
@@ -140,7 +147,10 @@ class RealTimeStreaming:
                     ]
                     self.current_response_id = returned_object["current_response_id"]
                     self.current_delta_chunks = returned_object["current_delta_chunks"]
-
+                    self.current_conversation_id = returned_object[
+                        "current_conversation_id"
+                    ]
+                    self.current_item_chunks = returned_object["current_item_chunks"]
                     if isinstance(transformed_response, list):
                         for event in transformed_response:
                             event_str = json.dumps(event)

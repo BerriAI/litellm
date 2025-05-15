@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 from typing_extensions import Required, TypedDict
 
-from .vertex_ai import HttpxContentType
+from .vertex_ai import HttpxContentType, UsageMetadata
 
 
 class GeminiFilesState(Enum):
@@ -40,7 +40,7 @@ class BidiGenerateContentTranscription(TypedDict):
     """Output only. The transcription of the audio."""
 
 
-class BidiGenerateContentServerContent(TypedDict):
+class BidiGenerateContentServerContent(TypedDict, total=False):
     generationComplete: bool
     """Output only. If true, indicates that the model is done generating."""
 
@@ -63,5 +63,12 @@ class BidiGenerateContentServerContent(TypedDict):
     """Output only. The content that the model is currently generating."""
 
 
-class BidiGenerateContentSetupComplete(TypedDict):
+class BidiGenerateContentServerMessage(TypedDict, total=False):
+    usageMetadata: UsageMetadata
+    """Output only. Usage metadata for the generated content."""
+
+    serverContent: BidiGenerateContentServerContent
+    """Output only. The content that the model is currently generating."""
+
     setupComplete: dict
+    """Output only. The setup complete message."""

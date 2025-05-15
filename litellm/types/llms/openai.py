@@ -1481,6 +1481,28 @@ class OpenAIRealtimeOutputItemDone(TypedDict):
     type: Literal["response.output_item.done"]
 
 
+class OpenAIRealtimeResponseDoneObject(TypedDict, total=False):
+    conversation_id: str
+    id: str
+    max_output_tokens: int
+    metadata: dict
+    modalities: list
+    object: Literal["realtime.response"]
+    output: List[OpenAIRealtimeStreamResponseOutputItem]
+    output_audio_format: str
+    status: Literal["completed", "cancelled", "failed", "incomplete"]
+    status_details: dict
+    temperature: float
+    usage: dict  # ResponseAPIUsage
+    voice: str
+
+
+class OpenAIRealtimeDoneEvent(TypedDict):
+    event_id: str
+    response: OpenAIRealtimeResponseDoneObject
+    type: Literal["response.done"]
+
+
 OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -1492,6 +1514,7 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeDoneEvent,
 ]
 
 OpenAIRealtimeStreamList = List[OpenAIRealtimeEvents]
