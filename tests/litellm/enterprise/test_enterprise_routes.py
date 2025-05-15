@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from enterprise.proxy.enterprise_routes import router
+from litellm_enterprise.proxy.enterprise_routes import router
 
 
 @pytest.fixture
@@ -21,7 +21,8 @@ def client():
 def test_robots_when_blocked(client):
     """Test get_robots returns block instructions when _should_block_robots returns True"""
     with mock.patch(
-        "enterprise.proxy.enterprise_routes._should_block_robots", return_value=True
+        "litellm_enterprise.proxy.enterprise_routes._should_block_robots",
+        return_value=True,
     ):
         response = client.get("/robots.txt")
         print("got response", response)
@@ -34,7 +35,8 @@ def test_robots_when_blocked(client):
 def test_robots_when_not_blocked(client):
     """Test get_robots returns 404 when _should_block_robots returns False"""
     with mock.patch(
-        "enterprise.proxy.enterprise_routes._should_block_robots", return_value=False
+        "litellm_enterprise.proxy.enterprise_routes._should_block_robots",
+        return_value=False,
     ):
         response = client.get("/robots.txt")
         assert response.status_code == 404
