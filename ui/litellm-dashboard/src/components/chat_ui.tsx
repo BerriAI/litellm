@@ -35,6 +35,7 @@ import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import GuardrailSelector from "./guardrails/GuardrailSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
@@ -50,7 +51,8 @@ import {
   LoadingOutlined,
   TagsOutlined,
   DatabaseOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  SafetyOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -87,6 +89,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
   const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -333,7 +336,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateTimingData,
             updateUsageData,
             traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -360,7 +364,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateTimingData,
             updateUsageData,
             traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         }
       }
@@ -526,6 +531,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <VectorStoreSelector
                   value={selectedVectorStores}
                   onChange={setSelectedVectorStores}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SafetyOutlined className="mr-2" /> Guardrails
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select guardrail(s) to use for this LLM API call. You can set up your guardrails <a href="?page=guardrails" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <GuardrailSelector
+                  value={selectedGuardrails}
+                  onChange={setSelectedGuardrails}
                   className="mb-4"
                   accessToken={accessToken || ""}
                 />

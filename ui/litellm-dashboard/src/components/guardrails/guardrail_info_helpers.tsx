@@ -6,9 +6,16 @@ export const guardrail_provider_map: Record<string, string> = {
     PresidioPII: "presidio",
 };
 
-// Define which providers need specific fields
-export const provider_specific_fields: Record<string, string[]> = {
-    PresidioPII: ["pii_entities", "pii_actions"]
+
+// Decides if we should render the PII config settings for a given provider
+// For now we only support PII config settings for Presidio PII
+export const shouldRenderPIIConfigSettings = (provider: string | null) => {
+    if (!provider) {
+        return false;
+    }
+    // cast provider to GuardrailProviders enum
+    const providerEnum = GuardrailProviders[provider as keyof typeof GuardrailProviders];
+    return providerEnum === GuardrailProviders.PresidioPII;
 };
 
 const asset_logos_folder = '../ui/assets/logos/';

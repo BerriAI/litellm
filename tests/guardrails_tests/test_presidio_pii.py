@@ -12,6 +12,7 @@ from litellm.types.guardrails import PiiEntityType, PiiAction
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
+from litellm.types.utils import CallTypes as LitellmCallTypes
 
 
 
@@ -154,8 +155,9 @@ async def test_presidio_pre_call_hook_with_blocked_entities():
 
 
 @pytest.mark.asyncio
-async def test_presidio_pre_call_hook_with_entities_config():
-    """Test for Presidio guardrail pre-call hook with entities config on a chat completion request"""
+@pytest.mark.parametrize("call_type", ["completion", "acompletion"])
+async def test_presidio_pre_call_hook_with_different_call_types(call_type):
+    """Test for Presidio guardrail pre-call hook with both completion and acompletion call types"""
     # Setup the guardrail with specific entities config
     pii_entities_config = {
         PiiEntityType.CREDIT_CARD: PiiAction.MASK,
@@ -168,7 +170,7 @@ async def test_presidio_pre_call_hook_with_entities_config():
         presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE")
     )
     
-    # Create a sample chat completion request with PII data
+    # Create a sample request with PII data
     data = {
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -181,12 +183,12 @@ async def test_presidio_pre_call_hook_with_entities_config():
     user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
     cache = DualCache()
     
-    # Call the pre-call hook
+    # Call the pre-call hook with the specified call type
     modified_data = await presidio_guardrail.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=cache,
         data=data,
-        call_type="completion"
+        call_type=call_type
     )
     
     # Verify the messages have been modified to mask PII
@@ -199,7 +201,7 @@ async def test_presidio_pre_call_hook_with_entities_config():
     # Since this entity is not in the config, it should not be masked
     assert "555-123-4567" in user_message
     
-    print(f"Modified user message: {user_message}")
+    print(f"Modified user message for call_type={call_type}: {user_message}")
 
 
 @pytest.mark.parametrize(

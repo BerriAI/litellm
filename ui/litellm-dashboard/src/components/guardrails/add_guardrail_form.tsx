@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, provider_specific_fields, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
+import GuardrailProviderFields from './guardrail_provider_fields';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -69,7 +70,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
     form.setFieldsValue({
-      config: undefined
+      config: undefined,
+      presidio_analyzer_api_base: undefined,
+      presidio_anonymizer_api_base: undefined
     });
     
     // Reset PII selections when changing provider
@@ -99,6 +102,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       // Validate current step fields
       if (currentStep === 0) {
         await form.validateFields(['guardrail_name', 'provider', 'mode', 'default_on']);
+        // Also validate provider-specific fields if applicable
+        if (selectedProvider) {
+          // This will automatically validate any required fields for the selected provider
+          const fieldsToValidate = ['guardrail_name', 'provider', 'mode', 'default_on'];
+          
+          if (selectedProvider === 'PresidioPII') {
+            fieldsToValidate.push('presidio_analyzer_api_base', 'presidio_anonymizer_api_base');
+          } else if (selectedProvider === 'Bedrock') {
+            fieldsToValidate.push('config');
+          }
+          
+          await form.validateFields(fieldsToValidate);
+        }
       }
       setCurrentStep(currentStep + 1);
     } catch (error) {
@@ -126,7 +142,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const handleSubmit = async () => {
     try {
       setLoading(true);
-      // First validate currently visible fields (step 1)
+      // First validate currently visible fields
       await form.validateFields();
 
       // After validation, fetch *all* form values (including those from previous steps)
@@ -163,6 +179,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         });
         
         guardrailData.litellm_params.pii_entities_config = piiEntitiesConfig;
+        
+        // Add Presidio API bases if provided
+        if (values.presidio_analyzer_api_base) {
+          guardrailData.litellm_params.presidio_analyzer_api_base = values.presidio_analyzer_api_base;
+        }
+        if (values.presidio_anonymizer_api_base) {
+          guardrailData.litellm_params.presidio_anonymizer_api_base = values.presidio_anonymizer_api_base;
+        }
       }
       // Add config values to the guardrail_info if provided
       else if (values.config) {
@@ -260,6 +284,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           </Select>
         </Form.Item>
 
+        {/* Use the GuardrailProviderFields component to render provider-specific fields */}
+        <GuardrailProviderFields selectedProvider={selectedProvider} />
+
         <Form.Item
           name="mode"
           label="Mode"
@@ -306,131 +333,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     );
   };
 
-  const renderProviderSpecificConfig = () => {
-    if (!selectedProvider || selectedProvider === 'PresidioPII') return null;
-
-    switch (selectedProvider) {
-      case 'Aporia':
-        return (
-          <Form.Item
-            label="Aporia Configuration"
-            name="config"
-            tooltip="JSON configuration for Aporia"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_aporia_api_key",
-  "project_name": "your_project_name"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'AimSecurity':
-        return (
-          <Form.Item
-            label="Aim Security Configuration"
-            name="config"
-            tooltip="JSON configuration for Aim Security"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_aim_api_key"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'Bedrock':
-        return (
-          <Form.Item
-            label="Amazon Bedrock Configuration"
-            name="config"
-            tooltip="JSON configuration for Amazon Bedrock guardrails"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "guardrail_id": "your_guardrail_id",
-  "guardrail_version": "your_guardrail_version"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'GuardrailsAI':
-        return (
-          <Form.Item
-            label="Guardrails.ai Configuration"
-            name="config"
-            tooltip="JSON configuration for Guardrails.ai"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_guardrails_api_key",
-  "guardrail_id": "your_guardrail_id"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'LakeraAI':
-        return (
-          <Form.Item
-            label="Lakera AI Configuration"
-            name="config"
-            tooltip="JSON configuration for Lakera AI"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "api_key": "your_lakera_api_key"
-}`}
-            />
-          </Form.Item>
-        );
-      case 'PromptInjection':
-        return (
-          <Form.Item
-            label="Prompt Injection Configuration"
-            name="config"
-            tooltip="JSON configuration for prompt injection detection"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "threshold": 0.8
-}`}
-            />
-          </Form.Item>
-        );
-      default:
-        return (
-          <Form.Item
-            label="Custom Configuration"
-            name="config"
-            tooltip="JSON configuration for your custom guardrail"
-          >
-            <Input.TextArea
-              rows={4}
-              placeholder={`{
-  "key1": "value1",
-  "key2": "value2"
-}`}
-            />
-          </Form.Item>
-        );
-    }
-  };
-
   const renderStepContent = () => {
     switch (currentStep) {
       case 0:
         return renderBasicInfo();
       case 1:
-        if (selectedProvider === 'PresidioPII') {
+        if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
-        } else {
-          return renderProviderSpecificConfig();
         }
       default:
         return null;
