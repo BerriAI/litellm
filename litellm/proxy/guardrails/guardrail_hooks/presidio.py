@@ -14,7 +14,6 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
-from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
@@ -26,26 +25,23 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, PiiAction, PiiEntityType
+from litellm.types.guardrails import (
+    GuardrailEventHooks,
+    PiiAction,
+    PiiEntityType,
+    PresidioPerRequestConfig,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
+from litellm.types.utils import CallTypes as LitellmCallTypes
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
     StreamingChoices,
 )
-
-
-class PresidioPerRequestConfig(BaseModel):
-    """
-    presdio params that can be controlled per request, api key
-    """
-
-    language: Optional[str] = None
-    entities: Optional[List[PiiEntityType]] = None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -357,8 +353,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-
-            if call_type == "completion":  # /chat/completions requests
+            if call_type in [
+                LitellmCallTypes.completion.value,
+                LitellmCallTypes.acompletion.value,
+            ]:
                 messages = data["messages"]
                 tasks = []
 
@@ -388,6 +386,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
                 data["messages"] = messages
+            else:
+                verbose_proxy_logger.debug(
+                    f"Not running async_pre_call_hook for call_type={call_type}"
+                )
             return data
         except Exception as e:
             raise e
@@ -525,3 +527,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 print(print_statement)  # noqa
         except Exception:
             pass
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        UI will call this function to check:
+            1. If the connection to the guardrail is working
+            2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
+        """
+        text = await self.check_pii(
+            text=text,
+            output_parse_pii=self.output_parse_pii,
+            presidio_config=None,
+            request_data={},
+        )
+        return text
