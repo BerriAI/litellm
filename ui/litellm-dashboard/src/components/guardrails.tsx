@@ -76,7 +76,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
   };
 
   const handleDeleteClick = (guardrailId: string, guardrailName: string) => {
-    console.log(`Delete clicked for guardrail: ${guardrailId} - ${guardrailName}`);
     setGuardrailToDelete({id: guardrailId, name: guardrailName});
   };
 
