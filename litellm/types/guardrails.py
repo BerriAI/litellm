@@ -210,7 +210,25 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
-class LitellmParams(TypedDict, total=False):
+class PresidioConfig(TypedDict, total=False):
+    presidio_analyzer_api_base: Optional[str]
+    presidio_anonymizer_api_base: Optional[str]
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
+
+
+class BedrockGuardrailConfig(TypedDict, total=False):
+    """
+    Bedrock guardrail config
+    """
+
+    guardrailIdentifier: Optional[str]
+    guardrailVersion: Optional[str]
+
+
+class LitellmParams(
+    PresidioConfig,
+    BedrockGuardrailConfig,
+):
     guardrail: str
     mode: str
     api_key: Optional[str]
@@ -219,18 +237,10 @@ class LitellmParams(TypedDict, total=False):
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds]
 
-    # Bedrock specific params
-    guardrailIdentifier: Optional[str]
-    guardrailVersion: Optional[str]
-
     # Presidio params
     output_parse_pii: Optional[bool]
     presidio_ad_hoc_recognizers: Optional[str]
     mock_redacted_text: Optional[dict]
-    # PII control params
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
-    presidio_analyzer_api_base: Optional[str]
-    presidio_anonymizer_api_base: Optional[str]
 
     # hide secrets params
     detect_secrets_config: Optional[dict]
