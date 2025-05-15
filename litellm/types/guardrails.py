@@ -229,6 +229,8 @@ class LitellmParams(TypedDict, total=False):
     mock_redacted_text: Optional[dict]
     # PII control params
     pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
+    presidio_analyzer_api_base: Optional[str]
+    presidio_anonymizer_api_base: Optional[str]
 
     # hide secrets params
     detect_secrets_config: Optional[dict]
