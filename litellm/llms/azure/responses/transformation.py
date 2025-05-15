@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
-
+import os 
 import httpx
 
 import litellm
@@ -10,6 +10,12 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
+from litellm.llms.azure.common_utils import (
+    get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_username_password,
+    get_azure_ad_token_from_oidc,
+    get_azure_ad_token_provider
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -18,16 +24,73 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def validate_environment(
         self,
         headers: dict,
         model: str,
+        litellm_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
+        azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
+        # If we have api_key, then we have higher priority
+        azure_ad_token = litellm_params.get("azure_ad_token")
+        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        client_secret = litellm_params.get(
+            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
+        )
+        azure_username = litellm_params.get(
+            "azure_username", os.getenv("AZURE_USERNAME")
+        )
+        azure_password = litellm_params.get(
+            "azure_password", os.getenv("AZURE_PASSWORD")
+        )
+        if (
+            not api_key
+            and azure_ad_token_provider is None
+            and tenant_id and client_id and client_secret
+        ):
+            verbose_logger.debug(
+                "Using Azure AD Token Provider from Entra ID for Azure Auth"
+            )
+            azure_ad_token_provider = get_azure_ad_token_from_entra_id(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            azure_ad_token = azure_ad_token_provider()
+        if azure_ad_token_provider is None and azure_username and azure_password and client_id:
+            verbose_logger.debug("Using Azure Username and Password for Azure Auth")
+            azure_ad_token_provider = get_azure_ad_token_from_username_password(
+                azure_username=azure_username,
+                azure_password=azure_password,
+                client_id=client_id,
+            )
+            azure_ad_token = azure_ad_token_provider()
+        if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
+            verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
+            azure_ad_token = get_azure_ad_token_from_oidc(
+                azure_ad_token=azure_ad_token,
+                azure_client_id=client_id,
+                azure_tenant_id=tenant_id,
+            )
+        elif (
+            not api_key
+            and azure_ad_token_provider is None
+            and litellm.enable_azure_ad_token_refresh is True
+        ):
+            verbose_logger.debug(
+                "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+            )
+            try:
+                azure_ad_token = get_azure_ad_token_provider()
+            except ValueError:
+                verbose_logger.debug("Azure AD Token Provider could not be used.")
+
         api_key = (
-            api_key
+            azure_ad_token
+            or api_key
             or litellm.api_key
             or litellm.azure_key
             or get_secret_str("AZURE_OPENAI_API_KEY")
