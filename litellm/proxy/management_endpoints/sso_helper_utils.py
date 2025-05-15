@@ -1,3 +1,8 @@
+import os
+from typing import Optional
+
+from fastapi import Request
+
 from litellm.proxy._types import LitellmUserRoles
 
 
@@ -20,3 +25,41 @@ def has_admin_ui_access(user_role: str) -> bool:
     ):
         return False
     return True
+
+
+class LitellmUILoginUtils:
+    """
+    Helper utils for LiteLLM UI Login
+
+    - Decider method for using SSO or regular UI login
+    - Get redirect URL for SSO
+    """
+
+    @staticmethod
+    def should_use_sso_handler(
+        google_client_id: Optional[str] = None,
+        microsoft_client_id: Optional[str] = None,
+        generic_client_id: Optional[str] = None,
+    ) -> bool:
+        if (
+            google_client_id is not None
+            or microsoft_client_id is not None
+            or generic_client_id is not None
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def get_redirect_url_for_sso(
+        request: Request,
+        sso_callback_route: str,
+    ) -> str:
+        """
+        Get the redirect URL for SSO
+        """
+        redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
+        if redirect_url.endswith("/"):
+            redirect_url += sso_callback_route
+        else:
+            redirect_url += "/" + sso_callback_route
+        return redirect_url

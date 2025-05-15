@@ -12,6 +12,7 @@ All /key management endpoints
 import asyncio
 import copy
 import json
+import os
 import secrets
 import traceback
 import uuid
@@ -34,6 +35,11 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.admin_ui_utils import (
+    admin_ui_disabled,
+    show_missing_vars_in_env,
+)
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
@@ -43,6 +49,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_endpoints.sso_helper_utils import LitellmUILoginUtils
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -55,7 +62,7 @@ from litellm.proxy.utils import (
     jsonify_object,
 )
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, str_to_bool
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
@@ -2753,3 +2760,60 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
+
+
+@router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
+async def login_to_litellm_ui(request: Request):
+    """
+    Sign in to the LiteLLM UI using SSO, or regular UI username/password
+
+    PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
+    """
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    ####### Check if UI is disabled #######
+    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
+    if _disable_ui_flag is not None:
+        is_disabled = str_to_bool(value=_disable_ui_flag)
+        if is_disabled:
+            return admin_ui_disabled()
+
+    ####### Detect DB + MASTER KEY in .env #######
+    missing_env_vars = show_missing_vars_in_env()
+    if missing_env_vars is not None:
+        return missing_env_vars
+    ui_username = os.getenv("UI_USERNAME")
+
+    # get url from request
+    redirect_url = LitellmUILoginUtils.get_redirect_url_for_sso(
+        request=request,
+        sso_callback_route="sso/callback",
+    )
+
+    # Check if we should use SSO handler
+    if LitellmUILoginUtils.should_use_sso_handler(
+        microsoft_client_id=microsoft_client_id,
+        google_client_id=google_client_id,
+        generic_client_id=generic_client_id,
+    ):
+        from litellm_enterprise.proxy.management_endpoints.ui_sso import login_with_sso
+
+        return login_with_sso(
+            request=request,
+            microsoft_client_id=microsoft_client_id,
+            google_client_id=google_client_id,
+            generic_client_id=generic_client_id,
+            redirect_url=redirect_url,
+        )
+    elif ui_username is not None:
+        # No Google, Microsoft SSO
+        # Use UI Credentials set in .env
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
+    else:
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)

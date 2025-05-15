@@ -44,16 +44,12 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.admin_ui_utils import (
-    admin_ui_disabled,
-    show_missing_vars_in_env,
-)
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
+    LitellmUILoginUtils,
     check_is_admin_only_access,
     has_admin_ui_access,
 )
@@ -64,7 +60,7 @@ from litellm.proxy.management_helpers.utils import (
     get_existing_user_info_from_db,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
 if TYPE_CHECKING:
@@ -75,27 +71,19 @@ else:
 router = APIRouter()
 
 
-@router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):  # noqa: PLR0915
+async def login_with_sso(
+    request: Request,
+    redirect_url: str,
+    microsoft_client_id: Optional[str] = None,
+    google_client_id: Optional[str] = None,
+    generic_client_id: Optional[str] = None,
+):
     """
-    Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
-    PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
-    Example:
+    Handles user signing in with SSO and redirects to /sso/callback
     """
+    ####### Check if user is a Enterprise / Premium User #######
     from litellm.proxy.proxy_server import premium_user
 
-    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-
-    ####### Check if UI is disabled #######
-    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None:
-        is_disabled = str_to_bool(value=_disable_ui_flag)
-        if is_disabled:
-            return admin_ui_disabled()
-
-    ####### Check if user is a Enterprise / Premium User #######
     if (
         microsoft_client_id is not None
         or google_client_id is not None
@@ -108,45 +96,13 @@ async def google_login(request: Request):  # noqa: PLR0915
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
             )
-
-    ####### Detect DB + MASTER KEY in .env #######
-    missing_env_vars = show_missing_vars_in_env()
-    if missing_env_vars is not None:
-        return missing_env_vars
-    ui_username = os.getenv("UI_USERNAME")
-
-    # get url from request
-    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
-        request=request,
-        sso_callback_route="sso/callback",
+    verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
+    return await SSOAuthenticationHandler.get_sso_login_redirect(
+        redirect_url=redirect_url,
+        microsoft_client_id=microsoft_client_id,
+        google_client_id=google_client_id,
+        generic_client_id=generic_client_id,
     )
-
-    # Check if we should use SSO handler
-    if (
-        SSOAuthenticationHandler.should_use_sso_handler(
-            microsoft_client_id=microsoft_client_id,
-            google_client_id=google_client_id,
-            generic_client_id=generic_client_id,
-        )
-        is True
-    ):
-        verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
-            redirect_url=redirect_url,
-            microsoft_client_id=microsoft_client_id,
-            google_client_id=google_client_id,
-            generic_client_id=generic_client_id,
-        )
-    elif ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
-    else:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
 
 
 def generic_response_convertor(response, jwt_handler: JWTHandler):
@@ -881,35 +837,6 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
-    def should_use_sso_handler(
-        google_client_id: Optional[str] = None,
-        microsoft_client_id: Optional[str] = None,
-        generic_client_id: Optional[str] = None,
-    ) -> bool:
-        if (
-            google_client_id is not None
-            or microsoft_client_id is not None
-            or generic_client_id is not None
-        ):
-            return True
-        return False
-
-    @staticmethod
-    def get_redirect_url_for_sso(
-        request: Request,
-        sso_callback_route: str,
-    ) -> str:
-        """
-        Get the redirect URL for SSO
-        """
-        redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
-        if redirect_url.endswith("/"):
-            redirect_url += sso_callback_route
-        else:
-            redirect_url += "/" + sso_callback_route
-        return redirect_url
-
-    @staticmethod
     async def upsert_sso_user(
         result: Optional[Union[CustomOpenID, OpenID, dict]],
         user_info: Optional[Union[NewUserResponse, LiteLLM_UserTable]],
@@ -1427,14 +1354,14 @@ async def debug_sso_login(request: Request):
             )
 
     # get url from request
-    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+    redirect_url = LitellmUILoginUtils.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/debug/callback",
     )
 
     # Check if we should use SSO handler
     if (
-        SSOAuthenticationHandler.should_use_sso_handler(
+        LitellmUILoginUtils.should_use_sso_handler(
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
