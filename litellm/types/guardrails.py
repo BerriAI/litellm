@@ -223,6 +223,16 @@ class BedrockGuardrailConfig(TypedDict, total=False):
 
     guardrailIdentifier: Optional[str]
     guardrailVersion: Optional[str]
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_session_token: Optional[str]
+    aws_region_name: Optional[str]
+    aws_session_name: Optional[str]
+    aws_profile_name: Optional[str]
+    aws_role_name: Optional[str]
+    aws_web_identity_token: Optional[str]
+    aws_sts_endpoint: Optional[str]
+    aws_bedrock_runtime_endpoint: Optional[str]
 
 
 class LitellmParams(
