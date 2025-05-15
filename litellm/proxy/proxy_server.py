@@ -143,6 +143,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -3296,6 +3297,16 @@ class ProxyStartupEvent:
             from litellm.integrations.prometheus import PrometheusLogger
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+
+        ### SPEND LOG CLEANUP ###
+        spend_log_cleanup = SpendLogCleanup()
+        scheduler.add_job(
+            spend_log_cleanup.cleanup_old_spend_logs,
+            "interval",
+            seconds=20,  # Run once per day
+            args=[prisma_client],
+        )
+        print("Scheduled cleanup job")
 
         scheduler.start()
 

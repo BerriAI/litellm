@@ -2362,11 +2362,7 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     return
 
 
-async def send_email(
-    receiver_email: Optional[str] = None,
-    subject: Optional[str] = None,
-    html: Optional[str] = None,
-):
+async def send_email(receiver_email, subject, html):
     """
     smtp_host,
     smtp_port,
@@ -2384,12 +2380,6 @@ async def send_email(
     sender_email = os.getenv("SMTP_SENDER_EMAIL", None)
     if sender_email is None:
         raise ValueError("Trying to use SMTP, but SMTP_SENDER_EMAIL is not set")
-    if receiver_email is None:
-        raise ValueError(f"No receiver email provided for SMTP email. {receiver_email}")
-    if subject is None:
-        raise ValueError(f"No subject provided for SMTP email. {subject}")
-    if html is None:
-        raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
@@ -2408,31 +2398,19 @@ async def send_email(
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(
-            host=smtp_host,
-            port=smtp_port,
-        ) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account only if smtp_username and smtp_password are provided
             if smtp_username and smtp_password:
-                server.login(
-                    user=smtp_username,
-                    password=smtp_password,
-                )
+                server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
-            server.send_message(
-                msg=email_message,
-                from_addr=sender_email,
-                to_addrs=receiver_email,
-            )
+            server.send_message(email_message)
 
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "An error occurred while sending the email:" + str(e)
-        )
+        print_verbose("An error occurred while sending the email:" + str(e))
 
 
 def hash_token(token: str):
