@@ -45,16 +45,15 @@ class SpendLogCleanup:
         Main cleanup function. Deletes old spend logs in batches.
         """
         try:
-            print("Cleanup DB URL:", os.environ.get("DATABASE_URL"))
-
-            print("Cleanup job triggered at", datetime.now())
+            logger.info(f"Cleanup DB URL: {os.environ.get('DATABASE_URL')}")
+            logger.info(f"Cleanup job triggered at {datetime.now()}")
 
             if not self._should_delete_spend_logs():
-                print("Skipping cleanup — invalid or missing retention setting.")
+                logger.info("Skipping cleanup — invalid or missing retention setting.")
                 return
 
             cutoff_date = datetime.now(UTC) - timedelta(seconds=self.retention_seconds)
-            print(f"🧹 Deleting logs older than {cutoff_date.isoformat()}")
+            logger.info(f"🧹 Deleting logs older than {cutoff_date.isoformat()}")
 
             total_deleted = 0
             while True:
@@ -64,7 +63,7 @@ class SpendLogCleanup:
                 )
 
                 if not old_logs:
-                    print(f"✅ No more logs to delete. Total deleted: {total_deleted}")
+                    logger.info(f"✅ No more logs to delete. Total deleted: {total_deleted}")
                     break
 
                 for log in old_logs:
@@ -73,7 +72,7 @@ class SpendLogCleanup:
                     )
                     total_deleted += 1
 
-                print(f"🗑️ Deleted {len(old_logs)} logs in this batch")
+                logger.info(f"🗑️ Deleted {len(old_logs)} logs in this batch")
 
         except Exception as e:
-            print(f"🔥 Error during cleanup: {str(e)}")
+            logger.error(f"🔥 Error during cleanup: {str(e)}")
