@@ -83,14 +83,15 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
 
   const columns: ColumnDef<GuardrailItem>[] = [
     {
-      header: "ID",
+      header: "Guardrail ID",
       accessorKey: "guardrail_id",
-      cell: ({ row }) => {
-        const guardrail = row.original;
-        return (
-          <span className="text-xs">{guardrail.guardrail_id || "-"}</span>
-        );
-      },
+      cell: (info: any) => (
+        <Tooltip title={String(info.getValue() || "")}>
+          <span className="font-mono text-xs max-w-[15ch] truncate block">
+            {String(info.getValue() || "")}
+          </span>
+        </Tooltip>
+      ),
     },
     {
       header: "Name",
