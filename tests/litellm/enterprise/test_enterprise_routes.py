@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm_enterprise.proxy.enterprise_routes import router
+from enterprise.litellm_enterprise.proxy.enterprise_routes import router
 
 
 @pytest.fixture
