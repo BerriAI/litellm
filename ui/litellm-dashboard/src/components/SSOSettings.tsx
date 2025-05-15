@@ -10,11 +10,19 @@ interface SSOSettingsProps {
   possibleUIRoles?: Record<string, Record<string, string>> | null;
   userID: string;
   userRole: string;
+  settings: any;
+  onSettingsUpdate: (settings: any) => void;
 }
 
-const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles, userID, userRole }) => {
+const SSOSettings: React.FC<SSOSettingsProps> = ({ 
+  accessToken, 
+  possibleUIRoles, 
+  userID, 
+  userRole,
+  settings,
+  onSettingsUpdate 
+}) => {
   const [loading, setLoading] = useState<boolean>(true);
-  const [settings, setSettings] = useState<any>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editedValues, setEditedValues] = useState<any>({});
   const [saving, setSaving] = useState<boolean>(false);
@@ -23,39 +31,29 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
   const { Option } = Select;
 
   useEffect(() => {
-    const fetchSSOSettings = async () => {
-      if (!accessToken) {
-        setLoading(false);
-        return;
-      }
+    if (settings) {
+      setEditedValues(settings.values || {});
+      setLoading(false);
+    }
+  }, [settings]);
 
+  // Add this new useEffect for fetching available models
+  useEffect(() => {
+    const fetchModels = async () => {
+      if (!accessToken) return;
       try {
-        const data = await getInternalUserSettings(accessToken);
-        setSettings(data);
-        setEditedValues(data.values || {});
-        
-        // Fetch available models
-        if (accessToken) {
-          try {
-            const modelResponse = await modelAvailableCall(accessToken, userID, userRole);
-            if (modelResponse && modelResponse.data) {
-              const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
-              setAvailableModels(modelNames);
-            }
-          } catch (error) {
-            console.error("Error fetching available models:", error);
-          }
+        const modelResponse = await modelAvailableCall(accessToken, userID, userRole);
+        if (modelResponse && modelResponse.data) {
+          const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
+          setAvailableModels(modelNames);
         }
       } catch (error) {
-        console.error("Error fetching SSO settings:", error);
-        message.error("Failed to fetch SSO settings");
-      } finally {
-        setLoading(false);
+        console.error("Error fetching available models:", error);
       }
     };
 
-    fetchSSOSettings();
-  }, [accessToken]);
+    fetchModels();
+  }, [accessToken, userID, userRole]); // Add dependencies
 
   const handleSaveSettings = async () => {
     if (!accessToken) return;
@@ -63,7 +61,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
     setSaving(true);
     try {
       const updatedSettings = await updateInternalUserSettings(accessToken, editedValues);
-      setSettings({...settings, values: updatedSettings.settings});
+      onSettingsUpdate({...settings, values: updatedSettings.settings});
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating SSO settings:", error);

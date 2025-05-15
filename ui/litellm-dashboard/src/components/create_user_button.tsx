@@ -33,6 +33,7 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
+  internalUserSettings: any;
 }
 
 // Define an interface for the UI settings
@@ -50,6 +51,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   possibleUIRoles,
   onUserCreated,
   isEmbedded = false,
+  internalUserSettings,
 }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
@@ -65,6 +67,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   const isLocal = process.env.NODE_ENV === "development";
 
   const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
+
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -125,6 +128,12 @@ const Createuser: React.FC<CreateuserProps> = ({
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
+      
+      // If no role is specified, use the default role from settings
+      if (!formValues.user_role && internalUserSettings?.values?.user_role) {
+        formValues.user_role = internalUserSettings.values.user_role;
+      }
+      
       if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
         console.log("formValues.user_role", formValues.user_role)
         // If models is empty or undefined, set it to "no-default-models"

@@ -17,6 +17,7 @@ import {
   getPossibleUserRoles,
   userListCall,
   UserListResponse,
+  getInternalUserSettings,
 } from "./networking";
 import { Button } from "@tremor/react";
 import CreateUser from "./create_user_button";
@@ -83,6 +84,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   userID,
   teams,
 }) => {
+  console.log("userRole", userRole)
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -93,16 +95,26 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 })
   const [showFilters, setShowFilters] = useState(false);
-  const handleDelete = (userId: string) => {
-    setUserToDelete(userId);
-    setIsDeleteModalOpen(true);
-  };
+  const [internalUserSettings, setInternalUserSettings] = useState<any>(null);
 
   useEffect(() => {
     return () => {
       debouncer.cancel()
     }
   }, [debouncer])
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      if (!accessToken) return;
+      try {
+        const data = await getInternalUserSettings(accessToken);
+        setInternalUserSettings(data);
+      } catch (error) {
+        console.error("Error fetching internal user settings:", error);
+      }
+    };
+    fetchSettings();
+  }, [accessToken]);
 
   const updateFilters = (update: Partial<FilterState>) => {
     setFilters((previousFilters) => {
@@ -116,6 +128,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     updateFilters({ sort_by: sortBy, sort_order: sortOrder });
   };
 
+
+  const handleDelete = (userId: string) => {
+    setUserToDelete(userId);
+    setIsDeleteModalOpen(true);
+  };
 
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
@@ -244,6 +261,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             accessToken={accessToken}
             teams={teams}
             possibleUIRoles={possibleUIRoles}
+            internalUserSettings={internalUserSettings}
           />
         </div>
       </div>
@@ -466,7 +484,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </TabPanel>
           
           <TabPanel>
-            <SSOSettings accessToken={accessToken} possibleUIRoles={possibleUIRoles} userID={userID} userRole={userRole}/>
+            <SSOSettings 
+              accessToken={accessToken} 
+              possibleUIRoles={possibleUIRoles} 
+              userID={userID} 
+              userRole={userRole}
+              settings={internalUserSettings}
+              onSettingsUpdate={setInternalUserSettings}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
