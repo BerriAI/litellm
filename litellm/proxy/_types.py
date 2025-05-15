@@ -295,7 +295,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
-        "/v2/rerank"
+        "/v2/rerank",
         # realtime
         "/realtime",
         "/v1/realtime",
