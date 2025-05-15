@@ -238,13 +238,35 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           <Select 
             placeholder="Select a guardrail provider"
             onChange={handleProviderChange}
+            labelInValue={false}
             optionLabelProp="label"
+            dropdownRender={menu => menu}
           >
             {Object.entries(GuardrailProviders).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}
-                label={value}
+                label={
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    {guardrailLogoMap[value] && (
+                      <img 
+                        src={guardrailLogoMap[value]} 
+                        alt=""
+                        style={{ 
+                          height: '20px', 
+                          width: '20px', 
+                          marginRight: '8px',
+                          objectFit: 'contain'
+                        }}
+                        onError={(e) => {
+                          // Hide broken image icon if image fails to load
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    )}
+                    <span>{value}</span>
+                  </div>
+                }
               >
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   {guardrailLogoMap[value] && (
