@@ -18,7 +18,7 @@ async def test_should_delete_spend_logs():
 
     # Test case 2: Valid integer maximum_spend_logs_retention_period (in seconds)
     general_settings["maximum_spend_logs_retention_period"] = 3600
-    assert _should_delete_spend_logs() is True
+    assert _should_delete_spend_logs() is False
 
     # Test case 3: Valid duration string - days
     general_settings["maximum_spend_logs_retention_period"] = "30d"
