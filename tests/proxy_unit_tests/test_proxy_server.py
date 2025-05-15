@@ -2145,7 +2145,7 @@ async def test_get_ui_settings_spend_logs_threshold():
     """
     Test that get_ui_settings correctly sets DISABLE_EXPENSIVE_DB_QUERIES based on spend_logs_row_count threshold
     """
-    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm_enterprise.proxy.management_endpoints.ui_sso import get_ui_settings
     from litellm.proxy.proxy_server import proxy_state
     from fastapi import Request
     from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY

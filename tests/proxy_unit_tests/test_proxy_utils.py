@@ -1330,8 +1330,8 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
 
 
 def test_custom_openid_response():
-    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
-    from litellm.proxy.management_endpoints.ui_sso import JWTHandler
+    from litellm_enterprise.proxy.management_endpoints.ui_sso import generic_response_convertor
+    from litellm_enterprise.proxy.management_endpoints.ui_sso import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.caching import DualCache
 
