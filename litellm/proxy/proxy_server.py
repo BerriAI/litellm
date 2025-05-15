@@ -28,7 +28,7 @@ from typing import (
 from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
-    LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+    LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -383,14 +383,20 @@ enterprise_router = APIRouter()
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-    from enterprise.proxy.enterprise_routes import router as enterprise_router
 except Exception:
     # when using litellm docker image
     try:
         import enterprise  # type: ignore
-        from enterprise.proxy.enterprise_routes import router as enterprise_router
     except Exception:
         pass
+
+###################
+# Import enterprise routes
+try:
+    from litellm_enterprise.proxy.enterprise_routes import router as enterprise_router
+except ImportError:
+    enterprise_router = APIRouter()
+###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
@@ -3849,11 +3855,11 @@ async def embeddings(  # noqa: PLR0915
             if llm_model_list is not None and data["model"] in router_model_names:
                 for m in llm_model_list:
                     if m["model_name"] == data["model"]:
-                        if (m["litellm_params"]["model"] in litellm.open_ai_embedding_models
-                                or any(
-                                    m["litellm_params"]["model"].startswith(provider)
-                                    for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                                )
+                        if m["litellm_params"][
+                            "model"
+                        ] in litellm.open_ai_embedding_models or any(
+                            m["litellm_params"]["model"].startswith(provider)
+                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
                         ):
                             pass
                         else:
