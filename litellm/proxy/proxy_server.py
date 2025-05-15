@@ -394,7 +394,8 @@ except Exception:
 try:
     from litellm_enterprise.proxy.enterprise_routes import router as enterprise_router
 except ImportError:
-    enterprise_router = APIRouter()
+    # use default enterprise_router = APIRouter()
+    pass
 ###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
