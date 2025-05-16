@@ -4568,7 +4568,6 @@
         "supports_tool_choice": true
     },
     "claude-3-sonnet-20240229": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -4613,7 +4612,6 @@
         "supports_web_search": true
     },
     "claude-3-5-sonnet-20240620": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -6398,7 +6396,6 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-3-sonnet": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -6412,7 +6409,6 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-3-sonnet@20240229": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -6441,7 +6437,6 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-3-5-sonnet@20240620": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -8090,7 +8085,6 @@
         "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-3-sonnet": {
-        "supports_computer_use": true,
         "max_tokens": 200000,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
@@ -9044,7 +9038,6 @@
         "supports_response_schema": true
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9059,7 +9052,6 @@
         "supports_tool_choice": true
     },
     "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9076,7 +9068,6 @@
         }
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9174,7 +9165,6 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-sonnet-20240229-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9189,7 +9179,6 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9204,7 +9193,6 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -9223,7 +9211,6 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -9287,7 +9274,6 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9302,7 +9288,6 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -9317,7 +9302,6 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -9334,7 +9318,6 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-        "supports_computer_use": true,
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -12054,7 +12037,6 @@
         "mode": "rerank"
     },
     "databricks/databricks-claude-3-7-sonnet": {
-        "supports_computer_use": true,
         "max_tokens": 200000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000, 
@@ -12338,7 +12320,6 @@
         "mode": "chat"
     },
     "snowflake/claude-3-5-sonnet": {
-        "supports_computer_use": true,
         "max_tokens": 18000,
         "max_input_tokens": 18000,
         "max_output_tokens": 8192,
