@@ -37,7 +37,6 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         response_format: Optional[dict] = None,
-        
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -82,10 +81,9 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
                     if litellm.drop_params is True or drop_params is True:
                         value = None
                     else:
+                        error_message = f"Featherless AI doesn't support {param}={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`"
                         raise litellm.utils.UnsupportedParamsError(
-                            message="Featherless AI doesn't support tool_choice={} or tools={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
-                                value
-                            ),
+                            message=error_message,
                             status_code=400,
                         )
             elif param == "max_completion_tokens":
