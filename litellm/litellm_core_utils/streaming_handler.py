@@ -1655,7 +1655,7 @@ class CustomStreamWrapper:
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
                     # Handle potentially problematic chunks based on provider type
-                    if self.custom_llm_provider == "gemini" or self.custom_llm_provider == "vertex_ai":
+                    if self.custom_llm_provider in ["gemini", "vertex_ai", "vertex_ai_beta"]:
                         # For Gemini family (Google AI Studio and Vertex AI):
                         # These providers might send None or chunks with empty 'parts' that should be skipped.
                         if chunk is None or chunk == "None":
