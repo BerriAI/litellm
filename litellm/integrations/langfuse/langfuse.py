@@ -822,16 +822,22 @@ class LangFuseLogger:
         Log guardrail information as a span
         """
         if standard_logging_object is None:
+            verbose_logger.debug(
+                "Not logging guardrail information as span because standard_logging_object is None"
+            )
             return
 
         guardrail_information = standard_logging_object.get(
             "guardrail_information", None
         )
         if guardrail_information is None:
+            verbose_logger.debug(
+                "Not logging guardrail information as span because guardrail_information is None"
+            )
             return
 
-        trace.span(
-            name="guardrail_information",
+        span = trace.span(
+            name="guardrail",
             input=guardrail_information.get("guardrail_request", None),
             output=guardrail_information.get("guardrail_response", None),
             metadata={
@@ -841,13 +847,12 @@ class LangFuseLogger:
                     "masked_entity_count", None
                 ),
             },
-            # start_time=datetime.fromtimestamp(
-            #     guardrail_information.get("start_time", datetime.now().timestamp())
-            # ),
-            # end_time=datetime.fromtimestamp(
-            #     guardrail_information.get("end_time", datetime.now().timestamp())
-            # ),
+            start_time=guardrail_information.get("start_time", None),  # type: ignore
+            end_time=guardrail_information.get("end_time", None),  # type: ignore
         )
+
+        verbose_logger.debug(f"Logged guardrail information as span: {span}")
+        span.end()
 
 
 def _add_prompt_to_generation_params(

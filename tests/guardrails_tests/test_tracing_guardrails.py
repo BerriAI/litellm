@@ -135,7 +135,7 @@ async def test_langfuse_trace_includes_guardrail_information():
         response = await litellm.acompletion(**request_data)
 
         # 3. Wait for async logging operations to complete
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         
         # 4. Verify the Langfuse payload
         assert mock_post.call_count >= 1
