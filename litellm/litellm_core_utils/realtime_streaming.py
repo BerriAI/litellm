@@ -1,42 +1,27 @@
-"""
-async with websockets.connect(  # type: ignore
-                url,
-                extra_headers={
-                    "api-key": api_key,  # type: ignore
-                },
-            ) as backend_ws:
-                forward_task = asyncio.create_task(
-                    forward_messages(websocket, backend_ws)
-                )
-
-                try:
-                    while True:
-                        message = await websocket.receive_text()
-                        await backend_ws.send(message)
-                except websockets.exceptions.ConnectionClosed:  # type: ignore
-                    forward_task.cancel()
-                finally:
-                    if not forward_task.done():
-                        forward_task.cancel()
-                        try:
-                            await forward_task
-                        except asyncio.CancelledError:
-                            pass
-"""
-
 import asyncio
 import concurrent.futures
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeResponseTextDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
 
 from .litellm_logging import Logging as LiteLLMLogging
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+    CLIENT_CONNECTION_CLASS = ClientConnection
+else:
+    CLIENT_CONNECTION_CLASS = Any
 
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
@@ -52,18 +37,15 @@ class RealTimeStreaming:
     def __init__(
         self,
         websocket: Any,
-        backend_ws: Any,
-        logging_obj: Optional[LiteLLMLogging] = None,
+        backend_ws: CLIENT_CONNECTION_CLASS,
+        logging_obj: LiteLLMLogging,
+        provider_config: Optional[BaseRealtimeConfig] = None,
+        model: str = "",
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages: List[
-            Union[
-                OpenAIRealtimeStreamResponseBaseObject,
-                OpenAIRealtimeStreamSessionEvents,
-            ]
-        ] = []
+        self.messages: List[OpenAIRealtimeEvents] = []
         self.input_message: Dict = {}
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
@@ -71,34 +53,43 @@ class RealTimeStreaming:
         if _logged_real_time_event_types is None:
             _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
         self.logged_real_time_event_types = _logged_real_time_event_types
+        self.provider_config = provider_config
+        self.model = model
+        self.current_delta_chunks: Optional[
+            List[OpenAIRealtimeResponseTextDelta]
+        ] = None
+        self.current_output_item_id: Optional[str] = None
+        self.current_response_id: Optional[str] = None
+        self.current_conversation_id: Optional[str] = None
+        self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
 
     def _should_store_message(
         self,
-        message_obj: Union[
-            dict,
-            OpenAIRealtimeStreamSessionEvents,
-            OpenAIRealtimeStreamResponseBaseObject,
-        ],
+        message_obj: Union[dict, OpenAIRealtimeEvents],
     ) -> bool:
-        _msg_type = message_obj["type"]
+        _msg_type = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
             return True
-        if _msg_type in self.logged_real_time_event_types:
+        if _msg_type and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes]):
+    def store_message(self, message: Union[str, bytes, OpenAIRealtimeEvents]):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
-        message_obj = json.loads(message)
+        if isinstance(message, dict):
+            message_obj = message
+        else:
+            message_obj = json.loads(message)
         try:
             if (
-                message_obj.get("type") == "session.created"
+                not isinstance(message, dict)
+                or message_obj.get("type") == "session.created"
                 or message_obj.get("type") == "session.updated"
             ):
                 message_obj = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
-            else:
+            elif not isinstance(message, dict):
                 message_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
         except Exception as e:
             verbose_logger.debug(f"Error parsing message for logging: {e}")
@@ -121,20 +112,68 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
-    async def backend_to_client_send_messages(self):
+    async def backend_to_client_send_messages(
+        self, session_configuration_request: Optional[str] = None
+    ):
         import websockets
 
         try:
             while True:
-                message = await self.backend_ws.recv()
-                await self.websocket.send_text(message)
+                try:
+                    raw_response = await self.backend_ws.recv(
+                        decode=False
+                    )  # improves performance
+                except TypeError:
+                    raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
-                ## LOGGING
-                self.store_message(message)
-        except websockets.exceptions.ConnectionClosed:  # type: ignore
-            pass
-        except Exception:
-            pass
+                if self.provider_config:
+                    returned_object = self.provider_config.transform_realtime_response(
+                        raw_response,
+                        self.model,
+                        self.logging_obj,
+                        realtime_response_transform_input={
+                            "session_configuration_request": session_configuration_request,
+                            "current_output_item_id": self.current_output_item_id,
+                            "current_response_id": self.current_response_id,
+                            "current_delta_chunks": self.current_delta_chunks,
+                            "current_conversation_id": self.current_conversation_id,
+                            "current_item_chunks": self.current_item_chunks,
+                        },
+                    )
+
+                    transformed_response = returned_object["response"]
+                    self.current_output_item_id = returned_object[
+                        "current_output_item_id"
+                    ]
+                    self.current_response_id = returned_object["current_response_id"]
+                    self.current_delta_chunks = returned_object["current_delta_chunks"]
+                    self.current_conversation_id = returned_object[
+                        "current_conversation_id"
+                    ]
+                    self.current_item_chunks = returned_object["current_item_chunks"]
+                    if isinstance(transformed_response, list):
+                        for event in transformed_response:
+                            event_str = json.dumps(event)
+                            ## LOGGING
+                            self.store_message(event_str)
+                            await self.websocket.send_text(event_str)
+                    else:
+                        event_str = json.dumps(transformed_response)
+                        ## LOGGING
+                        self.store_message(event_str)
+                        await self.websocket.send_text(event_str)
+
+                else:
+                    ## LOGGING
+                    self.store_message(raw_response)
+                    await self.websocket.send_text(raw_response)
+
+        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
+            verbose_logger.exception(
+                f"Connection closed in backend to client send messages - {e}"
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error in backend to client send messages: {e}")
         finally:
             await self.log_messages()
 
@@ -142,18 +181,42 @@ class RealTimeStreaming:
         try:
             while True:
                 message = await self.websocket.receive_text()
+
                 ## LOGGING
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
+                if self.provider_config:
+                    message = self.provider_config.transform_realtime_request(message)
+
                 await self.backend_ws.send(message)
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
+            verbose_logger.debug("Connection closed")
             pass
+        except Exception as e:
+            verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
-        forward_task = asyncio.create_task(self.backend_to_client_send_messages())
+        session_configuration_request: Optional[str] = None
+        if (
+            self.provider_config
+            and self.provider_config.requires_session_configuration()
+        ):
+            session_configuration_request = (
+                self.provider_config.session_configuration_request(self.model)
+            )
+            if session_configuration_request is None:
+                raise ValueError(
+                    "Session configuration request is None, but requires_session_configuration is True"
+                )
+            await self.backend_ws.send(session_configuration_request)
+
+        forward_task = asyncio.create_task(
+            self.backend_to_client_send_messages(session_configuration_request)
+        )
         try:
             await self.client_ack_messages()
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
+            verbose_logger.debug("Connection closed")
             forward_task.cancel()
         finally:
             if not forward_task.done():

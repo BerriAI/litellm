@@ -322,7 +322,7 @@ class CustomStreamWrapper:
         is_finished = False
         finish_reason = ""
         try:
-            if "dolphin" in self.model:
+            if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
                 data_json = json.loads(chunk)
@@ -978,8 +978,10 @@ class CustomStreamWrapper:
                     ]
 
                 if anthropic_response_obj["usage"] is not None:
-                    model_response.usage = litellm.Usage(
-                        **anthropic_response_obj["usage"]
+                    setattr(
+                        model_response,
+                        "usage",
+                        litellm.Usage(**anthropic_response_obj["usage"]),
                     )
 
                 if (
@@ -1046,19 +1048,21 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             raise Exception("An unknown error occurred with the stream")
                         self.received_finish_reason = "stop"
-            elif self.custom_llm_provider == "vertex_ai":
+            elif self.custom_llm_provider == "vertex_ai" and not isinstance(
+                chunk, ModelResponseStream
+            ):
                 import proto  # type: ignore
 
                 if hasattr(chunk, "candidates") is True:
                     try:
                         try:
-                            completion_obj["content"] = chunk.text
+                            completion_obj["content"] = chunk.text  # type: ignore
                         except Exception as e:
                             original_exception = e
                             if "Part has no text." in str(e):
                                 ## check for function calling
                                 function_call = (
-                                    chunk.candidates[0].content.parts[0].function_call
+                                    chunk.candidates[0].content.parts[0].function_call  # type: ignore
                                 )
 
                                 args_dict = {}
@@ -1067,7 +1071,7 @@ class CustomStreamWrapper:
                                 for key, val in function_call.args.items():
                                     if isinstance(
                                         val,
-                                        proto.marshal.collections.repeated.RepeatedComposite,
+                                        proto.marshal.collections.repeated.RepeatedComposite,  # type: ignore
                                     ):
                                         # If so, convert to list
                                         args_dict[key] = [v for v in val]
@@ -1098,15 +1102,15 @@ class CustomStreamWrapper:
                             else:
                                 raise original_exception
                         if (
-                            hasattr(chunk.candidates[0], "finish_reason")
-                            and chunk.candidates[0].finish_reason.name
+                            hasattr(chunk.candidates[0], "finish_reason")  # type: ignore
+                            and chunk.candidates[0].finish_reason.name  # type: ignore
                             != "FINISH_REASON_UNSPECIFIED"
                         ):  # every non-final chunk in vertex ai has this
-                            self.received_finish_reason = chunk.candidates[
+                            self.received_finish_reason = chunk.candidates[  # type: ignore
                                 0
                             ].finish_reason.name
                     except Exception:
-                        if chunk.candidates[0].finish_reason.name == "SAFETY":
+                        if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(
                                 f"The response was blocked by VertexAI. {str(chunk)}"
                             )
@@ -1153,12 +1157,18 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj["usage"] is not None:
-                    model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                    setattr(
+                        model_response,
+                        "usage",
+                        litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        ),
                     )
             elif self.custom_llm_provider == "text-completion-codestral":
+                if not isinstance(chunk, str):
+                    raise ValueError(f"chunk is not a string: {chunk}")
                 response_obj = cast(
                     Dict[str, Any],
                     litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
@@ -1168,10 +1178,14 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
                 if "usage" in response_obj is not None:
-                    model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
+                    setattr(
+                        model_response,
+                        "usage",
+                        litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        ),
                     )
             elif self.custom_llm_provider == "azure_text":
                 response_obj = self.handle_azure_text_completion_chunk(chunk)
@@ -1669,7 +1683,7 @@ class CustomStreamWrapper:
                     processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    print_verbose(
+                    verbose_logger.debug(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
                     if processed_chunk is None:

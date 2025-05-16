@@ -17,6 +17,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
 import { SessionView } from './SessionView';
 import { VectorStoreViewer } from './VectorStoreViewer';
+import { GuardrailViewer } from './GuardrailViewer';
 import FilterComponent from "../common_components/filter";
 import { FilterOption } from "../common_components/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -73,6 +74,7 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState(""); 
@@ -147,7 +149,8 @@ export default function SpendLogsTable({
       selectedTeamId,
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
-      selectedStatus
+      selectedStatus,
+      selectedModel
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -177,7 +180,8 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
-        selectedStatus
+        selectedStatus,
+        selectedModel
       );
 
       // Trigger prefetch for all logs
@@ -222,6 +226,7 @@ export default function SpendLogsTable({
     filteredLogs,
     allTeams: hookAllTeams,
     allKeyAliases,
+    allModels,
     handleFilterChange,
     handleFilterReset
   } = useLogFilterLogic({
@@ -231,7 +236,9 @@ export default function SpendLogsTable({
     endTime,
     pageSize,
     isCustomDate,
-    setCurrentPage
+    setCurrentPage,
+    userID,
+    userRole
   })
 
   // Add this effect to update selectedTeamId and selectedStatus when team filter changes
@@ -243,6 +250,7 @@ export default function SpendLogsTable({
       setSelectedTeamId("");
     }
     setSelectedStatus(filters['Status'] || "");
+    setSelectedModel(filters['Model'] || "");
   }, [filters]);
 
   // Fetch logs for a session if selected
@@ -360,6 +368,21 @@ export default function SpendLogsTable({
         { label: 'Success', value: 'success' },
         { label: 'Failure', value: 'failure' }
       ]
+    },
+    {
+      name: 'Model',
+      label: 'Model',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!allModels || allModels.length === 0) return [];
+        const filtered = allModels.filter((model: string) => {
+          return model.toLowerCase().includes(searchText.toLowerCase());
+        });
+        return filtered.map((model: string) => ({
+          label: model,
+          value: model
+        }));
+      }
     }
   ]
 
@@ -682,6 +705,20 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     Array.isArray(metadata.vector_store_request_metadata) && 
     metadata.vector_store_request_metadata.length > 0;
 
+  // Extract guardrail information from metadata if available
+  const hasGuardrailData = row.original.metadata && row.original.metadata.guardrail_information;
+  
+  // Calculate total masked entities if guardrail data exists
+  const getTotalMaskedEntities = (): number => {
+    if (!hasGuardrailData || !row.original.metadata?.guardrail_information.masked_entity_count) {
+      return 0;
+    }
+    return Object.values(row.original.metadata.guardrail_information.masked_entity_count)
+      .reduce((sum: number, count: any) => sum + (typeof count === 'number' ? count : 0), 0);
+  };
+  
+  const totalMaskedEntities = getTotalMaskedEntities();
+
   return (
     <div className="p-6 bg-gray-50 space-y-6">
       {/* Combined Info Card */}
@@ -723,7 +760,19 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 <span>{row?.original?.requester_ip_address}</span>
               </div>
             )}
-
+            {hasGuardrailData && (
+              <div className="flex">
+                <span className="font-medium w-1/3">Guardrail:</span>
+                <div>
+                  <span className="font-mono">{row.original.metadata!.guardrail_information.guardrail_name}</span>
+                  {totalMaskedEntities > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+                      {totalMaskedEntities} masked
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <div className="flex">
@@ -775,6 +824,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         getRawRequest={getRawRequest}
         formattedResponse={formattedResponse}
       />
+
+      {/* Guardrail Data - Show only if present */}
+      {hasGuardrailData && (
+        <GuardrailViewer data={row.original.metadata!.guardrail_information} />
+      )}
 
       {/* Vector Store Request Data - Show only if present */}
       {hasVectorStoreData && (
