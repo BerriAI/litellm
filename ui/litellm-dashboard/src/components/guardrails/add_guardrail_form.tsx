@@ -3,7 +3,7 @@ import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message,
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
 import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
-import { createGuardrailCall, getGuardrailUISettings } from '../networking';
+import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
 
@@ -35,6 +35,20 @@ interface LiteLLMParams {
   [key: string]: any; // Allow additional properties for specific guardrails
 }
 
+// Mapping of provider -> list of param descriptors
+interface ProviderParam {
+  param: string;
+  description: string;
+  required: boolean;
+  default_value?: string;
+  options?: string[];
+  type?: string;
+}
+
+interface ProviderParamsResponse {
+  [provider: string]: ProviderParam[];
+}
+
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
   visible, 
   onClose, 
@@ -48,22 +62,29 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
   const [currentStep, setCurrentStep] = useState(0);
+  const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
 
-  // Fetch guardrail settings when the component mounts
+  // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
-    const fetchGuardrailSettings = async () => {
+    if (!accessToken) return;
+
+    const fetchData = async () => {
       try {
-        if (!accessToken) return;
-        
-        const data = await getGuardrailUISettings(accessToken);
-        setGuardrailSettings(data);
+        // Parallel requests for speed
+        const [uiSettings, providerParamsResp] = await Promise.all([
+          getGuardrailUISettings(accessToken),
+          getGuardrailProviderSpecificParams(accessToken),
+        ]);
+
+        setGuardrailSettings(uiSettings);
+        setProviderParams(providerParamsResp);
       } catch (error) {
-        console.error('Error fetching guardrail settings:', error);
-        message.error('Failed to load guardrail settings');
+        console.error('Error fetching guardrail data:', error);
+        message.error('Failed to load guardrail configuration');
       }
     };
-    
-    fetchGuardrailSettings();
+
+    fetchData();
   }, [accessToken]);
 
   const handleProviderChange = (value: string) => {
@@ -198,6 +219,32 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         }
       }
 
+      /******************************
+       * Add provider-specific params
+       * ----------------------------------
+       * The backend exposes exactly which extra parameters a provider
+       * accepts via `/guardrails/ui/provider_specific_params`.
+       * Instead of copying every unknown form field, we fetch the list for
+       * the selected provider and ONLY pass those recognised params.
+       ******************************/
+
+      // Use pre-fetched provider params to copy recognised params
+      if (providerParams && selectedProvider) {
+        const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+        const providerSpecificParams = providerParams[providerKey] || [];
+
+        const allowedParams = new Set<string>(
+          providerSpecificParams.map((p) => p.param)
+        );
+
+        allowedParams.forEach((paramName) => {
+          const paramValue = values[paramName];
+          if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
+            guardrailData.litellm_params[paramName] = paramValue;
+          }
+        });
+      }
+
       if (!accessToken) {
         throw new Error("No access token available");
       }
@@ -294,7 +341,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        <GuardrailProviderFields selectedProvider={selectedProvider} accessToken={accessToken} />
+        <GuardrailProviderFields 
+          selectedProvider={selectedProvider} 
+          accessToken={accessToken} 
+          providerParams={providerParams}
+        />
 
         <Form.Item
           name="mode"

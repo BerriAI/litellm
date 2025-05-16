@@ -7,6 +7,7 @@ import { getGuardrailProviderSpecificParams } from "../networking";
 interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
   accessToken?: string | null;
+  providerParams?: ProviderParamsResponse | null;
 }
 
 interface ProviderParam {
@@ -24,14 +25,21 @@ interface ProviderParamsResponse {
 
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
-  accessToken
+  accessToken,
+  providerParams: providerParamsProp = null
 }) => {
   const [loading, setLoading] = useState(false);
-  const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+  const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
   const [error, setError] = useState<string | null>(null);
 
   // Fetch provider-specific parameters when component mounts
   useEffect(() => {
+    if (providerParamsProp) {
+      // Props updated externally
+      setProviderParams(providerParamsProp);
+      return;
+    }
+
     const fetchProviderParams = async () => {
       if (!accessToken) return;
       
@@ -49,9 +57,12 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         setLoading(false);
       }
     };
-    
-    fetchProviderParams();
-  }, [accessToken]);
+
+    // Only fetch if not provided via props
+    if (!providerParamsProp) {
+      fetchProviderParams();
+    }
+  }, [accessToken, providerParamsProp]);
 
   // If no provider is selected, don't render anything
   if (!selectedProvider) {
