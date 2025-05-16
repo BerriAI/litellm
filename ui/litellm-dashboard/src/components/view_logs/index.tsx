@@ -149,7 +149,8 @@ export default function SpendLogsTable({
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
       selectedStatus,
-      selectedModel
+      selectedModel,
+      selectedTeamId
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -250,6 +251,7 @@ export default function SpendLogsTable({
     }
     setSelectedStatus(filters['Status'] || "");
     setSelectedModel(filters['Model'] || "");
+    setSelectedKeyHash(filters['Key Hash'] || "");
   }, [filters]);
 
   // Fetch logs for a session if selected
@@ -382,6 +384,11 @@ export default function SpendLogsTable({
           value: model
         }));
       }
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
     }
   ]
 

@@ -131,6 +131,12 @@ export function useLogFilterLogic({
     if (filters[FILTER_KEYS.MODEL]) {
       filteredData = filteredData.filter(
         log => log.model === filters[FILTER_KEYS.MODEL]
+      )
+    }
+    
+    if (filters[FILTER_KEYS.KEY_HASH]) {
+      filteredData = filteredData.filter(
+        log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
       );
     }
     
