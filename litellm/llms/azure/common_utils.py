@@ -272,6 +272,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         client_initialization_params: dict = locals()
+        client_initialization_params["is_async"] = _is_async
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,

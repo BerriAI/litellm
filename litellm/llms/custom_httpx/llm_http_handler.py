@@ -19,6 +19,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -29,6 +30,7 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -711,6 +713,10 @@ class BaseLLMHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+        if provider_config is None:
+            raise ValueError(
+                f"Provider {custom_llm_provider} does not support embedding"
+            )
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -2016,7 +2022,11 @@ class BaseLLMHTTPHandler:
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
-        error_text = getattr(e, "text", str(e))
+        if isinstance(e, httpx.HTTPStatusError):
+            error_text = e.response.text
+            status_code = e.response.status_code
+        else:
+            error_text = getattr(e, "text", str(e))
         error_response = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
@@ -2026,8 +2036,65 @@ class BaseLLMHTTPHandler:
             error_headers = dict(error_headers)
         else:
             error_headers = {}
+
         raise provider_config.get_error_class(
             error_message=error_text,
             status_code=status_code,
             headers=error_headers,
         )
+
+    async def async_realtime(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLoggingObj,
+        provider_config: BaseRealtimeConfig,
+        headers: dict,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        client: Optional[Any] = None,
+        timeout: Optional[float] = None,
+    ):
+        import websockets
+        from websockets.asyncio.client import ClientConnection
+
+        url = provider_config.get_complete_url(api_base, model, api_key)
+        headers = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+        )
+
+        try:
+            async with websockets.connect(  # type: ignore
+                url, additional_headers=headers
+            ) as backend_ws:
+                realtime_streaming = RealTimeStreaming(
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    provider_config,
+                    model,
+                )
+                await realtime_streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            verbose_logger.exception(f"Error connecting to backend: {e}")
+            await websocket.close(code=e.status_code, reason=str(e))
+        except Exception as e:
+            verbose_logger.exception(f"Error connecting to backend: {e}")
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(
+                    close_error
+                ):
+                    # The WebSocket is already closed or the response is completed, so we can ignore this error
+                    pass
+                else:
+                    # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )

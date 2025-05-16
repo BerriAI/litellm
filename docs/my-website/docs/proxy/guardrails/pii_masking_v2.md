@@ -11,7 +11,7 @@ LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) fo
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="config.yaml" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -27,7 +27,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Setup Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -42,7 +42,7 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ### 2. Start LiteLLM Gateway 
 
 
-```shell
+```shell title="Start Gateway" showLineNumbers
 litellm --config config.yaml --detailed_debug
 ```
 
@@ -55,7 +55,7 @@ litellm --config config.yaml --detailed_debug
 
 Expect this to mask `Jane Doe` since it's PII
 
-```shell
+```shell title="Masked PII Request" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -70,7 +70,7 @@ curl http://localhost:4000/chat/completions \
 
 Expected response on failure
 
-```shell
+```shell title="Response with Masked PII" showLineNumbers
 {
  "id": "chatcmpl-A3qSC39K7imjGbZ8xCDacGJZBoTJQ",
  "choices": [
@@ -102,7 +102,7 @@ Expected response on failure
 
 <TabItem label="No PII Call " value = "allowed">
 
-```shell
+```shell title="No PII Request" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -120,6 +120,122 @@ curl http://localhost:4000/chat/completions \
 
 </Tabs>
 
+## Entity Type Configuration
+
+You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
+
+### Configure Entity Types in config.yaml
+
+Define your guardrails with specific entity type configuration:
+
+```yaml title="config.yaml with Entity Types" showLineNumbers
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-mask-guard"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"  # Will mask credit card numbers
+        EMAIL_ADDRESS: "MASK"  # Will mask email addresses
+        
+  - guardrail_name: "presidio-block-guard"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      pii_entities_config:
+        CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
+```
+
+### Supported Entity Types
+
+LiteLLM Supports all Presidio entity types. See the complete list of presidio entity types [here](https://microsoft.github.io/presidio/supported_entities/).
+
+### Supported Actions
+
+For each entity type, you can specify one of the following actions:
+
+- `MASK`: Replace the entity with a placeholder (e.g., `<PERSON>`)
+- `BLOCK`: Block the request entirely if this entity type is detected
+
+### Test request with Entity Type Configuration
+
+<Tabs>
+<TabItem label="Masking PII entities" value="masked-entities">
+
+When using the masking configuration, entities will be replaced with placeholders:
+
+```shell title="Masking PII Request" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com"}
+    ],
+    "guardrails": ["presidio-mask-guard"]
+  }'
+```
+
+Example response with masked entities:
+
+```json
+{
+  "id": "chatcmpl-123abc",
+  "choices": [
+    {
+      "message": {
+        "content": "I can see you provided a <CREDIT_CARD> and an <EMAIL_ADDRESS>. For security reasons, I recommend not sharing this sensitive information.",
+        "role": "assistant"
+      },
+      "index": 0,
+      "finish_reason": "stop"
+    }
+  ],
+  // ... other response fields
+}
+```
+
+</TabItem>
+
+<TabItem label="Blocking PII entities" value="blocked-entity">
+
+When using the blocking configuration, requests containing the configured entity types will be blocked completely with an exception:
+
+```shell title="Blocking PII Request" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "My credit card is 4111-1111-1111-1111"}
+    ],
+    "guardrails": ["presidio-block-guard"]
+  }'
+```
+
+When running this request, the proxy will raise a `BlockedPiiEntityError` exception.
+
+```json
+{
+  "error": {
+    "message": "Blocked PII entity detected: CREDIT_CARD by Guardrail: presidio-block-guard."
+  }
+}
+```
+
+The exception includes the entity type that was blocked (`CREDIT_CARD` in this case) and the guardrail name that caused the blocking.
+
+</TabItem>
+</Tabs>
+
 ## Advanced
 
 ###  Set `language` per request
@@ -129,7 +245,7 @@ The Presidio API [supports passing the `language` param](https://microsoft.githu
 <Tabs>
 <TabItem label="curl" value = "curl">
 
-```shell
+```shell title="Language Parameter - curl" showLineNumbers
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
@@ -148,8 +264,7 @@ curl http://localhost:4000/chat/completions \
 
 <TabItem label="OpenAI Python SDK" value = "python">
 
-```python
-
+```python title="Language Parameter - Python" showLineNumbers
 import openai
 client = openai.OpenAI(
     api_key="anything",
@@ -179,7 +294,6 @@ print(response)
 
 </Tabs>
 
-
 ### Output parsing 
 
 
@@ -188,7 +302,7 @@ LLM responses can sometimes contain the masked tokens.
 For presidio 'replace' operations, LiteLLM can check the LLM response and replace the masked token with the user-submitted values. 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Output Parsing Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -223,7 +337,7 @@ Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the pro
 #### Define ad-hoc recognizer on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Ad Hoc Recognizers Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -240,7 +354,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Ad Hoc Recognizers Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -248,13 +362,13 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 You can see this working, when you run the proxy: 
 
-```bash
+```bash title="Run Proxy with Debug" showLineNumbers
 litellm --config /path/to/config.yaml --debug
 ```
 
 Make a chat completions request, example:
 
-```
+```json title="Custom PII Request" showLineNumbers
 {
   "model": "azure-gpt-3.5",
   "messages": [{"role": "user", "content": "John Smith AHV number is 756.3026.0705.92. Zip code: 1334023"}]
@@ -262,7 +376,7 @@ Make a chat completions request, example:
 ```
 
 And search for any log starting with `Presidio PII Masking`, example:
-```
+```text title="PII Masking Log" showLineNumbers
 Presidio PII Masking: Redacted pii message: <PERSON> AHV number is <AHV_NUMBER>. Zip code: <US_DRIVER_LICENSE>
 ```
 
@@ -283,7 +397,7 @@ This is currently only applied for
 1. Define mode: `logging_only` on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+```yaml title="Logging Only Config" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -299,7 +413,7 @@ guardrails:
 
 Set the following env vars 
 
-```bash
+```bash title="Logging Only Environment Variables" showLineNumbers
 export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
 export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 ```
@@ -307,13 +421,13 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 2. Start proxy
 
-```bash
+```bash title="Start Proxy" showLineNumbers
 litellm --config /path/to/config.yaml
 ```
 
 3. Test it! 
 
-```bash
+```bash title="Test Logging Only" showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
@@ -331,7 +445,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 **Expected Logged Response**
 
-```
+```text title="Logged Response with Masked PII" showLineNumbers
 Hi, my name is <PERSON>!
 ```
 

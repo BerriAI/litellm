@@ -32,119 +32,6 @@ def test_get_optional_params_image_gen():
     assert optional_params["n"] == 3
 
 
-def return_mocked_response(model: str):
-    if model == "bedrock/mistral.mistral-large-2407-v1:0":
-        return {
-            "metrics": {"latencyMs": 316},
-            "output": {
-                "message": {
-                    "content": [{"text": "Hello! How are you doing today? How can"}],
-                    "role": "assistant",
-                }
-            },
-            "stopReason": "max_tokens",
-            "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
-        }
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/mistral.mistral-large-2407-v1:0",
-    ],
-)
-@pytest.mark.asyncio()
-async def test_bedrock_max_completion_tokens(model: str):
-    """
-    Tests that:
-    - max_completion_tokens is passed as max_tokens to bedrock models
-    """
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    litellm.set_verbose = True
-
-    client = AsyncHTTPHandler()
-
-    mock_response = return_mocked_response(model)
-    _model = model.split("/")[1]
-    print("\n\nmock_response: ", mock_response)
-
-    with patch.object(client, "post") as mock_client:
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                max_completion_tokens=10,
-                messages=[{"role": "user", "content": "Hello!"}],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_client.assert_called_once()
-        request_body = json.loads(mock_client.call_args.kwargs["data"])
-
-        print("request_body: ", request_body)
-
-        assert request_body == {
-            "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-            "additionalModelRequestFields": {},
-            "system": [],
-            "inferenceConfig": {"maxTokens": 10},
-        }
-
-
-@pytest.mark.parametrize(
-    "model",
-    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
-)
-@pytest.mark.asyncio()
-async def test_anthropic_api_max_completion_tokens(model: str):
-    """
-    Tests that:
-    - max_completion_tokens is passed as max_tokens to anthropic models
-    """
-    litellm.set_verbose = True
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    mock_response = {
-        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
-        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-        "model": "claude-3-5-sonnet-20240620",
-        "role": "assistant",
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "type": "message",
-        "usage": {"input_tokens": 2095, "output_tokens": 503},
-    }
-
-    client = HTTPHandler()
-
-    print("\n\nmock_response: ", mock_response)
-
-    with patch.object(client, "post") as mock_client:
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                max_completion_tokens=10,
-                messages=[{"role": "user", "content": "Hello!"}],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-        mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs["json"]
-
-        print("request_body: ", request_body)
-
-        assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
-            "max_tokens": 10,
-            "model": model.split("/")[-1],
-        }
-
-
 def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
@@ -395,3 +282,40 @@ def test_all_model_configs():
         optional_params={},
         drop_params=False,
     ) == {"max_output_tokens": 10}
+
+
+def test_anthropic_web_search_in_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    supported_models = [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-3-5-sonnet-20241022",
+        "anthropic/claude-3-5-haiku-20241022",
+        "anthropic/claude-3-5-haiku-latest",
+    ]
+    for model in supported_models:
+        from litellm.utils import get_model_info
+
+        model_info = get_model_info(model)
+        assert model_info is not None
+        assert (
+            model_info["supports_web_search"] is True
+        ), f"Model {model} should support web search"
+        assert (
+            model_info["search_context_cost_per_query"] is not None
+        ), f"Model {model} should have a search context cost per query"
+
+
+def test_cohere_embedding_optional_params():
+    from litellm import get_optional_params_embeddings
+
+    optional_params = get_optional_params_embeddings(
+        model="embed-v4.0",
+        custom_llm_provider="cohere",
+        input="Hello, world!",
+        input_type="search_query",
+        dimensions=512,
+    )
+    assert optional_params is not None

@@ -295,7 +295,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
-        "/v2/rerank"
+        "/v2/rerank",
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -334,7 +334,16 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
     ]
 
-    llm_api_routes = openai_routes + anthropic_routes + mapped_pass_through_routes
+    apply_guardrail_routes = [
+        "/guardrails/apply_guardrail",
+    ]
+
+    llm_api_routes = (
+        openai_routes
+        + anthropic_routes
+        + mapped_pass_through_routes
+        + apply_guardrail_routes
+    )
     info_routes = [
         "/key/info",
         "/key/health",
@@ -2484,6 +2493,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    user: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):

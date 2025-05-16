@@ -143,6 +143,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     OpenAITextCompletionUserMessage,
+    OpenAIWebSearchOptions,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
@@ -234,6 +235,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
@@ -2091,6 +2093,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            if key not in litellm.novita_models:
+                litellm.novita_models.append(key)
     return model_cost
 
 
@@ -2268,7 +2273,7 @@ def get_optional_params_image_gen(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}, {model}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -2366,8 +2371,33 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         default_params=default_params,
         additional_drop_params=additional_drop_params,
     )
+
+    provider_config: Optional[BaseEmbeddingConfig] = None
+
+    if (
+        custom_llm_provider is not None
+        and custom_llm_provider in LlmProviders._member_map_.values()
+    ):
+        provider_config = ProviderConfigManager.get_provider_embedding_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+    if provider_config is not None:
+        supported_params: Optional[list] = provider_config.get_supported_openai_params(
+            model=model
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     ## raise exception if non-default value passed for non-openai/azure embedding calls
-    if custom_llm_provider == "openai":
+    elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
 
         if (
@@ -2549,7 +2579,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                     status_code=500,
                     message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
+
     final_params = {**non_default_params, **kwargs}
+
     return final_params
 
 
@@ -2652,6 +2684,7 @@ def get_optional_params(  # noqa: PLR0915
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2739,6 +2772,7 @@ def get_optional_params(  # noqa: PLR0915
         "messages": None,
         "reasoning_effort": None,
         "thinking": None,
+        "web_search_options": None,
     }
 
     # filter out those parameters that were passed with non-default values
@@ -4943,6 +4977,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "novita":
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5025,6 +5064,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif model in litellm.novita_models:
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6366,6 +6410,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.NOVITA == provider:
+            return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6410,7 +6456,7 @@ class ProviderConfigManager:
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
-    ) -> BaseEmbeddingConfig:
+    ) -> Optional[BaseEmbeddingConfig]:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
@@ -6419,7 +6465,14 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
-        raise ValueError(f"Provider {provider.value} does not support embedding config")
+        elif (
+            litellm.LlmProviders.COHERE == provider
+            or litellm.LlmProviders.COHERE_CHAT == provider
+        ):
+            from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+
+            return CohereEmbeddingConfig()
+        return None
 
     @staticmethod
     def get_provider_rerank_config(
@@ -6576,6 +6629,17 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        return None
+
+    @staticmethod
+    def get_provider_realtime_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseRealtimeConfig]:
+        if LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+            return GeminiRealtimeConfig()
         return None
 
 
