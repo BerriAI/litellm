@@ -14,14 +14,13 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { getGuardrailInfo, deleteGuardrailCall } from "@/components/networking";
+import { getGuardrailInfo } from "@/components/networking";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 
 export interface GuardrailInfoProps {
   guardrailId: string;
   onClose: () => void;
   accessToken: string | null;
-  onGuardrailDeleted: () => void;
   isAdmin: boolean;
 }
 
@@ -29,7 +28,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
   guardrailId, 
   onClose, 
   accessToken,
-  onGuardrailDeleted,
   isAdmin
 }) => {
   const [guardrailData, setGuardrailData] = useState<any>(null);
@@ -55,17 +53,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     fetchGuardrailInfo();
   }, [guardrailId, accessToken]);
 
-  const handleDelete = async () => {
-    try {
-      if (!accessToken) return;
-      await deleteGuardrailCall(accessToken, guardrailId);
-      message.success("Guardrail deleted successfully");
-      onGuardrailDeleted();
-    } catch (error) {
-      message.error("Failed to delete guardrail");
-      console.error("Error deleting guardrail:", error);
-    }
-  };
 
   const handleGuardrailUpdate = async (values: any) => {
     try {
@@ -103,14 +90,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
           <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
           <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
         </div>
-        {isAdmin && (
-          <Button 
-            danger
-            onClick={handleDelete}
-          >
-            Delete Guardrail
-          </Button>
-        )}
       </div>
 
       <TabGroup>

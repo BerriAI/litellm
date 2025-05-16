@@ -43,6 +43,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<{id: string, name: string} | null>(null);
+  const [isViewingGuardrailInfo, setIsViewingGuardrailInfo] = useState(false);
   
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -107,15 +108,17 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex justify-between items-center mb-4">
-        <Button 
-          icon={PlusIcon} 
-          onClick={handleAddGuardrail}
-          disabled={!accessToken}
-        >
-          Add Guardrail
-        </Button>
-      </div>
+      {!isViewingGuardrailInfo && (
+        <div className="flex justify-between items-center mb-4">
+          <Button 
+            icon={PlusIcon} 
+            onClick={handleAddGuardrail}
+            disabled={!accessToken}
+          >
+            Add Guardrail
+          </Button>
+        </div>
+      )}
       
       <GuardrailTable 
         guardrailsList={guardrailsList}
@@ -124,6 +127,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         accessToken={accessToken}
         onGuardrailUpdated={fetchGuardrails}
         isAdmin={isAdmin}
+        onShowGuardrailInfo={setIsViewingGuardrailInfo}
       />
 
       <AddGuardrailForm 

@@ -51,6 +51,7 @@ interface GuardrailTableProps {
   accessToken: string | null;
   onGuardrailUpdated: () => void;
   isAdmin?: boolean;
+  onShowGuardrailInfo?: (isVisible: boolean) => void;
 }
 
 const GuardrailTable: React.FC<GuardrailTableProps> = ({
@@ -60,6 +61,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   accessToken,
   onGuardrailUpdated,
   isAdmin = false,
+  onShowGuardrailInfo,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "created_at", desc: true }
@@ -90,16 +92,19 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   const handleGuardrailIdClick = (guardrailId: string) => {
     setSelectedGuardrailId(guardrailId);
     setShowGuardrailInfo(true);
+    onShowGuardrailInfo?.(true);
   };
 
   const handleGuardrailInfoClose = () => {
     setShowGuardrailInfo(false);
     setSelectedGuardrailId(null);
+    onShowGuardrailInfo?.(false);
   };
 
   const handleGuardrailDeleted = () => {
     setShowGuardrailInfo(false);
     setSelectedGuardrailId(null);
+    onShowGuardrailInfo?.(false);
     onGuardrailUpdated();
   };
 
@@ -244,7 +249,6 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
         guardrailId={selectedGuardrailId}
         onClose={handleGuardrailInfoClose}
         accessToken={accessToken}
-        onGuardrailDeleted={handleGuardrailDeleted}
         isAdmin={isAdmin}
       />
     );
