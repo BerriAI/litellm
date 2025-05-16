@@ -830,6 +830,9 @@ class LangFuseLogger:
 
         trace.span(
             name="guardrail_information",
+            start_time=guardrail_information.get("start_time", None),
+            end_time=guardrail_information.get("end_time", None),
+            input=guardrail_information.get("guardrail_request", None),
             output=guardrail_information.get("guardrail_response", None),
             metadata={
                 "guardrail_name": guardrail_information.get("guardrail_name", None),

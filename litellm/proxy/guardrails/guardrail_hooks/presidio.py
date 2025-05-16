@@ -358,6 +358,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 guardrail_json_response=guardrail_json_response,
                 request_data=request_data,
                 guardrail_status=status,
+                start_time=start_time,
+                end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
             )
