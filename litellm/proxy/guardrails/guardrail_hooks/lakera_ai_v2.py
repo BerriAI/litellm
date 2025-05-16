@@ -2,22 +2,27 @@ import os
 from typing import Dict, List, Literal, Optional, Union
 
 import litellm
-from litellm.integrations.custom_guardrail import log_guardrail_information
+from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
 
-from .lakera_ai import lakeraAI_Moderation
 
-
-class LakeraAIGuardrail(lakeraAI_Moderation):
+class LakeraAIGuardrail(CustomGuardrail):
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -90,7 +95,39 @@ class LakeraAIGuardrail(lakeraAI_Moderation):
             "rerank",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
-        pass
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. No messages in data"
+            )
+            return
+
+        #########################################################
+        ########## 1. Make the Lakera AI v2 guard API request ##########
+        #########################################################
+        lakera_guardrail_response = await self.call_v2_guard(messages=new_messages)
+        if lakera_guardrail_response.get("flagged") is True:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message="Lakera AI flagged this request. Please review the request and try again.",
+            )
+
+        #########################################################
+        ########## 3. Add the guardrail to the applied guardrails header ##########
+        #########################################################
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return data
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -106,4 +143,36 @@ class LakeraAIGuardrail(lakeraAI_Moderation):
             "responses",
         ],
     ):
-        pass
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. No messages in data"
+            )
+            return
+
+        #########################################################
+        ########## 1. Make the Lakera AI v2 guard API request ##########
+        #########################################################
+        lakera_guardrail_response = await self.call_v2_guard(messages=new_messages)
+        if lakera_guardrail_response.get("flagged") is True:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message="Lakera AI flagged this request. Please review the request and try again.",
+            )
+
+        #########################################################
+        ########## 3. Add the guardrail to the applied guardrails header ##########
+        #########################################################
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return data

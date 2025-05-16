@@ -809,6 +809,13 @@ class LiteLLMUnknownProvider(BadRequestError):
         return self.message
 
 
+class GuardrailRaisedException(Exception):
+    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+        self.guardrail_name = guardrail_name
+        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        super().__init__(self.message)
+
+
 class BlockedPiiEntityError(Exception):
     def __init__(
         self,
