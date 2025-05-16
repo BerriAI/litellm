@@ -92,32 +92,90 @@ async def test_langfuse_trace_includes_guardrail_information():
     """
     Test that the langfuse trace includes the guardrail information when a guardrail is applied
     """
-    litellm._turn_on_debug()
-    litellm.callbacks = ["langfuse"]
-    presidio_guard = _OPTIONAL_PresidioPIIMasking(
-        guardrail_name="presidio_guard",
-        event_hook=GuardrailEventHooks.pre_call,
-        presidio_analyzer_api_base=os.getenv("PRESIDIO_ANALYZER_API_BASE"),
-        presidio_anonymizer_api_base=os.getenv("PRESIDIO_ANONYMIZER_API_BASE"),
-    )
-    # 1. call the pre call hook with guardrail
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [
-            {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
-        ],
-        "mock_response": "Hello",
-        "guardrails": ["presidio_guard"],
-        "metadata": {},
-    }
-    await presidio_guard.async_pre_call_hook(
-        user_api_key_dict={},
-        cache=None,
-        data=request_data,
-        call_type="acompletion"
-    )
+    import httpx
+    from unittest.mock import AsyncMock, patch
+    import json
+    
+    # Create a mock Response object
+    mock_response = AsyncMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"status": "success"}
+    
+    # Create mock for httpx.Client.post
+    mock_post = AsyncMock()
+    mock_post.return_value = mock_response
+    
+    with patch("httpx.Client.post", mock_post):
+        litellm._turn_on_debug()
+        litellm.callbacks = ["langfuse"]
+        presidio_guard = _OPTIONAL_PresidioPIIMasking(
+            guardrail_name="presidio_guard",
+            event_hook=GuardrailEventHooks.pre_call,
+            presidio_analyzer_api_base=os.getenv("PRESIDIO_ANALYZER_API_BASE"),
+            presidio_anonymizer_api_base=os.getenv("PRESIDIO_ANONYMIZER_API_BASE"),
+        )
+        # 1. call the pre call hook with guardrail
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
+            ],
+            "mock_response": "Hello",
+            "guardrails": ["presidio_guard"],
+            "metadata": {},
+        }
+        await presidio_guard.async_pre_call_hook(
+            user_api_key_dict={},
+            cache=None,
+            data=request_data,
+            call_type="acompletion"
+        )
 
-    # 2. call litellm.acompletion
-    response = await litellm.acompletion(**request_data)
+        # 2. call litellm.acompletion
+        response = await litellm.acompletion(**request_data)
 
-    await asyncio.sleep(5)
+        # 3. Wait for async logging operations to complete
+        await asyncio.sleep(3)
+        
+        # 4. Verify the Langfuse payload
+        assert mock_post.call_count >= 1
+        url = mock_post.call_args[0][0]
+        request_body = mock_post.call_args[1].get("content")
+        
+        # Parse the JSON body
+        actual_payload = json.loads(request_body)
+        print("\nLangfuse payload:", json.dumps(actual_payload, indent=2))
+        
+        # Look for the guardrail span in the payload
+        guardrail_span = None
+        for item in actual_payload["batch"]:
+            if (item["type"] == "span-create" and 
+                item["body"].get("name") == "guardrail_information"):
+                guardrail_span = item
+                break
+        
+        # Assert that the guardrail span exists
+        assert guardrail_span is not None, "No guardrail span found in Langfuse payload"
+        
+        # Validate the structure of the guardrail span
+        assert guardrail_span["body"]["name"] == "guardrail_information"
+        assert "metadata" in guardrail_span["body"]
+        assert guardrail_span["body"]["metadata"]["guardrail_name"] == "presidio_guard"
+        assert guardrail_span["body"]["metadata"]["guardrail_mode"] == GuardrailEventHooks.pre_call
+        assert "guardrail_masked_entity_count" in guardrail_span["body"]["metadata"]
+        assert guardrail_span["body"]["metadata"]["guardrail_masked_entity_count"]["PHONE_NUMBER"] == 1
+        
+        # Validate the output format matches the expected structure
+        assert "output" in guardrail_span["body"]
+        assert isinstance(guardrail_span["body"]["output"], list)
+        assert len(guardrail_span["body"]["output"]) > 0
+        
+        # Validate the first output item has the expected structure
+        output_item = guardrail_span["body"]["output"][0]
+        assert "entity_type" in output_item
+        assert output_item["entity_type"] == "PHONE_NUMBER"
+        assert "score" in output_item
+        assert "start" in output_item
+        assert "end" in output_item
+        assert "recognition_metadata" in output_item
+        assert "recognizer_name" in output_item["recognition_metadata"]
