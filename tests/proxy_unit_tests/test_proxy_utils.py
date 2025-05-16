@@ -472,13 +472,10 @@ def test_reading_openai_org_id_from_headers():
 @pytest.mark.parametrize(
     "headers, general_settings, expected_data",
     [
-        ({"OpenAI-Organization": "test_org_id"}, None, {"organization": "test_org_id"}),
-        ({"openai-organization": "test_org_id"}, None, {"organization": "test_org_id"}),
-        ({"OpenAI-Organization": "test_org_id", "Authorization": "Bearer test_token"}, None, {"organization": "test_org_id"}),
-        ({"X-OpenWebUI-User-Id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, {"user": "ishaan3"}),
-        ({"x-openwebui-user-id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, {"user": "ishaan3"}),
-        ({"X-OpenWebUI-User-Id": "ishaan3"}, {}, {}),
-        ({}, None, {}),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"x-openwebui-user-id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {}, None),
+        ({}, None, None),
     ],
 )
 def test_add_litellm_data_for_backend_llm_call(headers, general_settings, expected_data):
@@ -490,9 +487,8 @@ def test_add_litellm_data_for_backend_llm_call(headers, general_settings, expect
         api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
     )
 
-    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+    data = LiteLLMProxyRequestSetup.get_user_from_headers(
         headers=headers,
-        user_api_key_dict=user_api_key_dict,
         general_settings=general_settings,
     )
 
