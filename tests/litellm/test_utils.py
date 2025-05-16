@@ -319,3 +319,38 @@ def test_cohere_embedding_optional_params():
         dimensions=512,
     )
     assert optional_params is not None
+
+
+def test_supports_computer_use_utility():
+    """
+    Tests the litellm.utils.supports_computer_use utility function.
+    """
+    from litellm.utils import supports_computer_use
+    # Ensure LITELLM_LOCAL_MODEL_COST_MAP is set for consistent test behavior,
+    # as supports_computer_use relies on get_model_info.
+    # This also requires litellm.model_cost to be populated.
+    original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
+    original_model_cost = getattr(litellm, "model_cost", None)
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="") # Load with local/backup
+    
+    try:
+        # Test a model known to support computer_use from backup JSON
+        supports_cu_anthropic = supports_computer_use(model="anthropic/claude-3-7-sonnet-20250219")
+        assert supports_cu_anthropic is True
+
+        # Test a model known not to have the flag or set to false (defaults to False via get_model_info)
+        supports_cu_gpt = supports_computer_use(model="gpt-3.5-turbo")
+        assert supports_cu_gpt is False
+    finally:
+        # Restore original environment and model_cost to avoid side effects
+        if original_env_var is None:
+            del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+        
+        if original_model_cost is not None:
+            litellm.model_cost = original_model_cost
+        elif hasattr(litellm, "model_cost"):
+            delattr(litellm, "model_cost")
