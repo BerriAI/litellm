@@ -66,6 +66,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
     _user_has_admin_view,
+    _upsert_budget_and_membership,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -1266,56 +1267,13 @@ async def team_member_update(
 
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
-        if data.max_budget_in_team is not None:
-            if identified_budget_id is None:
-                new_budget = await tx.litellm_budgettable.create(
-                    data={
-                        "max_budget": data.max_budget_in_team,
-                        "created_by": user_api_key_dict.user_id or "",
-                        "updated_by": user_api_key_dict.user_id or "",
-                    },
-                    include={"team_membership": True},
-                )
-                await tx.litellm_teammembership.upsert(
-                    where={
-                        "user_id_team_id": {
-                            "user_id": received_user_id,
-                            "team_id": data.team_id,
-                        }
-                    },
-                    data={
-                        "create": {
-                            "user_id": received_user_id,
-                            "team_id": data.team_id,
-                            "litellm_budget_table": {
-                                "connect": {"budget_id": new_budget.budget_id},
-                            },
-                        },
-                        "update": {
-                            "litellm_budget_table": {
-                                "connect": {"budget_id": new_budget.budget_id},
-                            },
-                        },
-                    },
-                )
-            elif identified_budget_id is not None:
-                await prisma_client.db.litellm_budgettable.update(
-                    where={"budget_id": identified_budget_id},
-                    data={"max_budget": data.max_budget_in_team},
-                )
-        else:
-            await tx.litellm_teammembership.update(
-            where={
-                "user_id_team_id": {
-                    "user_id": received_user_id,
-                    "team_id": data.team_id,
-                }
-            },
-            data={
-                "litellm_budget_table": {
-                    "disconnect": True
-                }
-            },
+        await _upsert_budget_and_membership(
+            tx=tx,
+            team_id=data.team_id,
+            user_id=received_user_id,
+            max_budget=data.max_budget_in_team,
+            existing_budget_id=identified_budget_id,
+            user_api_key_dict=user_api_key_dict,
         )
 
     ### update team member role
