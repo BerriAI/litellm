@@ -96,8 +96,7 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
       user_header_name: X-OpenWebUI-User-Id
   ```
 
-  <details>
-  <summary>ⓘ Available tracking options</summary>
+  ⓘ Available tracking options
 
   You can use any of the following headers for `user_header_name`:
   - `X-OpenWebUI-User-Id`
@@ -110,7 +109,6 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
   - Users can modify their own usernames
   - Administrators can modify both usernames and emails of any account
 
-  </details>
 
 
 ## Render `thinking` content on Open WebUI
