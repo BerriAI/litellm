@@ -174,3 +174,53 @@ class TestVertexBase:
             )
         assert token == ""
         assert project == ""
+
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_authorized_user_credentials(self, is_async):
+        vertex_base = VertexBase()
+
+        credentials = {
+            "account": "",
+            "client_id": "fake-client-id",
+            "client_secret": "fake-secret",
+            "quota_project_id": "test-project",
+            "refresh_token": "fake-refresh-token",
+            "type": "authorized_user",
+            "universe_domain": "googleapis.com"
+        }
+
+        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            # 1. Test that authorized_user-style credentials are correctly handled and uses quota_project_id
+            if is_async:
+                token, project = await vertex_base._ensure_access_token_async(
+                    credentials=credentials, project_id=None, custom_llm_provider="vertex_ai"
+                )
+            else:
+                token, project = vertex_base._ensure_access_token(
+                    credentials=credentials, project_id=None, custom_llm_provider="vertex_ai"
+                )
+
+
+            assert token == "refreshed-token"
+            assert project == "test-project"
+
+            # 1. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
+            if is_async:
+                token, project = await vertex_base._ensure_access_token_async(
+                    credentials=credentials, project_id="new-project", custom_llm_provider="vertex_ai"
+                )
+            else:
+                token, project = vertex_base._ensure_access_token(
+                    credentials=credentials, project_id="new-project", custom_llm_provider="vertex_ai"
+                )
+
+
+            assert token == "refreshed-token"
+            assert project == "new-project"
