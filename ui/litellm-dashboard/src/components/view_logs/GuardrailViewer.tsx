@@ -42,6 +42,10 @@ export function GuardrailViewer({ data }: GuardrailViewerProps) {
     return null;
   }
 
+  // Calculate total masked entities
+  const totalMaskedEntities = data.masked_entity_count ? 
+    Object.values(data.masked_entity_count).reduce((sum, count) => sum + count, 0) : 0;
+
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleString();
@@ -82,6 +86,11 @@ export function GuardrailViewer({ data }: GuardrailViewerProps) {
           }`}>
             {data.guardrail_status}
           </span>
+          {totalMaskedEntities > 0 && (
+            <span className="ml-3 px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-xs font-medium">
+              {totalMaskedEntities} masked {totalMaskedEntities === 1 ? 'entity' : 'entities'}
+            </span>
+          )}
         </div>
         <span className="text-sm text-gray-500">{sectionExpanded ? 'Click to collapse' : 'Click to expand'}</span>
       </div>

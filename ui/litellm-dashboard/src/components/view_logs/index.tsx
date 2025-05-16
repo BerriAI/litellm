@@ -707,6 +707,17 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
 
   // Extract guardrail information from metadata if available
   const hasGuardrailData = row.original.metadata && row.original.metadata.guardrail_information;
+  
+  // Calculate total masked entities if guardrail data exists
+  const getTotalMaskedEntities = (): number => {
+    if (!hasGuardrailData || !row.original.metadata?.guardrail_information.masked_entity_count) {
+      return 0;
+    }
+    return Object.values(row.original.metadata.guardrail_information.masked_entity_count)
+      .reduce((sum: number, count: any) => sum + (typeof count === 'number' ? count : 0), 0);
+  };
+  
+  const totalMaskedEntities = getTotalMaskedEntities();
 
   return (
     <div className="p-6 bg-gray-50 space-y-6">
@@ -749,7 +760,19 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 <span>{row?.original?.requester_ip_address}</span>
               </div>
             )}
-
+            {hasGuardrailData && (
+              <div className="flex">
+                <span className="font-medium w-1/3">Guardrail:</span>
+                <div>
+                  <span>{row.original.metadata!.guardrail_information.guardrail_name}</span>
+                  {totalMaskedEntities > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs">
+                      {totalMaskedEntities} masked
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <div className="flex">
