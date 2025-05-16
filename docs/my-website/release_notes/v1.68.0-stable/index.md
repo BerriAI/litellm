@@ -68,6 +68,10 @@ For the next release we plan on allowing you to set key, user, team, org permiss
 
 ## Rate Limiting
 
+<Image img={require('../../img/multi_instance_rate_limiting.png')}/>
+<br/>
+
+
 This release brings accurate multi-instance rate limiting across keys/users/teams. Outlining key engineering changes below:
 
 - **Change**: Instances now increment cache value instead of setting it. To avoid calling Redis on each request, this is synced every 0.01s.

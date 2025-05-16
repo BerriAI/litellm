@@ -44,6 +44,7 @@ tiktoken==0.8.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
 tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli 
+rich==13.7.1 # for litellm proxy cli 
 jinja2==3.1.6 # for prompt templates
 aiohttp==3.10.2 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls

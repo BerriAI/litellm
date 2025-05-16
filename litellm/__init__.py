@@ -116,6 +116,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "anthropic_cache_control_hook",
     "bedrock_vector_store",
     "generic_api",
+    "resend_email",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
