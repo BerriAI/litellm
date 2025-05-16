@@ -57,18 +57,23 @@ class SpendLogCleanup:
                 return
 
             cutoff_date = datetime.now(UTC) - timedelta(seconds=float(self.retention_seconds))
-            verbose_proxy_logger.info(f"🧹 Deleting logs older than {cutoff_date.isoformat()}")
+            verbose_proxy_logger.info(f"Deleting logs older than {cutoff_date.isoformat()}")
 
             total_deleted = 0
+            run_count = 0
             while True:
+                if run_count > 100:
+                    verbose_proxy_logger.info("Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
+                    break
                 # Step 1: Find logs to delete
                 logs_to_delete = await prisma_client.db.litellm_spendlogs.find_many(
                     where={"startTime": {"lt": cutoff_date}},
                     take=self.batch_size,
                 )
+                verbose_proxy_logger.info(f"🗑️ Found {len(logs_to_delete)} logs in this batch")
 
                 if not logs_to_delete:
-                    verbose_proxy_logger.info(f"✅ No more logs to delete. Total deleted: {total_deleted}")
+                    verbose_proxy_logger.info(f"No more logs to delete. Total deleted: {total_deleted}")
                     break
 
                 request_ids = [log.request_id for log in logs_to_delete]
@@ -79,7 +84,7 @@ class SpendLogCleanup:
                 )
 
                 total_deleted += len(logs_to_delete)
-                verbose_proxy_logger.info(f"🗑️ Deleted {len(logs_to_delete)} logs in this batch")
-
+                verbose_proxy_logger.info(f"Deleted {len(logs_to_delete)} logs in this batch")
+                run_count += 1
         except Exception as e:
-            verbose_proxy_logger.error(f"🔥 Error during cleanup: {str(e)}")
+            verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")

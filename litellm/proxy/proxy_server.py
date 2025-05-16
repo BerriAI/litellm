@@ -3299,13 +3299,21 @@ class ProxyStartupEvent:
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
-        spend_log_cleanup = SpendLogCleanup()
-        scheduler.add_job(
-            spend_log_cleanup.cleanup_old_spend_logs,
-            "interval",
-            days=1,  # Run once per day
-            args=[prisma_client],
-        )
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            spend_log_cleanup = SpendLogCleanup()
+            # Get the interval from config or default to 1 day
+            retention_interval = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds,
+                    args=[prisma_client],
+                )
+            except ValueError:
+                verbose_proxy_logger.error(f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, defaulting to 60 seconds")
+                interval_seconds = 60
 
         scheduler.start()
 
