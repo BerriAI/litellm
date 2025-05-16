@@ -6,6 +6,7 @@ import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
+from langfuse.client import StatefulTraceClient
 from packaging.version import Version
 
 import litellm
@@ -626,15 +627,16 @@ class LangFuseLogger:
                         if key.lower() not in ["authorization", "cookie", "referer"]:
                             clean_headers[key] = value
 
-                # clean_metadata["request"] = {
-                #     "method": method,
-                #     "url": url,
-                #     "headers": clean_headers,
-                # }
-            trace = self.Langfuse.trace(**trace_params)
+            trace: StatefulTraceClient = self.Langfuse.trace(**trace_params)
 
             # Log provider specific information as a span
             log_provider_specific_information_as_span(trace, clean_metadata)
+
+            # Log guardrail information as a span
+            self._log_guardrail_information_as_span(
+                trace=trace,
+                standard_logging_object=standard_logging_object,
+            )
 
             generation_id = None
             usage = None
@@ -808,6 +810,35 @@ class LangFuseLogger:
             [int] The flush interval to use to initialize the Langfuse client
         """
         return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
+
+    def _log_guardrail_information_as_span(
+        self,
+        trace: StatefulTraceClient,
+        standard_logging_object: Optional[StandardLoggingPayload],
+    ):
+        """
+        Log guardrail information as a span
+        """
+        if standard_logging_object is None:
+            return
+
+        guardrail_information = standard_logging_object.get(
+            "guardrail_information", None
+        )
+        if guardrail_information is None:
+            return
+
+        trace.span(
+            name="guardrail_information",
+            output=guardrail_information.get("guardrail_response", None),
+            metadata={
+                "guardrail_name": guardrail_information.get("guardrail_name", None),
+                "guardrail_mode": guardrail_information.get("guardrail_mode", None),
+                "guardrail_masked_entity_count": guardrail_information.get(
+                    "masked_entity_count", None
+                ),
+            },
+        )
 
 
 def _add_prompt_to_generation_params(
