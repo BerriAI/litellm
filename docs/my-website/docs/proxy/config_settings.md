@@ -95,6 +95,7 @@ general_settings:
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
+  maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
 
   # Database Settings
   database_url: string
@@ -212,7 +213,7 @@ general_settings:
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
-
+| maximum_spend_logs_retention_interval | str | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
 ### router_settings - Reference
 
 :::info
