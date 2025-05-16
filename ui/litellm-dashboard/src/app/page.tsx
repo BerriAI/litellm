@@ -359,7 +359,7 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} />
+                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
               ): page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ): page == "general-settings" ? (
