@@ -120,11 +120,7 @@ class InitializeGuardrails:
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
-        _litellm_params_kwargs = {
-            k: litellm_params_data.get(k) for k in LitellmParams.__annotations__.keys()
-        }
-
-        litellm_params = LitellmParams(**_litellm_params_kwargs)  # type: ignore
+        litellm_params = LitellmParams(**litellm_params_data)
 
         if (
             "category_thresholds" in litellm_params_data
