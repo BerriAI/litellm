@@ -205,58 +205,44 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             drop_params=drop_params,
         )
 
-    @overload
-    def _handle_pdf_url(
-        self, content_item: ChatCompletionFileObjectFile, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, ChatCompletionFileObjectFile]:
-        ...
-
-    @overload
-    def _handle_pdf_url(
-        self,
-        content_item: ChatCompletionFileObjectFile,
-        is_async: Literal[False] = False,
-    ) -> ChatCompletionFileObjectFile:
-        ...
-
-    def _handle_pdf_url(
-        self, content_item: ChatCompletionFileObjectFile, is_async: bool = False
-    ) -> Union[
-        ChatCompletionFileObjectFile, Coroutine[Any, Any, ChatCompletionFileObjectFile]
-    ]:
+    def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
         potential_pdf_url_starts = ["https://", "http://", "www."]
-        content_copy = content_item.copy()
-        file_id = content_copy.get("file_id")
-        file_data = content_copy.get("file_data")
-        filename = content_copy.get("filename")
+        file_id = content_item.get("file_id")
         if file_id and any(
             file_id.startswith(start) for start in potential_pdf_url_starts
         ):
-            if is_async:
-                return self._async_handle_pdf_url_helper(content_item)
-            else:
-                base64_data = convert_url_to_base64(file_id)
-                content_copy["file_data"] = base64_data
-                content_copy["filename"] = "my_file.pdf"
-                content_copy.pop("file_id")
-        elif file_data and not filename:
-            content_copy["file_data"] = file_data
+            return True
+        return False
+
+    def _handle_pdf_url(
+        self, content_item: ChatCompletionFileObjectFile
+    ) -> ChatCompletionFileObjectFile:
+        content_copy = content_item.copy()
+        file_id = content_copy.get("file_id")
+        if file_id is not None:
+            base64_data = convert_url_to_base64(file_id)
+            content_copy["file_data"] = base64_data
             content_copy["filename"] = "my_file.pdf"
+            content_copy.pop("file_id")
         return content_copy
 
-    async def _async_handle_pdf_url_helper(
+    async def _async_handle_pdf_url(
         self, content_item: ChatCompletionFileObjectFile
     ) -> ChatCompletionFileObjectFile:
         file_id = content_item.get("file_id")
-        file_data = content_item.get("file_data")
-        filename = content_item.get("filename")
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
             base64_data = await async_convert_url_to_base64(file_id)
             content_item["file_data"] = base64_data
             content_item["filename"] = "my_file.pdf"
             content_item.pop("file_id")
-        elif file_data and not filename:
-            content_item["file_data"] = file_data
+        return content_item
+
+    def _common_file_data_check(
+        self, content_item: ChatCompletionFileObjectFile
+    ) -> ChatCompletionFileObjectFile:
+        file_data = content_item.get("file_data")
+        filename = content_item.get("filename")
+        if file_data is not None and filename is None:
             content_item["filename"] = "my_file.pdf"
         return content_item
 
@@ -322,7 +308,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if content_item_type == "file" and potential_file_obj:
                 file_obj = cast(ChatCompletionFileObjectFile, potential_file_obj)
                 content_item_typed = cast(ChatCompletionFileObject, content_item)
-                content_item_typed["file"] = self._handle_pdf_url(file_obj)
+                if self.contains_pdf_url(file_obj):
+                    file_obj = self._handle_pdf_url(file_obj)
+                file_obj = self._common_file_data_check(file_obj)
+                content_item_typed["file"] = file_obj
                 content_item = content_item_typed
             return content_item
 
@@ -335,9 +324,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if content_item_type == "file" and potential_file_obj:
                 file_obj = cast(ChatCompletionFileObjectFile, potential_file_obj)
                 content_item_typed = cast(ChatCompletionFileObject, content_item)
-                content_item_typed["file"] = await self._handle_pdf_url(
-                    file_obj, is_async=True
-                )
+                if self.contains_pdf_url(file_obj):
+                    file_obj = await self._async_handle_pdf_url(file_obj)
+                file_obj = self._common_file_data_check(file_obj)
+                content_item_typed["file"] = file_obj
                 content_item = content_item_typed
             return content_item
 
