@@ -7,7 +7,11 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-from litellm.types.guardrails import Guardrail, SupportedGuardrailIntegrations
+from litellm.types.guardrails import (
+    Guardrail,
+    LitellmParams,
+    SupportedGuardrailIntegrations,
+)
 
 from .guardrail_initializers import (
     initialize_aim,
@@ -71,7 +75,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params: str = safe_dumps(guardrail.get("litellm_params", {}))
+            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -117,7 +121,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params = guardrail.get("litellm_params", {})
+            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
             guardrail_info = guardrail.get("guardrail_info", {})
 
             # Update in DB
