@@ -87,7 +87,7 @@ export function GuardrailViewer({ data }: GuardrailViewerProps) {
             {data.guardrail_status}
           </span>
           {totalMaskedEntities > 0 && (
-            <span className="ml-3 px-2 py-1 bg-blue-100 text-blue-800 rounded-md text-xs font-medium">
+            <span className="ml-3 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
               {totalMaskedEntities} masked {totalMaskedEntities === 1 ? 'entity' : 'entities'}
             </span>
           )}
@@ -141,7 +141,7 @@ export function GuardrailViewer({ data }: GuardrailViewerProps) {
                 <h4 className="font-medium mb-2">Masked Entity Summary</h4>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(data.masked_entity_count).map(([entityType, count]) => (
-                    <span key={entityType} className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                    <span key={entityType} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
                       {entityType}: {count}
                     </span>
                   ))}
@@ -176,7 +176,7 @@ export function GuardrailViewer({ data }: GuardrailViewerProps) {
                     return (
                       <div key={index} className="border rounded-lg overflow-hidden">
                         <div 
-                          className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer"
+                          className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
                           onClick={() => toggleEntity(index)}
                         >
                           <div className="flex items-center">

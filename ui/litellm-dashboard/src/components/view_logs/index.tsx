@@ -764,9 +764,9 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <div className="flex">
                 <span className="font-medium w-1/3">Guardrail:</span>
                 <div>
-                  <span>{row.original.metadata!.guardrail_information.guardrail_name}</span>
+                  <span className="font-mono">{row.original.metadata!.guardrail_information.guardrail_name}</span>
                   {totalMaskedEntities > 0 && (
-                    <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs">
+                    <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
                       {totalMaskedEntities} masked
                     </span>
                   )}
