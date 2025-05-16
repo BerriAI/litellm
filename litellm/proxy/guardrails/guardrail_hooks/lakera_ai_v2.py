@@ -1,13 +1,12 @@
+import copy
 import os
-from typing import Any, Dict, List, Literal, Optional, TypeVar, Union, cast
+from datetime import datetime
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -62,31 +61,73 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.dev_info: Optional[bool] = dev_info
         super().__init__(**kwargs)
 
-    async def call_v2_guard(self, messages: List[Dict]) -> LakeraAIResponse:
+    async def call_v2_guard(
+        self, messages: List[Dict]
+    ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
         """
-        request = dict(
-            LakeraAIRequest(
-                messages=messages,
-                project_id=self.project_id,
-                payload=self.payload,
-                breakdown=self.breakdown,
-                metadata=self.metadata,
-                dev_info=self.dev_info,
+        status: Literal["success", "failure"] = "success"
+        exception_str: str = ""
+        start_time: datetime = datetime.now()
+        lakera_response: Optional[LakeraAIResponse] = None
+        request: Dict = {}
+        masked_entity_count: Dict = {}
+        try:
+            request = dict(
+                LakeraAIRequest(
+                    messages=messages,
+                    project_id=self.project_id,
+                    payload=self.payload,
+                    breakdown=self.breakdown,
+                    metadata=self.metadata,
+                    dev_info=self.dev_info,
+                )
             )
-        )
-        verbose_proxy_logger.debug("Lakera AI v2 guard request: %s", request)
-        response = await self.async_handler.post(
-            url=f"{self.api_base}/v2/guard",
-            headers={"Authorization": f"Bearer {self.lakera_api_key}"},
-            json=request,
-        )
-        verbose_proxy_logger.debug("Lakera AI v2 guard response: %s", response.json())
-        return LakeraAIResponse(**response.json())
+            verbose_proxy_logger.debug("Lakera AI v2 guard request: %s", request)
+            response = await self.async_handler.post(
+                url=f"{self.api_base}/v2/guard",
+                headers={"Authorization": f"Bearer {self.lakera_api_key}"},
+                json=request,
+            )
+            verbose_proxy_logger.debug(
+                "Lakera AI v2 guard response: %s", response.json()
+            )
+            lakera_response = LakeraAIResponse(**response.json())
+            return lakera_response, masked_entity_count
+        except Exception as e:
+            status = "failure"
+            exception_str = str(e)
+            raise e
+        finally:
+            ####################################################
+            # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
+            ####################################################
+            guardrail_json_response: Union[Exception, str, dict, List[dict]] = {}
+            if status == "success":
+                copy_lakera_response_dict = (
+                    dict(copy.deepcopy(lakera_response)) if lakera_response else {}
+                )
+                # payload contains PII, we don't want to log it
+                copy_lakera_response_dict.pop("payload")
+                guardrail_json_response = copy_lakera_response_dict
+            else:
+                guardrail_json_response = exception_str
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=guardrail_json_response,
+                guardrail_status=status,
+                request_data=dict(request) or {},
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                masked_entity_count=masked_entity_count,
+            )
 
     def _mask_pii_in_messages(
-        self, messages: List[Dict], lakera_response: Optional[LakeraAIResponse]
+        self,
+        messages: List[Dict],
+        lakera_response: Optional[LakeraAIResponse],
+        masked_entity_count: Dict,
     ) -> List[Dict]:
         """
         Return a copy of messages with any detected PII replaced by
@@ -131,12 +172,11 @@ class LakeraAIGuardrail(CustomGuardrail):
                         start_index=start,
                         end_index=end,
                     )
+                    masked_entity_count[typ] = masked_entity_count.get(typ, 0) + 1
 
             msg["content"] = content
-
         return masked
 
-    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -171,7 +211,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
-        lakera_guardrail_response = await self.call_v2_guard(messages=new_messages)
+        lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
+            messages=new_messages
+        )
 
         #########################################################
         ########## 2. Handle flagged content ##########
@@ -180,7 +222,9 @@ class LakeraAIGuardrail(CustomGuardrail):
             # If only PII violations exist, mask the PII
             if self._is_only_pii_violation(lakera_guardrail_response):
                 data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages, lakera_response=lakera_guardrail_response
+                    messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
                 )
                 verbose_proxy_logger.info(
                     "Lakera AI: Masked PII in messages instead of blocking request"
@@ -201,7 +245,6 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         return data
 
-    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,
@@ -233,7 +276,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
-        lakera_guardrail_response = await self.call_v2_guard(messages=new_messages)
+        lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
+            messages=new_messages
+        )
 
         #########################################################
         ########## 2. Handle flagged content ##########
@@ -242,7 +287,9 @@ class LakeraAIGuardrail(CustomGuardrail):
             # If only PII violations exist, mask the PII
             if self._is_only_pii_violation(lakera_guardrail_response):
                 data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages, lakera_response=lakera_guardrail_response
+                    messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
                 )
                 verbose_proxy_logger.info(
                     "Lakera AI: Masked PII in messages instead of blocking request"
