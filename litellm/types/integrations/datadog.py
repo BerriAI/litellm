@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Optional, TypedDict
 
+DD_MAX_BATCH_SIZE = 1000
+
 
 class DataDogStatus(str, Enum):
     INFO = "info"

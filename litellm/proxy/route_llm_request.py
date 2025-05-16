@@ -21,6 +21,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
     "arerank": "/rerank",
+    "aresponses": "/responses",
 }
 
 
@@ -45,6 +46,9 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "aresponses",
+        "aget_responses",
+        "adelete_responses",
         "_arealtime",  # private function for realtime API
     ],
 ):
@@ -99,7 +103,7 @@ async def route_request(
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif route_type == "amoderation":
+            elif route_type in ["amoderation", "aget_responses", "adelete_responses"]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 

@@ -56,7 +56,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
-                from enterprise.enterprise_hooks.llama_guard import (
+                from litellm_enterprise.enterprise_callbacks.llama_guard import (
                     _ENTERPRISE_LlamaGuard,
                 )
 
@@ -69,7 +69,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 llama_guard_object = _ENTERPRISE_LlamaGuard()
                 imported_list.append(llama_guard_object)
             elif isinstance(callback, str) and callback == "hide_secrets":
-                from enterprise.enterprise_hooks.secret_detection import (
+                from litellm_enterprise.enterprise_callbacks.secret_detection import (
                     _ENTERPRISE_SecretDetection,
                 )
 
@@ -125,7 +125,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 google_text_moderation_obj = _ENTERPRISE_GoogleTextModeration()
                 imported_list.append(google_text_moderation_obj)
             elif isinstance(callback, str) and callback == "llmguard_moderations":
-                from enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
+                from litellm_enterprise.enterprise_callbacks.llm_guard import (
+                    _ENTERPRISE_LLMGuard,
+                )
 
                 if premium_user is not True:
                     raise Exception(
@@ -224,18 +226,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            if premium_user is not True:
-                verbose_proxy_logger.warning(
-                    f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
-                )
-            from litellm.proxy.proxy_server import app
+            from litellm.integrations.prometheus import PrometheusLogger
 
-            verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")
-            from prometheus_client import make_asgi_app
-
-            # Add prometheus asgi middleware to route /metrics requests
-            metrics_app = make_asgi_app()
-            app.mount("/metrics", metrics_app)
+            PrometheusLogger._mount_metrics_endpoint(premium_user)
     else:
         litellm.callbacks = [
             get_instance_fn(

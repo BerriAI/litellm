@@ -6,7 +6,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -315,14 +315,20 @@ async def test_router_with_empty_choices(model_list):
     assert response is not None
 
 
-@pytest.mark.asyncio
-async def test_ageneric_api_call_with_fallbacks_basic():
+@pytest.mark.parametrize("sync_mode", [True, False])
+def test_generic_api_call_with_fallbacks_basic(sync_mode):
     """
-    Test the _ageneric_api_call_with_fallbacks method with a basic successful call
+    Test both the sync and async versions of generic_api_call_with_fallbacks with a basic successful call
     """
-    # Create a mock function that will be passed to _ageneric_api_call_with_fallbacks
-    mock_function = AsyncMock()
-    mock_function.__name__ = "test_function"
+    # Create a mock function that will be passed to generic_api_call_with_fallbacks
+    if sync_mode:
+        from unittest.mock import Mock
+
+        mock_function = Mock()
+        mock_function.__name__ = "test_function"
+    else:
+        mock_function = AsyncMock()
+        mock_function.__name__ = "test_function"
 
     # Create a mock response
     mock_response = {
@@ -347,13 +353,23 @@ async def test_ageneric_api_call_with_fallbacks_basic():
         ]
     )
 
-    # Call the _ageneric_api_call_with_fallbacks method
-    response = await router._ageneric_api_call_with_fallbacks(
-        model="test-model-alias",
-        original_function=mock_function,
-        messages=[{"role": "user", "content": "Hello"}],
-        max_tokens=100,
-    )
+    # Call the appropriate generic_api_call_with_fallbacks method
+    if sync_mode:
+        response = router._generic_api_call_with_fallbacks(
+            model="test-model-alias",
+            original_function=mock_function,
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+    else:
+        response = asyncio.run(
+            router._ageneric_api_call_with_fallbacks(
+                model="test-model-alias",
+                original_function=mock_function,
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=100,
+            )
+        )
 
     # Verify the mock function was called
     mock_function.assert_called_once()
@@ -510,3 +526,94 @@ async def test__aadapter_completion():
 
         # Verify async_routing_strategy_pre_call_checks was called
         router.async_routing_strategy_pre_call_checks.assert_called_once()
+
+
+def test_initialize_router_endpoints():
+    """
+    Test that initialize_router_endpoints correctly sets up all router endpoints
+    """
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "anthropic/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+
+    # Explicitly call initialize_router_endpoints
+    router.initialize_router_endpoints()
+
+    # Verify all expected endpoints are initialized
+    assert hasattr(router, "amoderation")
+    assert hasattr(router, "aanthropic_messages")
+    assert hasattr(router, "aresponses")
+    assert hasattr(router, "responses")
+    assert hasattr(router, "aget_responses")
+    assert hasattr(router, "adelete_responses")
+    # Verify the endpoints are callable
+    assert callable(router.amoderation)
+    assert callable(router.aanthropic_messages)
+    assert callable(router.aresponses)
+    assert callable(router.responses)
+    assert callable(router.aget_responses)
+    assert callable(router.adelete_responses)
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints():
+    """
+    A simpler test for _init_responses_api_endpoints that focuses on the basic functionality
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+    
+    # Just mock the _ageneric_api_call_with_fallbacks method
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+    
+    # Add a mock implementation of _get_model_id_from_response_id to the Router instance
+    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(return_value=None)
+    
+    # Call without a response_id (no model extraction should happen)
+    await router._init_responses_api_endpoints(
+        original_function=AsyncMock(),
+        thread_id="thread_xyz"
+    )
+    
+    # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
+    first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert "model" not in first_call_kwargs
+    assert first_call_kwargs["thread_id"] == "thread_xyz"
+    
+    # Reset the mock
+    router._ageneric_api_call_with_fallbacks.reset_mock()
+    
+    # Change the return value for the second call
+    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = "claude-3-sonnet"
+    
+    # Call with a response_id
+    await router._init_responses_api_endpoints(
+        original_function=AsyncMock(),
+        response_id="resp_claude_123"
+    )
+    
+    # Verify model was updated in the kwargs
+    second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert second_call_kwargs["model"] == "claude-3-sonnet"
+    assert second_call_kwargs["response_id"] == "resp_claude_123"
+

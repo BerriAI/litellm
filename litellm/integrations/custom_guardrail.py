@@ -2,12 +2,15 @@ from typing import Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.guardrails import DynamicGuardrailParams, GuardrailEventHooks
+from litellm.types.guardrails import (
+    DynamicGuardrailParams,
+    GuardrailEventHooks,
+    PiiEntityType,
+)
 from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
 class CustomGuardrail(CustomLogger):
-
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -16,6 +19,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = None,
         default_on: bool = False,
+        mask_request_content: bool = False,
+        mask_response_content: bool = False,
         **kwargs,
     ):
         """
@@ -26,6 +31,8 @@ class CustomGuardrail(CustomLogger):
             supported_event_hooks: The event hooks that the guardrail supports
             event_hook: The event hook to run the guardrail on
             default_on: If True, the guardrail will be run by default on all requests
+            mask_request_content: If True, the guardrail will mask the request content
+            mask_response_content: If True, the guardrail will mask the response content
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -33,6 +40,8 @@ class CustomGuardrail(CustomLogger):
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = event_hook
         self.default_on: bool = default_on
+        self.mask_request_content: bool = mask_request_content
+        self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -209,6 +218,31 @@ class CustomGuardrail(CustomLogger):
             verbose_logger.warning(
                 "unable to log guardrail information. No metadata found in request_data"
             )
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        Apply your guardrail logic to the given text
+
+        Args:
+            text: The text to apply the guardrail to
+            language: The language of the text
+            entities: The entities to mask, optional
+
+        Any of the custom guardrails can override this method to provide custom guardrail logic
+
+        Returns the text with the guardrail applied
+
+        Raises:
+            Exception:
+                - If the guardrail raises an exception
+
+        """
+        return text
 
 
 def log_guardrail_information(func):

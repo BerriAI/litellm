@@ -209,22 +209,6 @@ async def test_router_schedule_factory(model_list):
         assert "priority" not in mock_atext_completion.call_args.kwargs
 
 
-@pytest.mark.asyncio
-async def test_router_arealtime(model_list):
-    """Test if the '_arealtime' function is working correctly"""
-    import litellm
-
-    router = Router(model_list=model_list)
-    with patch.object(litellm, "_arealtime", AsyncMock()) as mock_arealtime:
-        mock_arealtime.return_value = "I'm fine, thank you!"
-        await router._arealtime(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-        )
-
-        mock_arealtime.assert_awaited_once()
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_router_function_with_fallbacks(model_list, sync_mode):
@@ -336,18 +320,6 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["api_key"] == "test"
     assert kwargs["metadata"]["key"] == "value"
     assert kwargs["metadata"]["key2"] == "value2"
-
-
-def test_get_async_openai_model_client(model_list):
-    """Test if the '_get_async_openai_model_client' function is working correctly"""
-    router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
-    )
-    model_client = router._get_async_openai_model_client(
-        deployment=deployment, kwargs={}
-    )
-    assert model_client is not None
 
 
 def test_get_timeout(model_list):
@@ -1169,3 +1141,14 @@ def test_cached_get_model_group_info(model_list):
     # Verify the cache info shows hits
     cache_info = router._cached_get_model_group_info.cache_info()
     assert cache_info.hits > 0  # Should have at least one cache hit
+
+
+def test_init_responses_api_endpoints(model_list):
+    """Test if the '_init_responses_api_endpoints' function is working correctly"""
+    from typing import Callable
+    router = Router(model_list=model_list)
+
+    assert router.aget_responses is not None
+    assert isinstance(router.aget_responses, Callable)
+    assert router.adelete_responses is not None
+    assert isinstance(router.adelete_responses, Callable)

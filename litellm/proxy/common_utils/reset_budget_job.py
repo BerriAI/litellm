@@ -1,11 +1,10 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta
-from typing import List, Optional, Union
+from datetime import datetime
+from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -318,16 +317,21 @@ class ResetBudgetJob:
     async def _reset_budget_common(
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
         current_time: datetime,
-        item_type: str,
-    ) -> Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken]:
+        item_type: Literal["key", "team", "user"],
+    ):
         """
+        In-place, updates spend=0, and sets budget_reset_at to current_time + budget_duration
+
         Common logic for resetting budget for a team, user, or key
         """
         try:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                duration_s = duration_in_seconds(duration=item.budget_duration)
-                item.budget_reset_at = current_time + timedelta(seconds=duration_s)
+                # Get standardized reset time based on budget duration
+                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+                item.budget_reset_at = get_budget_reset_time(
+                    budget_duration=item.budget_duration
+                )
             return item
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -339,19 +343,25 @@ class ResetBudgetJob:
     async def _reset_budget_for_team(
         team: LiteLLM_TeamTable, current_time: datetime
     ) -> Optional[LiteLLM_TeamTable]:
-        result = await ResetBudgetJob._reset_budget_common(team, current_time, "team")
-        return result if isinstance(result, LiteLLM_TeamTable) else None
+        await ResetBudgetJob._reset_budget_common(
+            item=team, current_time=current_time, item_type="team"
+        )
+        return team
 
     @staticmethod
     async def _reset_budget_for_user(
         user: LiteLLM_UserTable, current_time: datetime
     ) -> Optional[LiteLLM_UserTable]:
-        result = await ResetBudgetJob._reset_budget_common(user, current_time, "user")
-        return result if isinstance(result, LiteLLM_UserTable) else None
+        await ResetBudgetJob._reset_budget_common(
+            item=user, current_time=current_time, item_type="user"
+        )
+        return user
 
     @staticmethod
     async def _reset_budget_for_key(
         key: LiteLLM_VerificationToken, current_time: datetime
     ) -> Optional[LiteLLM_VerificationToken]:
-        result = await ResetBudgetJob._reset_budget_common(key, current_time, "key")
-        return result if isinstance(result, LiteLLM_VerificationToken) else None
+        await ResetBudgetJob._reset_budget_common(
+            item=key, current_time=current_time, item_type="key"
+        )
+        return key

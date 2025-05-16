@@ -2,30 +2,16 @@ from typing import Any, Callable, Optional
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
-from ...base import BaseLLM
 from ...openai.completion.transformation import OpenAITextCompletionConfig
-from ..common_utils import AzureOpenAIError
+from ..common_utils import AzureOpenAIError, BaseAzureLLM
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 
 
-def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    azure_endpoint = azure_client_params.get("azure_endpoint", None)
-    if azure_endpoint is not None:
-        # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
-        if "/openai/deployments" in azure_endpoint:
-            # this is base_url, not an azure_endpoint
-            azure_client_params["base_url"] = azure_endpoint
-            azure_client_params.pop("azure_endpoint")
-
-    return azure_client_params
-
-
-class AzureTextCompletion(BaseLLM):
+class AzureTextCompletion(BaseAzureLLM):
     def __init__(self) -> None:
         super().__init__()
 
@@ -60,7 +46,6 @@ class AzureTextCompletion(BaseLLM):
         headers: Optional[dict] = None,
         client=None,
     ):
-        super().completion()
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
@@ -76,27 +61,19 @@ class AzureTextCompletion(BaseLLM):
             ### if so - set the model as part of the base url
             if "gateway.ai.cloudflare.com" in api_base:
                 ## build base url - assume api base includes resource name
-                if client is None:
-                    if not api_base.endswith("/"):
-                        api_base += "/"
-                    api_base += f"{model}"
-
-                    azure_client_params = {
-                        "api_version": api_version,
-                        "base_url": f"{api_base}",
-                        "http_client": litellm.client_session,
-                        "max_retries": max_retries,
-                        "timeout": timeout,
-                    }
-                    if api_key is not None:
-                        azure_client_params["api_key"] = api_key
-                    elif azure_ad_token is not None:
-                        azure_client_params["azure_ad_token"] = azure_ad_token
-
-                    if acompletion is True:
-                        client = AsyncAzureOpenAI(**azure_client_params)
-                    else:
-                        client = AzureOpenAI(**azure_client_params)
+                client = self._init_azure_client_for_cloudflare_ai_gateway(
+                    api_key=api_key,
+                    api_version=api_version,
+                    api_base=api_base,
+                    model=model,
+                    client=client,
+                    max_retries=max_retries,
+                    timeout=timeout,
+                    azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
+                    acompletion=acompletion,
+                    litellm_params=litellm_params,
+                )
 
                 data = {"model": None, "prompt": prompt, **optional_params}
             else:
@@ -118,6 +95,7 @@ class AzureTextCompletion(BaseLLM):
                         azure_ad_token=azure_ad_token,
                         timeout=timeout,
                         client=client,
+                        litellm_params=litellm_params,
                     )
                 else:
                     return self.acompletion(
@@ -132,6 +110,7 @@ class AzureTextCompletion(BaseLLM):
                         client=client,
                         logging_obj=logging_obj,
                         max_retries=max_retries,
+                        litellm_params=litellm_params,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -165,33 +144,21 @@ class AzureTextCompletion(BaseLLM):
                         status_code=422, message="max retries must be an int"
                     )
                 # init AzureOpenAI Client
-                azure_client_params = {
-                    "api_version": api_version,
-                    "azure_endpoint": api_base,
-                    "azure_deployment": model,
-                    "http_client": litellm.client_session,
-                    "max_retries": max_retries,
-                    "timeout": timeout,
-                    "azure_ad_token_provider": azure_ad_token_provider,
-                }
-                azure_client_params = select_azure_base_url_or_endpoint(
-                    azure_client_params=azure_client_params
+                azure_client = self.get_azure_openai_client(
+                    api_key=api_key,
+                    api_base=api_base,
+                    api_version=api_version,
+                    client=client,
+                    litellm_params=litellm_params,
+                    _is_async=False,
+                    model=model,
                 )
-                if api_key is not None:
-                    azure_client_params["api_key"] = api_key
-                elif azure_ad_token is not None:
-                    azure_client_params["azure_ad_token"] = azure_ad_token
-                if client is None:
-                    azure_client = AzureOpenAI(**azure_client_params)
-                else:
-                    azure_client = client
-                    if api_version is not None and isinstance(
-                        azure_client._custom_query, dict
-                    ):
-                        # set api_version to version passed by user
-                        azure_client._custom_query.setdefault(
-                            "api-version", api_version
-                        )
+
+                if not isinstance(azure_client, AzureOpenAI):
+                    raise AzureOpenAIError(
+                        status_code=500,
+                        message="azure_client is not an instance of AzureOpenAI",
+                    )
 
                 raw_response = azure_client.completions.with_raw_response.create(
                     **data, timeout=timeout
@@ -240,36 +207,27 @@ class AzureTextCompletion(BaseLLM):
         max_retries: int,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
+        litellm_params: dict = {},
     ):
         response = None
         try:
             # init AzureOpenAI Client
-            azure_client_params = {
-                "api_version": api_version,
-                "azure_endpoint": api_base,
-                "azure_deployment": model,
-                "http_client": litellm.client_session,
-                "max_retries": max_retries,
-                "timeout": timeout,
-            }
-            azure_client_params = select_azure_base_url_or_endpoint(
-                azure_client_params=azure_client_params
-            )
-            if api_key is not None:
-                azure_client_params["api_key"] = api_key
-            elif azure_ad_token is not None:
-                azure_client_params["azure_ad_token"] = azure_ad_token
-
             # setting Azure client
-            if client is None:
-                azure_client = AsyncAzureOpenAI(**azure_client_params)
-            else:
-                azure_client = client
-                if api_version is not None and isinstance(
-                    azure_client._custom_query, dict
-                ):
-                    # set api_version to version passed by user
-                    azure_client._custom_query.setdefault("api-version", api_version)
+            azure_client = self.get_azure_openai_client(
+                api_version=api_version,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                _is_async=True,
+                client=client,
+                litellm_params=litellm_params,
+            )
+            if not isinstance(azure_client, AsyncAzureOpenAI):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message="azure_client is not an instance of AsyncAzureOpenAI",
+                )
+
             ## LOGGING
             logging_obj.pre_call(
                 input=data["prompt"],
@@ -312,6 +270,7 @@ class AzureTextCompletion(BaseLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
+        litellm_params: dict = {},
     ):
         max_retries = data.pop("max_retries", 2)
         if not isinstance(max_retries, int):
@@ -319,28 +278,21 @@ class AzureTextCompletion(BaseLLM):
                 status_code=422, message="max retries must be an int"
             )
         # init AzureOpenAI Client
-        azure_client_params = {
-            "api_version": api_version,
-            "azure_endpoint": api_base,
-            "azure_deployment": model,
-            "http_client": litellm.client_session,
-            "max_retries": max_retries,
-            "timeout": timeout,
-        }
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
+        azure_client = self.get_azure_openai_client(
+            api_version=api_version,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            _is_async=False,
+            client=client,
+            litellm_params=litellm_params,
         )
-        if api_key is not None:
-            azure_client_params["api_key"] = api_key
-        elif azure_ad_token is not None:
-            azure_client_params["azure_ad_token"] = azure_ad_token
-        if client is None:
-            azure_client = AzureOpenAI(**azure_client_params)
-        else:
-            azure_client = client
-            if api_version is not None and isinstance(azure_client._custom_query, dict):
-                # set api_version to version passed by user
-                azure_client._custom_query.setdefault("api-version", api_version)
+        if not isinstance(azure_client, AzureOpenAI):
+            raise AzureOpenAIError(
+                status_code=500,
+                message="azure_client is not an instance of AzureOpenAI",
+            )
+
         ## LOGGING
         logging_obj.pre_call(
             input=data["prompt"],
@@ -375,33 +327,24 @@ class AzureTextCompletion(BaseLLM):
         timeout: Any,
         azure_ad_token: Optional[str] = None,
         client=None,
+        litellm_params: dict = {},
     ):
         try:
             # init AzureOpenAI Client
-            azure_client_params = {
-                "api_version": api_version,
-                "azure_endpoint": api_base,
-                "azure_deployment": model,
-                "http_client": litellm.client_session,
-                "max_retries": data.pop("max_retries", 2),
-                "timeout": timeout,
-            }
-            azure_client_params = select_azure_base_url_or_endpoint(
-                azure_client_params=azure_client_params
+            azure_client = self.get_azure_openai_client(
+                api_version=api_version,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                _is_async=True,
+                client=client,
+                litellm_params=litellm_params,
             )
-            if api_key is not None:
-                azure_client_params["api_key"] = api_key
-            elif azure_ad_token is not None:
-                azure_client_params["azure_ad_token"] = azure_ad_token
-            if client is None:
-                azure_client = AsyncAzureOpenAI(**azure_client_params)
-            else:
-                azure_client = client
-                if api_version is not None and isinstance(
-                    azure_client._custom_query, dict
-                ):
-                    # set api_version to version passed by user
-                    azure_client._custom_query.setdefault("api-version", api_version)
+            if not isinstance(azure_client, AsyncAzureOpenAI):
+                raise AzureOpenAIError(
+                    status_code=500,
+                    message="azure_client is not an instance of AsyncAzureOpenAI",
+                )
             ## LOGGING
             logging_obj.pre_call(
                 input=data["prompt"],

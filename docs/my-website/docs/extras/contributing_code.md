@@ -8,7 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM
 - [ ] Add testing, **Adding at least 1 test is a hard requirement** - [see details](#2-adding-testing-to-your-pr)
 - [ ] Ensure your PR passes the following tests:
     - [ ] [Unit Tests](#3-running-unit-tests)
-    - [ ] Formatting / Linting Tests
+    - [ ] [Formatting / Linting Tests](#35-running-linting-tests)
 - [ ] Keep scope as isolated as possible. As a general rule, your changes should address 1 specific problem at a time
 
 
@@ -55,6 +55,16 @@ run the following command on the root of the litellm directory
 ```shell
 make test-unit
 ```
+
+## 3.5 Running Linting Tests
+
+run the following command on the root of the litellm directory
+
+```shell
+make lint
+```
+
+LiteLLM uses mypy for linting. On ci/cd we also run `black` for formatting.
 
 ## 4. Submit a PR with your changes!
 

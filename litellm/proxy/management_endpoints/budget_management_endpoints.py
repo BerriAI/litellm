@@ -197,7 +197,6 @@ async def budget_settings(
 
     for field_name, field_info in BudgetNewRequest.model_fields.items():
         if field_name in allowed_args:
-
             _stored_in_db = True
 
             _response_obj = ConfigList(

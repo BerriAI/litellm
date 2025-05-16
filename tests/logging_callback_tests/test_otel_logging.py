@@ -268,12 +268,16 @@ def validate_redacted_message_span_attributes(span):
         "metadata.requester_metadata",
         "metadata.user_api_key_team_id",
         "metadata.spend_logs_metadata",
+        "metadata.usage_object",
         "metadata.user_api_key_alias",
         "metadata.user_api_key_user_id",
         "metadata.user_api_key_org_id",
         "metadata.user_api_key_end_user_id",
         "metadata.user_api_key_user_email",
         "metadata.applied_guardrails",
+        "metadata.mcp_tool_call_metadata",
+        "metadata.vector_store_request_metadata",
+        "metadata.requester_custom_headers",
     ]
 
     _all_attributes = set(
