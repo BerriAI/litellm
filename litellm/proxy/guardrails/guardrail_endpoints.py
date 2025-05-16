@@ -434,6 +434,71 @@ async def delete_guardrail(guardrail_id: str):
 
 
 @router.get(
+    "/guardrails/{guardrail_id}/info",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_guardrail_info(guardrail_id: str):
+    """
+    Get detailed information about a specific guardrail by ID
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/info" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+        "guardrail_name": "my-bedrock-guard",
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": "pre_call",
+            "guardrailIdentifier": "ff6ujrregl1q",
+            "guardrailVersion": "DRAFT",
+            "default_on": true
+        },
+        "guardrail_info": {
+            "description": "Bedrock content moderation guardrail"
+        },
+        "created_at": "2023-11-09T12:34:56.789Z",
+        "updated_at": "2023-11-09T12:34:56.789Z"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+            guardrail_id=guardrail_id, prisma_client=prisma_client
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
+            )
+
+        return GuardrailInfoResponse(
+            guardrail_id=result.get("guardrail_id"),
+            guardrail_name=result.get("guardrail_name"),
+            litellm_params=result.get("litellm_params"),
+            guardrail_info=result.get("guardrail_info"),
+            created_at=result.get("created_at"),
+            updated_at=result.get("updated_at"),
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],

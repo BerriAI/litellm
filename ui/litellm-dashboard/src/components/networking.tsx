@@ -5124,3 +5124,28 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     throw error;
   }
 };
+
+export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
+  
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {})
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error fetching guardrail info:", error);
+    throw error;
+  }
+};
