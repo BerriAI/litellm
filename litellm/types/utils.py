@@ -1,7 +1,6 @@
 import json
 import time
 import uuid
-from datetime import datetime
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -1874,8 +1873,8 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
+    start_time: Optional[float]
+    end_time: Optional[float]
     duration: Optional[float]
     """
     Duration of the guardrail in seconds

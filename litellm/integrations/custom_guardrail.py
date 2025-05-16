@@ -190,8 +190,8 @@ class CustomGuardrail(CustomLogger):
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
         guardrail_status: Literal["success", "failure"],
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
     ) -> None:
@@ -250,8 +250,8 @@ class CustomGuardrail(CustomLogger):
         self,
         response: Optional[Dict],
         request_data: dict,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
         duration: Optional[float] = None,
     ):
         """
@@ -275,8 +275,8 @@ class CustomGuardrail(CustomLogger):
         self,
         e: Exception,
         request_data: dict,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
         duration: Optional[float] = None,
     ):
         """
@@ -322,16 +322,16 @@ def log_guardrail_information(func):
             return self._process_response(
                 response=response,
                 request_data=request_data,
-                start_time=start_time,
-                end_time=datetime.now(),
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
             )
         except Exception as e:
             return self._process_error(
                 e=e,
                 request_data=request_data,
-                start_time=start_time,
-                end_time=datetime.now(),
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
             )
 
