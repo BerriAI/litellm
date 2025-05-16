@@ -49,28 +49,6 @@ class SpendLogCleanup:
             )
             return False
 
-    # def _get_lock_duration(self) -> Optional[int]: // TODO: uncomment this when we have a way to set the lock duration
-    #     """
-    #     Gets the lock duration from config settings.
-    #     Returns the duration in seconds.
-    #     """
-    #     retention_interval = self.general_settings.get("maximum_spend_logs_retention_interval")
-    #     if retention_interval is None:
-    #         verbose_proxy_logger.info("No retention interval found, using default 24 hours")
-    #         return DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-
-    #     try:
-    #         if isinstance(retention_interval, int):
-    #             retention_interval = str(retention_interval)
-    #         lock_duration = duration_in_seconds(retention_interval)
-    #         verbose_proxy_logger.info(f"Lock duration set to {lock_duration} seconds")
-    #         return lock_duration
-    #     except ValueError as e:
-    #         verbose_proxy_logger.error(
-    #             f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, error: {str(e)}"
-    #         )
-    #         return DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
-
     async def _delete_old_logs(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
         """
         Helper method to delete old logs in batches.
@@ -111,7 +89,8 @@ class SpendLogCleanup:
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
-        Only runs on the pod that acquires the distributed lock.
+        If pod_lock_manager is available, ensures only one pod runs cleanup.
+        If no pod_lock_manager, runs cleanup without distributed locking.
         """
         try:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
@@ -124,21 +103,16 @@ class SpendLogCleanup:
                 verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
                 return
 
-            # Check if pod_lock_manager and redis_cache exist
-            if not self.pod_lock_manager or not self.pod_lock_manager.redis_cache:
-                verbose_proxy_logger.info("Pod lock manager or redis cache not initialized, skipping cleanup")
-                return
+            # If we have a pod lock manager, try to acquire the lock
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                lock_acquired = await self.pod_lock_manager.acquire_lock(
+                    cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                )
+                verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}")
 
-
-            # Try to acquire the distributed lock with the configured duration
-            lock_acquired = await self.pod_lock_manager.acquire_lock(
-                cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
-            )
-            verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}")
-            
-            if not lock_acquired:
-                verbose_proxy_logger.info("Another pod is already running cleanup")
-                return
+                if not lock_acquired:
+                    verbose_proxy_logger.info("Another pod is already running cleanup")
+                    return
 
             try:
                 cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
@@ -149,16 +123,18 @@ class SpendLogCleanup:
 
                 verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
 
-                # After cleanup is complete, release the lock and return
-                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info(f"Released cleanup lock {datetime.now()}")
+                # If we have a pod lock manager, release the lock
+                if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                    await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
+                    verbose_proxy_logger.info(f"Released cleanup lock {datetime.now()}")
                 return  # Explicitly return after cleanup is complete
 
             except Exception as e:
                 verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
                 # Ensure lock is released even if an error occurs
-                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info("Released cleanup lock after error")
+                if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                    await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
+                    verbose_proxy_logger.info("Released cleanup lock after error")
                 return  # Return after error handling
 
         except Exception as e:
