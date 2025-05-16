@@ -464,6 +464,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
+        """
+        Keep this state less - leave the state management (e.g. tracking current_output_item_id, current_response_id, current_conversation_id, current_delta_chunks) to the caller.
+        """
         try:
             json_message = json.loads(message)
         except json.JSONDecodeError:
@@ -474,6 +477,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Invalid JSON message: {message_str}")
 
         logging_session_id = logging_obj.litellm_trace_id
+
         current_output_item_id = realtime_response_transform_input[
             "current_output_item_id"
         ]
