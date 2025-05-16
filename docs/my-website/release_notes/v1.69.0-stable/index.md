@@ -1,5 +1,5 @@
 ---
-title: v1.69.0-stable
+title: v1.69.0-stable - Loadbalance Batch API Models
 slug: v1.69.0-stable
 date: 2025-05-10T10:00:00
 authors:
@@ -45,17 +45,45 @@ pip install litellm==1.69.0.post1
 
 LiteLLM v1.69.0-stable brings the following key improvements:
 
-- **Email Invites**: Send new users onboarded to LiteLLM an email invite. 
-- **Nscale**:  LLM API for compliance with European regulations.
-- **Bedrock /v1/messages**: Use Bedrock Anthropic models with /v1/messages. 
+- **Loadbalance Batch API Models**: Easily loadbalance across multiple azure batch deployments using LiteLLM Managed Files
+- **Email Invites 2.0**: Send new users onboarded to LiteLLM an email invite.
+- **Nscale**: LLM API for compliance with European regulations.
+- **Bedrock /v1/messages**: Use Bedrock Anthropic models with Anthropic's /v1/messages.
+
+## Batch API Load Balancing
+
+<Image 
+img={require('../../img/release_notes/lb_batch.png')}
+  style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+
+This release brings LiteLLM Managed File support to Batches. This is great for:
+
+- Proxy Admins: You can now control which Batch models users can call.
+- Developers: You no longer need to know the Azure deployment name when creating your batch .jsonl files - just specify the model your LiteLLM key has access to. 
+
+Over time, we expect LiteLLM Managed Files to be the way most teams use Files across `/chat/completions`, `/batch`, `/fine_tuning` endpoints. 
+
+[Read more here](https://docs.litellm.ai/docs/proxy/managed_batches)
+
 
 ## Email Invites
 
-This new release brings support for:
-- Sending email invites for new users added to LiteLLM.
-- Sending a user their virtual key over email. 
-- Controlling email notification settings. 
-- Support for SMTP servers or Resend for sending emails. 
+<Image 
+  img={require('../../img/email_2_0.png')}
+  style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+This release brings the following improvements to our email invite integration:
+- New templates for user invited and key created events.
+- Fixes for using SMTP email providers.
+- Native support for Resend API.
+- Ability for Proxy Admins to control email events. 
+
+For LiteLLM Cloud Users, please reach out to us if you want this enabled for your instance. 
+
+[Read more here](https://docs.litellm.ai/docs/proxy/email)
 
 
 ## New Models / Updated Models
@@ -67,6 +95,10 @@ This new release brings support for:
     - Added sonar-deep-research model pricing - [PR](https://github.com/BerriAI/litellm/pull/10537)
 - **[Azure OpenAI](../../docs/providers/azure)**: 
   - Fixed passing through of azure_ad_token_provider parameter - [PR](https://github.com/BerriAI/litellm/pull/10694)
+- **[OpenAI](../../docs/providers/openai)**:
+    - Added support for pdf url's in 'file' parameter - [PR](https://github.com/BerriAI/litellm/pull/10640)
+- **[Sagemaker](../../docs/providers/aws_sagemaker)**:
+    - Fix content length for `sagemaker_chat` provider - [PR](https://github.com/BerriAI/litellm/pull/10607)
 - **[Azure AI Foundry](../../docs/providers/azure_ai)**: 
     - Added cost tracking for the following models [PR](https://github.com/BerriAI/litellm/pull/9956)
         - DeepSeek V3 0324

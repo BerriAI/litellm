@@ -1654,6 +1654,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=50, description="Number of items per page", ge=1, le=100
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by status (e.g., success, failure)"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1705,6 +1709,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if team_id is not None:
             where_conditions["team_id"] = team_id
+
+        if status_filter is not None:
+            if status_filter == "success":
+                where_conditions["status"] = {"in": ["success", None]}  # Assuming None means empty status
+            else:
+                where_conditions["status"] = status_filter  # Filtering for other status values
 
         if api_key is not None:
             where_conditions["api_key"] = api_key

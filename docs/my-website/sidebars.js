@@ -354,6 +354,7 @@ const sidebars = {
         "providers/nlp_cloud",
         "providers/replicate",
         "providers/togetherai",
+        "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
         "providers/aleph_alpha",
@@ -494,7 +495,7 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-
+            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",

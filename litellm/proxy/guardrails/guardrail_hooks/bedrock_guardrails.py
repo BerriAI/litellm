@@ -64,6 +64,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
 
+        verbose_proxy_logger.debug(
+            "Bedrock Guardrail initialized with guardrailIdentifier: %s, guardrailVersion: %s",
+            self.guardrailIdentifier,
+            self.guardrailVersion,
+        )
+
     def convert_to_bedrock_format(
         self,
         messages: Optional[List[AllMessageValues]] = None,
@@ -74,9 +80,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if messages:
             for message in messages:
-                message_text_content: Optional[List[str]] = (
-                    self.get_content_for_message(message=message)
-                )
+                message_text_content: Optional[
+                    List[str]
+                ] = self.get_content_for_message(message=message)
                 if message_text_content is None:
                     continue
                 for text_content in message_text_content:
@@ -313,11 +319,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
 
         #########################################################
@@ -367,11 +373,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
 
         #########################################################
@@ -421,11 +427,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
 
         #########################################################
