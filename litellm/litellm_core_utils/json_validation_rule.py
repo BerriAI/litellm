@@ -17,7 +17,7 @@ def validate_schema(schema: dict, response: str):
         response_dict = json.loads(response)
     except json.JSONDecodeError:
         raise JSONSchemaValidationError(
-            model="", llm_provider="", raw_response=response, schema=response
+            model="", llm_provider="", raw_response=response, schema=json.dumps(schema)
         )
 
     try:

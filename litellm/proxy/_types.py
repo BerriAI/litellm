@@ -334,7 +334,16 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
     ]
 
-    llm_api_routes = openai_routes + anthropic_routes + mapped_pass_through_routes
+    apply_guardrail_routes = [
+        "/guardrails/apply_guardrail",
+    ]
+
+    llm_api_routes = (
+        openai_routes
+        + anthropic_routes
+        + mapped_pass_through_routes
+        + apply_guardrail_routes
+    )
     info_routes = [
         "/key/info",
         "/key/health",
@@ -2035,6 +2044,7 @@ class SpendLogsPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     proxy_server_request: Optional[str]
     session_id: Optional[str]
+    status: Literal["success", "failure"]
 
 
 class SpanAttributes(str, enum.Enum):

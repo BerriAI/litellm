@@ -27,6 +27,8 @@ def initialize_bedrock(litellm_params, guardrail):
         guardrailIdentifier=litellm_params["guardrailIdentifier"],
         guardrailVersion=litellm_params["guardrailVersion"],
         default_on=litellm_params["default_on"],
+        mask_request_content=litellm_params.get("mask_request_content", None),
+        mask_response_content=litellm_params.get("mask_response_content", None),
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
 
@@ -70,6 +72,9 @@ def initialize_presidio(litellm_params, guardrail):
         presidio_ad_hoc_recognizers=litellm_params["presidio_ad_hoc_recognizers"],
         mock_redacted_text=litellm_params.get("mock_redacted_text") or None,
         default_on=litellm_params["default_on"],
+        pii_entities_config=litellm_params.get("pii_entities_config"),
+        presidio_analyzer_api_base=litellm_params.get("presidio_analyzer_api_base"),
+        presidio_anonymizer_api_base=litellm_params.get("presidio_anonymizer_api_base"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
 
@@ -80,12 +85,18 @@ def initialize_presidio(litellm_params, guardrail):
             event_hook=GuardrailEventHooks.post_call.value,
             presidio_ad_hoc_recognizers=litellm_params["presidio_ad_hoc_recognizers"],
             default_on=litellm_params["default_on"],
+            presidio_analyzer_api_base=litellm_params.get("presidio_analyzer_api_base"),
+            presidio_anonymizer_api_base=litellm_params.get(
+                "presidio_anonymizer_api_base"
+            ),
         )
         litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 
 
 def initialize_hide_secrets(litellm_params, guardrail):
-    from enterprise.enterprise_hooks.secret_detection import _ENTERPRISE_SecretDetection
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _ENTERPRISE_SecretDetection,
+    )
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.get("detect_secrets_config"),
