@@ -7,6 +7,7 @@ import {
   TableHeaderCell,
   TableRow,
   Icon,
+  Button,
 } from "@tremor/react";
 import {
   TrashIcon,
@@ -108,12 +109,14 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
       accessorKey: "guardrail_id",
       cell: (info: any) => (
         <Tooltip title={String(info.getValue() || "")}>
-          <span 
-            className="font-mono text-xs max-w-[15ch] truncate block cursor-pointer text-blue-500 hover:text-blue-700"
+          <Button 
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
             onClick={() => info.getValue() && handleGuardrailIdClick(info.getValue())}
           >
-            {String(info.getValue() || "")}
-          </span>
+            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
+          </Button>
         </Tooltip>
       ),
     },
