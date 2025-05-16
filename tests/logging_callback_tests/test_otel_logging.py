@@ -277,7 +277,6 @@ def validate_redacted_message_span_attributes(span):
         "metadata.applied_guardrails",
         "metadata.mcp_tool_call_metadata",
         "metadata.vector_store_request_metadata",
-        "metadata.guardrail_information",
         "metadata.requester_custom_headers",
     ]
 
