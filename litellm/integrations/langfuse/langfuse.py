@@ -841,10 +841,12 @@ class LangFuseLogger:
                     "masked_entity_count", None
                 ),
             },
-            # The Langfuse SDK expects datetime objects for start_time and end_time but it does not render them correctly
-            # It seems to only work when start_time and end_time are floats :)
-            start_time=guardrail_information.get("start_time", None),  # type: ignore
-            end_time=guardrail_information.get("end_time", None),  # type: ignore
+            # start_time=datetime.fromtimestamp(
+            #     guardrail_information.get("start_time", datetime.now().timestamp())
+            # ),
+            # end_time=datetime.fromtimestamp(
+            #     guardrail_information.get("end_time", datetime.now().timestamp())
+            # ),
         )
 
 
