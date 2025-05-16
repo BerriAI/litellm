@@ -354,3 +354,29 @@ def test_supports_computer_use_utility():
             litellm.model_cost = original_model_cost
         elif hasattr(litellm, "model_cost"):
             delattr(litellm, "model_cost")
+
+def test_get_model_info_shows_supports_computer_use():
+    """
+    Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
+    We'll use 'anthropic/claude-3-7-sonnet-20250219' as it's configured
+    in the backup JSON to have supports_computer_use: True.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
+    # as per previous debugging.
+    litellm.model_cost = litellm.get_model_cost_map(url="") 
+    
+    # This model should have 'supports_computer_use': True in the backup JSON
+    model_known_to_support_computer_use = "anthropic/claude-3-7-sonnet-20250219"
+    info = litellm.get_model_info(model_known_to_support_computer_use)
+    print(f"Info for {model_known_to_support_computer_use}: {info}")
+    
+    # After the fix in utils.py, this should now be present and True
+    assert info.get("supports_computer_use") is True
+
+    # Optionally, test a model known NOT to support it, or where it's undefined (should default to False)
+    # For example, if "gpt-3.5-turbo" doesn't have it defined, it should be False.
+    model_known_not_to_support_computer_use = "gpt-3.5-turbo"
+    info_gpt = litellm.get_model_info(model_known_not_to_support_computer_use)
+    print(f"Info for {model_known_not_to_support_computer_use}: {info_gpt}")
+    assert info_gpt.get("supports_computer_use") is False # Expecting False due to the default in ModelInfoBase
