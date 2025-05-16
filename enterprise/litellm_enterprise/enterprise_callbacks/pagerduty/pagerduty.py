@@ -4,6 +4,10 @@ PagerDuty Alerting Integration
 Handles two types of alerts:
 - High LLM API Failure Rate. Configure X fails in Y seconds to trigger an alert.
 - High Number of Hanging LLM Requests. Configure X hangs in Y seconds to trigger an alert.
+
+Note: This is a Free feature on the regular litellm docker image.
+
+However, this is under the enterprise license
 """
 
 import asyncio
@@ -46,8 +50,6 @@ class PagerDutyAlerting(SlackAlerting):
     def __init__(
         self, alerting_args: Optional[Union[AlertingConfig, dict]] = None, **kwargs
     ):
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -55,7 +57,7 @@ class PagerDutyAlerting(SlackAlerting):
 
         self.api_key: str = _api_key
         alerting_args = alerting_args or {}
-        self.alerting_args: AlertingConfig = AlertingConfig(
+        self.pagerduty_alerting_args: AlertingConfig = AlertingConfig(
             failure_threshold=alerting_args.get(
                 "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
             ),
@@ -75,12 +77,6 @@ class PagerDutyAlerting(SlackAlerting):
         # Separate storage for failures vs. hangs
         self._failure_events: List[PagerDutyInternalEvent] = []
         self._hanging_events: List[PagerDutyInternalEvent] = []
-
-        # premium user check
-        if premium_user is not True:
-            raise ValueError(
-                f"PagerDutyAlerting is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
-            )
 
     # ------------------ MAIN LOGIC ------------------ #
 
@@ -123,8 +119,10 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_args.get("failure_threshold_window_seconds", 60)
-        threshold = self.alerting_args.get("failure_threshold", 1)
+        window_seconds = self.pagerduty_alerting_args.get(
+            "failure_threshold_window_seconds", 60
+        )
+        threshold = self.pagerduty_alerting_args.get("failure_threshold", 1)
 
         # If threshold is crossed, send PD alert for failures
         await self._send_alert_if_thresholds_crossed(
@@ -170,10 +168,10 @@ class PagerDutyAlerting(SlackAlerting):
         If not, we classify it as a hanging request.
         """
         verbose_logger.debug(
-            f"Inside Hanging Response Handler!..sleeping for {self.alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
+            f"Inside Hanging Response Handler!..sleeping for {self.pagerduty_alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
         )
         await asyncio.sleep(
-            self.alerting_args.get(
+            self.pagerduty_alerting_args.get(
                 "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
             )
         )
@@ -201,11 +199,11 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_args.get(
+        window_seconds = self.pagerduty_alerting_args.get(
             "hanging_threshold_window_seconds",
             PAGERDUTY_DEFAULT_HANGING_THRESHOLD_WINDOW_SECONDS,
         )
-        threshold: int = self.alerting_args.get(
+        threshold: int = self.pagerduty_alerting_args.get(
             "hanging_threshold_fails", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
         )
 

@@ -28,7 +28,7 @@ from typing import (
 from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
-    LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+    LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -143,6 +143,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -383,14 +384,22 @@ enterprise_router = APIRouter()
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-    from enterprise.proxy.enterprise_routes import router as enterprise_router
 except Exception:
     # when using litellm docker image
     try:
         import enterprise  # type: ignore
-        from enterprise.proxy.enterprise_routes import router as enterprise_router
     except Exception:
         pass
+
+###################
+# Import enterprise routes
+try:
+    from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+
+    enterprise_router = _enterprise_router
+except ImportError:
+    pass
+###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
@@ -3289,6 +3298,23 @@ class ProxyStartupEvent:
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
+        ### SPEND LOG CLEANUP ###
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            spend_log_cleanup = SpendLogCleanup()
+            # Get the interval from config or default to 1 day
+            retention_interval = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds,
+                    args=[prisma_client],
+                )
+            except ValueError:
+                verbose_proxy_logger.error(f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, defaulting to 60 seconds")
+                interval_seconds = 60
+
         scheduler.start()
 
     @classmethod
@@ -3849,11 +3875,11 @@ async def embeddings(  # noqa: PLR0915
             if llm_model_list is not None and data["model"] in router_model_names:
                 for m in llm_model_list:
                     if m["model_name"] == data["model"]:
-                        if (m["litellm_params"]["model"] in litellm.open_ai_embedding_models
-                                or any(
-                                    m["litellm_params"]["model"].startswith(provider)
-                                    for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                                )
+                        if m["litellm_params"][
+                            "model"
+                        ] in litellm.open_ai_embedding_models or any(
+                            m["litellm_params"]["model"].startswith(provider)
+                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
                         ):
                             pass
                         else:

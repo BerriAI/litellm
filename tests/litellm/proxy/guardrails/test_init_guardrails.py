@@ -24,6 +24,8 @@ def test_initialize_presidio_guardrail():
         "litellm_params": {
             "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
             "mode": "pre_call",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
         },
     }
 
@@ -34,7 +36,7 @@ def test_initialize_presidio_guardrail():
 
     assert result["guardrail_name"] == "test_presidio_guardrail"
     assert (
-        result["litellm_params"]["guardrail"]
+        result["litellm_params"].guardrail
         == SupportedGuardrailIntegrations.PRESIDIO.value
     )
-    assert result["litellm_params"]["mode"] == "pre_call"
+    assert result["litellm_params"].mode == "pre_call"

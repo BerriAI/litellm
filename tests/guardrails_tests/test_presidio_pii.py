@@ -67,6 +67,27 @@ async def test_presidio_with_entities_config():
 
 
 @pytest.mark.asyncio
+async def test_presidio_apply_guardrail():
+    """Test for Presidio guardrail apply guardrail - requires actual Presidio API"""
+    litellm._turn_on_debug()
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
+        presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE")
+    )
+
+
+    response = await presidio_guardrail.apply_guardrail(
+        text="My credit card number is 4111-1111-1111-1111 and my email is test@example.com",
+        language="en",
+    )
+    print("response from apply guardrail for presidio: ", response)
+
+    # assert tthe default config masks the credit card and email
+    assert "4111-1111-1111-1111" not in response
+    assert "test@example.com" not in response
+
+@pytest.mark.asyncio
 async def test_presidio_with_blocked_entities():
     """Test for Presidio guardrail with blocked entities - requires actual Presidio API"""
     # Setup the guardrail with specific entities config - BLOCK for credit card

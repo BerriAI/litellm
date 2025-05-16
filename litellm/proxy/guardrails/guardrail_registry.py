@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
 from litellm.types.guardrails import Guardrail, SupportedGuardrailIntegrations
@@ -39,6 +41,26 @@ class GuardrailRegistry:
         pass
 
     ###########################################################
+    ########### In memory management helpers for guardrails ###########
+    ############################################################
+    def get_initialized_guardrail_callback(
+        self, guardrail_name: str
+    ) -> Optional[CustomGuardrail]:
+        """
+        Returns the initialized guardrail callback for a given guardrail name
+        """
+        active_guardrails = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CustomGuardrail
+            )
+        )
+        for active_guardrail in active_guardrails:
+            if isinstance(active_guardrail, CustomGuardrail):
+                if active_guardrail.guardrail_name == guardrail_name:
+                    return active_guardrail
+        return None
+
+    ###########################################################
     ########### DB management helpers for guardrails ###########
     ############################################################
     async def add_guardrail_to_db(
@@ -49,7 +71,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params: str = safe_dumps(guardrail.get("litellm_params", {}))
+            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -95,7 +117,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
-            litellm_params = guardrail.get("litellm_params", {})
+            litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
             guardrail_info = guardrail.get("guardrail_info", {})
 
             # Update in DB

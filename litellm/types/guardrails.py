@@ -210,41 +210,118 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
-class LitellmParams(TypedDict, total=False):
-    guardrail: str
-    mode: str
-    api_key: Optional[str]
-    api_base: Optional[str]
+class PresidioConfigModel(BaseModel):
+    """Configuration parameters for the Presidio PII masking guardrail"""
+
+    presidio_analyzer_api_base: Optional[str] = Field(
+        default=None,
+        description="Base URL for the Presidio analyzer API",
+    )
+    presidio_anonymizer_api_base: Optional[str] = Field(
+        default=None,
+        description="Base URL for the Presidio anonymizer API",
+    )
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
+        default=None, description="Configuration for PII entity types and actions"
+    )
+    output_parse_pii: Optional[bool] = Field(
+        default=None, description="Whether to parse PII in model outputs"
+    )
+    presidio_ad_hoc_recognizers: Optional[str] = Field(
+        default=None,
+        description="Path to a JSON file containing ad-hoc recognizers for Presidio",
+    )
+    mock_redacted_text: Optional[dict] = Field(
+        default=None, description="Mock redacted text for testing"
+    )
+
+
+class BedrockGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the AWS Bedrock guardrail"""
+
+    guardrailIdentifier: Optional[str] = Field(
+        default=None, description="The ID of your guardrail on Bedrock"
+    )
+    guardrailVersion: Optional[str] = Field(
+        default=None,
+        description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    aws_region_name: Optional[str] = Field(
+        default=None, description="AWS region where your guardrail is deployed"
+    )
+    aws_access_key_id: Optional[str] = Field(
+        default=None, description="AWS access key ID for authentication"
+    )
+    aws_secret_access_key: Optional[str] = Field(
+        default=None, description="AWS secret access key for authentication"
+    )
+    aws_session_token: Optional[str] = Field(
+        default=None, description="AWS session token for temporary credentials"
+    )
+    aws_session_name: Optional[str] = Field(
+        default=None, description="Name of the AWS session"
+    )
+    aws_profile_name: Optional[str] = Field(
+        default=None, description="AWS profile name for credential retrieval"
+    )
+    aws_role_name: Optional[str] = Field(
+        default=None, description="AWS role name for assuming roles"
+    )
+    aws_web_identity_token: Optional[str] = Field(
+        default=None, description="Web identity token for AWS role assumption"
+    )
+    aws_sts_endpoint: Optional[str] = Field(
+        default=None, description="AWS STS endpoint URL"
+    )
+    aws_bedrock_runtime_endpoint: Optional[str] = Field(
+        default=None, description="AWS Bedrock runtime endpoint URL"
+    )
+
+
+class LitellmParams(
+    PresidioConfigModel,
+    BedrockGuardrailConfigModel,
+):
+    guardrail: str = Field(description="The type of guardrail integration to use")
+    mode: str = Field(
+        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="API key for the guardrail service"
+    )
+    api_base: Optional[str] = Field(
+        default=None, description="Base URL for the guardrail service API"
+    )
 
     # Lakera specific params
-    category_thresholds: Optional[LakeraCategoryThresholds]
-
-    # Bedrock specific params
-    guardrailIdentifier: Optional[str]
-    guardrailVersion: Optional[str]
-
-    # Presidio params
-    output_parse_pii: Optional[bool]
-    presidio_ad_hoc_recognizers: Optional[str]
-    mock_redacted_text: Optional[dict]
-    # PII control params
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]]
+    category_thresholds: Optional[LakeraCategoryThresholds] = Field(
+        default=None,
+        description="Threshold configuration for Lakera guardrail categories",
+    )
 
     # hide secrets params
-    detect_secrets_config: Optional[dict]
+    detect_secrets_config: Optional[dict] = Field(
+        default=None, description="Configuration for detect-secrets guardrail"
+    )
 
     # guardrails ai params
-    guard_name: Optional[str]
-    default_on: Optional[bool]
+    guard_name: Optional[str] = Field(
+        default=None, description="Name of the guardrail in guardrails.ai"
+    )
+    default_on: Optional[bool] = Field(
+        default=None, description="Whether the guardrail is enabled by default"
+    )
 
     ################## PII control params #################
     ########################################################
-    mask_request_content: Optional[
-        bool
-    ]  # will mask request content if guardrail makes any changes
-    mask_response_content: Optional[
-        bool
-    ]  # will mask response content if guardrail makes any changes
+    mask_request_content: Optional[bool] = Field(
+        default=None,
+        description="Will mask request content if guardrail makes any changes",
+    )
+    mask_response_content: Optional[bool] = Field(
+        default=None,
+        description="Will mask response content if guardrail makes any changes",
+    )
 
 
 class Guardrail(TypedDict, total=False):
@@ -286,6 +363,7 @@ class GuardrailLiteLLMParamsResponse(BaseModel):
 
 
 class GuardrailInfoResponse(BaseModel):
+    guardrail_id: Optional[str] = None
     guardrail_name: str
     litellm_params: GuardrailLiteLLMParamsResponse
     guardrail_info: Optional[Dict]
@@ -305,3 +383,23 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: List[PiiAction]
     supported_modes: List[GuardrailEventHooks]
     pii_entity_categories: List[PiiEntityCategoryMap]
+
+
+class PresidioPerRequestConfig(BaseModel):
+    """
+    presdio params that can be controlled per request, api key
+    """
+
+    language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
+
+
+class ApplyGuardrailRequest(BaseModel):
+    guardrail_name: str
+    text: str
+    language: Optional[str] = None
+    entities: Optional[List[PiiEntityType]] = None
+
+
+class ApplyGuardrailResponse(BaseModel):
+    response_text: str
