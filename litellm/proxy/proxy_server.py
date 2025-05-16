@@ -784,7 +784,7 @@ def swagger_monkey_patch(*args, **kwargs):
         *args,
         **kwargs,
         swagger_js_url="/swagger/swagger-ui-bundle.js",
-        swagger_css_url="/swagger/swagger-ui.css",
+        swagger_css_url="/swagger/custom.css",
         swagger_favicon_url="/swagger/favicon.png",
     )
 

@@ -1,0 +1,25 @@
+@import url("./swagger-ui.css"); /* Import the original Swagger UI styles */
+
+/* Custom styles to add the logo to the top bar */
+.swagger-ui .topbar .link::before {
+    content: "";
+    display: inline-block;
+    width: 30px;  /* Adjust width as needed */
+    height: 30px; /* Adjust height as needed */
+    background-image: url("./logo.png"); /* Path relative to custom.css */
+    background-size: contain;
+    background-repeat: no-repeat;
+    margin-right: 10px; /* Space between logo and "Swagger" text */
+    vertical-align: middle; /* Align logo with text */
+}
+
+/* Optional: If you want to make the logo larger or adjust alignment further */
+/*
+.swagger-ui .topbar {
+    background-color: #f0f0f0; // Example: change topbar background
+}
+.swagger-ui .topbar .link {
+    display: flex;
+    align-items: center;
+}
+*/
