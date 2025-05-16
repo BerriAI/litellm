@@ -94,7 +94,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         
         mock_token_provider = MagicMock(return_value="entra_id_token")
         
-        with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_from_entra_id",
+        with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id",
                   return_value=mock_token_provider) as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
@@ -121,7 +121,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         
         mock_token_provider = MagicMock(return_value="username_password_token")
         
-        with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_from_username_password",
+        with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
                   return_value=mock_token_provider) as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
@@ -146,7 +146,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             "tenant_id": "test_tenant_id"
         }
         
-        with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_from_oidc",
+        with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc",
                   return_value="processed_oidc_token") as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
@@ -175,7 +175,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             with patch("litellm.azure_key", None):
                 with patch("litellm.enable_azure_ad_token_refresh", True):
                     # Mock the get_azure_ad_token_provider function in the module
-                    with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_provider",
+                    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_provider",
                               return_value=mock_token) as mock_get_provider:
                         # Call the method
                         result = self.config.validate_environment(
@@ -199,7 +199,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         with patch("litellm.api_key", None):
             with patch("litellm.azure_key", None):
                 with patch("litellm.enable_azure_ad_token_refresh", True):
-                    with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_provider",
+                    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_provider",
                               side_effect=ValueError("Token provider error")):
                         with patch("litellm.llms.azure.responses.transformation.get_secret_str",
                                   return_value="fallback_api_key"):
@@ -306,7 +306,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             
             mock_token_provider = MagicMock(return_value="env_entra_id_token")
             
-            with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_from_entra_id", 
+            with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", 
                       return_value=mock_token_provider) as mock_get_token:
                 result = self.config.validate_environment(
                     headers=headers,
@@ -333,7 +333,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             
             with patch("litellm.api_key", None):
                 with patch("litellm.azure_key", None):
-                    with patch("litellm.llms.azure.responses.transformation.get_azure_ad_token_from_username_password", 
+                    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password", 
                               return_value=mock_token_provider) as mock_get_token:
                         result = self.config.validate_environment(
                             headers=headers,
