@@ -24,6 +24,7 @@ class SupportedGuardrailIntegrations(Enum):
     BEDROCK = "bedrock"
     GURDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
+    LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
