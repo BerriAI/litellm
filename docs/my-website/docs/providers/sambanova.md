@@ -23,7 +23,7 @@ import os
 
 os.environ['SAMBANOVA_API_KEY'] = ""
 response = completion(
-    model="sambanova/Meta-Llama-3.1-8B-Instruct",
+    model="sambanova/Llama-4-Maverick-17B-128E-Instruct",
     messages=[
         {
             "role": "user",
