@@ -16,8 +16,8 @@ from litellm.types.utils import CallTypes as LitellmCallTypes
 
 
 @pytest.mark.asyncio
-async def test_lakera_pre_call_hook_with_different_call_types():
-    """Test for Lakera guardrail pre-call hook with both completion and acompletion call types"""
+async def test_lakera_pre_call_hook_for_pii_masking():
+    """Test for Lakera guardrail pre-call hook for PII masking"""
     # Setup the guardrail with specific entities config
     litellm._turn_on_debug()
     lakera_guardrail = LakeraAIGuardrail(
@@ -30,7 +30,8 @@ async def test_lakera_pre_call_hook_with_different_call_types():
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com. My phone number is 555-123-4567"}
         ],
-        "model": "gpt-3.5-turbo"
+        "model": "gpt-3.5-turbo",
+        "metadata": {}
     }
     
     # Mock objects needed for the pre-call hook

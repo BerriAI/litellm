@@ -211,6 +211,8 @@ class CustomGuardrail(CustomLogger):
             masked_entity_count=masked_entity_count,
         )
         if "metadata" in request_data:
+            if request_data["metadata"] is None:
+                request_data["metadata"] = {}
             request_data["metadata"]["standard_logging_guardrail_information"] = slg
         elif "litellm_metadata" in request_data:
             request_data["litellm_metadata"][
