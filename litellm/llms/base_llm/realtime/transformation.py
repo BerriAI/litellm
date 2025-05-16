@@ -72,4 +72,7 @@ class BaseRealtimeConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:  # message sent to setup the realtime session
+        """
+        Keep this state less - leave the state management (e.g. tracking current_output_item_id, current_response_id, current_conversation_id, current_delta_chunks) to the caller.
+        """
         pass

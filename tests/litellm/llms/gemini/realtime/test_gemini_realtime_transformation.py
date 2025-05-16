@@ -33,7 +33,14 @@ def test_gemini_realtime_transformation_session_created():
         session_created_message_str,
         "gemini-1.5-flash",
         logging_obj,
-        session_configuration_request_str,
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+        },
     )
     assert transformed_message["response"]["type"] == "session.created"
 
@@ -66,7 +73,14 @@ def test_gemini_realtime_transformation_content_delta():
         session_created_message_str,
         "gemini-1.5-flash",
         logging_obj,
-        session_configuration_request_str,
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+        },
     )
     transformed_message = returned_object["response"]
     assert isinstance(transformed_message, list)
