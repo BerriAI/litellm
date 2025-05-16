@@ -23,8 +23,6 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     temperature: Optional[int] = None
     top_p: Optional[int] = None
     response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
 
     def __init__(
         self,
@@ -39,8 +37,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
