@@ -22,7 +22,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
