@@ -33,7 +33,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.proxy.proxy_server import user_api_key_cache
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     KeyMetadata,
@@ -737,6 +736,8 @@ async def user_update(
                 )
                 
                 # Update user object in cache if Redis is being used
+                # Get user_api_key_cache from proxy_server at runtime to avoid circular imports
+                from litellm.proxy.proxy_server import user_api_key_cache
                 if user_api_key_cache is not None:
                     # Cache key for user objects is the user_id
                     cache_key = user_row_litellm_typed.user_id
