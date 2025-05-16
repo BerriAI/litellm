@@ -89,7 +89,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
 def encode_unserializable_types(
     data: Dict[str, object], depth: int = 0
-) -> dict[str, object]:
+) -> Dict[str, object]:
     """Converts unserializable types in dict to json.dumps() compatible types.
 
     This function is called in models.py after calling convert_to_dict(). The
