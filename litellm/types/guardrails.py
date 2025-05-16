@@ -214,9 +214,11 @@ class PresidioConfigModel(BaseModel):
     """Configuration parameters for the Presidio PII masking guardrail"""
 
     presidio_analyzer_api_base: Optional[str] = Field(
+        default=None,
         description="Base URL for the Presidio analyzer API",
     )
     presidio_anonymizer_api_base: Optional[str] = Field(
+        default=None,
         description="Base URL for the Presidio anonymizer API",
     )
     pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
@@ -238,7 +240,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
     guardrailIdentifier: Optional[str] = Field(
-        description="The ID of your guardrail on Bedrock"
+        default=None, description="The ID of your guardrail on Bedrock"
     )
     guardrailVersion: Optional[str] = Field(
         default=None,

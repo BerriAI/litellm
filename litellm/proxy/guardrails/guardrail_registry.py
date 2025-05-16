@@ -7,11 +7,7 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-from litellm.types.guardrails import (
-    Guardrail,
-    LitellmParams,
-    SupportedGuardrailIntegrations,
-)
+from litellm.types.guardrails import Guardrail, SupportedGuardrailIntegrations
 
 from .guardrail_initializers import (
     initialize_aim,
