@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
-
 from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 
 class TestOpenTelemetry(unittest.TestCase):
@@ -49,7 +49,7 @@ class TestOpenTelemetry(unittest.TestCase):
             "guardrail_response", "filtered_content"
         )
         mock_span.set_attribute.assert_any_call(
-            "masked_entity_count", {"CREDIT_CARD": 2}
+            "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
         )
 
         # Verify that the span was ended

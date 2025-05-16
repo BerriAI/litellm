@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -400,7 +401,9 @@ class OpenTelemetry(CustomLogger):
         # Set masked_entity_count directly without conversion
         masked_entity_count = guardrail_information.get("masked_entity_count")
         if masked_entity_count is not None:
-            guardrail_span.set_attribute("masked_entity_count", masked_entity_count)
+            guardrail_span.set_attribute(
+                "masked_entity_count", safe_dumps(masked_entity_count)
+            )
 
         self.safe_set_attribute(
             span=guardrail_span,
