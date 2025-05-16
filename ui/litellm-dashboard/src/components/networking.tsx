@@ -2147,7 +2147,8 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
-  status_filter?: string
+  status_filter?: string,
+  model?: string
 ) => {
   try {
     // Construct base URL
@@ -2164,7 +2165,7 @@ export const uiSpendLogsCall = async (
     if (page_size) queryParams.append('page_size', page_size.toString());
     if (user_id) queryParams.append('user_id', user_id);
     if (status_filter) queryParams.append('status_filter', status_filter);
-
+    if (model) queryParams.append('model', model);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -5093,6 +5094,33 @@ export const getGuardrailUISettings = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to get guardrail UI settings:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailProviderSpecificParams = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/ui/provider_specific_params` : `/guardrails/ui/provider_specific_params`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail provider specific parameters");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail provider specific params response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail provider specific parameters:", error);
     throw error;
   }
 };
