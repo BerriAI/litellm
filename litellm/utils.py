@@ -69,11 +69,13 @@ from litellm.constants import (
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
+    MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.vector_stores.base_vector_store import BaseVectorStore
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
@@ -121,9 +123,7 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import (
-    get_modified_max_tokens,
-)
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
@@ -143,6 +143,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     OpenAITextCompletionUserMessage,
+    OpenAIWebSearchOptions,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
@@ -180,10 +181,10 @@ from litellm.types.utils import (
 )
 
 try:
-    # Python 3.9+
+    # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
         "anthropic_tokenizer.json"
-    ).open("r") as f:
+    ).open("r", encoding="utf-8") as f:
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -213,6 +214,7 @@ from typing import (
 from openai import OpenAIError as OriginalError
 
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -227,6 +229,9 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
@@ -265,8 +270,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -290,7 +293,6 @@ dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
-genericAPILogger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
@@ -760,7 +762,7 @@ def function_setup(  # noqa: PLR0915
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] is True else False
         logging_obj = LiteLLMLogging(
-            model=model, # type: ignore
+            model=model,  # type: ignore
             messages=messages,
             stream=stream,
             litellm_call_id=kwargs["litellm_call_id"],
@@ -867,6 +869,28 @@ def client(original_function):  # noqa: PLR0915
             return True
         else:
             return False
+
+    async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
+        """
+        Allow modifying the request just before it's sent to the deployment.
+
+        Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
+        """
+        try:
+            typed_call_type = CallTypes(call_type)
+        except ValueError:
+            typed_call_type = None  # unknown call type
+
+        modified_kwargs = kwargs.copy()
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                result = await callback.async_pre_call_deployment_hook(
+                    modified_kwargs, typed_call_type
+                )
+                if result is not None:
+                    modified_kwargs = result
+
+        return modified_kwargs
 
     def post_call_processing(original_response, model, optional_params: Optional[dict]):
         try:
@@ -1281,6 +1305,9 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
+            if modified_kwargs is not None:
+                kwargs = modified_kwargs
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
@@ -1608,6 +1635,7 @@ def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = 
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
 
+
 def create_pretrained_tokenizer(
     identifier: str, revision="main", auth_token: Optional[str] = None
 ):
@@ -1663,10 +1691,20 @@ def token_counter(
 ) -> int:
     """
     The same as `litellm.litellm_core_utils.token_counter`.
-    
+
     Kept for backwards compatibility.
     """
-    return token_counter_new(model, custom_tokenizer, text, messages, count_response_tokens, tools, tool_choice, use_default_image_token_count, default_token_count)
+    return token_counter_new(
+        model,
+        custom_tokenizer,
+        text,
+        messages,
+        count_response_tokens,
+        tools,
+        tool_choice,
+        use_default_image_token_count,
+        default_token_count,
+    )
 
 
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
@@ -2054,6 +2092,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            if key not in litellm.novita_models:
+                litellm.novita_models.append(key)
     return model_cost
 
 
@@ -2176,12 +2217,16 @@ def get_optional_params_image_gen(
     user: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[bool] = None,
+    provider_config: Optional[BaseImageGenerationConfig] = None,
+    drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
     model = passed_params.pop("model", None)
     custom_llm_provider = passed_params.pop("custom_llm_provider")
+    provider_config = passed_params.pop("provider_config", None)
+    drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
@@ -2213,7 +2258,7 @@ def get_optional_params_image_gen(
         default_params=default_params,
         additional_drop_params=additional_drop_params,
     )
-    optional_params = {}
+    optional_params: Dict[str, Any] = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     def _check_valid_arg(supported_params):
@@ -2221,17 +2266,28 @@ def get_optional_params_image_gen(
             keys = list(non_default_params.keys())
             for k in keys:
                 if (
-                    litellm.drop_params is True and k not in supported_params
-                ):  # drop the unsupported non-default values
+                    litellm.drop_params is True or drop_params is True
+                ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}, {model}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
-    if (
+    if provider_config is not None:
+        supported_params = provider_config.get_supported_openai_params(
+            model=model or ""
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model or "",
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    elif (
         custom_llm_provider == "openai"
         or custom_llm_provider == "azure"
         or custom_llm_provider in litellm.openai_compatible_providers
@@ -2314,8 +2370,33 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         default_params=default_params,
         additional_drop_params=additional_drop_params,
     )
+
+    provider_config: Optional[BaseEmbeddingConfig] = None
+
+    if (
+        custom_llm_provider is not None
+        and custom_llm_provider in LlmProviders._member_map_.values()
+    ):
+        provider_config = ProviderConfigManager.get_provider_embedding_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+    if provider_config is not None:
+        supported_params: Optional[list] = provider_config.get_supported_openai_params(
+            model=model
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     ## raise exception if non-default value passed for non-openai/azure embedding calls
-    if custom_llm_provider == "openai":
+    elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
 
         if (
@@ -2497,7 +2578,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                     status_code=500,
                     message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
+
     final_params = {**non_default_params, **kwargs}
+
     return final_params
 
 
@@ -2600,6 +2683,7 @@ def get_optional_params(  # noqa: PLR0915
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2607,7 +2691,8 @@ def get_optional_params(  # noqa: PLR0915
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+            custom_llm_provider != "bedrock"
+            and not custom_llm_provider.startswith("sagemaker")
         ):  # allow dynamically setting boto3 init logic
             continue
         elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
@@ -2686,6 +2771,7 @@ def get_optional_params(  # noqa: PLR0915
         "messages": None,
         "reasoning_effort": None,
         "thinking": None,
+        "web_search_options": None,
     }
 
     # filter out those parameters that were passed with non-default values
@@ -4118,6 +4204,18 @@ def get_provider_info(
     return model_info
 
 
+def _is_potential_model_name_in_model_cost(
+    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
+) -> bool:
+    """
+    Check if the potential model name is in the model cost.
+    """
+    return any(
+        potential_model_name in litellm.model_cost
+        for potential_model_name in potential_model_names.values()
+    )
+
+
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
@@ -4173,7 +4271,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_prompt_caching=None,
                 supports_pdf_input=None,
             )
-        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+        elif (
+            custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
+        ) and not _is_potential_model_name_in_model_cost(potential_model_names):
             return litellm.OllamaConfig().get_model_info(model)
         else:
             """
@@ -4876,6 +4976,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "novita":
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -4958,6 +5063,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif model in litellm.novita_models:
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -5361,12 +5471,19 @@ def process_messages(messages, max_tokens, model):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
-
+    verbose_logger.debug(
+        f"calling process_messages with messages: {messages}, max_tokens: {max_tokens}, model: {model}"
+    )
     for message in messages:
+        verbose_logger.debug(f"processing final_messages: {final_messages}")
         used_tokens = get_token_count(final_messages, model)
         available_tokens = max_tokens - used_tokens
+        verbose_logger.debug(
+            f"used_tokens: {used_tokens}, available_tokens: {available_tokens}"
+        )
         if available_tokens <= 3:
             break
+
         final_messages = attempt_message_addition(
             final_messages=final_messages,
             message=message,
@@ -5374,7 +5491,10 @@ def process_messages(messages, max_tokens, model):
             max_tokens=max_tokens,
             model=model,
         )
-
+        verbose_logger.debug(
+            f"final_messages after attempt_message_addition: {final_messages}"
+        )
+    verbose_logger.debug(f"Final messages: {final_messages}")
     return final_messages
 
 
@@ -5383,17 +5503,24 @@ def attempt_message_addition(
 ):
     temp_messages = [message] + final_messages
     temp_message_tokens = get_token_count(messages=temp_messages, model=model)
-
+    verbose_logger.debug(
+        f"temp_message_tokens: {temp_message_tokens}, max_tokens: {max_tokens}"
+    )
     if temp_message_tokens <= max_tokens:
         return temp_messages
 
     # if temp_message_tokens > max_tokens, try shortening temp_messages
     elif "function_call" not in message:
+        verbose_logger.debug("attempting to shorten message to fit limit")
         # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is greate than max_tokens)
         updated_message = shorten_message_to_fit_limit(message, available_tokens, model)
         if can_add_message(updated_message, final_messages, max_tokens, model):
+            verbose_logger.debug(
+                "can add message, returning [updated_message] + final_messages"
+            )
             return [updated_message] + final_messages
-
+        else:
+            verbose_logger.debug("cannot add message, returning final_messages")
     return final_messages
 
 
@@ -5407,9 +5534,17 @@ def get_token_count(messages, model):
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
+def shorten_message_to_fit_limit(
+    message, tokens_needed, model: Optional[str], raise_error_on_max_limit: bool = False
+):
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
+
+    Args:
+        message: The message to shorten
+        tokens_needed: The maximum number of tokens allowed
+        model: The model being used (optional)
+        raise_error_on_max_limit: If True, raises an error when max attempts reached. If False, returns final trimmed content.
     """
 
     # For OpenAI models, even blank messages cost 7 token,
@@ -5419,9 +5554,16 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
         return message
 
     content = message["content"]
+    attempts = 0
 
-    while True:
+    verbose_logger.debug(f"content: {content}")
+
+    while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
+        verbose_logger.debug(f"getting token count for message: {message}")
         total_tokens = get_token_count([message], model)
+        verbose_logger.debug(
+            f"total_tokens: {total_tokens}, tokens_needed: {tokens_needed}"
+        )
 
         if total_tokens <= tokens_needed:
             break
@@ -5437,7 +5579,14 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: Optional[str]):
 
         trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
+        verbose_logger.debug(f"trimmed_content: {trimmed_content}")
         content = trimmed_content
+        attempts += 1
+
+    if attempts >= MAX_TOKEN_TRIMMING_ATTEMPTS and raise_error_on_max_limit:
+        raise Exception(
+            f"Failed to trim message to fit within {tokens_needed} tokens after {MAX_TOKEN_TRIMMING_ATTEMPTS} attempts"
+        )
 
     return message
 
@@ -5523,9 +5672,11 @@ def trim_messages(
             # we remove all system messages from the messages list
             messages = [message for message in messages if message["role"] != "system"]
 
+        verbose_logger.debug(f"Processed system message: {system_message_event}")
         final_messages = process_messages(
             messages=messages, max_tokens=max_tokens, model=model
         )
+        verbose_logger.debug(f"Processed messages: {final_messages}")
 
         # Add system message to the beginning of the final messages
         if system_message_event:
@@ -5534,6 +5685,9 @@ def trim_messages(
         if len(tool_messages) > 0:
             final_messages.extend(tool_messages)
 
+        verbose_logger.debug(
+            f"Final messages: {final_messages}, return_response_tokens: {return_response_tokens}"
+        )
         if (
             return_response_tokens
         ):  # if user wants token count with new trimmed messages
@@ -5995,6 +6149,15 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def convert_list_message_to_dict(messages: List):
+    new_messages = []
+    for message in messages:
+        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        new_messages.append(cleaned_message)
+    return new_messages
+
+
 def validate_and_fix_openai_messages(messages: List):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -6114,6 +6277,8 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.LLAMA == provider:
+            return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
         elif litellm.LlmProviders.COHERE_CHAT == provider:
@@ -6244,6 +6409,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.NOVITA == provider:
+            return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6280,13 +6447,15 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.NSCALE == provider:
+            return litellm.NscaleConfig()
         return None
 
     @staticmethod
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
-    ) -> BaseEmbeddingConfig:
+    ) -> Optional[BaseEmbeddingConfig]:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
@@ -6295,7 +6464,14 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
-        raise ValueError(f"Provider {provider.value} does not support embedding config")
+        elif (
+            litellm.LlmProviders.COHERE == provider
+            or litellm.LlmProviders.COHERE_CHAT == provider
+        ):
+            from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+
+            return CohereEmbeddingConfig()
+        return None
 
     @staticmethod
     def get_provider_rerank_config(
@@ -6324,6 +6500,10 @@ class ProviderConfigManager:
     ) -> Optional[BaseAnthropicMessagesConfig]:
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
+        # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
+        # This mapping ensures that the correct configuration is returned for BEDROCK.
+        elif litellm.LlmProviders.BEDROCK == provider:
+            return litellm.AmazonAnthropicClaude3MessagesConfig()
         return None
 
     @staticmethod
@@ -6417,6 +6597,37 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        return None
+
+    @staticmethod
+    def get_provider_vector_store_config(
+        provider: LlmProviders,
+    ) -> Optional[CustomLogger]:
+        from litellm.integrations.vector_stores.bedrock_vector_store import (
+            BedrockVectorStore,
+        )
+
+        if LlmProviders.BEDROCK == provider:
+            return BedrockVectorStore.get_initialized_custom_logger()
+        return None
+
+    @staticmethod
+    def get_provider_image_generation_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageGenerationConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_generation import (
+                get_openai_image_generation_config,
+            )
+
+            return get_openai_image_generation_config(model)
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.image_generation import (
+                get_azure_image_generation_config,
+            )
+
+            return get_azure_image_generation_config(model)
         return None
 
 
@@ -6564,6 +6775,7 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
     return non_default_params
 
 

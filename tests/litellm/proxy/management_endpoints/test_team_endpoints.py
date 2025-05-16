@@ -14,7 +14,11 @@ sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles
+from litellm.proxy._types import (
+    LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+)
 from litellm.proxy.management_endpoints.team_endpoints import (
     user_api_key_auth,  # Assuming this dependency is needed
 )
@@ -22,11 +26,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     router,
+    validate_team_org_change,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.proxy_server import app
+from litellm.router import Router
 
 # Setup TestClient
 client = TestClient(app)
@@ -50,6 +56,59 @@ def mock_db_client():
 def mock_admin_auth():
     mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     return mock_auth
+
+
+# Test for validate_team_org_change when organization IDs match
+@pytest.mark.asyncio
+async def test_validate_team_org_change_same_org_id():
+    """
+    Test that validate_team_org_change returns True without performing any checks
+    when the team and organization have the same organization_id.
+
+    This is a user issue, a user was editing their team and this function raised an exception even when they were not changing the organization.
+    """
+    # Create mock team and organization with same org ID
+    org_id = "test-org-123"
+
+    # Mock team
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.organization_id = org_id
+    team.models = ["gpt-4", "claude-2"]
+    team.max_budget = 100.0
+    team.tpm_limit = 1000
+    team.rpm_limit = 100
+    team.members_with_roles = []
+
+    # Mock organization
+    organization = MagicMock(spec=LiteLLM_OrganizationTable)
+    organization.organization_id = org_id
+    organization.models = []
+    organization.litellm_budget_table = MagicMock()
+    organization.litellm_budget_table.max_budget = (
+        50.0  # This would normally fail validation
+    )
+    organization.litellm_budget_table.tpm_limit = (
+        500  # This would normally fail validation
+    )
+    organization.litellm_budget_table.rpm_limit = (
+        50  # This would normally fail validation
+    )
+    organization.users = []
+
+    # Mock Router
+    mock_router = MagicMock(spec=Router)
+
+    # Use patch to ensure the model access check is never called
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.can_org_access_model"
+    ) as mock_access_check:
+        result = validate_team_org_change(
+            team=team, organization=organization, llm_router=mock_router
+        )
+
+        # Assert the function returns True without checking anything
+        assert result is True
+        mock_access_check.assert_not_called()  # Ensure access check wasn't called
 
 
 # Test for /team/permissions_list endpoint (GET)
