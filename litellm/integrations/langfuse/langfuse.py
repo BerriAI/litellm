@@ -6,7 +6,6 @@ import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
-from langfuse.client import StatefulTraceClient
 from packaging.version import Version
 
 import litellm
@@ -28,9 +27,12 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from langfuse.client import StatefulTraceClient
+
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
+    StatefulTraceClient = Any
 
 
 class LangFuseLogger:
@@ -830,8 +832,6 @@ class LangFuseLogger:
 
         trace.span(
             name="guardrail_information",
-            start_time=guardrail_information.get("start_time", None),
-            end_time=guardrail_information.get("end_time", None),
             input=guardrail_information.get("guardrail_request", None),
             output=guardrail_information.get("guardrail_response", None),
             metadata={
@@ -841,6 +841,10 @@ class LangFuseLogger:
                     "masked_entity_count", None
                 ),
             },
+            # The Langfuse SDK expects datetime objects for start_time and end_time but it does not render them correctly
+            # It seems to only work when start_time and end_time are floats :)
+            start_time=guardrail_information.get("start_time", None),  # type: ignore
+            end_time=guardrail_information.get("end_time", None),  # type: ignore
         )
 
 
