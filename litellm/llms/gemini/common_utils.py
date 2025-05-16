@@ -1,6 +1,6 @@
 import base64
 import datetime
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import httpx
 
@@ -88,7 +88,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
 
 def encode_unserializable_types(
-    data: dict[str, object], depth: int = 0
+    data: Dict[str, object], depth: int = 0
 ) -> dict[str, object]:
     """Converts unserializable types in dict to json.dumps() compatible types.
 
