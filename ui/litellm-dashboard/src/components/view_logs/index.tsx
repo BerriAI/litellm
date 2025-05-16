@@ -17,6 +17,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
 import { SessionView } from './SessionView';
 import { VectorStoreViewer } from './VectorStoreViewer';
+import { GuardrailViewer } from './GuardrailViewer';
 import FilterComponent from "../common_components/filter";
 import { FilterOption } from "../common_components/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -704,6 +705,9 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     Array.isArray(metadata.vector_store_request_metadata) && 
     metadata.vector_store_request_metadata.length > 0;
 
+  // Extract guardrail information from metadata if available
+  const hasGuardrailData = row.original.metadata && row.original.metadata.guardrail_information;
+
   return (
     <div className="p-6 bg-gray-50 space-y-6">
       {/* Combined Info Card */}
@@ -797,6 +801,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         getRawRequest={getRawRequest}
         formattedResponse={formattedResponse}
       />
+
+      {/* Guardrail Data - Show only if present */}
+      {hasGuardrailData && (
+        <GuardrailViewer data={row.original.metadata!.guardrail_information} />
+      )}
 
       {/* Vector Store Request Data - Show only if present */}
       {hasVectorStoreData && (
