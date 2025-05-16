@@ -48,10 +48,33 @@ class SpendLogCleanup:
             )
             return False
 
+    def _get_lock_duration(self) -> Optional[int]:
+        """
+        Gets the lock duration from config settings.
+        Returns the duration in seconds.
+        """
+        retention_interval = self.general_settings.get("maximum_spend_logs_retention_interval")
+        if retention_interval is None:
+            verbose_proxy_logger.info("No retention interval found, using default 24 hours")
+            return 86400  # Default to 24 hours
+
+        try:
+            if isinstance(retention_interval, int):
+                retention_interval = str(retention_interval)
+            lock_duration = duration_in_seconds(retention_interval)
+            verbose_proxy_logger.info(f"Lock duration set to {lock_duration} seconds")
+            return lock_duration
+        except ValueError as e:
+            verbose_proxy_logger.error(
+                f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, error: {str(e)}"
+            )
+            return 86400  # Default to 24 hours on error
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
         Only runs on the pod that acquires the distributed lock.
+        The lock is held for the duration specified in maximum_spend_logs_retention_interval.
         """
         try:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
@@ -69,8 +92,14 @@ class SpendLogCleanup:
                 verbose_proxy_logger.info("Pod lock manager or redis cache not initialized, skipping cleanup")
                 return
 
-            # Try to acquire the distributed lock
-            lock_acquired = await self.pod_lock_manager.acquire_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
+            # Get lock duration from config
+            lock_duration = self._get_lock_duration()
+
+            # Try to acquire the distributed lock with the configured duration
+            lock_acquired = await self.pod_lock_manager.acquire_lock(
+                cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                lock_expiry_seconds=lock_duration
+            )
             verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}")
             
             if not lock_acquired:
