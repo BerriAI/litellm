@@ -409,9 +409,11 @@ class BaseAzureLLM(BaseOpenAILLM):
         }
         # init http client + SSL Verification settings
         if is_async is True:
-            azure_client_params["http_client"] = self._get_async_http_client()
+            # Type annotation to fix incompatible types error
+            azure_client_params["http_client"] = self._get_async_http_client()  # type: ignore
         else:
-            azure_client_params["http_client"] = self._get_sync_http_client()
+            # Type annotation to fix incompatible types error
+            azure_client_params["http_client"] = self._get_sync_http_client()  # type: ignore
 
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
