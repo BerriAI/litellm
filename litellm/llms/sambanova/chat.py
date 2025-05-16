@@ -17,8 +17,8 @@ class SambanovaConfig(OpenAIGPTConfig):
     """
 
     max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
+    temperature: Optional[int] = None
+    top_p: Optional[int] = None
     top_k: Optional[int] = None
     stop: Optional[Union[str, list]] = None
     stream: Optional[bool] = None
