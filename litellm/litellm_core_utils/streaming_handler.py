@@ -1654,14 +1654,24 @@ class CustomStreamWrapper:
 
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
-                    if chunk == "None" or chunk is None:
-                        raise Exception
-                    elif (
-                        self.custom_llm_provider == "gemini"
-                        and hasattr(chunk, "parts")
-                        and len(chunk.parts) == 0
-                    ):
-                        continue
+                    # Handle potentially problematic chunks based on provider type
+                    if self.custom_llm_provider == "gemini" or self.custom_llm_provider == "vertex_ai":
+                        # For Gemini family (Google AI Studio and Vertex AI):
+                        # These providers might send None or chunks with empty 'parts' that should be skipped.
+                        if chunk is None or chunk == "None":
+                            print_verbose(f"Skipping None/\"None\" chunk for {self.custom_llm_provider}")
+                            continue
+                        if hasattr(chunk, "parts") and len(chunk.parts) == 0: # hasattr check is safe as chunk won't be None here
+                            print_verbose(f"Skipping chunk with empty parts for {self.custom_llm_provider}")
+                            continue
+                    elif chunk == "None" or chunk is None:
+                        # For other providers, a None or "None" string chunk is unexpected and indicates an issue.
+                        error_message = (
+                            f"Received an unexpected None or 'None' string chunk from the stream "
+                            f"for provider '{self.custom_llm_provider}'. Chunk value: {chunk}"
+                        )
+                        verbose_logger.error(error_message) # Log it for more context
+                        raise Exception(error_message)
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
                     print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
