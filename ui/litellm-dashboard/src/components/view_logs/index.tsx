@@ -73,6 +73,7 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState(""); 
@@ -147,7 +148,8 @@ export default function SpendLogsTable({
       selectedTeamId,
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
-      selectedStatus
+      selectedStatus,
+      selectedModel
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -177,7 +179,8 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
-        selectedStatus
+        selectedStatus,
+        selectedModel
       );
 
       // Trigger prefetch for all logs
@@ -222,6 +225,7 @@ export default function SpendLogsTable({
     filteredLogs,
     allTeams: hookAllTeams,
     allKeyAliases,
+    allModels,
     handleFilterChange,
     handleFilterReset
   } = useLogFilterLogic({
@@ -231,7 +235,9 @@ export default function SpendLogsTable({
     endTime,
     pageSize,
     isCustomDate,
-    setCurrentPage
+    setCurrentPage,
+    userID,
+    userRole
   })
 
   // Add this effect to update selectedTeamId and selectedStatus when team filter changes
@@ -243,6 +249,7 @@ export default function SpendLogsTable({
       setSelectedTeamId("");
     }
     setSelectedStatus(filters['Status'] || "");
+    setSelectedModel(filters['Model'] || "");
   }, [filters]);
 
   // Fetch logs for a session if selected
@@ -360,6 +367,21 @@ export default function SpendLogsTable({
         { label: 'Success', value: 'success' },
         { label: 'Failure', value: 'failure' }
       ]
+    },
+    {
+      name: 'Model',
+      label: 'Model',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!allModels || allModels.length === 0) return [];
+        const filtered = allModels.filter((model: string) => {
+          return model.toLowerCase().includes(searchText.toLowerCase());
+        });
+        return filtered.map((model: string) => ({
+          label: model,
+          value: model
+        }));
+      }
     }
   ]
 
