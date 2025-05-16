@@ -88,6 +88,7 @@ async def test_standard_logging_payload_includes_guardrail_information():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Local only test")
 async def test_langfuse_trace_includes_guardrail_information():
     """
     Test that the langfuse trace includes the guardrail information when a guardrail is applied
