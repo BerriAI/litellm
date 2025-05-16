@@ -32,7 +32,6 @@ class PodLockManager:
     async def acquire_lock(
         self,
         cronjob_id: str,
-        lock_expiry_seconds: Optional[int] = None,
     ) -> Optional[bool]:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
@@ -54,12 +53,11 @@ class PodLockManager:
             # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
             # and with an expiration (EX) to avoid deadlocks.
             lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
-            ttl = lock_expiry_seconds if lock_expiry_seconds is not None else DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             acquired = await self.redis_cache.async_set_cache(
                 lock_key,
                 self.pod_id,
                 nx=True,
-                ttl=ttl,
+                ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
             )
             if acquired:
                 verbose_proxy_logger.info(

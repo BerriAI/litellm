@@ -4,7 +4,8 @@ from litellm.proxy.utils import PrismaClient
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS, SPEND_LOG_CLEANUP_JOB_NAME
+from litellm.constants import SPEND_LOG_CLEANUP_JOB_NAME, SPEND_LOG_RUN_LOOPS
+import asyncio
 
 
 class SpendLogCleanup:
@@ -78,7 +79,7 @@ class SpendLogCleanup:
         total_deleted = 0
         run_count = 0
         while True:
-            if run_count > 100:
+            if run_count > SPEND_LOG_RUN_LOOPS:
                 verbose_proxy_logger.info("Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
                 break
             # Step 1: Find logs to delete
@@ -101,6 +102,9 @@ class SpendLogCleanup:
 
             total_deleted += len(logs_to_delete)
             run_count += 1
+            
+            # Add a small sleep to prevent overwhelming the database
+            await asyncio.sleep(0.1)
 
         return total_deleted
 
@@ -108,7 +112,6 @@ class SpendLogCleanup:
         """
         Main cleanup function. Deletes old spend logs in batches.
         Only runs on the pod that acquires the distributed lock.
-        The lock is held for the duration specified in maximum_spend_logs_retention_interval.
         """
         try:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
@@ -126,13 +129,10 @@ class SpendLogCleanup:
                 verbose_proxy_logger.info("Pod lock manager or redis cache not initialized, skipping cleanup")
                 return
 
-            # Get lock duration from config
-            lock_duration = DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 
             # Try to acquire the distributed lock with the configured duration
             lock_acquired = await self.pod_lock_manager.acquire_lock(
                 cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
-                lock_expiry_seconds=lock_duration
             )
             verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}")
             
