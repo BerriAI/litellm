@@ -47,6 +47,7 @@ export type LogEntry = {
   response: string | any[] | Record<string, any>;
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
+  status?: string;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };

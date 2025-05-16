@@ -1,3 +1,4 @@
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -14,9 +15,15 @@ __all__ = [
 
 
 def get_azure_image_generation_config(model: str) -> BaseImageGenerationConfig:
-    if model.startswith("dall-e-2") or model == "":  # empty model is dall-e-2
+    model = model.lower()
+    model = model.replace("-", "")
+    model = model.replace("_", "")
+    if model == "" or "dalle2" in model:  # empty model is dall-e-2
         return AzureDallE2ImageGenerationConfig()
-    elif model.startswith("dall-e-3"):
+    elif "dalle3" in model:
         return AzureDallE3ImageGenerationConfig()
     else:
+        verbose_logger.debug(
+            f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image-1 model format."
+        )
         return AzureGPTImageGenerationConfig()
