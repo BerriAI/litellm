@@ -122,6 +122,12 @@ export function useLogFilterLogic({
         }
       );
     }
+
+    if (filters[FILTER_KEYS.KEY_HASH]) {
+      filteredData = filteredData.filter(
+        log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
+      );
+    }
     
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
