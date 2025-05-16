@@ -48,7 +48,6 @@ def _set_object_metadata_field(
     object_data.metadata[field_name] = value
 
 
-
 async def _upsert_budget_and_membership(
     tx,
     *,
@@ -119,4 +118,3 @@ async def _upsert_budget_and_membership(
             },
         },
     )
-
