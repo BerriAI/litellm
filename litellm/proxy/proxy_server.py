@@ -1229,13 +1229,10 @@ async def _run_background_health_check():
     """
     global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    # make 1 deep copy of llm_model_list -> use this for all background health checks
-    _llm_model_list = copy.deepcopy(llm_model_list)
-
-    if _llm_model_list is None:
-        return
-
     while True:
+        # make 1 deep copy of llm_model_list on every health check iteration
+        _llm_model_list = copy.deepcopy(llm_model_list) or []
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1247,7 +1244,7 @@ async def _run_background_health_check():
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
 
         if health_check_interval is not None and isinstance(
-            health_check_interval, float
+            health_check_interval, int
         ):
             await asyncio.sleep(health_check_interval)
 
