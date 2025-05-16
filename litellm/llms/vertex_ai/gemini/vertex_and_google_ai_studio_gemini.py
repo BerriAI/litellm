@@ -1567,15 +1567,17 @@ class VertexLLM(VertexBase):
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
+        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
+        self.accumulated_json = ""
         self.sent_first_chunk = False
 
-    def chunk_parser(self, chunk_dict: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            processed_chunk = GenerateContentResponseBody(**chunk_dict)
+            processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            finish_reason = ""  # Default, will be overridden if chunk has a terminal reason
+            finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             gemini_chunk: Optional[Candidates] = None
@@ -1590,105 +1592,165 @@ class ModelResponseIterator:
                 if "text" in gemini_chunk["content"]["parts"][0]:
                     text = gemini_chunk["content"]["parts"][0]["text"]
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
-                    function_call_data = gemini_chunk["content"]["parts"][0]["functionCall"]
                     function_call = ChatCompletionToolCallFunctionChunk(
-                        name=function_call_data["name"],
-                        arguments=json.dumps(function_call_data["args"]),
+                        name=gemini_chunk["content"]["parts"][0]["functionCall"][
+                            "name"
+                        ],
+                        arguments=json.dumps(
+                            gemini_chunk["content"]["parts"][0]["functionCall"]["args"]
+                        ),
                     )
                     tool_use = ChatCompletionToolCallChunk(
-                        id=str(uuid.uuid4()), # Generate a unique ID for the tool call
+                        id=str(uuid.uuid4()),
                         type="function",
                         function=function_call,
-                        index=0, # Assuming one tool call per chunk part for now
+                        index=0,
                     )
-            
-            _chunk_finish_reason = ""
+
             if gemini_chunk and "finishReason" in gemini_chunk:
-                mapped_provider_reason = VertexGeminiConfig()._check_finish_reason(
-                    chat_completion_message=None, 
+                finish_reason = VertexGeminiConfig()._check_finish_reason(
+                    chat_completion_message=None,
                     finish_reason=gemini_chunk["finishReason"],
                 )
-                # Propagate terminal reasons from data chunks.
-                # 'stop' from an intermediate data chunk is not the stream's true stop.
-                if mapped_provider_reason not in ["stop", "function_call", "tool_calls", ""]: 
-                    finish_reason = mapped_provider_reason
+                ## DO NOT SET 'is_finished' = True
+                ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
-                    prompt_tokens=processed_chunk["usageMetadata"].get("promptTokenCount", 0),
-                    completion_tokens=processed_chunk["usageMetadata"].get("candidatesTokenCount", 0),
-                    total_tokens=processed_chunk["usageMetadata"].get("totalTokenCount", 0),
+                    prompt_tokens=processed_chunk["usageMetadata"].get(
+                        "promptTokenCount", 0
+                    ),
+                    completion_tokens=processed_chunk["usageMetadata"].get(
+                        "candidatesTokenCount", 0
+                    ),
+                    total_tokens=processed_chunk["usageMetadata"].get(
+                        "totalTokenCount", 0
+                    ),
+                    completion_tokens_details={
+                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                            "thoughtsTokenCount", 0
+                        )
+                    }
                 )
 
-            # This chunk represents a data event, not the end of the stream itself.
-            # is_finished will be True only for the [DONE] signal.
-            return GenericStreamingChunk(
+            returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
-                is_finished=False, 
+                is_finished=False,
                 finish_reason=finish_reason,
                 usage=usage,
-                index=0, # Assuming single choice for streaming for now
+                index=0,
             )
-        except Exception as e: # Catch broader errors during parsing specific chunk fields
-            verbose_logger.error(f"Error in chunk_parser with data: {chunk_dict}. Error: {e}")
-            raise ValueError(f"Failed to parse content of JSON chunk: {chunk_dict}. Error: {e}")
-
-    def _common_chunk_parsing_logic(self, raw_line_from_stream: str) -> GenericStreamingChunk:
-        payload_content = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(raw_line_from_stream)
-
-        if payload_content is None:  # Not a data line (e.g., event, id, retry) or empty line
-            return GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
-
-        stripped_payload = payload_content.strip()
-
-        if stripped_payload == "[DONE]":
-            return GenericStreamingChunk(text="", is_finished=True, finish_reason="stop", usage=None, index=0, tool_use=None)
-
-        if not stripped_payload:  # Empty data payload after stripping (e.g. from "data:\n")
-            return GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
-
-        try:
-            json_data = json.loads(stripped_payload)
-            if not self.sent_first_chunk:
-                self.sent_first_chunk = True
-            return self.chunk_parser(chunk_dict=json_data)
-        except json.JSONDecodeError as e:
-            verbose_logger.error(f"Vertex/Gemini stream: Failed to parse JSON from data line: '{stripped_payload}'. Error: {e}")
-            raise RuntimeError(f"Unexpected non-JSON data in Vertex/Gemini stream: '{stripped_payload}'. Error: {e}")
-        except Exception as e: # Catch other errors from chunk_parser
-            verbose_logger.error(f"Error processing parsed JSON data: {stripped_payload}. Error: {e}")
-            raise RuntimeError(f"Error processing JSON data: {stripped_payload}. Error: {e}")
-
+            return returned_chunk
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     # Sync iterator
     def __iter__(self):
         self.response_iterator = self.streaming_response
         return self
 
+    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        chunk = chunk.strip()
+        try:
+            json_chunk = json.loads(chunk)
+
+        except json.JSONDecodeError as e:
+            if (
+                self.sent_first_chunk is False
+            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
+                self.chunk_type = "accumulated_json"
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+            raise e
+
+        if self.sent_first_chunk is False:
+            self.sent_first_chunk = True
+
+        return self.chunk_parser(chunk=json_chunk)
+
+    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+        message = chunk.replace("\n\n", "")
+
+        # Accumulate JSON data
+        self.accumulated_json += message
+
+        # Try to parse the accumulated JSON
+        try:
+            _data = json.loads(self.accumulated_json)
+            self.accumulated_json = ""  # reset after successful parsing
+            return self.chunk_parser(chunk=_data)
+        except json.JSONDecodeError:
+            # If it's not valid JSON yet, continue to the next event
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+        try:
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+            if len(chunk) > 0:
+                """
+                Check if initial chunk valid json
+                - if partial json -> enter accumulated json logic
+                - if valid - continue
+                """
+                if self.chunk_type == "valid_json":
+                    return self.handle_valid_json_chunk(chunk=chunk)
+                elif self.chunk_type == "accumulated_json":
+                    return self.handle_accumulated_json_chunk(chunk=chunk)
+
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+        except Exception:
+            raise
+
     def __next__(self):
         try:
-            raw_line = self.response_iterator.__next__()
+            chunk = self.response_iterator.__next__()
         except StopIteration:
-            # verbose_logger.warning("Vertex/Gemini stream ended without [DONE] marker.") # Optional: log if stream ends before [DONE]
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopIteration
-        except ValueError as e: # Can be raised by httpx for malformed lines
-            raise RuntimeError(f"Error receiving line from stream: {e}")
-        
-        return self._common_chunk_parsing_logic(raw_line_from_stream=raw_line)
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self._common_chunk_parsing_logic(chunk=chunk)
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
-        self.async_response_iterator = self.streaming_response
+        self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
     async def __anext__(self):
         try:
-            raw_line = await self.async_response_iterator.__anext__()
+            chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
-            # verbose_logger.warning("Vertex/Gemini async stream ended without [DONE] marker.") # Optional
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopAsyncIteration
         except ValueError as e:
-            raise RuntimeError(f"Error receiving async line from stream: {e}")
-            
-        return self._common_chunk_parsing_logic(raw_line_from_stream=raw_line)
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self._common_chunk_parsing_logic(chunk=chunk)
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")

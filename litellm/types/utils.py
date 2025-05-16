@@ -633,20 +633,24 @@ class Message(OpenAIObject):
         if audio is None:
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            del self.audio
+            if hasattr(self, 'audio'):
+                del self.audio
 
         if annotations is None:
             # ensure default response matches OpenAI spec
             # Some OpenAI compatible APIs raise an error if annotations are passed in
-            del self.annotations
+            if hasattr(self, 'annotations'):
+                del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
-            del self.reasoning_content
+            if hasattr(self, 'reasoning_content'):
+                del self.reasoning_content
 
         if thinking_blocks is None:
             # ensure default response matches OpenAI spec
-            del self.thinking_blocks
+            if hasattr(self, 'thinking_blocks'):
+                del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
@@ -822,6 +826,9 @@ class PromptTokensDetailsWrapper(
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
 
+    web_search_requests: Optional[int] = None
+    """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -839,6 +846,12 @@ class PromptTokensDetailsWrapper(
             del self.image_count
         if self.video_length_seconds is None:
             del self.video_length_seconds
+        if self.web_search_requests is None:
+            del self.web_search_requests
+
+
+class ServerToolUse(BaseModel):
+    web_search_requests: Optional[int]
 
 
 class Usage(CompletionUsage):
@@ -848,6 +861,8 @@ class Usage(CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+
+    server_tool_use: Optional[ServerToolUse] = None
 
     def __init__(
         self,
@@ -859,6 +874,7 @@ class Usage(CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
+        server_tool_use: Optional[ServerToolUse] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -915,6 +931,11 @@ class Usage(CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if server_tool_use is not None:
+            self.server_tool_use = server_tool_use
+        else:  # maintain openai compatibility in usage object if possible
+            del self.server_tool_use
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
@@ -1785,6 +1806,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
+    requester_custom_headers: Optional[
+        Dict[str, str]
+    ]  # Log any custom (`x-`) headers sent by the client to the proxy.
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]

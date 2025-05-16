@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -91,6 +92,7 @@ def test_get_cost_for_built_in_tools_web_search():
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
+        usage=None,
         response_object=None,
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
@@ -110,7 +112,25 @@ def test_get_cost_for_built_in_tools_file_search():
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
         response_object=None,
+        usage=None,
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
 
     assert cost == 0.00
+
+
+def test_get_cost_for_anthropic_web_search():
+    """
+    Test that the cost for a web search is 0.00 when no response object is provided
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "claude-3-7-sonnet-latest"
+    usage = Usage(server_tool_use=ServerToolUse(web_search_requests=1))
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        standard_built_in_tools_params=None,
+    )
+    assert cost > 0.0

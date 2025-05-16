@@ -1046,7 +1046,7 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             raise Exception("An unknown error occurred with the stream")
                         self.received_finish_reason = "stop"
-            elif self.custom_llm_provider == "vertex_ai":
+            elif self.custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
                 import proto  # type: ignore
 
                 if hasattr(chunk, "candidates") is True:

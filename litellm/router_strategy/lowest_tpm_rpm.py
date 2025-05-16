@@ -47,7 +47,33 @@ class LowestTPMLoggingHandler(CustomLogger):
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = response_obj["usage"]["total_tokens"]
+                if "usage" not in response_obj:
+                    verbose_router_logger.warning(
+                        "log_success_event: 'usage' key missing in response_obj. Kwargs: %s, Response: %s",
+                        kwargs,
+                        response_obj
+                    )
+                    return
+                
+                current_usage = response_obj["usage"]
+                if not isinstance(current_usage, dict):
+                    verbose_router_logger.warning(
+                        "log_success_event: 'usage' field in response_obj is not a dict. Value: %s. Kwargs: %s, Response: %s",
+                        current_usage,
+                        kwargs,
+                        response_obj
+                    )
+                    return
+
+                if "total_tokens" not in current_usage:
+                    verbose_router_logger.warning(
+                        "log_success_event: 'total_tokens' key missing in response_obj['usage']. Usage: %s. Kwargs: %s, Response: %s",
+                        current_usage,
+                        kwargs,
+                        response_obj
+                    )
+                    return
+                total_tokens = current_usage["total_tokens"]
 
                 # ------------
                 # Setup values
@@ -81,7 +107,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.error(
-                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
+                "litellm.router_strategy.lowest_tpm_rpm.py::log_success_event(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -107,8 +133,32 @@ class LowestTPMLoggingHandler(CustomLogger):
                     id = str(id)
 
                 if "usage" not in response_obj:
+                    verbose_router_logger.warning(
+                        "async_log_success_event: 'usage' key missing in response_obj. Kwargs: %s, Response: %s",
+                        kwargs,
+                        response_obj
+                    )
                     return
-                total_tokens = response_obj["usage"]["total_tokens"]
+
+                current_usage = response_obj["usage"]
+                if not isinstance(current_usage, dict):
+                    verbose_router_logger.warning(
+                        "async_log_success_event: 'usage' field in response_obj is not a dict. Value: %s. Kwargs: %s, Response: %s",
+                        current_usage,
+                        kwargs,
+                        response_obj
+                    )
+                    return
+
+                if "total_tokens" not in current_usage:
+                    verbose_router_logger.warning(
+                        "async_log_success_event: 'total_tokens' key missing in response_obj['usage']. Usage: %s. Kwargs: %s, Response: %s",
+                        current_usage,
+                        kwargs,
+                        response_obj
+                    )
+                    return
+                total_tokens = current_usage["total_tokens"]
 
                 # ------------
                 # Setup values
