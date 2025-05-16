@@ -241,6 +241,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             labelInValue={false}
             optionLabelProp="label"
             dropdownRender={menu => menu}
+            showSearch={true}
           >
             {Object.entries(GuardrailProviders).map(([key, value]) => (
               <Option 
