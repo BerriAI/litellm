@@ -3312,7 +3312,7 @@ class ProxyStartupEvent:
                     args=[prisma_client],
                 )
             except ValueError:
-                verbose_proxy_logger.error(f"Invalid maximum_spend_logs_retention_interval value")
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
         scheduler.start()
 
