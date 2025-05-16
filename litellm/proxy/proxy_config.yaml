@@ -5,11 +5,11 @@ model_list:
       api_key: any_key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
+litellm_settings:
+  callbacks:
+    - "langfuse"
+    - "arize_phoenix"
 
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+
+general_settings:
+  store_prompts_in_spend_logs: true
