@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { uiSpendLogsCall } from "../networking";
+import { modelAvailableCall, uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
@@ -14,7 +14,7 @@ export const FILTER_KEYS = {
   REQUEST_ID: "Request ID",
   MODEL: "Model",
   USER_ID: "User ID",
-  STATUS: "Status"
+  STATUS: "Status",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -27,7 +27,9 @@ export function useLogFilterLogic({
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
   isCustomDate,
-  setCurrentPage
+  setCurrentPage,
+  userID,  
+  userRole 
 }: {
   logs: PaginatedResponse;
   accessToken: string | null;
@@ -36,6 +38,8 @@ export function useLogFilterLogic({
   pageSize?: number;
   isCustomDate: boolean;
   setCurrentPage: (page: number) => void;
+  userID: string | null; 
+  userRole: string | null; 
 }) {
   const defaultFilters = useMemo<LogFilterState>(() => ({
     [FILTER_KEYS.TEAM_ID]: "",
@@ -71,7 +75,8 @@ export function useLogFilterLogic({
         page,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
-        filters[FILTER_KEYS.STATUS] || undefined
+        filters[FILTER_KEYS.STATUS] || undefined,
+        filters[FILTER_KEYS.MODEL] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -122,6 +127,12 @@ export function useLogFilterLogic({
         }
       );
     }
+
+    if (filters[FILTER_KEYS.MODEL]) {
+      filteredData = filteredData.filter(
+        log => log.model === filters[FILTER_KEYS.MODEL]
+      );
+    }
     
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
@@ -157,6 +168,24 @@ export function useLogFilterLogic({
       return teamsData || []; // Ensure it returns an array
     },
     enabled: !!accessToken,
+  });
+
+  const { data: allModels = [] } = useQuery<string[], Error>({
+    queryKey: ['allModels', accessToken, userID, userRole],
+    queryFn: async () => {
+      if (!accessToken || !userID || !userRole) return [];
+
+      const response = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole,
+        false, // return_wildcard_routes
+        null // teamID
+      );
+
+      return response.data.map((model: { id: string }) => model.id);
+    },
+    enabled: !!accessToken && !!userID && !!userRole,
   });
 
   // Update filters state
@@ -195,6 +224,7 @@ export function useLogFilterLogic({
     filteredLogs,
     allKeyAliases,
     allTeams,
+    allModels,
     handleFilterChange,
     handleFilterReset,
   };

@@ -1658,6 +1658,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Filter logs by status (e.g., success, failure)"
     ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by model"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1712,9 +1716,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if status_filter is not None:
             if status_filter == "success":
-                where_conditions["status"] = {"in": ["success", None]}  # Assuming None means empty status
+                where_conditions["OR"] = [
+                    {"status": {"equals": "success"}},
+                    {"status": None}
+                ]
             else:
-                where_conditions["status"] = status_filter  # Filtering for other status values
+                where_conditions["status"] = {"equals": status_filter}
 
         if api_key is not None:
             where_conditions["api_key"] = api_key
@@ -1724,6 +1731,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if request_id is not None:
             where_conditions["request_id"] = request_id
+
+        if model is not None:
+            where_conditions["model"] = model
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
