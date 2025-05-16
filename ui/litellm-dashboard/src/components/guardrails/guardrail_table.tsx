@@ -7,6 +7,7 @@ import {
   TableHeaderCell,
   TableRow,
   Icon,
+  Button,
 } from "@tremor/react";
 import {
   TrashIcon,
@@ -26,6 +27,7 @@ import {
 } from "@tanstack/react-table";
 import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
 import EditGuardrailForm from "./edit_guardrail_form";
+import GuardrailInfoView from "./guardrail_info";
 
 interface GuardrailItem {
   guardrail_id?: string;
@@ -48,6 +50,8 @@ interface GuardrailTableProps {
   onDeleteClick: (guardrailId: string, guardrailName: string) => void;
   accessToken: string | null;
   onGuardrailUpdated: () => void;
+  isAdmin?: boolean;
+  onShowGuardrailInfo?: (isVisible: boolean) => void;
 }
 
 const GuardrailTable: React.FC<GuardrailTableProps> = ({
@@ -56,12 +60,16 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
   onDeleteClick,
   accessToken,
   onGuardrailUpdated,
+  isAdmin = false,
+  onShowGuardrailInfo,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "created_at", desc: true }
   ]);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedGuardrail, setSelectedGuardrail] = useState<GuardrailItem | null>(null);
+  const [showGuardrailInfo, setShowGuardrailInfo] = useState(false);
+  const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
@@ -81,15 +89,39 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     onGuardrailUpdated();
   };
 
+  const handleGuardrailIdClick = (guardrailId: string) => {
+    setSelectedGuardrailId(guardrailId);
+    setShowGuardrailInfo(true);
+    onShowGuardrailInfo?.(true);
+  };
+
+  const handleGuardrailInfoClose = () => {
+    setShowGuardrailInfo(false);
+    setSelectedGuardrailId(null);
+    onShowGuardrailInfo?.(false);
+  };
+
+  const handleGuardrailDeleted = () => {
+    setShowGuardrailInfo(false);
+    setSelectedGuardrailId(null);
+    onShowGuardrailInfo?.(false);
+    onGuardrailUpdated();
+  };
+
   const columns: ColumnDef<GuardrailItem>[] = [
     {
       header: "Guardrail ID",
       accessorKey: "guardrail_id",
       cell: (info: any) => (
         <Tooltip title={String(info.getValue() || "")}>
-          <span className="font-mono text-xs max-w-[15ch] truncate block">
-            {String(info.getValue() || "")}
-          </span>
+          <Button 
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+            onClick={() => info.getValue() && handleGuardrailIdClick(info.getValue())}
+          >
+            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
+          </Button>
         </Tooltip>
       ),
     },
@@ -209,6 +241,18 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
   });
+
+  // If showing guardrail info, render the GuardrailInfoView
+  if (showGuardrailInfo && selectedGuardrailId) {
+    return (
+      <GuardrailInfoView
+        guardrailId={selectedGuardrailId}
+        onClose={handleGuardrailInfoClose}
+        accessToken={accessToken}
+        isAdmin={isAdmin}
+      />
+    );
+  }
 
   return (
     <div className="rounded-lg custom-border relative">
