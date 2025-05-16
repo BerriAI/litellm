@@ -1046,108 +1046,72 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             raise Exception("An unknown error occurred with the stream")
                         self.received_finish_reason = "stop"
-            elif self.custom_llm_provider in ["vertex_ai", "vertex_ai_beta", "gemini"]: # Consolidated handling for Vertex AI and Google Gemini
+            elif self.custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
                 import proto  # type: ignore
-                
-                _content_parts_texts = []
-                _tool_calls_parts = []
-                completion_obj["content"] = None # Default to None
 
-                if hasattr(chunk, "candidates") and chunk.candidates:
-                    candidate = chunk.candidates[0]
-                    if hasattr(candidate, "content") and hasattr(candidate.content, "parts") and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            if hasattr(part, "text") and part.text:
-                                _content_parts_texts.append(part.text)
-                            elif hasattr(part, "function_call") and part.function_call:
+                if hasattr(chunk, "candidates") is True:
+                    try:
+                        try:
+                            completion_obj["content"] = chunk.text
+                        except Exception as e:
+                            original_exception = e
+                            if "Part has no text." in str(e):
+                                ## check for function calling
+                                function_call = (
+                                    chunk.candidates[0].content.parts[0].function_call
+                                )
+
                                 args_dict = {}
-                                # Ensure part.function_call.args exists and is iterable
-                                if hasattr(part.function_call, "args") and part.function_call.args:
-                                    for key, val in part.function_call.args.items():
-                                        # Check if val is a RepeatedComposite or similar iterable structure
-                                        if isinstance(val, proto.marshal.collections.repeated.RepeatedComposite):
-                                            args_dict[key] = [v for v in val]
-                                        # Check if val is a RepeatedScalarComposite (for simple lists like string arrays)
-                                        elif isinstance(val, proto.marshal.collections.repeated.Repeated): # More generic check for repeated fields
-                                            args_dict[key] = [v for v in val]
-                                        else:
-                                            args_dict[key] = val
-                                
+
+                                # Check if it's a RepeatedComposite instance
+                                for key, val in function_call.args.items():
+                                    if isinstance(
+                                        val,
+                                        proto.marshal.collections.repeated.RepeatedComposite,
+                                    ):
+                                        # If so, convert to list
+                                        args_dict[key] = [v for v in val]
+                                    else:
+                                        args_dict[key] = val
+
                                 try:
-                                    # Attempt to serialize, ensure complex objects are handled if not directly serializable
-                                    # Forcing string conversion for all args if direct JSON dump fails for complex objects
-                                    try:
-                                        args_str = json.dumps(args_dict)
-                                    except TypeError:
-                                        # Fallback for non-serializable objects: convert all values to strings
-                                        # This is a common pattern for Gemini function calling
-                                        stringified_args = {k: str(v) for k, v in args_dict.items()}
-                                        args_str = json.dumps(stringified_args)
-
+                                    args_str = json.dumps(args_dict)
                                 except Exception as e:
-                                    verbose_logger.error(f"Vertex AI function call args serialization error: {e}, args: {args_dict}")
-                                    args_str = "{}" # Default to empty JSON object string on error
-
-                                tool_call_obj = {
-                                    "id": f"call_{str(uuid.uuid4())}",
-                                    "function": {
-                                        "name": part.function_call.name if hasattr(part.function_call, "name") else "unknown_function",
-                                        "arguments": args_str,
-                                    },
-                                    "type": "function",
-                                }
-                                _tool_calls_parts.append(tool_call_obj)
-                    
-                    if _content_parts_texts:
-                        completion_obj["content"] = "".join(_content_parts_texts)
-                    
-                    if _tool_calls_parts:
-                        completion_obj["tool_calls"] = _tool_calls_parts
-                        # If content is None and there are tool_calls, set content to None explicitly (OpenAI spec)
-                        if completion_obj["content"] is None : # only if content is still None
-                             completion_obj["content"] = None
-
-
-                    # Finish Reason Handling
-                    raw_finish_reason = None
-                    if hasattr(candidate, "finish_reason") and candidate.finish_reason:
-                        # VertexAI uses an enum for finish_reason, get its string name
-                        if hasattr(candidate.finish_reason, "name"):
-                            raw_finish_reason = candidate.finish_reason.name
-                        elif isinstance(candidate.finish_reason, str): # some SDK versions might return string directly
-                            raw_finish_reason = candidate.finish_reason
-
-                    if raw_finish_reason and raw_finish_reason != "FINISH_REASON_UNSPECIFIED":
-                        self.received_finish_reason = raw_finish_reason
-                        if raw_finish_reason == "SAFETY":
-                            verbose_logger.warning(f"Vertex AI response flagged for SAFETY: {chunk}")
-                            # Potentially set a specific error message or standardized content
-                            # completion_obj["content"] = "[LITELLM_CONTENT_BLOCKED_SAFETY]" # Example
-                            # Or rely on the finish_reason to be mapped later
-                    
-                    # If the only thing in the chunk is a finish_reason (and it's not unspecified)
-                    # ensure content is None if it hasn't been set.
-                    if not _content_parts_texts and not _tool_calls_parts and self.received_finish_reason:
-                         completion_obj["content"] = None
-
-
-                elif not hasattr(chunk, "candidates"):
-                     # This case handles if the chunk is not the typical GenerateContentResponse
-                     # but a simple string or other direct content (less common for Gemini API stream)
-                     # For example, if a custom wrapper around Gemini SDK yields raw text strings.
-                     # This part is speculative based on `else: completion_obj["content"] = str(chunk)`
-                     # If `chunk` is the direct text content:
-                     if isinstance(chunk, str):
-                         completion_obj["content"] = chunk
-                     else:
-                         # If it's not a string and not a candidate structure, log warning.
-                         verbose_logger.warning(f"Unexpected chunk type/structure for {self.custom_llm_provider}: {type(chunk)}, {chunk}")
-                         completion_obj["content"] = None # Default to None
-
-                # Ensure content is None if it's an empty string and there are no tool calls,
-                # to align with OpenAI's spec where delta content is null for tool call chunks.
-                if completion_obj.get("content") == "" and not completion_obj.get("tool_calls"):
-                    completion_obj["content"] = None
+                                    raise e
+                                _delta_obj = litellm.utils.Delta(
+                                    content=None,
+                                    tool_calls=[
+                                        {
+                                            "id": f"call_{str(uuid.uuid4())}",
+                                            "function": {
+                                                "arguments": args_str,
+                                                "name": function_call.name,
+                                            },
+                                            "type": "function",
+                                        }
+                                    ],
+                                )
+                                _streaming_response = StreamingChoices(delta=_delta_obj)
+                                _model_response = ModelResponse(stream=True)
+                                _model_response.choices = [_streaming_response]
+                                response_obj = {"original_chunk": _model_response}
+                            else:
+                                raise original_exception
+                        if (
+                            hasattr(chunk.candidates[0], "finish_reason")
+                            and chunk.candidates[0].finish_reason.name
+                            != "FINISH_REASON_UNSPECIFIED"
+                        ):  # every non-final chunk in vertex ai has this
+                            self.received_finish_reason = chunk.candidates[
+                                0
+                            ].finish_reason.name
+                    except Exception:
+                        if chunk.candidates[0].finish_reason.name == "SAFETY":
+                            raise Exception(
+                                f"The response was blocked by VertexAI. {str(chunk)}"
+                            )
+                else:
+                    completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
@@ -1690,24 +1654,14 @@ class CustomStreamWrapper:
 
             if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
-                    # Handle potentially problematic chunks based on provider type
-                    if self.custom_llm_provider in ["gemini", "vertex_ai", "vertex_ai_beta"]:
-                        # For Gemini family (Google AI Studio and Vertex AI):
-                        # These providers might send None or chunks with empty 'parts' that should be skipped.
-                        if chunk is None or chunk == "None":
-                            print_verbose(f"Skipping None/\"None\" chunk for {self.custom_llm_provider}")
-                            continue
-                        if hasattr(chunk, "parts") and len(chunk.parts) == 0: # hasattr check is safe as chunk won't be None here
-                            print_verbose(f"Skipping chunk with empty parts for {self.custom_llm_provider}")
-                            continue
-                    elif chunk == "None" or chunk is None:
-                        # For other providers, a None or "None" string chunk is unexpected and indicates an issue.
-                        error_message = (
-                            f"Received an unexpected None or 'None' string chunk from the stream "
-                            f"for provider '{self.custom_llm_provider}'. Chunk value: {chunk}"
-                        )
-                        verbose_logger.error(error_message) # Log it for more context
-                        raise Exception(error_message)
+                    if chunk == "None" or chunk is None:
+                        raise Exception
+                    elif (
+                        self.custom_llm_provider == "gemini"
+                        and hasattr(chunk, "parts")
+                        and len(chunk.parts) == 0
+                    ):
+                        continue
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
                     print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
