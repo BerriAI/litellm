@@ -46,7 +46,11 @@ class PodLockManager:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             return None
         try:
-            verbose_proxy_logger.debug(f"attempting to acquire Redis lock for cronjob_id={cronjob_id}")
+            verbose_proxy_logger.debug(
+                "Pod %s attempting to acquire Redis lock for cronjob_id=%s",
+                self.pod_id,
+                cronjob_id,
+            )
             # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
             # and with an expiration (EX) to avoid deadlocks.
             lock_key = PodLockManager.get_redis_lock_key(cronjob_id)
