@@ -1,12 +1,10 @@
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from litellm.proxy.utils import PrismaClient
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.constants import SPEND_LOG_CLEANUP_JOB_NAME
-import os
 
 
 class SpendLogCleanup:
@@ -35,7 +33,7 @@ class SpendLogCleanup:
         verbose_proxy_logger.info(f"Checking retention setting: {retention_setting}")
 
         if retention_setting is None:
-            verbose_proxy_logger.info(f"No retention setting found")
+            verbose_proxy_logger.info("No retention setting found")
             return False
 
         try:
@@ -59,16 +57,16 @@ class SpendLogCleanup:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
 
             if not self._should_delete_spend_logs():
-                verbose_proxy_logger.info(f"Skipping cleanup — invalid or missing retention setting.")
+                verbose_proxy_logger.info("Skipping cleanup — invalid or missing retention setting.")
                 return
 
             if self.retention_seconds is None:
-                verbose_proxy_logger.error(f"Retention seconds is None, cannot proceed with cleanup")
+                verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
                 return
 
             # Check if pod_lock_manager and redis_cache exist
             if not self.pod_lock_manager or not self.pod_lock_manager.redis_cache:
-                verbose_proxy_logger.info(f"Pod lock manager or redis cache not initialized, skipping cleanup")
+                verbose_proxy_logger.info("Pod lock manager or redis cache not initialized, skipping cleanup")
                 return
 
             # Try to acquire the distributed lock
@@ -76,18 +74,18 @@ class SpendLogCleanup:
             verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}")
             
             if not lock_acquired:
-                verbose_proxy_logger.info(f"Another pod is already running cleanup")
+                verbose_proxy_logger.info("Another pod is already running cleanup")
                 return
 
             try:
-                cutoff_date = datetime.now(UTC) - timedelta(seconds=float(self.retention_seconds))
+                cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
                 verbose_proxy_logger.info(f"Deleting logs older than {cutoff_date.isoformat()}")
 
                 total_deleted = 0
                 run_count = 0
                 while True:
                     if run_count > 100:
-                        verbose_proxy_logger.info(f"Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
+                        verbose_proxy_logger.info("Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
                         break
                     # Step 1: Find logs to delete
                     logs_to_delete = await prisma_client.db.litellm_spendlogs.find_many(
@@ -113,14 +111,14 @@ class SpendLogCleanup:
 
                 # After cleanup is complete, release the lock and return
                 await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info(f"Released cleanup lock")
+                verbose_proxy_logger.info("Released cleanup lock")
                 return  # Explicitly return after cleanup is complete
 
             except Exception as e:
                 verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
                 # Ensure lock is released even if an error occurs
                 await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                verbose_proxy_logger.info(f"Released cleanup lock after error")
+                verbose_proxy_logger.info("Released cleanup lock after error")
                 return  # Return after error handling
 
         except Exception as e:
