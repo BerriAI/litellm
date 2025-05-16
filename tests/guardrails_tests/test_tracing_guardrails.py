@@ -84,3 +84,40 @@ async def test_standard_logging_payload_includes_guardrail_information():
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["masked_entity_count"] is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["masked_entity_count"]["PHONE_NUMBER"] == 1
 
+
+
+
+@pytest.mark.asyncio
+async def test_langfuse_trace_includes_guardrail_information():
+    """
+    Test that the langfuse trace includes the guardrail information when a guardrail is applied
+    """
+    litellm._turn_on_debug()
+    litellm.callbacks = ["langfuse"]
+    presidio_guard = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="presidio_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        presidio_analyzer_api_base=os.getenv("PRESIDIO_ANALYZER_API_BASE"),
+        presidio_anonymizer_api_base=os.getenv("PRESIDIO_ANONYMIZER_API_BASE"),
+    )
+    # 1. call the pre call hook with guardrail
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
+        ],
+        "mock_response": "Hello",
+        "guardrails": ["presidio_guard"],
+        "metadata": {},
+    }
+    await presidio_guard.async_pre_call_hook(
+        user_api_key_dict={},
+        cache=None,
+        data=request_data,
+        call_type="acompletion"
+    )
+
+    # 2. call litellm.acompletion
+    response = await litellm.acompletion(**request_data)
+
+    await asyncio.sleep(5)
