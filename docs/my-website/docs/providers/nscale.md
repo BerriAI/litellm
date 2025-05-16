@@ -3,6 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # Nscale (EU Sovereign)
 
+https://docs.nscale.com/docs/inference/chat
+
+:::tip
+
+**We support ALL Nscale models, just set `model=nscale/<any-model-on-nscale>` as a prefix when sending litellm requests**
+
+:::
+
 | Property | Details |
 |-------|-------|
 | Description | European-domiciled full-stack AI cloud platform for LLMs and image generation. |
@@ -16,33 +24,11 @@ import TabItem from '@theme/TabItem';
 os.environ["NSCALE_API_KEY"] = ""  # your Nscale API key
 ```
 
-## Supported Models
+## Explore Available Models  
 
-### Chat Models
+Explore our full list of text and multimodal AI models — all available at highly competitive pricing:
+📚 [Full List of Models](https://docs.nscale.com/docs/inference/serverless-models/current)  
 
-| Model Name | Description | Input Cost | Output Cost |
-|------------|-------------|------------|-------------|
-| nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct | 17B parameter model | $0.09/M tokens | $0.29/M tokens |
-| nscale/Qwen/Qwen2.5-Coder-3B-Instruct | 3B parameter coding model | $0.01/M tokens | $0.03/M tokens |
-| nscale/Qwen/Qwen2.5-Coder-7B-Instruct | 7B parameter coding model | $0.01/M tokens | $0.03/M tokens |
-| nscale/Qwen/Qwen2.5-Coder-32B-Instruct | 32B parameter coding model | $0.06/M tokens | $0.20/M tokens |
-| nscale/Qwen/QwQ-32B | 32B parameter model | $0.18/M tokens | $0.20/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B | 70B parameter distilled model | $0.375/M tokens | $0.375/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B | 8B parameter distilled model | $0.025/M tokens | $0.025/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B | 1.5B parameter distilled model | $0.09/M tokens | $0.09/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B | 7B parameter distilled model | $0.20/M tokens | $0.20/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B | 14B parameter distilled model | $0.07/M tokens | $0.07/M tokens |
-| nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | 32B parameter distilled model | $0.15/M tokens | $0.15/M tokens |
-| nscale/mistralai/mixtral-8x22b-instruct-v0.1 | Mixtral 8x22B model | $0.60/M tokens | $0.60/M tokens |
-| nscale/meta-llama/Llama-3.1-8B-Instruct | 8B parameter model | $0.03/M tokens | $0.03/M tokens |
-| nscale/meta-llama/Llama-3.3-70B-Instruct | 70B parameter model | $0.20/M tokens | $0.20/M tokens |
-
-### Image Generation Models
-
-| Model Name | Description | Cost per Pixel |
-|------------|-------------|----------------|
-| nscale/black-forest-labs/FLUX.1-schnell | Fast image generation model | $0.0000000013 |
-| nscale/stabilityai/stable-diffusion-xl-base-1.0 | SDXL base model | $0.000000003 |
 
 ## Key Features
 - **EU Sovereign**: Full data sovereignty and compliance with European regulations
@@ -185,7 +171,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 ## Getting Started
 1. Create an account at [console.nscale.com](https://console.nscale.com)
-2. Add credit to your account (minimum $5)
+2. Claim free credit
 3. Create an API key in settings
 4. Start making API calls using LiteLLM
 
