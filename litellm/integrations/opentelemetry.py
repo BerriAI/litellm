@@ -397,11 +397,10 @@ class OpenTelemetry(CustomLogger):
             value=guardrail_information.get("guardrail_mode"),
         )
 
-        self.safe_set_attribute(
-            span=guardrail_span,
-            key="guardrail_masked_entity_count",
-            value=guardrail_information.get("masked_entity_count"),
-        )
+        # Set masked_entity_count directly without conversion
+        masked_entity_count = guardrail_information.get("masked_entity_count")
+        if masked_entity_count is not None:
+            guardrail_span.set_attribute("masked_entity_count", masked_entity_count)
 
         self.safe_set_attribute(
             span=guardrail_span,
