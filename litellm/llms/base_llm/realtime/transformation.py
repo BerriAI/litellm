@@ -51,7 +51,9 @@ class BaseRealtimeConfig(ABC):
         )
 
     @abstractmethod
-    def transform_realtime_request(self, message: str) -> str:
+    def transform_realtime_request(
+        self, message: str, session_configuration_request: Optional[str] = None
+    ) -> str:
         pass
 
     def requires_session_configuration(

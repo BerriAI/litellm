@@ -177,7 +177,9 @@ class RealTimeStreaming:
         finally:
             await self.log_messages()
 
-    async def client_ack_messages(self):
+    async def client_ack_messages(
+        self, session_configuration_request: Optional[str] = None
+    ):
         try:
             while True:
                 message = await self.websocket.receive_text()
@@ -186,12 +188,11 @@ class RealTimeStreaming:
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
                 if self.provider_config:
-                    message = self.provider_config.transform_realtime_request(message)
+                    message = self.provider_config.transform_realtime_request(
+                        message, session_configuration_request
+                    )
 
                 await self.backend_ws.send(message)
-        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
-            verbose_logger.debug("Connection closed")
-            pass
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
 
@@ -214,7 +215,9 @@ class RealTimeStreaming:
             self.backend_to_client_send_messages(session_configuration_request)
         )
         try:
-            await self.client_ack_messages()
+            await self.client_ack_messages(
+                session_configuration_request=session_configuration_request
+            )
         except self.websocket.exceptions.ConnectionClosed:  # type: ignore
             verbose_logger.debug("Connection closed")
             forward_task.cancel()

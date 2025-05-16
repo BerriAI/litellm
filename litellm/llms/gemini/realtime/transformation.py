@@ -16,8 +16,10 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.gemini import (
+    BidiGenerateContentRealtimeInput,
     BidiGenerateContentServerContent,
     BidiGenerateContentServerMessage,
+    BidiGenerateContentSetup,
 )
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
@@ -34,6 +36,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
 )
+from litellm.types.llms.vertex_ai import HttpxBlobType
 from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
@@ -72,9 +75,29 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         api_base = api_base.replace("http://", "ws://")
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
-    def transform_realtime_request(self, message: str) -> str:
-        realtime_input_dict: Dict[str, Any] = {}
-        realtime_input_dict["text"] = message
+    def get_audio_mime_type(self, input_audio_format: str = "pcm16"):
+        mime_types = {
+            "pcm16": "audio/pcm",
+            "g711_ulaw": "audio/pcmu",
+            "g711_alaw": "audio/pcma",
+        }
+
+        return mime_types.get(input_audio_format, "application/octet-stream")
+
+    def transform_realtime_request(
+        self, message: str, session_configuration_request: Optional[str] = None
+    ) -> str:
+        realtime_input_dict: BidiGenerateContentRealtimeInput = {}
+        message_dict = json.loads(message)
+        if (
+            "type" in message_dict
+            and message_dict["type"] == "input_audio_buffer.append"
+        ):
+            realtime_input_dict["audio"] = HttpxBlobType(
+                mimeType=self.get_audio_mime_type(), data=message_dict["audio"]
+            )
+        else:
+            realtime_input_dict["text"] = message
 
         if len(realtime_input_dict) != 1:
             raise ValueError(
@@ -82,7 +105,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 f" {list(realtime_input_dict.keys())}"
             )
 
-        realtime_input_dict = encode_unserializable_types(realtime_input_dict)
+        realtime_input_dict = cast(
+            BidiGenerateContentRealtimeInput,
+            encode_unserializable_types(cast(Dict[str, object], realtime_input_dict)),
+        )
 
         return json.dumps({"realtime_input": realtime_input_dict})
 
@@ -97,11 +123,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "session_configuration_request is required for Gemini API calls"
             )
 
-        session_configuration_request_dict = json.loads(session_configuration_request)
+        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
+            session_configuration_request
+        ).get("setup", {})
         _model = session_configuration_request_dict.get("model") or model
-        _modalities = session_configuration_request_dict.get(
+        generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
-        ).get("responseModalities", ["TEXT"])
+        )
+        _modalities = generation_config.get("responseModalities", ["text"])
+        _modalities = [modality.lower() for modality in _modalities]
         _system_instruction = session_configuration_request_dict.get(
             "systemInstruction"
         )
@@ -112,7 +142,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if _system_instruction is not None and isinstance(_system_instruction, str):
             session["instructions"] = _system_instruction
         if _model is not None and isinstance(_model, str):
-            session["model"] = _model
+            session["model"] = _model.strip(
+                "models/"
+            )  # keep it consistent with how openai returns the model name
 
         return OpenAIRealtimeStreamSessionEvents(
             type="session.created",
@@ -144,16 +176,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "session_configuration_request is required for Gemini API calls"
             )
 
-        session_configuration_request_dict = json.loads(session_configuration_request)
-        _modalities = session_configuration_request_dict.get(
+        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
+            session_configuration_request
+        ).get("setup", {})
+        generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
-        ).get("responseModalities", ["TEXT"])
-        _temperature = session_configuration_request_dict.get(
-            "generationConfig", {}
-        ).get("temperature")
-        _max_output_tokens = session_configuration_request_dict.get(
-            "generationConfig", {}
-        ).get("maxOutputTokens")
+        )
+        _modalities = generation_config.get("responseModalities", ["text"])
+        _modalities = [cast(str, modality).lower() for modality in _modalities]
+
+        _temperature = generation_config.get("temperature")
+        _max_output_tokens = generation_config.get("maxOutputTokens")
 
         response_items: List[OpenAIRealtimeEvents] = []
 
@@ -570,7 +603,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             current_response_id=current_response_id,
                             current_conversation_id=current_conversation_id,
                             session_configuration_request=session_configuration_request,
-                            output_items=current_item_chunks,
+                            current_item_chunks=current_item_chunks,
+                            output_items=None,
                         )
                         returned_message = transformed_response_done_event
 
@@ -628,7 +662,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             {
                 "setup": {
                     "model": f"models/{model}",
-                    "generationConfig": {"responseModalities": ["TEXT"]},
+                    "generationConfig": {"responseModalities": ["AUDIO"]},
                 }
             }
         )
