@@ -433,6 +433,10 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
 
 
 @pytest.mark.asyncio
+@patch.dict(os.environ, {
+    "PRESIDIO_ANALYZER_API_BASE": "http://localhost:5002",
+    "PRESIDIO_ANONYMIZER_API_BASE": "http://localhost:5001"
+})
 async def test_presidio_pii_masking_logging_output_only_logged_response_guardrails_config():
     from typing import Dict, List, Optional
 
@@ -445,9 +449,8 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     )
 
     litellm.set_verbose = True
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
-
+    # Environment variables are now patched via the decorator instead of setting them directly
+    
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
         {
             "pii_masking": {
