@@ -1,5 +1,4 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
-import os 
 import httpx
 
 import litellm
