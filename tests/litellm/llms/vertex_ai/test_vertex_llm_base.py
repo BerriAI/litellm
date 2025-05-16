@@ -211,7 +211,7 @@ class TestVertexBase:
             assert token == "refreshed-token"
             assert project == "test-project"
 
-            # 1. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
+            # 2. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
                     credentials=credentials, project_id="new-project", custom_llm_provider="vertex_ai"
