@@ -358,9 +358,6 @@ class OpenTelemetry(CustomLogger):
         """
         Creates a span for Guardrail, if any guardrail information is present in standard_logging_object
         """
-        from opentelemetry import trace
-        from opentelemetry.trace import Status, StatusCode
-
         # Create span for guardrail information
         kwargs = kwargs or {}
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
