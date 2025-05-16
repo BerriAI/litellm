@@ -294,6 +294,24 @@ class CustomGuardrail(CustomLogger):
         )
         raise e
 
+    def mask_content_in_string(
+        self,
+        content_string: str,
+        mask_string: str,
+        start_index: int,
+        end_index: int,
+    ) -> str:
+        """
+        Mask the content in the string between the start and end indices.
+        """
+
+        # Do nothing if the start or end are not valid
+        if not (0 <= start_index < end_index <= len(content_string)):
+            return content_string
+
+        # Mask the content
+        return content_string[:start_index] + mask_string + content_string[end_index:]
+
 
 def log_guardrail_information(func):
     """
