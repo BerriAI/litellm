@@ -51,29 +51,25 @@ class LowestTPMLoggingHandler(CustomLogger):
                     verbose_router_logger.warning(
                         "log_success_event: 'usage' key missing in response_obj. Kwargs: %s, Response: %s",
                         kwargs,
-                        response_obj
-                    )
-                    return
-                
-                current_usage = response_obj["usage"]
-                if not isinstance(current_usage, dict):
-                    verbose_router_logger.warning(
-                        "log_success_event: 'usage' field in response_obj is not a dict. Value: %s. Kwargs: %s, Response: %s",
-                        current_usage,
-                        kwargs,
-                        response_obj
+                        response_obj,
                     )
                     return
 
-                if "total_tokens" not in current_usage:
+                current_usage = response_obj["usage"]
+                total_tokens = None
+                if isinstance(current_usage, dict):
+                    total_tokens = current_usage.get("total_tokens")
+                elif hasattr(current_usage, "total_tokens"):
+                    total_tokens = current_usage.total_tokens
+                
+                if total_tokens is None:
                     verbose_router_logger.warning(
-                        "log_success_event: 'total_tokens' key missing in response_obj['usage']. Usage: %s. Kwargs: %s, Response: %s",
+                        "log_success_event: Could not extract 'total_tokens' from usage data. Usage: %s. Kwargs: %s, Response: %s",
                         current_usage,
                         kwargs,
-                        response_obj
+                        response_obj,
                     )
                     return
-                total_tokens = current_usage["total_tokens"]
 
                 # ------------
                 # Setup values
@@ -136,30 +132,26 @@ class LowestTPMLoggingHandler(CustomLogger):
                     verbose_router_logger.warning(
                         "async_log_success_event: 'usage' key missing in response_obj. Kwargs: %s, Response: %s",
                         kwargs,
-                        response_obj
+                        response_obj,
                     )
                     return
 
                 current_usage = response_obj["usage"]
-                if not isinstance(current_usage, dict):
+                total_tokens = None
+                if isinstance(current_usage, dict):
+                    total_tokens = current_usage.get("total_tokens")
+                elif hasattr(current_usage, "total_tokens"):
+                    total_tokens = current_usage.total_tokens
+
+                if total_tokens is None:
                     verbose_router_logger.warning(
-                        "async_log_success_event: 'usage' field in response_obj is not a dict. Value: %s. Kwargs: %s, Response: %s",
+                        "async_log_success_event: Could not extract 'total_tokens' from usage data. Usage: %s. Kwargs: %s, Response: %s",
                         current_usage,
                         kwargs,
-                        response_obj
+                        response_obj,
                     )
                     return
-
-                if "total_tokens" not in current_usage:
-                    verbose_router_logger.warning(
-                        "async_log_success_event: 'total_tokens' key missing in response_obj['usage']. Usage: %s. Kwargs: %s, Response: %s",
-                        current_usage,
-                        kwargs,
-                        response_obj
-                    )
-                    return
-                total_tokens = current_usage["total_tokens"]
-
+                
                 # ------------
                 # Setup values
                 # ------------
