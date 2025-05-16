@@ -2,7 +2,11 @@ from typing import Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.guardrails import DynamicGuardrailParams, GuardrailEventHooks
+from litellm.types.guardrails import (
+    DynamicGuardrailParams,
+    GuardrailEventHooks,
+    PiiEntityType,
+)
 from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
@@ -214,6 +218,31 @@ class CustomGuardrail(CustomLogger):
             verbose_logger.warning(
                 "unable to log guardrail information. No metadata found in request_data"
             )
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        Apply your guardrail logic to the given text
+
+        Args:
+            text: The text to apply the guardrail to
+            language: The language of the text
+            entities: The entities to mask, optional
+
+        Any of the custom guardrails can override this method to provide custom guardrail logic
+
+        Returns the text with the guardrail applied
+
+        Raises:
+            Exception:
+                - If the guardrail raises an exception
+
+        """
+        return text
 
 
 def log_guardrail_information(func):

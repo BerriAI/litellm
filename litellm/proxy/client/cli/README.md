@@ -15,6 +15,20 @@ The CLI can be configured using environment variables or command-line options:
 - `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
 - `LITELLM_PROXY_API_KEY`: API key for authentication
 
+## Global Options
+
+- `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.
+
+Example:
+
+```bash
+litellm-proxy version
+# or
+litellm-proxy --version
+# or
+litellm-proxy -v
+```
+
 ## Commands
 
 ### Models Management
@@ -108,6 +122,52 @@ Options:
 
 - `--param`, `-p`: Model parameters in key=value format (can be specified multiple times)
 - `--info`, `-i`: Model info in key=value format (can be specified multiple times)
+
+#### Import Models
+
+Import models from a YAML file:
+
+```bash
+litellm-proxy models import models.yaml
+```
+
+Options:
+
+- `--dry-run`: Show what would be imported without making any changes.
+- `--only-models-matching-regex <regex>`: Only import models where `litellm_params.model` matches the given regex.
+- `--only-access-groups-matching-regex <regex>`: Only import models where at least one item in `model_info.access_groups` matches the given regex.
+
+Examples:
+
+1. Import all models from a YAML file:
+
+```bash
+litellm-proxy models import models.yaml
+```
+
+2. Dry run (show what would be imported):
+
+```bash
+litellm-proxy models import models.yaml --dry-run
+```
+
+3. Only import models where the model name contains 'gpt':
+
+```bash
+litellm-proxy models import models.yaml --only-models-matching-regex gpt
+```
+
+4. Only import models with access group containing 'beta':
+
+```bash
+litellm-proxy models import models.yaml --only-access-groups-matching-regex beta
+```
+
+5. Combine both filters:
+
+```bash
+litellm-proxy models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
+```
 
 ### Credentials Management
 
@@ -447,6 +507,19 @@ litellm-proxy users create --email a@b.com --role internal_user --alias "Alice" 
 
 # Delete users
 litellm-proxy users delete u1 u2
+```
+
+9. Import models from a YAML file (with filters):
+
+```bash
+# Only import models where the model name contains 'gpt'
+litellm-proxy models import models.yaml --only-models-matching-regex gpt
+
+# Only import models with access group containing 'beta'
+litellm-proxy models import models.yaml --only-access-groups-matching-regex beta
+
+# Combine both filters
+litellm-proxy models import models.yaml --only-models-matching-regex gpt --only-access-groups-matching-regex beta
 ```
 
 ## Error Handling

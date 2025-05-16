@@ -483,6 +483,23 @@ async def test_embedding_caching_individual_items_and_then_list():
     )
     assert embedding4.usage.prompt_tokens > embedding3.usage.prompt_tokens
 
+@pytest.mark.asyncio
+async def test_embedding_caching_individual_items():
+    litellm.cache = Cache()
+    text_to_embed = "hello"
+    embedding1 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+
+    await asyncio.sleep(1)
+
+    embedding3 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+    final_prompt_tokens = embedding3.usage.prompt_tokens
+    assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
+    assert embedding3._hidden_params["cache_hit"] == True
+    assert embedding3.usage.prompt_tokens != 0 
 
 
 def test_embedding_caching_azure():

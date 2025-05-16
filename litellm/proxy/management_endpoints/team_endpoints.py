@@ -423,6 +423,11 @@ def validate_team_org_change(
     - The team's tpm/rpm limit must be less than the org's tpm/rpm limit
     """
 
+    # If the team's organization is the same as the new organization, return True
+    # Since no changes are being made
+    if team.organization_id == organization.organization_id:
+        return True
+
     # Check if the org has access to the team's models
     if len(organization.models) > 0:
         if SpecialModelNames.all_proxy_models.value in organization.models:
