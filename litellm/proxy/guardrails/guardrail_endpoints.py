@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Type, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -19,6 +20,8 @@ from litellm.types.guardrails import (
     ListGuardrailsResponse,
     PiiAction,
     PiiEntityType,
+    PresidioConfigModel,
+    SupportedGuardrailIntegrations,
 )
 
 #### GUARDRAILS ENDPOINTS ####
@@ -455,3 +458,80 @@ async def get_guardrail_ui_settings():
         supported_modes=list(GuardrailEventHooks),
         pii_entity_categories=category_maps,
     )
+
+
+def _get_fields_from_model(model_class: Type[BaseModel]) -> List[Dict[str, Any]]:
+    """
+    Get the fields from a Pydantic model
+    """
+    fields = []
+    for field_name, field in model_class.model_fields.items():
+        # Get field metadata
+        description = field.description or field_name
+
+        # Check if this field is in the required_fields class variable
+        required = field.is_required()
+
+        fields.append(
+            {
+                "param": field_name,
+                "description": description,
+                "required": required,
+            }
+        )
+    return fields
+
+
+@router.get(
+    "/guardrails/ui/provider_specific_params",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_provider_specific_params():
+    """
+    Get provider-specific parameters for different guardrail types.
+
+    Returns a dictionary mapping guardrail providers to their specific parameters,
+    including parameter names, descriptions, and whether they are required.
+
+    Example Response:
+    ```json
+    {
+        "bedrock": [
+            {
+                "param": "guardrailIdentifier",
+                "description": "The ID of your guardrail on Bedrock",
+                "required": true
+            },
+            {
+                "param": "guardrailVersion",
+                "description": "The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+                "required": true
+            }
+        ],
+        "presidio": [
+            {
+                "param": "presidio_analyzer_api_base",
+                "description": "Base URL for the Presidio analyzer API",
+                "required": true
+            },
+            {
+                "param": "presidio_anonymizer_api_base",
+                "description": "Base URL for the Presidio anonymizer API",
+                "required": true
+            }
+        ]
+    }
+    ```
+    """
+    # Get fields from the models
+    bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
+    presidio_fields = _get_fields_from_model(PresidioConfigModel)
+
+    # Return the provider-specific parameters
+    provider_params = {
+        SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
+        SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
+    }
+
+    return provider_params
