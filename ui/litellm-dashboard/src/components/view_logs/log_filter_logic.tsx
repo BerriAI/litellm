@@ -14,7 +14,8 @@ export const FILTER_KEYS = {
   REQUEST_ID: "Request ID",
   MODEL: "Model",
   USER_ID: "User ID",
-  STATUS: "Status"
+  STATUS: "Status",
+  SESSION_ID: "Session ID"
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -43,7 +44,8 @@ export function useLogFilterLogic({
     [FILTER_KEYS.REQUEST_ID]: "",
     [FILTER_KEYS.MODEL]: "",
     [FILTER_KEYS.USER_ID]: "",
-    [FILTER_KEYS.STATUS]: ""
+    [FILTER_KEYS.STATUS]: "",
+    [FILTER_KEYS.SESSION_ID]: ""
   }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
@@ -71,7 +73,8 @@ export function useLogFilterLogic({
         page,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
-        filters[FILTER_KEYS.STATUS] || undefined
+        filters[FILTER_KEYS.STATUS] || undefined,
+        filters[FILTER_KEYS.SESSION_ID] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -120,6 +123,12 @@ export function useLogFilterLogic({
           }
           return log.status === filters[FILTER_KEYS.STATUS];
         }
+      );
+    }
+
+    if (filters[FILTER_KEYS.SESSION_ID]) {
+      filteredData = filteredData.filter(
+        log => log.session_id === filters[FILTER_KEYS.SESSION_ID]
       );
     }
     

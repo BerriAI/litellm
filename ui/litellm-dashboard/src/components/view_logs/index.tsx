@@ -147,7 +147,8 @@ export default function SpendLogsTable({
       selectedTeamId,
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
-      selectedStatus
+      selectedStatus,
+      selectedSessionId
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -177,7 +178,8 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
-        selectedStatus
+        selectedStatus,
+        selectedSessionId || undefined
       );
 
       // Trigger prefetch for all logs
@@ -360,6 +362,11 @@ export default function SpendLogsTable({
         { label: 'Success', value: 'success' },
         { label: 'Failure', value: 'failure' }
       ]
+    },
+    {
+      name: 'Session ID',
+      label: 'Session ID',
+      isSearchable: false
     }
   ]
 
