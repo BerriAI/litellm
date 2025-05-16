@@ -227,6 +227,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         potential_pdf_url_starts = ["https://", "http://", "www."]
         content_copy = content_item.copy()
         file_id = content_copy.get("file_id")
+        file_data = content_copy.get("file_data")
+        filename = content_copy.get("filename")
         if file_id and any(
             file_id.startswith(start) for start in potential_pdf_url_starts
         ):
@@ -237,17 +239,25 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 content_copy["file_data"] = base64_data
                 content_copy["filename"] = "my_file.pdf"
                 content_copy.pop("file_id")
+        elif file_data and not filename:
+            content_copy["file_data"] = file_data
+            content_copy["filename"] = "my_file.pdf"
         return content_copy
 
     async def _async_handle_pdf_url_helper(
         self, content_item: ChatCompletionFileObjectFile
     ) -> ChatCompletionFileObjectFile:
         file_id = content_item.get("file_id")
+        file_data = content_item.get("file_data")
+        filename = content_item.get("filename")
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
             base64_data = await async_convert_url_to_base64(file_id)
             content_item["file_data"] = base64_data
             content_item["filename"] = "my_file.pdf"
             content_item.pop("file_id")
+        elif file_data and not filename:
+            content_item["file_data"] = file_data
+            content_item["filename"] = "my_file.pdf"
         return content_item
 
     @overload

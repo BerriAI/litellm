@@ -438,6 +438,7 @@
         "cache_read_input_token_cost": 0.000000075,
         "litellm_provider": "openai",
         "mode": "chat",
+        "supports_pdf_input": true, 
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,

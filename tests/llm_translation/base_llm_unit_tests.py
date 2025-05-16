@@ -174,20 +174,21 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
-    @pytest.mark.parametrize("image_url", ["str", "dict"])
-    def test_pdf_handling(self, pdf_messages, image_url):
+    def test_pdf_handling(self, pdf_messages):
         from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        if image_url == "str":
-            image_url = pdf_messages
-        elif image_url == "dict":
-            image_url = {"url": pdf_messages}
+        litellm._turn_on_debug()
+
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
-                "type": "image_url",
-                "image_url": image_url,
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                },
             },
         ]
 
