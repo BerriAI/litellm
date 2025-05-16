@@ -7,7 +7,7 @@ from litellm.secret_managers.main import get_secret_str
 
 class FeatherlessAIConfig(OpenAIGPTConfig):
     """
-    Reference: https://deepinfra.com/docs/advanced/openai_api
+    Reference: https://featherless.ai/docs/completions
 
     The class `FeatherlessAI` provides configuration for the FeatherlessAI's Chat Completions API interface. Below are the parameters:
     """
@@ -66,8 +66,6 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "response_format",
-            "tools",
-            "tool_choice",
         ]
 
     def map_openai_params(
@@ -79,16 +77,16 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "tool_choice":
+            if param == "tool_choice" or param == "tools":
                 if (
                     value != "auto" and value != "none"
-                ):  # https://deepinfra.com/docs/advanced/function_calling
+                ):  # https://featherless.ai/docs/completions
                     ## UNSUPPORTED TOOL CHOICE VALUE
                     if litellm.drop_params is True or drop_params is True:
                         value = None
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="Featherless AI doesn't support tool_choice={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
+                            message="Featherless AI doesn't support tool_choice={} or tools={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
                                 value
                             ),
                             status_code=400,
