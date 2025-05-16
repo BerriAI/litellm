@@ -483,7 +483,15 @@ async def get_guardrail_info(guardrail_id: str):
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
-        return result
+
+        return GuardrailInfoResponse(
+            guardrail_id=result.get("guardrail_id"),
+            guardrail_name=result.get("guardrail_name"),
+            litellm_params=result.get("litellm_params"),
+            guardrail_info=result.get("guardrail_info"),
+            created_at=result.get("created_at"),
+            updated_at=result.get("updated_at"),
+        )
     except HTTPException as e:
         raise e
     except Exception as e:
