@@ -36,7 +36,7 @@ def test_initialize_presidio_guardrail():
 
     assert result["guardrail_name"] == "test_presidio_guardrail"
     assert (
-        result["litellm_params"]["guardrail"]
+        result["litellm_params"].guardrail
         == SupportedGuardrailIntegrations.PRESIDIO.value
     )
-    assert result["litellm_params"]["mode"] == "pre_call"
+    assert result["litellm_params"].mode == "pre_call"
