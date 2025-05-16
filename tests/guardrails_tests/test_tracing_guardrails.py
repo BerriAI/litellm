@@ -94,6 +94,8 @@ async def test_langfuse_trace_includes_guardrail_information():
     """
     import httpx
     from unittest.mock import AsyncMock, patch
+    from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement 
+    callback = LangfusePromptManagement(flush_interval=3)
     import json
     
     # Create a mock Response object
@@ -107,7 +109,7 @@ async def test_langfuse_trace_includes_guardrail_information():
     
     with patch("httpx.Client.post", mock_post):
         litellm._turn_on_debug()
-        litellm.callbacks = ["langfuse"]
+        litellm.callbacks = [callback]
         presidio_guard = _OPTIONAL_PresidioPIIMasking(
             guardrail_name="presidio_guard",
             event_hook=GuardrailEventHooks.pre_call,
@@ -150,7 +152,7 @@ async def test_langfuse_trace_includes_guardrail_information():
         guardrail_span = None
         for item in actual_payload["batch"]:
             if (item["type"] == "span-create" and 
-                item["body"].get("name") == "guardrail_information"):
+                item["body"].get("name") == "guardrail"):
                 guardrail_span = item
                 break
         
@@ -158,7 +160,7 @@ async def test_langfuse_trace_includes_guardrail_information():
         assert guardrail_span is not None, "No guardrail span found in Langfuse payload"
         
         # Validate the structure of the guardrail span
-        assert guardrail_span["body"]["name"] == "guardrail_information"
+        assert guardrail_span["body"]["name"] == "guardrail"
         assert "metadata" in guardrail_span["body"]
         assert guardrail_span["body"]["metadata"]["guardrail_name"] == "presidio_guard"
         assert guardrail_span["body"]["metadata"]["guardrail_mode"] == GuardrailEventHooks.pre_call
