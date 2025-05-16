@@ -95,7 +95,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
-          {isAdmin && <Tab key="settings">Settings</Tab>}
+          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
         </TabList>
 
         <TabPanels>
