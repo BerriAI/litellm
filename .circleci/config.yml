@@ -146,6 +146,8 @@ jobs:
             if ! python -m mypy . \
                 --config-file mypy.ini \
                 --ignore-missing-imports; then
+                echo "mypy detected errors"
+                exit 1
             fi
             cd ..
 
