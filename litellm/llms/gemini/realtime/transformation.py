@@ -41,6 +41,7 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
+from litellm.utils import get_empty_usage
 
 from ..common_utils import encode_unserializable_types
 
@@ -49,6 +50,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT = {
     "serverContent.modelTurn": "response.text.delta",
     "serverContent.generationComplete": "response.text.done",
     "serverContent.turnComplete": "response.done",
+    "serverContent.interrupted": "response.done",
 }
 
 
@@ -439,40 +441,38 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         message: BidiGenerateContentServerMessage,
         current_response_id: Optional[str],
         current_conversation_id: Optional[str],
-        current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]],
         output_items: Optional[List[OpenAIRealtimeOutputItemDone]],
         session_configuration_request: Optional[str] = None,
     ) -> OpenAIRealtimeDoneEvent:
-        if (
-            current_conversation_id is None
-            or current_response_id is None
-            or current_item_chunks is None
-        ):
+        if current_conversation_id is None or current_response_id is None:
             raise ValueError(
-                "current_conversation_id and current_response_id and current_item_chunks cannot be None for a 'done' event."
+                f"current_conversation_id and current_response_id must all be set for a 'done' event. Got=current_conversation_id: {current_conversation_id}, current_response_id: {current_response_id}"
             )
         if session_configuration_request is None:
             raise ValueError(
                 "session_configuration_request is required for Gemini API calls"
             )
 
-        session_configuration_request_dict = json.loads(session_configuration_request)
-        temperature = session_configuration_request_dict.get(
+        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
+            session_configuration_request
+        ).get("setup", {})
+        generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
-        ).get("temperature")
-        max_output_tokens = session_configuration_request_dict.get(
-            "generationConfig", {}
-        ).get("maxOutputTokens")
-        _modalities = session_configuration_request_dict.get(
-            "generationConfig", {}
-        ).get("responseModalities", ["TEXT"])
-        _chat_completion_usage = VertexGeminiConfig()._calculate_usage(
-            completion_response=message,
         )
+        temperature = generation_config.get("temperature")
+        max_output_tokens = generation_config.get("maxOutputTokens")
+        _modalities = generation_config.get("responseModalities", ["text"])
+        _modalities = [cast(str, modality).lower() for modality in _modalities]
+        if "usageMetadata" in message:
+            _chat_completion_usage = VertexGeminiConfig()._calculate_usage(
+                completion_response=message,
+            )
+        else:
+            _chat_completion_usage = get_empty_usage()
         responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
-        return OpenAIRealtimeDoneEvent(
+        response_done_event = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id="event_{}".format(uuid.uuid4()),
             response=OpenAIRealtimeResponseDoneObject(
@@ -484,11 +484,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 else [],
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
                 usage=responses_api_usage.model_dump(),
             ),
         )
+        if temperature is not None:
+            response_done_event["response"]["temperature"] = temperature
+        if max_output_tokens is not None:
+            response_done_event["response"]["max_output_tokens"] = max_output_tokens
+
+        return response_done_event
 
     def transform_realtime_response(
         self,
@@ -603,7 +607,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             current_response_id=current_response_id,
                             current_conversation_id=current_conversation_id,
                             session_configuration_request=session_configuration_request,
-                            current_item_chunks=current_item_chunks,
                             output_items=None,
                         )
                         returned_message = transformed_response_done_event
