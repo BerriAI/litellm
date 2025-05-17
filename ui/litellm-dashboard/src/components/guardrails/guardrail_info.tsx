@@ -15,7 +15,7 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { getGuardrailInfo } from "@/components/networking";
+import { getGuardrailInfo, updateGuardrailCall } from "@/components/networking";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 
 export interface GuardrailInfoProps {
@@ -57,11 +57,23 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
 
   const handleGuardrailUpdate = async (values: any) => {
     try {
-      // Not implemented yet - will be added in the future
-      message.info("Guardrail update functionality coming soon");
+      if (!accessToken) return;
+      
+      const updateData = {
+        guardrail_name: values.guardrail_name,
+        litellm_params: {
+          default_on: values.default_on
+        },
+        guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined
+      };
+      
+      await updateGuardrailCall(accessToken, guardrailId, updateData);
+      message.success("Guardrail updated successfully");
+      fetchGuardrailInfo();
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating guardrail:", error);
+      message.error("Failed to update guardrail");
     }
   };
 
