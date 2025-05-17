@@ -211,8 +211,8 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
-class PresidioConfigModel(BaseModel):
-    """Configuration parameters for the Presidio PII masking guardrail"""
+class PresidioPresidioConfigModelUserInterface(BaseModel):
+    """Configuration parameters for the Presidio PII masking guardrail on LiteLLM UI"""
 
     presidio_analyzer_api_base: Optional[str] = Field(
         default=None,
@@ -222,11 +222,16 @@ class PresidioConfigModel(BaseModel):
         default=None,
         description="Base URL for the Presidio anonymizer API",
     )
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
-        default=None, description="Configuration for PII entity types and actions"
-    )
     output_parse_pii: Optional[bool] = Field(
         default=None, description="Whether to parse PII in model outputs"
+    )
+
+
+class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
+    """Configuration parameters for the Presidio PII masking guardrail"""
+
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
+        default=None, description="Configuration for PII entity types and actions"
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,

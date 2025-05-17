@@ -23,7 +23,7 @@ from litellm.types.guardrails import (
     PatchGuardrailRequest,
     PiiAction,
     PiiEntityType,
-    PresidioConfigModel,
+    PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
 )
 
@@ -703,7 +703,7 @@ async def get_provider_specific_params():
     """
     # Get fields from the models
     bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
-    presidio_fields = _get_fields_from_model(PresidioConfigModel)
+    presidio_fields = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
 
     # Return the provider-specific parameters
