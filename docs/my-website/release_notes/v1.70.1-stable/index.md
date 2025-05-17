@@ -32,10 +32,10 @@ import TabItem from '@theme/TabItem';
 - **[VertexAI](../../docs/providers/vertex#metallama-api)**
     - `/chat/completion`
         - Fix llama streaming error - where model response was nested in returned streaming chunk - [PR](https://github.com/BerriAI/litellm/pull/10878)
-- **Ollama**
+- **[Ollama](../../docs/providers/ollama)**
     - `/chat/completion`
         - structure responses fix - [PR](https://github.com/BerriAI/litellm/pull/10617)
-- **Bedrock**
+- **[Bedrock](../../docs/providers/bedrock#litellm-proxy-usage)**
     - `/chat/completion`
         - Handle thinking_blocks when assistant.content is None - [PR](https://github.com/BerriAI/litellm/pull/10688)
         - Fixes to only allow accepted fields for tool json schema - [PR](https://github.com/BerriAI/litellm/pull/10062)
@@ -44,36 +44,34 @@ import TabItem from '@theme/TabItem';
         - Tool caching support - [PR](https://github.com/BerriAI/litellm/pull/10897)
     - `/messages`
         - allow using dynamic AWS Params 
-- **Nvidia NIM**
+- **[Nvidia NIM](../../docs/providers/nvidia_nim)**
     - `/chat/completion`
         - Add tools, tool_choice, parallel_tool_calls support - [PR](https://github.com/BerriAI/litellm/pull/10763)
-- **Novita AI**
+- **[Novita AI](../../docs/providers/novita)**
     - New Provider added for `/chat/completion` routes - [PR](https://github.com/BerriAI/litellm/pull/9527)
-- **Azure**
+- **[Azure](../../docs/providers/azure)**
     - `/image/generation`
         - Fix azure dall e 3 call with custom model name - [PR](https://github.com/BerriAI/litellm/pull/10776)
     - `/audio/transcription`
         - Add gpt-4o-mini-tts pricing - [PR](https://github.com/BerriAI/litellm/pull/10807)
     - `/embeddings`
         - Add cohere embed v4 pricing - [PR](https://github.com/BerriAI/litellm/pull/10806)
-- **Cohere**
+- **[Cohere](../../docs/providers/cohere)**
     - `/embeddings`
         - Migrate embedding to use `/v2/embed` - adds support for output_dimensions param - [PR](https://github.com/BerriAI/litellm/pull/10809)
-- **Groq**
+- **[Groq](../../docs/providers/groq)**
     - `/chat/completion`
         - Update model max tokens + cost information - [PR](https://github.com/BerriAI/litellm/pull/10077)
-- **Anthropic**
+- **[Anthropic](../../docs/providers/anthropic)**
     - `/chat/completion`
         - Web search tool support - native + openai format - [PR](https://github.com/BerriAI/litellm/pull/10846)
-- **VLLM**
+- **[VLLM](../../docs/providers/vllm)**
     - `/chat/completion`
         - Support embedding input as list of integers - [PR](https://github.com/BerriAI/litellm/pull/10629)
-- **OpenAI**
+- **[OpenAI](../../docs/providers/openai)**
     - `/chat/completion`
         - Fix - b64 file data input handling - [PR](https://github.com/BerriAI/litellm/pull/10897)
         - Add ‘supports_pdf_input’ to all vision models - [PR](https://github.com/BerriAI/litellm/pull/10897)
-
-
 
 ## LLM API Endpoints
 - **Responses API**
