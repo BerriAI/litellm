@@ -11,10 +11,11 @@ import {
   TabList,
   TabPanel,
   TabPanels,
+  TextInput,
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { getGuardrailInfo } from "@/components/networking";
+import { getGuardrailInfo, updateGuardrailCall } from "@/components/networking";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 
 export interface GuardrailInfoProps {
@@ -56,11 +57,23 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
 
   const handleGuardrailUpdate = async (values: any) => {
     try {
-      // Not implemented yet - will be added in the future
-      message.info("Guardrail update functionality coming soon");
+      if (!accessToken) return;
+      
+      const updateData = {
+        guardrail_name: values.guardrail_name,
+        litellm_params: {
+          default_on: values.default_on
+        },
+        guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined
+      };
+      
+      await updateGuardrailCall(accessToken, guardrailId, updateData);
+      message.success("Guardrail updated successfully");
+      fetchGuardrailInfo();
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating guardrail:", error);
+      message.error("Failed to update guardrail");
     }
   };
 
@@ -139,30 +152,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
               </Card>
             </Grid>
 
-            <Card className="mt-6">
-              <Text>Provider Configuration</Text>
-              <div className="mt-2 space-y-2">
-                {Object.entries(guardrailData.litellm_params || {}).map(([key, value]) => {
-                  // Skip mode and guardrail as they're displayed above
-                  if (key === 'mode' || key === 'guardrail' || key === 'default_on') return null;
-                  
-                  return (
-                    <div key={key} className="flex">
-                      <Text className="font-medium w-1/3">{key}</Text>
-                      <Text className="w-2/3">
-                        {typeof value === 'object' 
-                          ? JSON.stringify(value, null, 2) 
-                          : String(value)}
-                      </Text>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-
             {guardrailData.guardrail_info && Object.keys(guardrailData.guardrail_info).length > 0 && (
               <Card className="mt-6">
-                <Text>Additional Information</Text>
+                <Text>Guardrail Info</Text>
                 <div className="mt-2 space-y-2">
                   {Object.entries(guardrailData.guardrail_info).map(([key, value]) => (
                     <div key={key} className="flex">
@@ -212,7 +204,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       name="guardrail_name"
                       rules={[{ required: true, message: "Please input a guardrail name" }]}
                     >
-                      <Input />
+                      <TextInput />
                     </Form.Item>
                     
                     <Form.Item
@@ -226,7 +218,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
-                      label="Additional Information"
+                      label="Guardrail Information"
                       name="guardrail_info"
                     >
                       <Input.TextArea rows={5} />
