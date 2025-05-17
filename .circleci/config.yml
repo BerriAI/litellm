@@ -81,31 +81,13 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install mypy
       - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
       - run:
           name: Linting Testing
           command: |
             cd litellm
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
-                --config-file ../mypy.ini \
+                --config-file mypy.ini \
                 --ignore-missing-imports; then
               echo "mypy detected errors"
               exit 1
