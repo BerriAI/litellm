@@ -807,22 +807,26 @@ class JWTAuthManager:
 
         user_object: Optional[LiteLLM_UserTable] = None
         if user_id:
-            user_object = (
-                await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=jwt_handler.is_upsert_user_id(
-                        valid_user_email=valid_user_email
-                    ),
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_email=user_email,
-                    sso_user_id=user_id,
+            try:
+                user_object = (
+                    await get_user_object(
+                        user_id=user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=jwt_handler.is_upsert_user_id(
+                            valid_user_email=valid_user_email
+                        ),
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_email=user_email,
+                        sso_user_id=user_id,
+                    )
+                    if user_id
+                    else None
                 )
-                if user_id
-                else None
-            )
+            except Exception as e:
+                verbose_proxy_logger.error(f"Error getting/creating JWT user: {str(e)}")
+                user_object = None
 
         end_user_object: Optional[LiteLLM_EndUserTable] = None
         if end_user_id:
