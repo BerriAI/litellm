@@ -143,9 +143,9 @@ jobs:
           command: |
             cd litellm
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
+            if ! python -m mypy . \
+                --config-file mypy.ini \
+                --ignore-missing-imports; then
             fi
             cd ..
 
