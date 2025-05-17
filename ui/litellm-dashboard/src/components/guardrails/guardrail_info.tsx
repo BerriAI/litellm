@@ -215,28 +215,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
 
             {guardrailData.litellm_params?.pii_entities_config && Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
               <Card className="mt-6">
-                <Text>PII Protection Configuration</Text>
-                <div className="mt-2 space-y-2">
-                  <table className="min-w-full">
-                    <thead>
-                      <tr className="bg-gray-50 border-b">
-                        <th className="py-2 px-4 text-left">PII Type</th>
-                        <th className="py-2 px-4 text-left">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(guardrailData.litellm_params.pii_entities_config).map(([entity, action]: [string, any]) => (
-                        <tr key={entity} className="border-b">
-                          <td className="py-2 px-4">{entity.replace(/_/g, ' ')}</td>
-                          <td className="py-2 px-4">
-                            <Badge color={action === "BLOCK" ? "red" : "blue"}>
-                              {action}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="flex justify-between items-center">
+                  <Text className="font-medium">PII Protection</Text>
+                  <Badge color="blue">
+                    {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities configured
+                  </Badge>
                 </div>
               </Card>
             )}
