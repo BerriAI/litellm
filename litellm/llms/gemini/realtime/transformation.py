@@ -494,7 +494,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
         returned_items: List[OpenAIRealtimeEvents] = []
 
-        delta_done_event_text = delta_done_event.get("text")
+        delta_done_event_text = cast(Optional[str], delta_done_event.get("text"))
         # response.content_part.done
         response_content_part_done = OpenAIRealtimeContentPartDone(
             type="response.content_part.done",
