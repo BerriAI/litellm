@@ -58,16 +58,28 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
       // Initialize PII configuration from guardrail data
       if (response.litellm_params?.pii_entities_config) {
         const piiConfig = response.litellm_params.pii_entities_config;
-        const entities: string[] = [];
-        const actions: {[key: string]: string} = {};
         
-        Object.entries(piiConfig).forEach(([entity, action]: [string, any]) => {
-          entities.push(entity);
-          actions[entity] = typeof action === 'string' ? action : "MASK";
-        });
+        // Clear previous selections
+        setSelectedPiiEntities([]);
+        setSelectedPiiActions({});
         
-        setSelectedPiiEntities(entities);
-        setSelectedPiiActions(actions);
+        // Only if there are entities configured
+        if (Object.keys(piiConfig).length > 0) {
+          const entities: string[] = [];
+          const actions: {[key: string]: string} = {};
+          
+          Object.entries(piiConfig).forEach(([entity, action]: [string, any]) => {
+            entities.push(entity);
+            actions[entity] = typeof action === 'string' ? action : "MASK";
+          });
+          
+          setSelectedPiiEntities(entities);
+          setSelectedPiiActions(actions);
+        }
+      } else {
+        // Clear selections if no PII config exists
+        setSelectedPiiEntities([]);
+        setSelectedPiiActions({});
       }
     } catch (error) {
       message.error("Failed to load guardrail information");
@@ -113,20 +125,30 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     try {
       if (!accessToken) return;
       
-      // Prepare PII entity configuration
-      const piiEntitiesConfig: {[key: string]: string} = {};
-      selectedPiiEntities.forEach(entity => {
-        piiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
-      });
-      
-      const updateData = {
+      // Prepare update data object
+      const updateData: any = {
         guardrail_name: values.guardrail_name,
         litellm_params: {
           default_on: values.default_on,
-          pii_entities_config: Object.keys(piiEntitiesConfig).length > 0 ? piiEntitiesConfig : undefined
         },
         guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined
       };
+      
+      // Only add PII entities config if we have selected entities
+      if (selectedPiiEntities.length > 0) {
+        // Create PII config object only with selected entities
+        const piiEntitiesConfig: {[key: string]: string} = {};
+        selectedPiiEntities.forEach(entity => {
+          piiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
+        });
+        
+        // Add to litellm_params only if we have entities
+        updateData.litellm_params.pii_entities_config = piiEntitiesConfig;
+      } else {
+        // If no entities selected, explicitly set to empty object
+        // This will clear any existing PII config
+        updateData.litellm_params.pii_entities_config = {};
+      }
       
       await updateGuardrailCall(accessToken, guardrailId, updateData);
       message.success("Guardrail updated successfully");
