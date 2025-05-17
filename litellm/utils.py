@@ -6876,3 +6876,11 @@ def jsonify_tools(tools: List[Any]) -> List[Dict]:
         if isinstance(tool, dict):
             new_tools.append(tool)
     return new_tools
+
+
+def get_empty_usage() -> Usage:
+    return Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+    )

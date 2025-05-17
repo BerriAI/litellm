@@ -2067,7 +2067,7 @@ class BaseLLMHTTPHandler:
 
         try:
             async with websockets.connect(  # type: ignore
-                url, additional_headers=headers
+                url, extra_headers=headers
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
