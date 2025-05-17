@@ -2,27 +2,56 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0"  # Run every Sundays at midnight
-    #- cron: "0 0 * * *" # Run daily at midnight
+    - cron: "0 0 * * *" # Run daily at midnight
 
 jobs:
   auto_update_price_and_context_window:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Install Dependencies
-        run: |
-          pip install aiohttp
+        run: pip install aiohttp
+
       - name: Update JSON Data
+        run: python ".github/workflows/auto_update_price_and_context_window_file.py"
+
+      - name: Configure Git
         run: |
-          python ".github/workflows/auto_update_price_and_context_window_file.py"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Check for Changes in JSON File
+        id: check_changes
+        run: |
+          if git diff --exit-code model_prices_and_context_window.json; then
+            echo "has_changes=false" >> $GITHUB_ENV
+          else
+            echo "has_changes=true" >> $GITHUB_ENV
+          fi
+
+      - name: Commit Changes
+        if: env.has_changes == 'true'
+        run: |
+          git checkout -b auto-update-price-and-context-window-$(date +'%Y-%m-%d')
+          git add model_prices_and_context_window.json
+          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
+          git push -f origin auto-update-price-and-context-window-$(date +'%Y-%m-%d')
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
       - name: Create Pull Request
+        if: env.has_changes == 'true'
         run: |
-          git add model_prices_and_context_window.json 
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
+          gh auth login --with-token <<< "${{ secrets.GH_TOKEN }}"
           gh pr create --title "Update model_prices_and_context_window.json file" \
             --body "Automated update for model_prices_and_context_window.json" \
             --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
             --base main
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: No Changes Detected
+        if: env.has_changes == 'false'
+        run: echo "No changes found in model_prices_and_context_window.json, no pull request created."
