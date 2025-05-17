@@ -13,7 +13,7 @@ export const guardrail_provider_map: Record<string, string> = {
     LLMGuard: "llmguard_moderations",
     SecretDetector: "hide_secrets",
     AIM: "aim",
-    Lakera: "lakera"
+    Lakera: "lakera_v2"
 };
 
 
