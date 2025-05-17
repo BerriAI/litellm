@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 import os
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -754,6 +754,36 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "current_delta_type": delta_type,
         }
 
+    def map_openai_event(
+        self,
+        key: str,
+        value: dict,
+        current_delta_type: Optional[ALL_DELTA_TYPES],
+        json_message: dict,
+    ) -> OpenAIRealtimeEventTypes:
+        model_turn_event = value.get("modelTurn")
+        generation_complete_event = value.get("generationComplete")
+        openai_event: Optional[OpenAIRealtimeEventTypes] = None
+        if model_turn_event:  # check if model turn event
+            openai_event = self.map_model_turn_event(model_turn_event)
+        elif generation_complete_event:
+            openai_event = self.map_generation_complete_event(
+                delta_type=current_delta_type
+            )
+        else:
+            # Check if this key or any nested key matches our mapping
+            for map_key, openai_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
+                if map_key == key or (
+                    "." in map_key
+                    and GeminiRealtimeConfig.get_nested_value(json_message, map_key)
+                    is not None
+                ):
+                    openai_event = openai_event
+                    break
+        if openai_event is None:
+            raise ValueError(f"Unknown openai event: {key}, value: {value}")
+        return openai_event
+
     def transform_realtime_response(
         self,
         message: Union[str, bytes],
@@ -794,25 +824,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         for key, value in json_message.items():
             # Check if this key or any nested key matches our mapping
-            openai_event: Optional[OpenAIRealtimeEventTypes] = None
-            model_turn_event = value.get("modelTurn")
-            generation_complete_event = value.get("generationComplete")
-            if model_turn_event:  # check if model turn event
-                openai_event = self.map_model_turn_event(model_turn_event)
-            elif generation_complete_event:
-                openai_event = self.map_generation_complete_event(
-                    delta_type=current_delta_type
-                )
-            else:
-                # Check if this key or any nested key matches our mapping
-                for map_key, openai_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
-                    if map_key == key or (
-                        "." in map_key
-                        and GeminiRealtimeConfig.get_nested_value(json_message, map_key)
-                        is not None
-                    ):
-                        openai_event = openai_event
-                        break
+            openai_event = self.map_openai_event(
+                key=key,
+                value=value,
+                current_delta_type=current_delta_type,
+                json_message=json_message,
+            )
+
             if openai_event == OpenAIRealtimeEventTypes.SESSION_CREATED:
                 transformed_message = self.transform_session_created_event(
                     model,
@@ -821,7 +839,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 session_configuration_request = json.dumps(transformed_message)
                 returned_message.append(transformed_message)
-
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
@@ -834,28 +851,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             elif (
                 openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
-            ):
-                _returned_message = self.handle_openai_modality_event(
-                    openai_event,
-                    json_message,
-                    realtime_response_transform_input,
-                    delta_type="text",
-                )
-                returned_message.extend(_returned_message["returned_message"])
-                current_output_item_id = _returned_message["current_output_item_id"]
-                current_response_id = _returned_message["current_response_id"]
-                current_conversation_id = _returned_message["current_conversation_id"]
-                current_delta_chunks = _returned_message["current_delta_chunks"]
-                current_delta_type = _returned_message["current_delta_type"]
-            elif (
-                openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
+                or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
             ):
                 _returned_message = self.handle_openai_modality_event(
                     openai_event,
                     json_message,
                     realtime_response_transform_input,
-                    delta_type="audio",
+                    delta_type="text" if "text" in openai_event.value else "audio",
                 )
                 returned_message.extend(_returned_message["returned_message"])
                 current_output_item_id = _returned_message["current_output_item_id"]
