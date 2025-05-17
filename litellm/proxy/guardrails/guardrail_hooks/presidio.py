@@ -25,6 +25,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
+    LitellmParams,
     PiiAction,
     PiiEntityType,
     PresidioPerRequestConfig,
@@ -575,3 +576,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data={},
         )
         return text
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        Update the guardrails litellm params in memory
+        """
+        if litellm_params.pii_entities_config:
+            self.pii_entities_config = litellm_params.pii_entities_config
