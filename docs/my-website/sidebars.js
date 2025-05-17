@@ -566,7 +566,6 @@ const sidebars = {
             "projects/GPTLocalhost",
           ],
         },
-        "proxy/pii_masking",
         "extras/code_quality",
         "rules",
         "proxy/team_based_routing",
