@@ -64,8 +64,6 @@ async def test_reset_budget_keys_partial_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    now = datetime.utcnow()
-
     async def fake_reset_key(key, current_time):
         if key["id"] == "key1":
             # Simulate a failure on key1 (for example, this might be due to an invariant check)
