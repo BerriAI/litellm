@@ -300,6 +300,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         message: BidiGenerateContentServerContent,
         output_item_id: str,
         response_id: str,
+        delta_type: Literal["text", "audio"],
     ) -> OpenAIRealtimeResponseDelta:
         delta = ""
         try:
@@ -315,7 +316,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
 
         return OpenAIRealtimeResponseDelta(
-            type="response.text.delta",
+            type="response.text.delta"
+            if delta_type == "text"
+            else "response.audio.delta",
             content_index=0,
             event_id="event_{}".format(uuid.uuid4()),
             item_id=output_item_id,
@@ -603,6 +606,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 BidiGenerateContentServerContent(**json_message["serverContent"]),
                 current_output_item_id,
                 current_response_id,
+                delta_type=delta_type,
             )
             returned_message.append(transformed_message)
         elif (
