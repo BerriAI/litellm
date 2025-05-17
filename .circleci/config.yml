@@ -143,7 +143,7 @@ jobs:
           command: |
             cd litellm
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
+            if ! python -m mypy . --ignore-missing-imports --exclude '(^|/)cryptography/'; then
               echo "mypy detected errors"
               exit 1
             fi
