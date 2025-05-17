@@ -16,6 +16,7 @@ from litellm.types.guardrails import (
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
+    GuardrailParamUITypes,
     GuardrailUIAddGuardrailSettings,
     LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
@@ -649,11 +650,17 @@ def _get_fields_from_model(model_class: Type[BaseModel]) -> List[Dict[str, Any]]
         # Check if this field is in the required_fields class variable
         required = field.is_required()
 
+        field_type: Optional[GuardrailParamUITypes] = None
+        field_json_schema_extra = getattr(field, "json_schema_extra", {})
+        if field_json_schema_extra and "ui_type" in field_json_schema_extra:
+            field_type = field_json_schema_extra["ui_type"]
+
         fields.append(
             {
                 "param": field_name,
                 "description": description,
                 "required": required,
+                "type": field_type.value if field_type else None,
             }
         )
     return fields
@@ -696,6 +703,12 @@ async def get_provider_specific_params():
                 "param": "presidio_anonymizer_api_base",
                 "description": "Base URL for the Presidio anonymizer API",
                 "required": true
+            },
+            {
+                "param": "output_parse_pii",
+                "description": "Whether to parse PII in model outputs",
+                "required": false,
+                "type": "bool"
             }
         ]
     }

@@ -211,6 +211,11 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
+class GuardrailParamUITypes(str, Enum):
+    BOOL = "bool"
+    STR = "str"
+
+
 class PresidioPresidioConfigModelUserInterface(BaseModel):
     """Configuration parameters for the Presidio PII masking guardrail on LiteLLM UI"""
 
@@ -223,7 +228,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         description="Base URL for the Presidio anonymizer API",
     )
     output_parse_pii: Optional[bool] = Field(
-        default=None, description="Whether to parse PII in model outputs"
+        default=None,
+        description="When True, LiteLLM will replace the masked text with the original text in the response",
+        # extra param to let the ui know this is a boolean
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
 
 
@@ -317,7 +325,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: str = Field(
+    mode: Union[str, List[str]] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
     api_key: Optional[str] = Field(
