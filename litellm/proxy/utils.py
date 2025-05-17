@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import hashlib
 import json
 import os
 import smtplib
@@ -24,6 +23,8 @@ from typing import (
 
 from litellm.constants import MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
+    hash_token,
+    _hash_token_if_needed,
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -1214,12 +1215,9 @@ class PrismaClient:
         except (json.JSONDecodeError, AttributeError):
             # Default to success if metadata parsing fails
             return "success"
-
+        
     def hash_token(self, token: str):
-        # Hash the string using SHA-256
-        hashed_token = hashlib.sha256(token.encode()).hexdigest()
-
-        return hashed_token
+        return hash_token(token=token)
 
     def jsonify_object(self, data: dict) -> dict:
         db_data = copy.deepcopy(data)
@@ -1510,7 +1508,7 @@ class PrismaClient:
                             for t in token:
                                 assert isinstance(t, str)
                                 if t.startswith("sk-"):
-                                    new_token = self.hash_token(token=t)
+                                    new_token = hash_token(token=t)
                                     hashed_tokens.append(new_token)
                                 else:
                                     hashed_tokens.append(t)
@@ -1780,7 +1778,11 @@ class PrismaClient:
             verbose_proxy_logger.debug("PrismaClient: insert_data: %s", data)
             if table_name == "key":
                 token = data["token"]
-                hashed_token = self.hash_token(token=token)
+                # Only hash if it's a secret key, not a pre-hashed value
+                if isinstance(token, str) and token.startswith("sk-"):
+                    hashed_token = hash_token(token=token)
+                else:
+                    hashed_token = token
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
                 print_verbose(
@@ -2037,7 +2039,7 @@ class PrismaClient:
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):  # type: ignore
-                        t.token = self.hash_token(token=t.token)  # type: ignore
+                        t.token = hash_token(token=t.token)  # type: ignore
                     try:
                         data_json = self.jsonify_object(
                             data=t.model_dump(exclude_none=True)
@@ -2159,7 +2161,7 @@ class PrismaClient:
                 hashed_tokens = []
                 for token in tokens:
                     if isinstance(token, str) and token.startswith("sk-"):
-                        hashed_token = self.hash_token(token=token)
+                        hashed_token = hash_token(token=token)
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
@@ -2433,27 +2435,6 @@ async def send_email(
         verbose_proxy_logger.exception(
             "An error occurred while sending the email:" + str(e)
         )
-
-
-def hash_token(token: str):
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
-
-
-def _hash_token_if_needed(token: str) -> str:
-    """
-    Hash the token if it's a string and starts with "sk-"
-
-    Else return the token as is
-    """
-    if token.startswith("sk-"):
-        return hash_token(token=token)
-    else:
-        return token
 
 
 class ProxyUpdateSpend:
