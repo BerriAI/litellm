@@ -27,7 +27,7 @@ def test_gemini_realtime_transformation_session_created():
 
     session_created_message_str = json.dumps(session_created_message)
     logging_obj = MagicMock()
-    logging_obj.litellm_trace_id.return_value = "123"
+    logging_obj.litellm_trace_id = "123"
 
     transformed_message = config.transform_realtime_response(
         session_created_message_str,
