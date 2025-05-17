@@ -41,6 +41,26 @@ securityContext: {}
   # runAsNonRoot: true
   # runAsUser: 1000
 
+# health probes for litellmproxy 
+livenessProbe:
+  httpGet:
+    path: /health/liveliness
+    port: http
+
+readinessProbe:
+  httpGet:
+    path: /health/readiness
+    port: http
+# Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
+
+startupProbe:
+  httpGet:
+    path: /health/readiness
+    port: http
+  failureThreshold: 30
+  periodSeconds: 10
+
+
 # A list of Kubernetes Secret objects that will be exported to the LiteLLM proxy
 #  pod as environment variables.  These secrets can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
