@@ -17,21 +17,28 @@ LiteLLM currently covers:
 
 
 ## **Supported Providers**:
-- [OpenAI](#quick-start)
-- [Azure OpenAI](#azure-openai)
-- [OpenAI-Compatible APIs](#openai-compatible-apis)
+- [Assistants API](#assistants-api)
+  - [**Supported Providers**:](#supported-providers)
+  - [Quick Start](#quick-start)
+    - [SDK + PROXY](#sdk--proxy)
+  - [Streaming](#streaming)
+  - [👉 Proxy API Reference](#-proxy-api-reference)
+  - [Azure OpenAI](#azure-openai)
+  - [OpenAI-Compatible APIs](#openai-compatible-apis)
 
 ## Quick Start 
 
 Call an existing Assistant. 
 
-- Get the Assistant 
+- Get the Assistant
 
 - Create a Thread when a user starts a conversation.
 
 - Add Messages to the Thread as the user asks questions.
 
 - Run the Assistant on the Thread to generate a response by calling the model and the tools.
+
+- Modify the Assistant's details if necessary (name, instructions, tools, etc.)
 
 ### SDK + PROXY
 <Tabs>
@@ -78,6 +85,36 @@ assistants = get_assistants(custom_llm_provider="openai")
 
 ### ASYNC USAGE ### 
 # assistants = await aget_assistants(custom_llm_provider="openai")
+```
+
+
+**Modify the Assistant**
+
+```python
+from litellm import modify_assistants, amodify_assistants
+
+# setup env
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+# Modify Assistant (sync)
+modified_assistant = modify_assistants(
+    custom_llm_provider="openai",
+    assistant_id="asst_S4IW1JplxrRtsb5sQOXmztf4",
+    model="gpt-4o",
+    name="Updated Python Assistant",
+    instructions="You are an advanced Python tutor.",
+    tools=[{"type": "code_interpreter"}],
+)
+
+### ASYNC USAGE ###
+# modified_assistant = await amodify_assistants(
+#     custom_llm_provider="openai",
+#     assistant_id="asst_S4IW1JplxrRtsb5sQOXmztf4",
+#     model="gpt-4o",
+#     name="Updated Python Assistant",
+#     instructions="You are an advanced Python tutor.",
+#     tools=[{"type": "code_interpreter"}],
+# )
 ```
 
 **Create a Thread**
@@ -243,6 +280,19 @@ curl http://0.0.0.0:4000/v1/threads/thread_abc123/runs \
   -H "Content-Type: application/json" \
   -d '{
     "assistant_id": "asst_abc123"
+  }'
+```
+
+**Modify an Assistant**
+```bash
+curl -X PATCH "http://0.0.0.0:4000/v1/assistants/{assistant_id}" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "name": "Updated Math Tutor",
+    "instructions": "You are a Python coding expert who can solve complex math problems.",
+    "tools": [{"type": "code_interpreter"}],
+    "model": "gpt-4o"
   }'
 ```
 
