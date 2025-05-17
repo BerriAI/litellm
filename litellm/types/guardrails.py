@@ -24,6 +24,7 @@ class SupportedGuardrailIntegrations(Enum):
     BEDROCK = "bedrock"
     GURDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
+    LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
@@ -278,9 +279,37 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
+class LakeraV2GuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Lakera AI v2 guardrail"""
+
+    api_key: Optional[str] = Field(
+        default=None, description="API key for the Lakera AI service"
+    )
+    api_base: Optional[str] = Field(
+        default=None, description="Base URL for the Lakera AI API"
+    )
+    project_id: Optional[str] = Field(
+        default=None, description="Project ID for the Lakera AI project"
+    )
+    payload: Optional[bool] = Field(
+        default=True, description="Whether to include payload in the response"
+    )
+    breakdown: Optional[bool] = Field(
+        default=True, description="Whether to include breakdown in the response"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to include in the request"
+    )
+    dev_info: Optional[bool] = Field(
+        default=True,
+        description="Whether to include developer information in the response",
+    )
+
+
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
+    LakeraV2GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str = Field(

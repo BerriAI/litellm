@@ -211,6 +211,8 @@ class CustomGuardrail(CustomLogger):
             masked_entity_count=masked_entity_count,
         )
         if "metadata" in request_data:
+            if request_data["metadata"] is None:
+                request_data["metadata"] = {}
             request_data["metadata"]["standard_logging_guardrail_information"] = slg
         elif "litellm_metadata" in request_data:
             request_data["litellm_metadata"][
@@ -293,6 +295,24 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
         )
         raise e
+
+    def mask_content_in_string(
+        self,
+        content_string: str,
+        mask_string: str,
+        start_index: int,
+        end_index: int,
+    ) -> str:
+        """
+        Mask the content in the string between the start and end indices.
+        """
+
+        # Do nothing if the start or end are not valid
+        if not (0 <= start_index < end_index <= len(content_string)):
+            return content_string
+
+        # Mask the content
+        return content_string[:start_index] + mask_string + content_string[end_index:]
 
 
 def log_guardrail_information(func):
