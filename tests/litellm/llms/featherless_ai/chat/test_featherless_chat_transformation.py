@@ -170,51 +170,58 @@ class TestFeatherlessAIConfig:
         # only returns the headers, but we can verify it doesn't raise an exception
         # which would happen if api_base handling was incorrect
 
-    def test_featherless_ai_completion_mock(self):
+    def test_featherless_ai_completion_mock(self, respx_mock):
         """
         Mock test for Featherless AI completion using the model format from docs.
-        This test uses patching to avoid requiring actual API credentials.
+        This test mocks the actual HTTP request to test the integration properly.
         """
+        import respx
         from litellm import completion
-        from litellm.types.utils import ModelResponse
         
-        # Create a proper ModelResponse object
-        mock_response = ModelResponse(
-            id="chatcmpl-mock-id",
-            object="chat.completion",
-            created=1699975384,
-            model="featherless-ai/Qwerky-72B",
-            choices=[
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "```python\nprint(\"Hi from LiteLLM!\")\n```\n\nThis simple Python code prints a greeting message from LiteLLM."
-                    },
-                    "finish_reason": "stop"
-                }
-            ],
-            usage={
-                "prompt_tokens": 15,
-                "completion_tokens": 30,
-                "total_tokens": 45
-            }
+        # Set up environment variables for the test
+        api_key = "fake-featherless-key"
+        api_base = "https://api.featherless.ai/v1"
+        model = "featherless_ai/featherless-ai/Qwerky-72B"
+        model_name = "Qwerky-72B"  # The actual model name without provider prefix
+        
+        # Mock the HTTP request to the Featherless AI API
+        respx_mock.post(f"{api_base}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model_name,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "```python\nprint(\"Hi from LiteLLM!\")\n```\n\nThis simple Python code prints a greeting message from LiteLLM.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+            },
+            status_code=200
         )
         
-        # Patch the completion function to return our mock response
-        with patch("litellm.completion", return_value=mock_response):
-            response = completion(
-                model="featherless_ai/featherless-ai/Qwerky-72B", 
-                messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
-            )
-            
-            # Verify response structure for a ModelResponse object
-            assert response is not None
-            assert hasattr(response, "choices")
-            assert len(response.choices) > 0
-            assert hasattr(response.choices[0], "message")
-            assert hasattr(response.choices[0].message, "content")
-            assert response.choices[0].message.content is not None
-            
-            # Check for any code block or LiteLLM mention instead of specific text
-            assert "```python" in response.choices[0].message.content or "LiteLLM" in response.choices[0].message.content
+        # Make the actual API call through LiteLLM
+        response = completion(
+            model=model,
+            messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
+            api_key=api_key,
+            api_base=api_base
+        )
+        
+        # Verify response structure
+        assert response is not None
+        assert hasattr(response, "choices")
+        assert len(response.choices) > 0
+        assert hasattr(response.choices[0], "message")
+        assert hasattr(response.choices[0].message, "content")
+        assert response.choices[0].message.content is not None
+        
+        # Check for specific content in the response
+        assert "```python" in response.choices[0].message.content
+        assert "Hi from LiteLLM" in response.choices[0].message.content
