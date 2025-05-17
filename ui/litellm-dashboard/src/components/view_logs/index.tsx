@@ -421,11 +421,6 @@ export default function SpendLogsTable({
       }
     },
     {
-      name: 'Key Hash',
-      label: 'Key Hash',
-      isSearchable: false,
-    },
-    {
       name: 'Key Alias',
       label: 'Key Alias',
       isSearchable: true,
@@ -440,6 +435,11 @@ export default function SpendLogsTable({
           value: alias
         }));
       }
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
     }
   ]
 
