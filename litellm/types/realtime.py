@@ -1,10 +1,12 @@
-from typing import List, Optional, TypedDict, Union
+from typing import List, Literal, Optional, TypedDict, Union
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
-    OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseDelta,
 )
+
+ALL_DELTA_TYPES = Literal["text", "audio"]
 
 
 class RealtimeResponseTransformInput(TypedDict):
@@ -15,15 +17,27 @@ class RealtimeResponseTransformInput(TypedDict):
     current_response_id: Optional[
         str
     ]  # used to check if this is a new content.delta or a continuation of a previous content.delta
-    current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]]
+    current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
     current_conversation_id: Optional[str]
+    current_delta_type: Optional[ALL_DELTA_TYPES]
 
 
 class RealtimeResponseTypedDict(TypedDict):
     response: Union[OpenAIRealtimeEvents, List[OpenAIRealtimeEvents]]
     current_output_item_id: Optional[str]
     current_response_id: Optional[str]
-    current_delta_chunks: Optional[List[OpenAIRealtimeResponseTextDelta]]
+    current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
     current_conversation_id: Optional[str]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
+    current_delta_type: Optional[ALL_DELTA_TYPES]
+    session_configuration_request: Optional[str]
+
+
+class RealtimeModalityResponseTransformOutput(TypedDict):
+    returned_message: List[OpenAIRealtimeEvents]
+    current_output_item_id: Optional[str]
+    current_response_id: Optional[str]
+    current_conversation_id: Optional[str]
+    current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
+    current_delta_type: Optional[ALL_DELTA_TYPES]

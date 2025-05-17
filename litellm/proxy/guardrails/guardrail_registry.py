@@ -16,6 +16,7 @@ from .guardrail_initializers import (
     initialize_guardrails_ai,
     initialize_hide_secrets,
     initialize_lakera,
+    initialize_lakera_v2,
     initialize_presidio,
 )
 
@@ -23,6 +24,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
+    SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
     SupportedGuardrailIntegrations.AIM.value: initialize_aim,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
@@ -118,7 +120,7 @@ class GuardrailRegistry:
         try:
             guardrail_name = guardrail.get("guardrail_name")
             litellm_params: str = safe_dumps(dict(guardrail.get("litellm_params", {})))
-            guardrail_info = guardrail.get("guardrail_info", {})
+            guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
             updated_guardrail = await prisma_client.db.litellm_guardrailstable.update(

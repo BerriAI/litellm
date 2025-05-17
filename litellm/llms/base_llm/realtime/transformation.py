@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -51,7 +51,12 @@ class BaseRealtimeConfig(ABC):
         )
 
     @abstractmethod
-    def transform_realtime_request(self, message: str) -> str:
+    def transform_realtime_request(
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> List[str]:
         pass
 
     def requires_session_configuration(
@@ -72,4 +77,7 @@ class BaseRealtimeConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:  # message sent to setup the realtime session
+        """
+        Keep this state less - leave the state management (e.g. tracking current_output_item_id, current_response_id, current_conversation_id, current_delta_chunks) to the caller.
+        """
         pass

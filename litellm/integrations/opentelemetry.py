@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -16,6 +17,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
+    from opentelemetry.trace import Context as _Context
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy._types import (
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = Union[_Span, Any]
+    Context = Union[_Context, Any]
     SpanExporter = Union[_SpanExporter, Any]
     UserAPIKeyAuth = Union[_UserAPIKeyAuth, Any]
     ManagementEndpointLoggingPayload = Union[_ManagementEndpointLoggingPayload, Any]
@@ -32,7 +35,7 @@ else:
     SpanExporter = Any
     UserAPIKeyAuth = Any
     ManagementEndpointLoggingPayload = Any
-
+    Context = Any
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE: Dict[Any, Any] = {
@@ -63,9 +66,13 @@ class OpenTelemetryConfig:
             InMemorySpanExporter,
         )
 
-        exporter=os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console"))
-        endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", os.getenv("OTEL_ENDPOINT"))
-        headers=os.getenv("OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS"))  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
+        exporter = os.getenv(
+            "OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console")
+        )
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", os.getenv("OTEL_ENDPOINT"))
+        headers = os.getenv(
+            "OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS")
+        )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
 
         if exporter == "in_memory":
             return cls(exporter=InMemorySpanExporter())
@@ -340,8 +347,71 @@ class OpenTelemetry(CustomLogger):
 
         span.end(end_time=self._to_ns(end_time))
 
+        # Create span for guardrail information
+        self._create_guardrail_span(kwargs=kwargs, context=_parent_context)
+
         if parent_otel_span is not None:
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+
+    def _create_guardrail_span(
+        self, kwargs: Optional[dict], context: Optional[Context]
+    ):
+        """
+        Creates a span for Guardrail, if any guardrail information is present in standard_logging_object
+        """
+        # Create span for guardrail information
+        kwargs = kwargs or {}
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
+        if standard_logging_payload is None:
+            return
+
+        guardrail_information = standard_logging_payload.get("guardrail_information")
+        if guardrail_information is None:
+            return
+
+        start_time_float = guardrail_information.get("start_time")
+        end_time_float = guardrail_information.get("end_time")
+        start_time_datetime = datetime.now()
+        if start_time_float is not None:
+            start_time_datetime = datetime.fromtimestamp(start_time_float)
+        end_time_datetime = datetime.now()
+        if end_time_float is not None:
+            end_time_datetime = datetime.fromtimestamp(end_time_float)
+
+        guardrail_span = self.tracer.start_span(
+            name="guardrail",
+            start_time=self._to_ns(start_time_datetime),
+            context=context,
+        )
+
+        self.safe_set_attribute(
+            span=guardrail_span,
+            key="guardrail_name",
+            value=guardrail_information.get("guardrail_name"),
+        )
+
+        self.safe_set_attribute(
+            span=guardrail_span,
+            key="guardrail_mode",
+            value=guardrail_information.get("guardrail_mode"),
+        )
+
+        # Set masked_entity_count directly without conversion
+        masked_entity_count = guardrail_information.get("masked_entity_count")
+        if masked_entity_count is not None:
+            guardrail_span.set_attribute(
+                "masked_entity_count", safe_dumps(masked_entity_count)
+            )
+
+        self.safe_set_attribute(
+            span=guardrail_span,
+            key="guardrail_response",
+            value=guardrail_information.get("guardrail_response"),
+        )
+
+        guardrail_span.end(end_time=self._to_ns(end_time_datetime))
 
     def _add_dynamic_span_processor_if_needed(self, kwargs):
         """
@@ -401,6 +471,9 @@ class OpenTelemetry(CustomLogger):
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+
+        # Create span for guardrail information
+        self._create_guardrail_span(kwargs=kwargs, context=_parent_context)
 
         if parent_otel_span is not None:
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
@@ -856,7 +929,11 @@ class OpenTelemetry(CustomLogger):
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
-        elif self.OTEL_EXPORTER == "otlp_http" or self.OTEL_EXPORTER == "http/protobuf" or self.OTEL_EXPORTER == "http/json":
+        elif (
+            self.OTEL_EXPORTER == "otlp_http"
+            or self.OTEL_EXPORTER == "http/protobuf"
+            or self.OTEL_EXPORTER == "http/json"
+        ):
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,

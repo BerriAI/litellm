@@ -17,7 +17,10 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     GuardrailInfoResponse,
     GuardrailUIAddGuardrailSettings,
+    LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
+    LitellmParams,
+    PatchGuardrailRequest,
     PiiAction,
     PiiEntityType,
     PresidioConfigModel,
@@ -433,6 +436,180 @@ async def delete_guardrail(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.patch(
+    "/guardrails/{guardrail_id}",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
+    """
+    Partially update an existing guardrail
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    This endpoint allows updating specific fields of a guardrail without sending the entire object.
+    Only the following fields can be updated:
+    - guardrail_name: The name of the guardrail
+    - default_on: Whether the guardrail is enabled by default
+    - guardrail_info: Additional information about the guardrail
+
+    Example Request:
+    ```bash
+    curl -X PATCH "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "guardrail_name": "updated-name",
+            "default_on": true,
+            "guardrail_info": {
+                "description": "Updated description"
+            }
+        }'
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+        "guardrail_name": "updated-name",
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": "pre_call",
+            "guardrailIdentifier": "ff6ujrregl1q",
+            "guardrailVersion": "DRAFT",
+            "default_on": true
+        },
+        "guardrail_info": {
+            "description": "Updated description"
+        },
+        "created_at": "2023-11-09T12:34:56.789Z",
+        "updated_at": "2023-11-09T14:22:33.456Z"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        # Check if guardrail exists and get current data
+        existing_guardrail = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+            guardrail_id=guardrail_id, prisma_client=prisma_client
+        )
+
+        if existing_guardrail is None:
+            raise HTTPException(
+                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
+            )
+
+        # Create updated guardrail object
+        guardrail_name = (
+            request.guardrail_name
+            if request.guardrail_name is not None
+            else existing_guardrail.get("guardrail_name")
+        )
+
+        # Update litellm_params if default_on is provided
+        litellm_params = LitellmParams(
+            **dict(existing_guardrail.get("litellm_params", {}))
+        )
+        if (
+            request.litellm_params is not None
+            and request.litellm_params.default_on is not None
+        ):
+            litellm_params.default_on = request.litellm_params.default_on
+
+        # Update guardrail_info if provided
+        guardrail_info = (
+            request.guardrail_info
+            if request.guardrail_info is not None
+            else existing_guardrail.get("guardrail_info", {})
+        )
+
+        # Create the guardrail object
+        result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+            guardrail_id=guardrail_id,
+            guardrail=Guardrail(
+                guardrail_name=guardrail_name or "",
+                litellm_params=litellm_params,
+                guardrail_info=guardrail_info,
+            ),
+            prisma_client=prisma_client,
+        )
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating guardrail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/guardrails/{guardrail_id}/info",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_guardrail_info(guardrail_id: str):
+    """
+    Get detailed information about a specific guardrail by ID
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/info" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+        "guardrail_name": "my-bedrock-guard",
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": "pre_call",
+            "guardrailIdentifier": "ff6ujrregl1q",
+            "guardrailVersion": "DRAFT",
+            "default_on": true
+        },
+        "guardrail_info": {
+            "description": "Bedrock content moderation guardrail"
+        },
+        "created_at": "2023-11-09T12:34:56.789Z",
+        "updated_at": "2023-11-09T12:34:56.789Z"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+            guardrail_id=guardrail_id, prisma_client=prisma_client
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
+            )
+
+        return GuardrailInfoResponse(
+            guardrail_id=result.get("guardrail_id"),
+            guardrail_name=result.get("guardrail_name"),
+            litellm_params=result.get("litellm_params"),
+            guardrail_info=result.get("guardrail_info"),
+            created_at=result.get("created_at"),
+            updated_at=result.get("updated_at"),
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
@@ -527,11 +704,13 @@ async def get_provider_specific_params():
     # Get fields from the models
     bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
     presidio_fields = _get_fields_from_model(PresidioConfigModel)
+    lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
 
     # Return the provider-specific parameters
     provider_params = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
+        SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
     }
 
     return provider_params
