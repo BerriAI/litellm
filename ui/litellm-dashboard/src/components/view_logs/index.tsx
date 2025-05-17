@@ -1,9 +1,9 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -21,6 +21,7 @@ import { GuardrailViewer } from './GuardrailViewer';
 import FilterComponent from "../common_components/filter";
 import { FilterOption } from "../common_components/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -154,7 +155,6 @@ export default function SpendLogsTable({
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
-        console.log("Missing required auth parameters");
         return {
           data: [],
           total: 0,
@@ -241,18 +241,53 @@ export default function SpendLogsTable({
     userRole
   })
 
-  // Add this effect to update selectedTeamId and selectedStatus when team filter changes
+  const fetchKeyHashForAlias = useCallback(async (keyAlias: string) => {
+    if (!accessToken) return;
+    
+    try {
+      const response = await keyListCall(
+        accessToken,
+        null,
+        null,
+        keyAlias,
+        null,
+        null,
+        currentPage,
+        pageSize
+      );
+
+      const selectedKey = response.keys.find(
+        (key: any) => key.key_alias === keyAlias
+      );
+
+      if (selectedKey) {
+        setSelectedKeyHash(selectedKey.token);
+      }
+    } catch (error) {
+      console.error("Error fetching key hash for alias:", error);
+    }
+  }, [accessToken, currentPage, pageSize]);
+
+  // Add this effect to update selected filters when filter changes
   useEffect(() => {
+    if(!accessToken) return;
+
     if (filters['Team ID']) {
       setSelectedTeamId(filters['Team ID']);
-      
     } else {
       setSelectedTeamId("");
     }
     setSelectedStatus(filters['Status'] || "");
     setSelectedModel(filters['Model'] || "");
-    setSelectedKeyHash(filters['Key Hash'] || "");
-  }, [filters]);
+    
+    if (filters['Key Hash']) {
+      setSelectedKeyHash(filters['Key Hash']);
+    } else if (filters['Key Alias']) {
+      fetchKeyHashForAlias(filters['Key Alias']);
+    } else {
+      setSelectedKeyHash("");
+    }
+  }, [filters, accessToken, fetchKeyHashForAlias]);
 
   // Fetch logs for a session if selected
   const sessionLogs = useQuery<PaginatedResponse>({
@@ -354,7 +389,7 @@ export default function SpendLogsTable({
         const filtered = allTeams.filter((team: Team) =>{
           return team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
           (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
-      });
+        });
         return filtered.map((team: Team) => ({
           label: `${team.team_alias || team.team_id} (${team.team_id})`,
           value: team.team_id
@@ -382,6 +417,22 @@ export default function SpendLogsTable({
         return filtered.map((model: string) => ({
           label: model,
           value: model
+        }));
+      }
+    },
+    {
+      name: 'Key Alias',
+      label: 'Key Alias',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        const keyAliases = await fetchAllKeyAliases(accessToken);
+        const filtered = keyAliases.filter(alias => 
+          alias.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filtered.map(alias => ({
+          label: alias,
+          value: alias
         }));
       }
     },
