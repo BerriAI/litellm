@@ -563,7 +563,7 @@ def add_provider_specific_fields(
 
 class Message(OpenAIObject):
     content: Optional[str]
-    role: Literal["assistant", "user", "system", "tool", "function"]
+    role: Literal["assistant", "user", "system", "tool", "function", "developer"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
@@ -579,9 +579,9 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
-        function_call=None,
-        tool_calls: Optional[list] = None,
+        role: Literal["assistant", "user", "system", "tool", "function", "developer"] = "assistant",
+        function_call: Optional[FunctionCall] = None,
+        tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
