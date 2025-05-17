@@ -92,7 +92,7 @@ def test_ollama_pt_consecutive_system_messages():
 
     # Consecutive system messages should be merged
     expected_prompt = "### User:\nHello\n\n### System:\nYou are a helpful assistantBe concise and polite\n\n### Assistant:\nHow can I help you?\n\n"
-    assert result == expected_prompt
+    assert result["prompt"] == expected_prompt
 
 def test_ollama_pt_consecutive_assistant_messages():
     """Test handling consecutive assistant messages"""
