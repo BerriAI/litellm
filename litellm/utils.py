@@ -4885,6 +4885,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DEEPINFRA_API_KEY")
+        elif custom_llm_provider == "featherless_ai":
+            if "FEATHERLESS_AI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("FEATHERLESS_AI_API_KEY")
         elif custom_llm_provider == "gemini":
             if "GEMINI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6410,6 +6415,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.FEATHERLESS_AI == provider:
+            return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
