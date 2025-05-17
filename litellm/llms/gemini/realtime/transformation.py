@@ -17,7 +17,9 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.gemini import (
+    AutomaticActivityDetection,
     BidiGenerateContentRealtimeInput,
+    BidiGenerateContentRealtimeInputConfig,
     BidiGenerateContentServerContent,
     BidiGenerateContentServerMessage,
     BidiGenerateContentSetup,
@@ -38,6 +40,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeTurnDetection,
 )
 from litellm.types.llms.vertex_ai import (
     GeminiResponseModalities,
@@ -131,17 +134,113 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return mime_types.get(input_audio_format, "application/octet-stream")
 
+    def map_automatic_turn_detection(
+        self, value: OpenAIRealtimeTurnDetection
+    ) -> AutomaticActivityDetection:
+        automatic_activity_dection = AutomaticActivityDetection()
+        if "create_response" in value and isinstance(value["create_response"], bool):
+            automatic_activity_dection["disabled"] = not value["create_response"]
+        else:
+            automatic_activity_dection["disabled"] = True
+        if "prefix_padding_ms" in value and isinstance(value["prefix_padding_ms"], int):
+            automatic_activity_dection["prefixPaddingMs"] = value["prefix_padding_ms"]
+        if "silence_duration_ms" in value and isinstance(
+            value["silence_duration_ms"], int
+        ):
+            automatic_activity_dection["silenceDurationMs"] = value[
+                "silence_duration_ms"
+            ]
+        return automatic_activity_dection
+
+    def map_openai_params(
+        self, optional_params: dict, non_default_params: dict
+    ) -> dict:
+        if "generationConfig" not in optional_params:
+            optional_params["generationConfig"] = {}
+        for key, value in non_default_params.items():
+            if key == "instructions":
+                optional_params["systemInstruction"] = HttpxContentType(
+                    role="user", parts=[{"text": value}]
+                )
+            elif key == "temperature":
+                optional_params["generationConfig"]["temperature"] = value
+            elif key == "max_response_output_tokens":
+                optional_params["generationConfig"]["maxOutputTokens"] = value
+            elif key == "modalities":
+                optional_params["generationConfig"]["responseModalities"] = [
+                    modality.upper() for modality in cast(List[str], value)
+                ]
+            elif key == "tools":
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    VertexGeminiConfig,
+                )
+
+                vertex_gemini_config = VertexGeminiConfig()
+                vertex_gemini_config._map_function(value)
+                optional_params["generationConfig"][
+                    "tools"
+                ] = vertex_gemini_config._map_function(value)
+            elif key == "input_audio_transcription" and value is not None:
+                optional_params["inputAudioTranscription"] = {}
+            elif key == "turn_detection":
+                value_typed = cast(OpenAIRealtimeTurnDetection, value)
+                transformed_audio_activity_config = self.map_automatic_turn_detection(
+                    value_typed
+                )
+                if (
+                    len(transformed_audio_activity_config) > 0
+                ):  # if the config is not empty, add it to the optional params
+                    optional_params[
+                        "realtimeInputConfig"
+                    ] = BidiGenerateContentRealtimeInputConfig(
+                        automaticActivityDetection=transformed_audio_activity_config
+                    )
+        if len(optional_params["generationConfig"]) == 0:
+            optional_params.pop("generationConfig")
+        return optional_params
+
     def transform_realtime_request(
-        self, message: str, session_configuration_request: Optional[str] = None
-    ) -> str:
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> List[str]:
         realtime_input_dict: BidiGenerateContentRealtimeInput = {}
-        message_dict = json.loads(message)
+        try:
+            json_message = json.loads(message)
+        except json.JSONDecodeError:
+            if isinstance(message, bytes):
+                message_str = message.decode("utf-8", errors="replace")
+            else:
+                message_str = str(message)
+            raise ValueError(f"Invalid JSON message: {message_str}")
+
+        ## HANDLE SESSION UPDATE ##
+        messages: List[str] = []
+        if "type" in json_message and json_message["type"] == "session.update":
+            client_session_configuration_request = self.map_openai_params(
+                optional_params={}, non_default_params=json_message["session"]
+            )
+            client_session_configuration_request["model"] = f"models/{model}"
+
+            messages.append(
+                json.dumps(
+                    {
+                        "setup": client_session_configuration_request,
+                    }
+                )
+            )
+        # elif session_configuration_request is None:
+        #     default_session_configuration_request = self.session_configuration_request(model)
+        #     messages.append(default_session_configuration_request)
+
+        ## HANDLE INPUT AUDIO BUFFER ##
         if (
-            "type" in message_dict
-            and message_dict["type"] == "input_audio_buffer.append"
+            "type" in json_message
+            and json_message["type"] == "input_audio_buffer.append"
         ):
             realtime_input_dict["audio"] = HttpxBlobType(
-                mimeType=self.get_audio_mime_type(), data=message_dict["audio"]
+                mimeType=self.get_audio_mime_type(), data=json_message["audio"]
             )
         else:
             realtime_input_dict["text"] = message
@@ -157,7 +256,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             encode_unserializable_types(cast(Dict[str, object], realtime_input_dict)),
         )
 
-        return json.dumps({"realtime_input": realtime_input_dict})
+        messages.append(json.dumps({"realtime_input": realtime_input_dict}))
+        return messages
 
     def transform_session_created_event(
         self,
@@ -165,17 +265,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         logging_session_id: str,
         session_configuration_request: Optional[str] = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
-        if session_configuration_request is None:
-            raise ValueError(
-                "session_configuration_request is required for Gemini API calls"
-            )
+        if session_configuration_request:
+            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
+                session_configuration_request
+            ).get("setup", {})
+        else:
+            session_configuration_request_dict = {}
 
-        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-            session_configuration_request
-        ).get("setup", {})
         _model = session_configuration_request_dict.get("model") or model
-        generation_config = session_configuration_request_dict.get(
-            "generationConfig", {}
+        generation_config = (
+            session_configuration_request_dict.get("generationConfig", {}) or {}
         )
         _modalities = generation_config.get("responseModalities", ["text"])
         _modalities = [modality.lower() for modality in _modalities]
@@ -713,6 +812,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     logging_session_id,
                     realtime_response_transform_input["session_configuration_request"],
                 )
+                session_configuration_request = json.dumps(transformed_message)
                 returned_message.append(transformed_message)
 
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
@@ -781,12 +881,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "current_conversation_id": current_conversation_id,
             "current_item_chunks": current_item_chunks,
             "current_delta_type": current_delta_type,
+            "session_configuration_request": session_configuration_request,
         }
 
     def requires_session_configuration(self) -> bool:
         return True
 
-    def session_configuration_request(self, model: str) -> Optional[str]:
+    def session_configuration_request(self, model: str) -> str:
         """
 
         ```

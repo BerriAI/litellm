@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -52,8 +52,11 @@ class BaseRealtimeConfig(ABC):
 
     @abstractmethod
     def transform_realtime_request(
-        self, message: str, session_configuration_request: Optional[str] = None
-    ) -> str:
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> List[str]:
         pass
 
     def requires_session_configuration(

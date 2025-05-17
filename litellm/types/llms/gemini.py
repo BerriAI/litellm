@@ -100,6 +100,26 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
     """Output only. If true, indicates that the activity has ended."""
 
 
+StartOfSpeechSensitivityEnum = Literal[
+    "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
+]
+EndOfSpeechSensitivityEnum = Literal[
+    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
+]
+
+
+class AutomaticActivityDetection(TypedDict, total=False):
+    disabled: bool
+    startOfSpeechSensitivity: StartOfSpeechSensitivityEnum
+    prefixPaddingMs: int
+    endOfSpeechSensitivity: EndOfSpeechSensitivityEnum
+    silenceDurationMs: int
+
+
+class BidiGenerateContentRealtimeInputConfig(TypedDict, total=False):
+    automaticActivityDetection: AutomaticActivityDetection
+
+
 class BidiGenerateContentSetup(TypedDict, total=False):
     model: str
     """The model to be used for the realtime session."""

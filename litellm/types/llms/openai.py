@@ -1631,3 +1631,13 @@ class OpenAIWebSearchUserLocation(TypedDict):
 class OpenAIWebSearchOptions(TypedDict, total=False):
     search_context_size: Optional[Literal["low", "medium", "high"]]
     user_location: Optional[OpenAIWebSearchUserLocation]
+
+
+class OpenAIRealtimeTurnDetection(TypedDict, total=False):
+    create_response: bool
+    eagerness: str
+    interrupt_response: bool
+    prefix_padding_ms: int
+    silence_duration_ms: int
+    threshold: int
+    type: str

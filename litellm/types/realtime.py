@@ -31,6 +31,7 @@ class RealtimeResponseTypedDict(TypedDict):
     current_conversation_id: Optional[str]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
     current_delta_type: Optional[ALL_DELTA_TYPES]
+    session_configuration_request: Optional[str]
 
 
 class RealtimeModalityResponseTransformOutput(TypedDict):
