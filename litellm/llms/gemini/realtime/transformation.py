@@ -625,14 +625,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(
                 f"current_conversation_id and current_response_id must all be set for a 'done' event. Got=current_conversation_id: {current_conversation_id}, current_response_id: {current_response_id}"
             )
-        if session_configuration_request is None:
-            raise ValueError(
-                "session_configuration_request is required for Gemini API calls"
-            )
 
-        session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-            session_configuration_request
-        ).get("setup", {})
+        if session_configuration_request:
+            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
+                session_configuration_request
+            ).get("setup", {})
+        else:
+            session_configuration_request_dict = {}
+
         generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
         )
@@ -646,6 +646,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
         else:
             _chat_completion_usage = get_empty_usage()
+
         responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
