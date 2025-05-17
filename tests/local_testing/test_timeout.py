@@ -23,7 +23,7 @@ import litellm
     [
         ("gpt-3.5-turbo", "openai"),
         ("anthropic.claude-instant-v1", "bedrock"),
-        ("azure/chatgpt-v-3", "azure"),
+        ("azure/gpt-4o-new-test", "azure"),
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -158,7 +158,7 @@ def test_hanging_request_openai():
                 {
                     "model_name": "azure-gpt",
                     "litellm_params": {
-                        "model": "azure/chatgpt-v-3",
+                        "model": "azure/gpt-4o-new-test",
                         "api_base": os.environ["AZURE_API_BASE"],
                         "api_key": os.environ["AZURE_API_KEY"],
                     },
