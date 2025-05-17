@@ -79,35 +79,35 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
 
 
 
-# def test_ollama_pt_consecutive_system_messages():
-#     """Test handling consecutive system messages"""
-#     messages = [
-#         {"role": "user", "content": "Hello"},
-#         {"role": "system", "content": "You are a helpful assistant"},
-#         {"role": "system", "content": "Be concise and polite"},
-#         {"role": "assistant", "content": "How can I help you?"}
-#     ]
+def test_ollama_pt_consecutive_system_messages():
+    """Test handling consecutive system messages"""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "system", "content": "Be concise and polite"},
+        {"role": "assistant", "content": "How can I help you?"}
+    ]
 
-#     result = ollama_pt(model="llama2", messages=messages)
+    result = ollama_pt(model="llama2", messages=messages)
 
-#     # Consecutive system messages should be merged
-#     expected_prompt = "### User:\nHello\n\n### System:\nYou are a helpful assistantBe concise and polite\n\n### Assistant:\nHow can I help you?\n\n"
-#     assert result == expected_prompt
+    # Consecutive system messages should be merged
+    expected_prompt = "### User:\nHello\n\n### System:\nYou are a helpful assistantBe concise and polite\n\n### Assistant:\nHow can I help you?\n\n"
+    assert result == expected_prompt
 
-# def test_ollama_pt_consecutive_assistant_messages():
-#     """Test handling consecutive assistant messages"""
-#     messages = [
-#         {"role": "user", "content": "Hello"},
-#         {"role": "assistant", "content": "Hi there!"},
-#         {"role": "assistant", "content": "How can I help you?"},
-#         {"role": "user", "content": "Tell me a joke"}
-#     ]
+def test_ollama_pt_consecutive_assistant_messages():
+    """Test handling consecutive assistant messages"""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "assistant", "content": "How can I help you?"},
+        {"role": "user", "content": "Tell me a joke"}
+    ]
 
-#     result = ollama_pt(model="llama2", messages=messages)
+    result = ollama_pt(model="llama2", messages=messages)
 
-#     # Consecutive assistant messages should be merged
-#     expected_prompt = "### User:\nHello\n\n### Assistant:\nHi there!How can I help you?\n\n### User:\nTell me a joke\n\n"
-#     assert result["prompt"] == expected_prompt
+    # Consecutive assistant messages should be merged
+    expected_prompt = "### User:\nHello\n\n### Assistant:\nHi there!How can I help you?\n\n### User:\nTell me a joke\n\n"
+    assert result["prompt"] == expected_prompt
 
 # def test_ollama_pt_with_image_urls_as_strings():
 #     """Test handling messages with image URLs as strings"""
