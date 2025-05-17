@@ -22,42 +22,56 @@ import TabItem from '@theme/TabItem';
 
 ## New Models / Updated Models
 
-- **Gemini** (VertexAI + Google AI Studio)
-    - /chat/completion - Handle audio input - https://github.com/BerriAI/litellm/pull/10739
-    - Fixes maximum recursion depth issue when using deeply nested response schemas with Vertex AI by Increasing DEFAULT_MAX_RECURSE_DEPTH from 10 to 100 in constants. https://github.com/BerriAI/litellm/pull/10798
-    - Capture reasoning tokens in streaming mode - https://github.com/BerriAI/litellm/pull/10789
-- **VertexAI**
-    - Fix llama streaming error - where model response was nested in returned streaming chunk - https://github.com/BerriAI/litellm/pull/10878
+- **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
+    - `/chat/completion`
+        - Handle audio input - [PR](https://github.com/BerriAI/litellm/pull/10739)
+        - Fixes maximum recursion depth issue when using deeply nested response schemas with Vertex AI by Increasing DEFAULT_MAX_RECURSE_DEPTH from 10 to 100 in constants. [PR](https://github.com/BerriAI/litellm/pull/10798)
+        - Capture reasoning tokens in streaming mode - [PR](https://github.com/BerriAI/litellm/pull/10789)
+    - `/realtime` 
+        - Gemini Multimodal Live API support - [PR](https://github.com/BerriAI/litellm/pull/10841)
+- **[VertexAI](../../docs/providers/vertex#metallama-api)**
+    - `/chat/completion`
+        - Fix llama streaming error - where model response was nested in returned streaming chunk - [PR](https://github.com/BerriAI/litellm/pull/10878)
 - **Ollama**
-    - structure responses fix - https://github.com/BerriAI/litellm/pull/10617
+    - `/chat/completion`
+        - structure responses fix - [PR](https://github.com/BerriAI/litellm/pull/10617)
 - **Bedrock**
-    - `/chat/completion` - Handle thinking_blocks when assistant.content is None - https://github.com/BerriAI/litellm/pull/10688
-    - `/messages` - allow using dynamic AWS Params 
-    - Fixes to only allow accepted fields for tool json schema - https://github.com/BerriAI/litellm/pull/10062
-    - Add bedrock sonnet prompt caching cost information
-    - Mistral Pixtral support - https://github.com/BerriAI/litellm/pull/10439
-    - Tool caching support - https://github.com/BerriAI/litellm/pull/10897
+    - `/chat/completion`
+        - Handle thinking_blocks when assistant.content is None - [PR](https://github.com/BerriAI/litellm/pull/10688)
+        - Fixes to only allow accepted fields for tool json schema - [PR](https://github.com/BerriAI/litellm/pull/10062)
+        - Add bedrock sonnet prompt caching cost information
+        - Mistral Pixtral support - [PR](https://github.com/BerriAI/litellm/pull/10439)
+        - Tool caching support - [PR](https://github.com/BerriAI/litellm/pull/10897)
+    - `/messages`
+        - allow using dynamic AWS Params 
 - **Nvidia NIM**
-    - Add tools, tool_choice, parallel_tool_calls support - https://github.com/BerriAI/litellm/pull/10763
-- **LiteLLM Proxy (`litellm_proxy/`)**
-    - Option to force/always use the litellm proxy when calling via LiteLLM SDK - https://github.com/BerriAI/litellm/pull/10773
+    - `/chat/completion`
+        - Add tools, tool_choice, parallel_tool_calls support - [PR](https://github.com/BerriAI/litellm/pull/10763)
 - **Novita AI**
-    - Support on `/chat/completion`, `/completions`, `/responses` API routes - https://github.com/BerriAI/litellm/pull/9527
+    - New Provider added for `/chat/completion` routes - [PR](https://github.com/BerriAI/litellm/pull/9527)
 - **Azure**
-    - Fix azure dall e 3 call with custom model name - https://github.com/BerriAI/litellm/pull/10776
-    2. Add gpt-4o-mini-tts pricing - https://github.com/BerriAI/litellm/pull/10807
-    3. Add cohere embed v4 pricing - https://github.com/BerriAI/litellm/pull/10806
+    - `/image/generation`
+        - Fix azure dall e 3 call with custom model name - [PR](https://github.com/BerriAI/litellm/pull/10776)
+    - `/audio/transcription`
+        - Add gpt-4o-mini-tts pricing - [PR](https://github.com/BerriAI/litellm/pull/10807)
+    - `/embeddings`
+        - Add cohere embed v4 pricing - [PR](https://github.com/BerriAI/litellm/pull/10806)
 - **Cohere**
-    - Migrate embedding to use `/v2/embed` - adds support for output_dimensions param - https://github.com/BerriAI/litellm/pull/10809
+    - `/embeddings`
+        - Migrate embedding to use `/v2/embed` - adds support for output_dimensions param - [PR](https://github.com/BerriAI/litellm/pull/10809)
 - **Groq**
-    - Update model max tokens + cost information - https://github.com/BerriAI/litellm/pull/10077
+    - `/chat/completion`
+        - Update model max tokens + cost information - [PR](https://github.com/BerriAI/litellm/pull/10077)
 - **Anthropic**
-    - Web search tool support - native + openai format - https://github.com/BerriAI/litellm/pull/10846
+    - `/chat/completion`
+        - Web search tool support - native + openai format - [PR](https://github.com/BerriAI/litellm/pull/10846)
 - **VLLM**
-    - Support embedding input as list of integers - https://github.com/BerriAI/litellm/pull/10629
+    - `/chat/completion`
+        - Support embedding input as list of integers - [PR](https://github.com/BerriAI/litellm/pull/10629)
 - **OpenAI**
-    - Fix - b64 file data input handling - https://github.com/BerriAI/litellm/pull/10897
-    - Add ‘supports_pdf_input’ to all vision models - https://github.com/BerriAI/litellm/pull/10897
+    - `/chat/completion`
+        - Fix - b64 file data input handling - [PR](https://github.com/BerriAI/litellm/pull/10897)
+        - Add ‘supports_pdf_input’ to all vision models - [PR](https://github.com/BerriAI/litellm/pull/10897)
 
 
 
@@ -137,6 +151,8 @@ import TabItem from '@theme/TabItem';
     - Document in-memory + disk caching - https://github.com/BerriAI/litellm/pull/10522
 - **OpenWebUI**
     - Configure LiteLLM to Parse User Headers from Open Web UI - https://github.com/BerriAI/litellm/pull/9802
+- **LiteLLM Proxy w/ LiteLLM SDK**
+    - Option to force/always use the litellm proxy when calling via LiteLLM SDK - [PR](https://github.com/BerriAI/litellm/pull/10773)
 
 
 ## New Contributors
