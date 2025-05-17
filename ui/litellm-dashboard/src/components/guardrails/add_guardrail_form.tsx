@@ -340,13 +340,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           </Select>
         </Form.Item>
 
-        {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        <GuardrailProviderFields 
-          selectedProvider={selectedProvider} 
-          accessToken={accessToken} 
-          providerParams={providerParams}
-        />
-
         <Form.Item
           name="mode"
           label="Mode"
@@ -373,6 +366,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         >
           <Switch />
         </Form.Item>
+
+        {/* Use the GuardrailProviderFields component to render provider-specific fields */}
+        <GuardrailProviderFields 
+          selectedProvider={selectedProvider} 
+          accessToken={accessToken} 
+          providerParams={providerParams}
+        />
       </>
     );
   };
