@@ -2,11 +2,54 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# PII Masking - Presidio
+# PII, PHI Masking - Presidio
+
+## Overview
+
+Use LiteLLM with Presidio for PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data masking. When using LiteLLM with Presido you can:
+- Mask PII, PHI before the LLM call
+- Ensure no PII, PHI is sent to connected Logging Integrations - Langfuse, Arize Phoenix, LiteLLM Logs Page. 
+
+| Property | Details |
+|-------|-------|
+| Description | Use this guardrail to mask PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data.  |
+| Provider | [Microsoft Presidio](https://github.com/microsoft/presidio/) |
+| Supported Entity Types | All Presidio Entity Types |
+| Supported Actions | `MASK`, `BLOCK` |
+| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
+
+
+
+## Usage 
+
+### 1. Create a PII, PHI Masking Guardrail 
+
+### 2. Configure Entity Types
+
+### 3. Test it! 
+
+#### 3.1 LiteLLM UI 
+
+#### 3.2 Code
+
+### 4. Tracing Guardrail requests
+
+
+#### 4.1 LiteLLM UI 
+
+#### 4.2 Langfuse 
+
+#### 4.3 Arize Phoenix, OTEL compatible logging integrations
+
+
+
+
+
+
 
 ## Quick Start
 
-LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
+
 
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 
