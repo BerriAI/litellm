@@ -432,3 +432,13 @@ class ApplyGuardrailRequest(BaseModel):
 
 class ApplyGuardrailResponse(BaseModel):
     response_text: str
+
+
+class PatchGuardrailLitellmParams(BaseModel):
+    default_on: Optional[bool] = None
+
+
+class PatchGuardrailRequest(BaseModel):
+    guardrail_name: Optional[str] = None
+    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    guardrail_info: Optional[Dict[str, Any]] = None
