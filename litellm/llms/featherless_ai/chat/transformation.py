@@ -23,6 +23,9 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     temperature: Optional[int] = None
     top_p: Optional[int] = None
     response_format: Optional[dict] = None
+    tool_choice: Optional[str] = None
+    tools: Optional[list] = None
+
 
     def __init__(
         self,
@@ -37,6 +40,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
         response_format: Optional[dict] = None,
+        tool_choice: Optional[str] = None,
+        tools: Optional[list] = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -62,6 +67,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "response_format",
+            "tool_choice",
+            "tools"
         ]
 
     def map_openai_params(
@@ -74,9 +81,10 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "tool_choice" or param == "tools":
-                if (
-                    value != "auto" and value != "none"
-                ):  # https://featherless.ai/docs/completions
+                if param == "tool_choice" and (value == "auto" or value == "none"):
+                    # These values are supported, so add them to optional_params
+                    optional_params[param] = value
+                else:  # https://featherless.ai/docs/completions
                     ## UNSUPPORTED TOOL CHOICE VALUE
                     if litellm.drop_params is True or drop_params is True:
                         value = None
@@ -104,3 +112,21 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         )
         dynamic_api_key = api_key or get_secret_str("FEATHERLESS_API_KEY")
         return api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if not api_key:
+            raise ValueError("Missing Featherless AI API Key")
+        
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+        
+        return headers
