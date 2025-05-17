@@ -354,6 +354,7 @@ class LitellmParams(
 
 
 class Guardrail(TypedDict, total=False):
+    guardrail_id: Optional[str]
     guardrail_name: str
     litellm_params: LitellmParams
     guardrail_info: Optional[Dict]
