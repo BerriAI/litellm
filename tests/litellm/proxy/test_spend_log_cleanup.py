@@ -3,7 +3,7 @@ Test cases for spend log cleanup functionality
 """
 
 import pytest
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, UTC, timezone
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from unittest.mock import MagicMock, AsyncMock
 
@@ -33,6 +33,7 @@ async def test_should_delete_spend_logs():
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_batch_deletion():
     from types import SimpleNamespace
+    from unittest.mock import MagicMock, AsyncMock, patch
 
     # Setup Prisma client
     mock_prisma_client = MagicMock()
@@ -55,35 +56,62 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     mock_db.litellm_spendlogs = mock_spendlogs
     mock_prisma_client.db = mock_db
 
-    # Run cleanup
+    # Mock Redis cache and pod_lock_manager
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    # Run cleanup with mocked pod_lock_manager
     test_settings = {"maximum_spend_logs_retention_period": "7d"}
     cleaner = SpendLogCleanup(general_settings=test_settings)
+    cleaner.pod_lock_manager = mock_pod_lock_manager
     assert cleaner._should_delete_spend_logs() is True
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
     # Validate batching and deletion
     assert mock_spendlogs.find_many.call_count == 3
-    assert mock_spendlogs.delete_many.await_count == 2
-
+    assert mock_spendlogs.delete_many.call_count == 2
+    mock_spendlogs.delete_many.assert_any_call(
+        where={"request_id": {"in": [f"req_{i}" for i in range(1000)]}}
+    )
+    mock_spendlogs.delete_many.assert_any_call(
+        where={"request_id": {"in": [f"req_{i}" for i in range(1000, 1500)]}}
+    )
 
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_retention_period_cutoff():
     """
     Test that logs are filtered using correct cutoff based on retention
     """
+    # Setup Prisma client
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_spendlogs.delete = AsyncMock()
+    mock_db = MagicMock()
+    mock_spendlogs = MagicMock()
+    mock_spendlogs.find_many = AsyncMock(return_value=[])
+    mock_spendlogs.delete_many = AsyncMock()
+    mock_db.litellm_spendlogs = mock_spendlogs
+    mock_prisma_client.db = mock_db
 
+    # Mock Redis cache and pod_lock_manager
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    # Run cleanup with mocked pod_lock_manager
     test_settings = {"maximum_spend_logs_retention_period": "24h"}
     cleaner = SpendLogCleanup(general_settings=test_settings)
+    cleaner.pod_lock_manager = mock_pod_lock_manager
     assert cleaner._should_delete_spend_logs() is True
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    cutoff_date = mock_prisma_client.db.litellm_spendlogs.find_many.call_args[1]["where"]["startTime"]["lt"]
-    expected_cutoff = datetime.now(UTC) - timedelta(hours=24)
-    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 5
-
+    # Verify the cutoff date is correct
+    cutoff_date = mock_spendlogs.find_many.call_args[1]["where"]["startTime"]["lt"]
+    expected_cutoff = datetime.now(timezone.utc) - timedelta(seconds=86400)
+    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 1  # Allow 1 second difference for test execution time
 
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_no_retention_period():
