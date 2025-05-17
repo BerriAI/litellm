@@ -792,6 +792,19 @@ async def update_key_fn(
             data=data, existing_key_row=existing_key_row
         )
 
+        is_admin = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+
+        if not is_admin:
+            # Ensure user_id is preserved when not specified by admin
+            if non_default_values.get("user_id", None) is None:
+                non_default_values["user_id"] = existing_key_row.user_id
+        elif "user_id" not in non_default_values:
+            # preserve user_id from existing key only when admin does not specify to unset it
+            non_default_values["user_id"] = existing_key_row.user_id
+
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
