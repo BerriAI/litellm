@@ -174,3 +174,57 @@ class TestVertexBase:
             )
         assert token == ""
         assert project == ""
+
+    def test_load_auth_wif(self):
+        vertex_base = VertexBase()
+        input_project_id = "some_project_id"
+
+        # Test case 1: Using Workload Identity Federation for Microsoft Azure and
+        # OIDC identity providers (default behavior)
+        json_obj_1  = {
+            "type": "external_account",
+        }
+        mock_auth_1 = MagicMock()
+        mock_creds_1 = MagicMock()
+        mock_request_1 = MagicMock()
+        mock_creds_1 = mock_auth_1.identity_pool.Credentials.from_info.return_value
+        with patch.dict(sys.modules, {"google.auth": mock_auth_1,
+                                      "google.auth.transport.requests": mock_request_1}):
+            
+            creds_1, project_id = vertex_base.load_auth(
+                credentials=json_obj_1, project_id=input_project_id
+            )
+
+        mock_auth_1.identity_pool.Credentials.from_info.assert_called_once_with(
+            json_obj_1
+        )
+        mock_creds_1.refresh.assert_called_once_with(
+            mock_request_1.Request.return_value
+        )
+        assert creds_1 == mock_creds_1
+        assert project_id == input_project_id
+
+        # Test case 2: Using Workload Identity Federation for AWS
+        json_obj_2  = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"}
+        }
+        mock_auth_2 = MagicMock()
+        mock_creds_2 = MagicMock()
+        mock_request_2 = MagicMock()
+        mock_creds_2 = mock_auth_2.aws.Credentials.from_info.return_value
+        with patch.dict(sys.modules, {"google.auth": mock_auth_2,
+                                      "google.auth.transport.requests": mock_request_2}):
+            
+            creds_2, project_id = vertex_base.load_auth(
+                credentials=json_obj_2, project_id=input_project_id
+            )
+
+        mock_auth_2.aws.Credentials.from_info.assert_called_once_with(
+            json_obj_2
+        )
+        mock_creds_2.refresh.assert_called_once_with(
+            mock_request_2.Request.return_value
+        )
+        assert creds_2 == mock_creds_2
+        assert project_id == input_project_id
