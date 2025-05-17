@@ -312,7 +312,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: str = Field(
+    mode: Union[str, List[str]] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
     api_key: Optional[str] = Field(
@@ -382,6 +382,7 @@ class GuardrailLiteLLMParamsResponse(BaseModel):
     guardrail: str
     mode: Union[str, List[str]]
     default_on: bool = Field(default=False)
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
 
     def __init__(self, **kwargs):
         default_on = kwargs.get("default_on")
@@ -436,6 +437,7 @@ class ApplyGuardrailResponse(BaseModel):
 
 class PatchGuardrailLitellmParams(BaseModel):
     default_on: Optional[bool] = None
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
 
 
 class PatchGuardrailRequest(BaseModel):
