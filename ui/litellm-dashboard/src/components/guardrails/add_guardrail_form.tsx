@@ -11,6 +11,14 @@ const { Title, Text, Link } = Typography;
 const { Option } = Select;
 const { Step } = Steps;
 
+// Define human-friendly descriptions for each mode
+const modeDescriptions = {
+  pre_call: "Before LLM Call - Runs before the LLM call and checks the input (Recommended)",
+  during_call: "During LLM Call - Runs in parallel with the LLM call, with response held until check completes",
+  post_call: "After LLM Call - Runs after the LLM call and checks only the output",
+  logging_only: "Logging Only - Only runs on logging callbacks without affecting the LLM call"
+};
+
 interface AddGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
@@ -346,13 +354,45 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           tooltip="How the guardrail should be applied"
           rules={[{ required: true, message: 'Please select a mode' }]}
         >
-          <Select>
+          <Select
+            optionLabelProp="label"
+          >
             {guardrailSettings?.supported_modes?.map(mode => (
-              <Option key={mode} value={mode}>{mode}</Option>
+              <Option key={mode} value={mode} label={mode}>
+                <div>
+                  <div>
+                    <strong>{mode}</strong>
+                    {mode === 'pre_call' && <Tag color="green" style={{ marginLeft: '8px' }}>Recommended</Tag>}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions[mode as keyof typeof modeDescriptions]}</div>
+                </div>
+              </Option>
             )) || (
               <>
-                <Option value="pre_call">pre_call</Option>
-                <Option value="post_call">post_call</Option>
+                <Option value="pre_call" label="pre_call">
+                  <div>
+                    <div><strong>pre_call</strong> <Tag color="green">Recommended</Tag></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.pre_call}</div>
+                  </div>
+                </Option>
+                <Option value="during_call" label="during_call">
+                  <div>
+                    <div><strong>during_call</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.during_call}</div>
+                  </div>
+                </Option>
+                <Option value="post_call" label="post_call">
+                  <div>
+                    <div><strong>post_call</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.post_call}</div>
+                  </div>
+                </Option>
+                <Option value="logging_only" label="logging_only">
+                  <div>
+                    <div><strong>logging_only</strong></div>
+                    <div style={{ fontSize: '12px', color: '#888' }}>{modeDescriptions.logging_only}</div>
+                  </div>
+                </Option>
               </>
             )}
           </Select>
@@ -454,7 +494,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         form={form}
         layout="vertical"
         initialValues={{
-          mode: guardrailSettings?.supported_modes?.[0] || "pre_call",
+          mode: "pre_call",
           default_on: false
         }}
       >
