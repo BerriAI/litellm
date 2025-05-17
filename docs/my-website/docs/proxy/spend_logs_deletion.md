@@ -1,94 +1,98 @@
 ---
-id: spend_locks_deletion
-title: Spend Locks Deletion
+id: spend_logs_deletion
+title: Spend Logs Deletion
 ---
 
 # Spend Log Cleanup
 
-Automatically clean up old spend logs to manage database size and performance.
+LiteLLM stores a log for every request. Over time, these logs can grow large and slow down your database. The Spend Log Cleanup feature helps manage database size by deleting old logs automatically.
 
-## What causes the problem?
-
-LiteLLM accumulates spend logs for every request. Over time, these logs can grow to a large size, potentially impacting database performance and storage costs.
-
-## How the spend log cleanup feature works
-
-The spend log cleanup feature:
-
-- Runs periodically to delete old spend logs
-- Uses distributed locking to ensure only one instance runs cleanup at a time
-- Deletes logs in batches to prevent database overload
-- Configurable retention period and cleanup interval
-
-## How it works
-
-### Stage 1. Instance acquires cleanup lock
-
-When cleanup is triggered, an instance will attempt to acquire a distributed lock:
-
-- Only one instance can acquire the lock at a time
-- The lock status is stored in Redis
-- If an instance acquires the lock:
-  - It proceeds with cleanup
-  - Other instances skip cleanup
-- If no instance has the lock:
-  - Cleanup runs without distributed locking
-
-![Working of spend log deletions](../../img/spend_log_deletion_working.png)
-
-_Working of spend log deletions_
-
-### Stage 2. Batch deletion of old logs
-
-The instance with the lock:
-
-- Calculates cutoff date based on retention period
-- Finds logs older than cutoff date
-- Deletes logs in batches of 1000
-- Adds small delays between batches to prevent database overload
-- Releases lock when complete
-
-![Batch deletion of old logs](../../img/spend_log_deletion_multi_pod.jpg)
-
-_Batch deletion of old logs_
+---
 
 ## Usage
 
-### Required components
+### Requirements
 
-- Redis (optional, for distributed locking)
-- Postgres
+- **Postgres** (for log storage)
+- **Redis** *(optional)* — required only if you're running multiple proxy instances and want to enable distributed locking
 
-### Setup on LiteLLM config
+### Setup
 
-You can configure spend log cleanup by setting the retention period and cleanup interval in the `general_settings` section of your `proxy_config.yaml` file:
+Add this to your `proxy_config.yaml` under `general_settings`:
 
-```yaml title="litellm proxy_config.yaml" showLineNumbers
+```yaml title="proxy_config.yaml"
 general_settings:
-  maximum_spend_logs_retention_period: "7d" # Keep logs for 7 days, i.e the cutoff date, logs older than x should be deleted
-  maximum_spend_logs_retention_interval: "1d" # Run cleanup every 1 day, i.e. the interval in which the job should run
+  maximum_spend_logs_retention_period: "7d"  # Keep logs for 7 days
+
+  # Optional: set how frequently cleanup should run
+  maximum_spend_logs_retention_interval: "1d"  # Run cleanup every day
 
 litellm_settings:
-  cache: True
+  cache: true
   cache_params:
     type: redis
 ```
 
-### Configuration Settings
+### Configuration Options
 
-#### Retention Period
+#### `maximum_spend_logs_retention_period` (required)
 
-The `maximum_spend_logs_retention_period` determines how long to keep logs before deletion. Supports the following formats:
+How long logs should be kept before deletion. Supported formats:
 
-- `"7d"` - 7 days
-- `"24h"` - 24 hours
-- `"60m"` - 60 minutes
-- `"3600s"` - 3600 seconds
+- `"7d"` – 7 days
+- `"24h"` – 24 hours
+- `"60m"` – 60 minutes
+- `"3600s"` – 3600 seconds
 
-#### Cleanup Interval
+#### `maximum_spend_logs_retention_interval` (optional)
 
-The `maximum_spend_logs_retention_interval` controls how often the cleanup job runs. Uses the same time format as retention period:
+How often the cleanup job should run. Uses the same format as above. If not set, cleanup will run every 24 hours if and only if `maximum_spend_logs_retention_period` is set.
 
-- `"1d"` - Run cleanup daily
-- `"12h"` - Run cleanup every 12 hours
-- `"6h"` - Run cleanup every 6 hours
+---
+
+## How it works
+
+### Step 1. Lock Acquisition (Optional with Redis)
+
+If Redis is enabled, LiteLLM uses it to make sure only one instance runs the cleanup at a time.
+
+- If the lock is acquired:
+  - This instance proceeds with cleanup
+  - Others skip it
+- If no lock is present:
+  - Cleanup still runs (useful for single-node setups)
+
+![Working of spend log deletions](../../img/spend_log_deletion_working.png)  
+*Working of spend log deletions*
+
+---
+
+### Step 2. Batch Deletion
+
+Once cleanup starts:
+
+- It calculates the cutoff date using the configured retention period
+- Deletes logs older than the cutoff in **batches of 1000**
+- Adds a short delay between batches to avoid overloading the database
+
+### Default settings:
+- **Batch size**: 1000 logs
+- **Max batches per run**: 500
+- **Max deletions per run**: 500,000 logs
+
+You can change the number of batches using an environment variable:
+
+```bash
+SPEND_LOG_RUN_LOOPS=200
+```
+
+This would allow up to 200,000 logs to be deleted in one run.
+
+![Batch deletion of old logs](../../img/spend_log_deletion_multi_pod.jpg)  
+*Batch deletion of old logs*
+
+---
+
+## Summary
+
+Spend Log Cleanup helps keep your database fast by regularly deleting old logs. It’s safe, customizable, and works well for both single-node and multi-node deployments.
