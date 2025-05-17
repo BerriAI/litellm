@@ -695,6 +695,14 @@ class LangFuseLogger:
                 "version": clean_metadata.pop("version", None),
             }
 
+            # Promote every metadata entry whose key starts with "generation_"
+            for key in list(
+                filter(lambda k: k.startswith("generation_"), clean_metadata.keys())
+            ):
+                stripped = key.replace("generation_", "")
+                if stripped not in generation_params:
+                    generation_params[stripped] = clean_metadata[key]
+
             parent_observation_id = metadata.get("parent_observation_id", None)
             if parent_observation_id is not None:
                 generation_params["parent_observation_id"] = parent_observation_id
@@ -930,7 +938,9 @@ def _add_prompt_to_generation_params(
     ):
         try:
             generation_params["prompt"] = langfuse_client.get_prompt(
-                prompt_management_metadata["prompt_id"]
+                prompt_management_metadata["prompt_id"],
+                version=prompt_management_metadata["prompt_version"],
+                label=prompt_management_metadata["prompt_label"],
             )
         except Exception as e:
             verbose_logger.debug(

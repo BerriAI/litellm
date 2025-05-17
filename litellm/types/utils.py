@@ -1792,6 +1792,8 @@ class StandardBuiltInToolsParams(TypedDict, total=False):
 
 class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
+    prompt_version: Optional[str]
+    prompt_label: Optional[str]
     prompt_variables: Optional[dict]
     prompt_integration: str
 
@@ -2007,6 +2009,8 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "prompt_version",
+    "prompt_label",
     "provider_specific_header",
     "prompt_variables",
     "api_base",
