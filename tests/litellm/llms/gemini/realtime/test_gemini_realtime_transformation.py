@@ -105,3 +105,31 @@ def test_gemini_realtime_transformation_content_delta():
         event["item_id"] for event in transformed_message if "item_id" in event
     ]
     assert len(set(output_item_ids)) == 1
+
+
+def test_gemini_model_turn_event_mapping():
+    from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+    config = GeminiRealtimeConfig()
+    assert config is not None
+
+    model_turn_event = {"parts": [{"text": "Hello, world!"}]}
+    openai_event = config.map_model_turn_event(model_turn_event)
+    assert openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
+
+    model_turn_event = {
+        "parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "..."}}]
+    }
+    openai_event = config.map_model_turn_event(model_turn_event)
+    assert openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
+
+    model_turn_event = {
+        "parts": [
+            {
+                "text": "Hello, world!",
+                "inlineData": {"mimeType": "audio/pcm", "data": "..."},
+            }
+        ]
+    }
+    openai_event = config.map_model_turn_event(model_turn_event)
+    assert openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA

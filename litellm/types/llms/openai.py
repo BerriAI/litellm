@@ -1353,7 +1353,7 @@ class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     """The text content, used for 'input_text' and 'text' content types"""
     transcript: str
     """The transcript content, used for 'input_audio' content types"""
-    type: Literal["input_audio", "input_text", "text", "item_reference"]
+    type: Literal["input_audio", "input_text", "text", "item_reference", "audio"]
     """The type of content"""
 
 
@@ -1443,14 +1443,14 @@ class OpenAIRealtimeResponseContentPartAdded(TypedDict):
     response_id: str
 
 
-class OpenAIRealtimeResponseTextDelta(TypedDict):
+class OpenAIRealtimeResponseDelta(TypedDict):
     content_index: int
     delta: str
     event_id: str
     item_id: str
     output_index: int
     response_id: str
-    type: Literal["response.text.delta"]
+    type: Union[Literal["response.text.delta"], Literal["response.audio.delta"]]
 
 
 class OpenAIRealtimeResponseTextDone(TypedDict):
@@ -1461,6 +1461,15 @@ class OpenAIRealtimeResponseTextDone(TypedDict):
     response_id: str
     text: str
     type: Literal["response.text.done"]
+
+
+class OpenAIRealtimeResponseAudioDone(TypedDict):
+    content_index: int
+    event_id: str
+    item_id: str
+    output_index: int
+    response_id: str
+    type: Literal["response.audio.done"]
 
 
 class OpenAIRealtimeContentPartDone(TypedDict):
@@ -1503,6 +1512,17 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeEventTypes(Enum):
+    SESSION_CREATED = "session.created"
+    RESPONSE_TEXT_DELTA = "response.text.delta"
+    RESPONSE_AUDIO_DELTA = "response.audio.delta"
+    RESPONSE_TEXT_DONE = "response.text.done"
+    RESPONSE_AUDIO_DONE = "response.audio.done"
+    RESPONSE_DONE = "response.done"
+    RESPONSE_OUTPUT_ITEM_ADDED = "response.output_item.added"
+    RESPONSE_CONTENT_PART_ADDED = "response.content_part.added"
+
+
 OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -1510,8 +1530,9 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeConversationItemCreated,
     OpenAIRealtimeConversationCreated,
-    OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseDelta,
     OpenAIRealtimeResponseTextDone,
+    OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeDoneEvent,

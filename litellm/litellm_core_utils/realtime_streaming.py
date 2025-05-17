@@ -9,7 +9,7 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
-    OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
@@ -55,9 +55,7 @@ class RealTimeStreaming:
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
         self.model = model
-        self.current_delta_chunks: Optional[
-            List[OpenAIRealtimeResponseTextDelta]
-        ] = None
+        self.current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]] = None
         self.current_output_item_id: Optional[str] = None
         self.current_response_id: Optional[str] = None
         self.current_conversation_id: Optional[str] = None
