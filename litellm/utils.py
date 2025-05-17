@@ -235,6 +235,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
@@ -6628,6 +6629,17 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        return None
+
+    @staticmethod
+    def get_provider_realtime_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseRealtimeConfig]:
+        if LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+            return GeminiRealtimeConfig()
         return None
 
 

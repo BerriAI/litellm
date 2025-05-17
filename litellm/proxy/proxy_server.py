@@ -143,6 +143,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -3296,6 +3297,23 @@ class ProxyStartupEvent:
             from litellm.integrations.prometheus import PrometheusLogger
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+
+        ### SPEND LOG CLEANUP ###
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            spend_log_cleanup = SpendLogCleanup()
+            # Get the interval from config or default to 1 day
+            retention_interval = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds,
+                    args=[prisma_client],
+                )
+            except ValueError:
+                verbose_proxy_logger.error(f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, defaulting to 60 seconds")
+                interval_seconds = 60
 
         scheduler.start()
 

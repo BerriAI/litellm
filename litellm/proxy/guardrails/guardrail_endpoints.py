@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Type, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -19,6 +20,8 @@ from litellm.types.guardrails import (
     ListGuardrailsResponse,
     PiiAction,
     PiiEntityType,
+    PresidioConfigModel,
+    SupportedGuardrailIntegrations,
 )
 
 #### GUARDRAILS ENDPOINTS ####
@@ -431,6 +434,71 @@ async def delete_guardrail(guardrail_id: str):
 
 
 @router.get(
+    "/guardrails/{guardrail_id}/info",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_guardrail_info(guardrail_id: str):
+    """
+    Get detailed information about a specific guardrail by ID
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/info" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+        "guardrail_name": "my-bedrock-guard",
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": "pre_call",
+            "guardrailIdentifier": "ff6ujrregl1q",
+            "guardrailVersion": "DRAFT",
+            "default_on": true
+        },
+        "guardrail_info": {
+            "description": "Bedrock content moderation guardrail"
+        },
+        "created_at": "2023-11-09T12:34:56.789Z",
+        "updated_at": "2023-11-09T12:34:56.789Z"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+            guardrail_id=guardrail_id, prisma_client=prisma_client
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
+            )
+
+        return GuardrailInfoResponse(
+            guardrail_id=result.get("guardrail_id"),
+            guardrail_name=result.get("guardrail_name"),
+            litellm_params=result.get("litellm_params"),
+            guardrail_info=result.get("guardrail_info"),
+            created_at=result.get("created_at"),
+            updated_at=result.get("updated_at"),
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
@@ -455,3 +523,80 @@ async def get_guardrail_ui_settings():
         supported_modes=list(GuardrailEventHooks),
         pii_entity_categories=category_maps,
     )
+
+
+def _get_fields_from_model(model_class: Type[BaseModel]) -> List[Dict[str, Any]]:
+    """
+    Get the fields from a Pydantic model
+    """
+    fields = []
+    for field_name, field in model_class.model_fields.items():
+        # Get field metadata
+        description = field.description or field_name
+
+        # Check if this field is in the required_fields class variable
+        required = field.is_required()
+
+        fields.append(
+            {
+                "param": field_name,
+                "description": description,
+                "required": required,
+            }
+        )
+    return fields
+
+
+@router.get(
+    "/guardrails/ui/provider_specific_params",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_provider_specific_params():
+    """
+    Get provider-specific parameters for different guardrail types.
+
+    Returns a dictionary mapping guardrail providers to their specific parameters,
+    including parameter names, descriptions, and whether they are required.
+
+    Example Response:
+    ```json
+    {
+        "bedrock": [
+            {
+                "param": "guardrailIdentifier",
+                "description": "The ID of your guardrail on Bedrock",
+                "required": true
+            },
+            {
+                "param": "guardrailVersion",
+                "description": "The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+                "required": true
+            }
+        ],
+        "presidio": [
+            {
+                "param": "presidio_analyzer_api_base",
+                "description": "Base URL for the Presidio analyzer API",
+                "required": true
+            },
+            {
+                "param": "presidio_anonymizer_api_base",
+                "description": "Base URL for the Presidio anonymizer API",
+                "required": true
+            }
+        ]
+    }
+    ```
+    """
+    # Get fields from the models
+    bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
+    presidio_fields = _get_fields_from_model(PresidioConfigModel)
+
+    # Return the provider-specific parameters
+    provider_params = {
+        SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
+        SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
+    }
+
+    return provider_params

@@ -120,11 +120,7 @@ class InitializeGuardrails:
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
-        _litellm_params_kwargs = {
-            k: litellm_params_data.get(k) for k in LitellmParams.__annotations__.keys()
-        }
-
-        litellm_params = LitellmParams(**_litellm_params_kwargs)  # type: ignore
+        litellm_params = LitellmParams(**litellm_params_data)
 
         if (
             "category_thresholds" in litellm_params_data
@@ -133,17 +129,17 @@ class InitializeGuardrails:
             lakera_category_thresholds = LakeraCategoryThresholds(
                 **litellm_params_data["category_thresholds"]
             )
-            litellm_params["category_thresholds"] = lakera_category_thresholds
+            litellm_params.category_thresholds = lakera_category_thresholds
 
-        api_key: Optional[str] = litellm_params.get("api_key")
-        if api_key and api_key.startswith("os.environ/"):
-            litellm_params["api_key"] = str(get_secret(litellm_params["api_key"]))  # type: ignore
+        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
+            litellm_params.api_key = str(get_secret(litellm_params.api_key))
 
-        api_base: Optional[str] = litellm_params.get("api_base")
-        if api_base and api_base.startswith("os.environ/"):
-            litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
+        if litellm_params.api_base and litellm_params.api_base.startswith(
+            "os.environ/"
+        ):
+            litellm_params.api_base = str(get_secret(litellm_params.api_base))
 
-        guardrail_type: Optional[str] = litellm_params.get("guardrail")
+        guardrail_type = litellm_params.guardrail
         if guardrail_type is None:
             raise ValueError("guardrail_type is required")
 
@@ -206,13 +202,13 @@ class InitializeGuardrails:
         spec.loader.exec_module(module)  # type: ignore
         _guardrail_class = getattr(module, _class_name)
 
-        mode: Optional[str] = litellm_params.get("mode")
+        mode = litellm_params.mode
         if mode is None:
             raise ValueError(
                 f"mode is required for guardrail {guardrail_type} please set mode to one of the following: {', '.join(GuardrailEventHooks)}"
             )
 
-        default_on: Optional[bool] = litellm_params.get("default_on")
+        default_on = litellm_params.default_on
         _guardrail_callback = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
             event_hook=mode,
