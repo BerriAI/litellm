@@ -5,6 +5,8 @@ from unittest import mock
 import pytest
 
 from dotenv import load_dotenv
+from moto import mock_aws
+import boto3
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -264,3 +266,68 @@ def test_add_callbacks_invalid_input():
     # Cleanup
     litellm.success_callback = []
     litellm.failure_callback = []
+
+
+@pytest.mark.asyncio
+async def test_reading_configs_with_includes_from_s3():
+    """
+    Test that the config is read correctly from the S3 and read includes
+    """
+    BUCKET_NAME = "config-bucket"
+    config_files = ("config_with_multiple_includes.yaml", "models_file_1.yaml", "models_file_2.yaml")
+    os.environ["LITELLM_CONFIG_BUCKET_NAME"] = BUCKET_NAME
+    os.environ["LITELLM_CONFIG_BUCKET_OBJECT_KEY"] = config_files[0]
+    os.environ["LITELLM_CONFIG_BUCKET_TYPE"] = "S3"
+    with mock_aws():
+        # setup s3 bucket and put config files
+        current_path = os.path.dirname(os.path.abspath(__file__))
+        s3_client = boto3.client("s3")
+        s3_client.create_bucket(Bucket=BUCKET_NAME)
+        for file_name in config_files:
+            config_path = os.path.join(
+                current_path, "example_config_yaml", file_name,
+            )
+            s3_client.put_object(
+                Bucket="config-bucket", Key=file_name, Body=open(config_path, 'rb')
+            )
+        proxy_config_instance = ProxyConfig()    
+        config = await proxy_config_instance.get_config()
+
+        assert config == {
+            'model_list': [
+                {'model_name': 'included-model-1', 'litellm_params': {'model': 'gpt-4'}},
+                {'model_name': 'included-model-2', 'litellm_params': {'model': 'gpt-3.5-turbo'}}
+            ],
+            'litellm_settings': {'callbacks': ['prometheus']},
+        }
+
+    # unset the env variable to avoid side-effects on other tests
+    del os.environ["LITELLM_CONFIG_BUCKET_NAME"]
+    del os.environ["LITELLM_CONFIG_BUCKET_OBJECT_KEY"]
+    del os.environ["LITELLM_CONFIG_BUCKET_TYPE"]
+
+
+@pytest.mark.asyncio
+async def test_reading_configs_from_s3_file_not_found():
+    """
+    Test that the config is not present S3
+    """
+    BUCKET_NAME = "config-bucket"
+    config_files = ("config_with_multiple_includes.yaml", "models_file_1.yaml", "models_file_2.yaml")
+    os.environ["LITELLM_CONFIG_BUCKET_NAME"] = BUCKET_NAME
+    os.environ["LITELLM_CONFIG_BUCKET_OBJECT_KEY"] = config_files[0]
+    os.environ["LITELLM_CONFIG_BUCKET_TYPE"] = "S3"
+    with mock_aws():
+        # setup s3 bucket but do not put file
+        s3_client = boto3.client("s3")
+        s3_client.create_bucket(Bucket=BUCKET_NAME)
+        proxy_config_instance = ProxyConfig()
+        with pytest.raises(Exception) as ex:
+            await proxy_config_instance.get_config()
+        
+        assert str(ex.value) == "Unable to load config from given source."
+
+    # unset the env variable to avoid side-effects on other tests
+    del os.environ["LITELLM_CONFIG_BUCKET_NAME"]
+    del os.environ["LITELLM_CONFIG_BUCKET_OBJECT_KEY"]
+    del os.environ["LITELLM_CONFIG_BUCKET_TYPE"]
