@@ -323,6 +323,7 @@ openai_compatible_providers: List = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "netmind",
     "novita",
     "meta_llama",
     "nscale",
@@ -473,6 +474,19 @@ together_ai_models: List = [
     "WizardLM/WizardLM-70B-V1.0",
 ]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
+
+netmind_models: List = [
+    "netmind/Qwen/Qwen3-235B-A22B",
+    "netmind/Qwen/Qwen3-30B-A3B",
+    "netmind/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "netmind/google/gemma-3-27b-it",
+    "netmind/deepseek-ai/DeepSeek-V3-0324",
+    "netmind/deepseek-ai/DeepSeek-R1",
+    "netmind/meta-llama/Llama-3.3-70B-Instruct",
+    "netmind/meta-llama/Meta-Llama-3.1-405B",
+    "netmind/meta-llama/Llama-3.2-90B-Vision-Instruct",
+    "netmind/doubao/Doubao-1.5-vision-pro"
+]
 
 baseten_models: List = [
     "qvv0xeq",

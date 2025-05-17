@@ -3940,6 +3940,13 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or get_secret("TOGETHERAI_API_KEY")
             or get_secret("TOGETHER_AI_TOKEN")
         )
+    elif llm_provider == "netmind":
+        api_key = (
+            api_key
+            or litellm.netmind_key
+            or get_secret("NETMIND_API_KEY")
+            or get_secret("NETMIND_TOKEN")
+        )
     return api_key
 
 
@@ -4846,6 +4853,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
+        elif custom_llm_provider == "netmind":
+            if "NETMIND_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NETMIND_API_KEY")
         elif custom_llm_provider == "aleph_alpha":
             if "ALEPH_ALPHA_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5046,6 +5058,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("TOGETHERAI_API_KEY")
+        ## netmind
+        elif model in litellm.netmind_models:
+            if "NETMIND_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NETMIND_API_KEY")
         ## aleph_alpha
         elif model in litellm.aleph_alpha_models:
             if "ALEPH_ALPHA_API_KEY" in os.environ:
@@ -6444,6 +6462,8 @@ class ProviderConfigManager:
                 return litellm.AmazonInvokeNovaConfig()
             else:
                 return litellm.AmazonInvokeConfig()
+        elif litellm.LlmProviders.NETMIND == provider:
+            return litellm.NetmindChatConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:

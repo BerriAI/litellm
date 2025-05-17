@@ -3553,6 +3553,7 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or custom_llm_provider == "netmind"
         ):
             api_base = (
                 api_base

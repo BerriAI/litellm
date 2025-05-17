@@ -2197,6 +2197,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     ASSEMBLYAI = "assemblyai"
+    NETMIND = "netmind"
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
