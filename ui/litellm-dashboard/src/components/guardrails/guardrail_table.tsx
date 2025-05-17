@@ -14,7 +14,6 @@ import {
   SwitchVerticalIcon,
   ChevronUpIcon,
   ChevronDownIcon,
-  PencilIcon,
 } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import {
@@ -210,13 +209,6 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
         const guardrail = row.original;
         return (
           <div className="flex space-x-2">
-            <Icon
-              icon={PencilIcon}
-              size="sm"
-              onClick={() => guardrail.guardrail_id && handleEditClick(guardrail)}
-              className="cursor-pointer hover:text-blue-500"
-              tooltip="Edit guardrail"
-            />
             <Icon
               icon={TrashIcon}
               size="sm"
