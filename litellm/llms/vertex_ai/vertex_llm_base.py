@@ -42,13 +42,11 @@ class VertexBase:
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
         from google.auth import identity_pool
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
 
         if credentials is not None:
             import google.oauth2.service_account
-
+            import google.oauth2.credentials as google_oauth_credentials
+            
             if isinstance(credentials, str):
                 verbose_logger.debug(
                     "Vertex: Loading vertex credentials from %s", credentials
@@ -81,6 +79,14 @@ class VertexBase:
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
                 creds = identity_pool.Credentials.from_info(json_obj)
+            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+            elif "type" in json_obj and json_obj["type"] == "authorized_user":
+                creds = google_oauth_credentials.Credentials.from_authorized_user_info(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                if project_id is None:
+                    project_id = creds.quota_project_id # authorized user credentials don't have a project_id, only quota_project_id
             else:
                 creds = (
                     google.oauth2.service_account.Credentials.from_service_account_info(
@@ -99,7 +105,7 @@ class VertexBase:
             if project_id is None:
                 project_id = creds_project_id
 
-        creds.refresh(Request())  # type: ignore
+        self.refresh_auth(creds)
 
         if not project_id:
             raise ValueError("Could not resolve project_id")
