@@ -112,6 +112,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
+    "tinybird",
     "agentops",
     "anthropic_cache_control_hook",
     "bedrock_vector_store",
