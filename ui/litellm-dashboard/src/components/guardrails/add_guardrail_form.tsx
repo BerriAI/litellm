@@ -356,6 +356,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         >
           <Select
             optionLabelProp="label"
+            mode="multiple"
           >
             {guardrailSettings?.supported_modes?.map(mode => (
               <Option key={mode} value={mode} label={mode}>
