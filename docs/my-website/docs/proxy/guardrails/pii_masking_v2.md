@@ -28,6 +28,15 @@ For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer 
 
 ### 1. Create a PII, PHI Masking Guardrail 
 
+<Image 
+  img={require('../../../img/presidio_1.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  Presidio PII Masking: Mask PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data.
+</p>
+
+
 ### 2. Configure Entity Types
 
 ### 3. Test it! 
