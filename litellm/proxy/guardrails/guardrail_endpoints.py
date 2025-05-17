@@ -19,6 +19,7 @@ from litellm.types.guardrails import (
     GuardrailUIAddGuardrailSettings,
     LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
+    LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
     PiiEntityType,
@@ -510,12 +511,14 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         )
 
         # Update litellm_params if default_on is provided
-        litellm_params = dict(existing_guardrail.get("litellm_params", {}))
+        litellm_params = LitellmParams(
+            **dict(existing_guardrail.get("litellm_params", {}))
+        )
         if (
             request.litellm_params is not None
             and request.litellm_params.default_on is not None
         ):
-            litellm_params["default_on"] = request.litellm_params.default_on
+            litellm_params.default_on = request.litellm_params.default_on
 
         # Update guardrail_info if provided
         guardrail_info = (
@@ -525,15 +528,13 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         )
 
         # Create the guardrail object
-        updated_guardrail = {
-            "guardrail_name": guardrail_name,
-            "litellm_params": litellm_params,
-            "guardrail_info": guardrail_info,
-        }
-
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
-            guardrail=Guardrail(**updated_guardrail),
+            guardrail=Guardrail(
+                guardrail_name=guardrail_name or "",
+                litellm_params=litellm_params,
+                guardrail_info=guardrail_info,
+            ),
             prisma_client=prisma_client,
         )
         return result
