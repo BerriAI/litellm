@@ -5046,7 +5046,7 @@ export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
 export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/${guardrailId}` : `/v2/guardrails/${guardrailId}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
     
     const response = await fetch(url, {
       method: "DELETE",
