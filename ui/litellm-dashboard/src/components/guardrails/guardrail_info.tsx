@@ -13,34 +13,11 @@ import {
   TabPanels,
   TextInput,
 } from "@tremor/react";
-import { Button, Form, Input, Select, message, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Tooltip, Divider } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { getGuardrailInfo, updateGuardrailCall } from "@/components/networking";
+import { getGuardrailInfo, updateGuardrailCall, getGuardrailUISettings } from "@/components/networking";
 import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import PiiConfiguration from "./pii_configuration";
-
-// Available PII actions
-const PII_ACTIONS = ["MASK", "BLOCK"];
-
-// PII entity categories for organization
-const PII_ENTITY_CATEGORIES = [
-  {
-    category: "Personal",
-    entities: ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON_NAME"]
-  },
-  {
-    category: "Financial",
-    entities: ["CREDIT_CARD", "BANK_ACCOUNT", "NRP"]
-  },
-  {
-    category: "Location",
-    entities: ["LOCATION", "ADDRESS", "IP_ADDRESS", "URL"]
-  },
-  {
-    category: "Government",
-    entities: ["AU_ABN", "US_SSN", "UK_NHS"]
-  }
-];
 
 export interface GuardrailInfoProps {
   guardrailId: string;
@@ -59,11 +36,17 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
-  
-  // For PII configuration
-  const [piiEntities, setPiiEntities] = useState<string[]>([]);
   const [selectedPiiEntities, setSelectedPiiEntities] = useState<string[]>([]);
   const [selectedPiiActions, setSelectedPiiActions] = useState<{[key: string]: string}>({});
+  const [guardrailSettings, setGuardrailSettings] = useState<{
+    supported_entities: string[];
+    supported_actions: string[];
+    pii_entity_categories: Array<{
+      category: string;
+      entities: string[];
+    }>;
+    supported_modes: string[];
+  } | null>(null);
 
   const fetchGuardrailInfo = async () => {
     try {
@@ -71,6 +54,21 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
       if (!accessToken) return;
       const response = await getGuardrailInfo(accessToken, guardrailId);
       setGuardrailData(response);
+      
+      // Initialize PII configuration from guardrail data
+      if (response.litellm_params?.pii_entities_config) {
+        const piiConfig = response.litellm_params.pii_entities_config;
+        const entities: string[] = [];
+        const actions: {[key: string]: string} = {};
+        
+        Object.entries(piiConfig).forEach(([entity, action]: [string, any]) => {
+          entities.push(entity);
+          actions[entity] = typeof action === 'string' ? action : "MASK";
+        });
+        
+        setSelectedPiiEntities(entities);
+        setSelectedPiiActions(actions);
+      }
     } catch (error) {
       message.error("Failed to load guardrail information");
       console.error("Error fetching guardrail info:", error);
@@ -79,56 +77,26 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     }
   };
 
+  const fetchGuardrailUISettings = async () => {
+    try {
+      if (!accessToken) return;
+      const uiSettings = await getGuardrailUISettings(accessToken);
+      setGuardrailSettings(uiSettings);
+    } catch (error) {
+      console.error("Error fetching guardrail UI settings:", error);
+    }
+  };
+
   useEffect(() => {
     fetchGuardrailInfo();
+    fetchGuardrailUISettings();
   }, [guardrailId, accessToken]);
-
-  // Set up PII entities and selected actions when guardrail data changes
-  useEffect(() => {
-    if (guardrailData?.guardrail_info?.pii_entities_config) {
-      const piiConfig = guardrailData.guardrail_info.pii_entities_config;
-      
-      // Get unique entities from both categories and existing config
-      const allEntities = new Set<string>();
-      
-      // Add entities from categories
-      PII_ENTITY_CATEGORIES.forEach(category => {
-        category.entities.forEach(entity => allEntities.add(entity));
-      });
-      
-      // Add entities from existing config
-      Object.keys(piiConfig).forEach(entity => allEntities.add(entity));
-      
-      setPiiEntities(Array.from(allEntities));
-      setSelectedPiiEntities(Object.keys(piiConfig));
-      setSelectedPiiActions(piiConfig);
-    } else {
-      // Default empty state
-      const allEntities = new Set<string>();
-      PII_ENTITY_CATEGORIES.forEach(category => {
-        category.entities.forEach(entity => allEntities.add(entity));
-      });
-      
-      setPiiEntities(Array.from(allEntities));
-      setSelectedPiiEntities([]);
-      setSelectedPiiActions({});
-    }
-  }, [guardrailData]);
 
   const handlePiiEntitySelect = (entity: string) => {
     setSelectedPiiEntities(prev => {
       if (prev.includes(entity)) {
-        // Remove entity from selected list
-        const newSelected = prev.filter(e => e !== entity);
-        // Also remove from actions
-        const newActions = {...selectedPiiActions};
-        delete newActions[entity];
-        setSelectedPiiActions(newActions);
-        return newSelected;
+        return prev.filter(e => e !== entity);
       } else {
-        // Add entity to selected list with default action of MASK
-        const newActions = {...selectedPiiActions, [entity]: "MASK"};
-        setSelectedPiiActions(newActions);
         return [...prev, entity];
       }
     });
@@ -145,23 +113,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
     try {
       if (!accessToken) return;
       
-      // Create guardrail_info with PII configuration if entities selected
-      const guardrailInfo = values.guardrail_info ? JSON.parse(values.guardrail_info) : {};
-      
-      // Add PII entities configuration
-      if (selectedPiiEntities.length > 0) {
-        guardrailInfo.pii_entities_config = {};
-        selectedPiiEntities.forEach(entity => {
-          guardrailInfo.pii_entities_config[entity] = selectedPiiActions[entity] || "MASK";
-        });
-      }
+      // Prepare PII entity configuration
+      const piiEntitiesConfig: {[key: string]: string} = {};
+      selectedPiiEntities.forEach(entity => {
+        piiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
+      });
       
       const updateData = {
         guardrail_name: values.guardrail_name,
         litellm_params: {
-          default_on: values.default_on
+          default_on: values.default_on,
+          pii_entities_config: Object.keys(piiEntitiesConfig).length > 0 ? piiEntitiesConfig : undefined
         },
-        guardrail_info: guardrailInfo
+        guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined
       };
       
       await updateGuardrailCall(accessToken, guardrailId, updateData);
@@ -249,25 +213,30 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
               </Card>
             </Grid>
 
-            {/* PII Configuration Display */}
-            {guardrailData.guardrail_info?.pii_entities_config && 
-             Object.keys(guardrailData.guardrail_info.pii_entities_config).length > 0 && (
+            {guardrailData.litellm_params?.pii_entities_config && Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
               <Card className="mt-6">
-                <Text>PII Entity Protection</Text>
+                <Text>PII Protection Configuration</Text>
                 <div className="mt-2 space-y-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    {Object.entries(guardrailData.guardrail_info.pii_entities_config).map(([entity, action]) => (
-                      <div key={entity} className="flex items-center p-2 border rounded">
-                        <Text className="font-medium flex-1">{entity.replace(/_/g, ' ')}</Text>
-                                                 <Badge 
-                           color={action === "MASK" ? "blue" : "red"}
-                           className="px-2 py-1 rounded"
-                         >
-                           {String(action)}
-                         </Badge>
-                      </div>
-                    ))}
-                  </div>
+                  <table className="min-w-full">
+                    <thead>
+                      <tr className="bg-gray-50 border-b">
+                        <th className="py-2 px-4 text-left">PII Type</th>
+                        <th className="py-2 px-4 text-left">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(guardrailData.litellm_params.pii_entities_config).map(([entity, action]: [string, any]) => (
+                        <tr key={entity} className="border-b">
+                          <td className="py-2 px-4">{entity.replace(/_/g, ' ')}</td>
+                          <td className="py-2 px-4">
+                            <Badge color={action === "BLOCK" ? "red" : "blue"}>
+                              {action}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </Card>
             )}
@@ -276,19 +245,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
               <Card className="mt-6">
                 <Text>Guardrail Info</Text>
                 <div className="mt-2 space-y-2">
-                  {Object.entries(guardrailData.guardrail_info).map(([key, value]) => {
-                    if (key === "pii_entities_config") return null; // Skip, already shown above
-                    return (
-                      <div key={key} className="flex">
-                        <Text className="font-medium w-1/3">{key}</Text>
-                        <Text className="w-2/3">
-                          {typeof value === 'object' 
-                            ? JSON.stringify(value, null, 2) 
-                            : String(value)}
-                        </Text>
-                      </div>
-                    );
-                  })}
+                  {Object.entries(guardrailData.guardrail_info).map(([key, value]) => (
+                    <div key={key} className="flex">
+                      <Text className="font-medium w-1/3">{key}</Text>
+                      <Text className="w-2/3">
+                        {typeof value === 'object' 
+                          ? JSON.stringify(value, null, 2) 
+                          : String(value)}
+                      </Text>
+                    </div>
+                  ))}
                 </div>
               </Card>
             )}
@@ -310,74 +276,68 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                 </div>
 
                 {isEditing ? (
-                  <div>
-                    <Form
-                      form={form}
-                      onFinish={handleGuardrailUpdate}
-                      initialValues={{
-                        guardrail_name: guardrailData.guardrail_name,
-                        ...guardrailData.litellm_params,
-                        guardrail_info: guardrailData.guardrail_info 
-                          ? JSON.stringify(Object.fromEntries(
-                              Object.entries(guardrailData.guardrail_info)
-                                .filter(([key]) => key !== "pii_entities_config")
-                            ), null, 2)
-                          : "",
-                      }}
-                      layout="vertical"
+                  <Form
+                    form={form}
+                    onFinish={handleGuardrailUpdate}
+                    initialValues={{
+                      guardrail_name: guardrailData.guardrail_name,
+                      ...guardrailData.litellm_params,
+                      guardrail_info: guardrailData.guardrail_info 
+                        ? JSON.stringify(guardrailData.guardrail_info, null, 2) 
+                        : "",
+                    }}
+                    layout="vertical"
+                  >
+                    <Form.Item
+                      label="Guardrail Name"
+                      name="guardrail_name"
+                      rules={[{ required: true, message: "Please input a guardrail name" }]}
                     >
-                      <Form.Item
-                        label="Guardrail Name"
-                        name="guardrail_name"
-                        rules={[{ required: true, message: "Please input a guardrail name" }]}
-                      >
-                        <TextInput />
-                      </Form.Item>
-                      
-                      <Form.Item
-                        label="Default On"
-                        name="default_on"
-                      >
-                        <Select>
-                          <Select.Option value={true}>Yes</Select.Option>
-                          <Select.Option value={false}>No</Select.Option>
-                        </Select>
-                      </Form.Item>
-                      
-                      {/* PII Configuration */}
-                      <Form.Item
-                        label="PII Entity Protection"
-                        help="Select PII entities to protect and choose an action for each entity"
-                      >
-                        <PiiConfiguration
-                          entities={piiEntities}
-                          actions={PII_ACTIONS}
+                      <TextInput />
+                    </Form.Item>
+                    
+                    <Form.Item
+                      label="Default On"
+                      name="default_on"
+                    >
+                      <Select>
+                        <Select.Option value={true}>Yes</Select.Option>
+                        <Select.Option value={false}>No</Select.Option>
+                      </Select>
+                    </Form.Item>
+                    
+                    <Divider orientation="left">PII Protection</Divider>
+                    <div className="mb-6">
+                      {guardrailSettings && (
+                        <PiiConfiguration 
+                          entities={guardrailSettings.supported_entities}
+                          actions={guardrailSettings.supported_actions}
                           selectedEntities={selectedPiiEntities}
                           selectedActions={selectedPiiActions}
                           onEntitySelect={handlePiiEntitySelect}
                           onActionSelect={handlePiiActionSelect}
-                          entityCategories={PII_ENTITY_CATEGORIES}
+                          entityCategories={guardrailSettings.pii_entity_categories}
                         />
-                      </Form.Item>
+                      )}
+                    </div>
 
-                      <Form.Item
-                        label="Additional Guardrail Information"
-                        name="guardrail_info"
-                        help="Enter any additional guardrail configuration in JSON format"
-                      >
-                        <Input.TextArea rows={5} />
-                      </Form.Item>
+                    <Divider orientation="left">Advanced Settings</Divider>
+                    <Form.Item
+                      label="Guardrail Information"
+                      name="guardrail_info"
+                    >
+                      <Input.TextArea rows={5} />
+                    </Form.Item>
 
-                      <div className="flex justify-end gap-2 mt-6">
-                        <Button onClick={() => setIsEditing(false)}>
-                          Cancel
-                        </Button>
-                        <TremorButton>
-                          Save Changes
-                        </TremorButton>
-                      </div>
-                    </Form>
-                  </div>
+                    <div className="flex justify-end gap-2 mt-6">
+                      <Button onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton>
+                        Save Changes
+                      </TremorButton>
+                    </div>
+                  </Form>
                 ) : (
                   <div className="space-y-4">
                     <div>
@@ -402,6 +362,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                         {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
                       </Badge>
                     </div>
+                    
+                    {guardrailData.litellm_params?.pii_entities_config && Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
+                      <div>
+                        <Text className="font-medium">PII Protection</Text>
+                        <div className="mt-2">
+                          <Badge color="blue">
+                            {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities configured
+                          </Badge>
+                        </div>
+                      </div>
+                    )}
+                    
                     <div>
                       <Text className="font-medium">Created At</Text>
                       <div>{formatDate(guardrailData.created_at)}</div>
