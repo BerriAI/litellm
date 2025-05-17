@@ -40,9 +40,12 @@ def test_gemini_realtime_transformation_session_created():
             "current_conversation_id": None,
             "current_delta_chunks": [],
             "current_item_chunks": [],
+            "current_delta_type": None,
         },
     )
-    assert transformed_message["response"]["type"] == "session.created"
+
+    print(transformed_message)
+    assert transformed_message["response"][0]["type"] == "session.created"
 
 
 def test_gemini_realtime_transformation_content_delta():
@@ -80,6 +83,7 @@ def test_gemini_realtime_transformation_content_delta():
             "current_conversation_id": None,
             "current_delta_chunks": [],
             "current_item_chunks": [],
+            "current_delta_type": None,
         },
     )
     transformed_message = returned_object["response"]
@@ -168,6 +172,7 @@ def test_gemini_realtime_transformation_audio_delta():
             "current_conversation_id": None,
             "current_delta_chunks": [],
             "current_item_chunks": [],
+            "current_delta_type": None,
         },
     )
 
@@ -178,6 +183,47 @@ def test_gemini_realtime_transformation_audio_delta():
     contains_audio_delta = False
     for response in responses:
         if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA.value:
+            contains_audio_delta = True
+            break
+    assert contains_audio_delta, "Expected audio delta event"
+
+
+def test_gemini_realtime_transformation_generation_complete():
+    from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+    config = GeminiRealtimeConfig()
+    assert config is not None
+
+    session_configuration_request = {
+        "model": "gemini-1.5-flash",
+        "generationConfig": {"responseModalities": ["AUDIO"]},
+    }
+    session_configuration_request_str = json.dumps(session_configuration_request)
+
+    audio_delta_event = {"serverContent": {"generationComplete": True}}
+
+    result = config.transform_realtime_response(
+        json.dumps(audio_delta_event),
+        "gemini-1.5-flash",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": "my-output-item-id",
+            "current_response_id": "my-response-id",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        },
+    )
+
+    print(result)
+
+    responses = result["response"]
+
+    contains_audio_done_event = False
+    for response in responses:
+        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE.value:
             contains_audio_delta = True
             break
     assert contains_audio_delta, "Expected audio delta event"

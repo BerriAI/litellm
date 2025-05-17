@@ -13,6 +13,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
+from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -60,6 +61,7 @@ class RealTimeStreaming:
         self.current_response_id: Optional[str] = None
         self.current_conversation_id: Optional[str] = None
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
+        self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
 
     def _should_store_message(
         self,
@@ -136,6 +138,7 @@ class RealTimeStreaming:
                             "current_delta_chunks": self.current_delta_chunks,
                             "current_conversation_id": self.current_conversation_id,
                             "current_item_chunks": self.current_item_chunks,
+                            "current_delta_type": self.current_delta_type,
                         },
                     )
 
@@ -149,6 +152,7 @@ class RealTimeStreaming:
                         "current_conversation_id"
                     ]
                     self.current_item_chunks = returned_object["current_item_chunks"]
+                    self.current_delta_type = returned_object["current_delta_type"]
                     if isinstance(transformed_response, list):
                         for event in transformed_response:
                             event_str = json.dumps(event)

@@ -1,10 +1,12 @@
-from typing import List, Optional, TypedDict, Union
+from typing import List, Literal, Optional, TypedDict, Union
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseDelta,
 )
+
+ALL_DELTA_TYPES = Literal["text", "audio"]
 
 
 class RealtimeResponseTransformInput(TypedDict):
@@ -18,6 +20,7 @@ class RealtimeResponseTransformInput(TypedDict):
     current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
     current_conversation_id: Optional[str]
+    current_delta_type: Optional[ALL_DELTA_TYPES]
 
 
 class RealtimeResponseTypedDict(TypedDict):
@@ -27,6 +30,7 @@ class RealtimeResponseTypedDict(TypedDict):
     current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
     current_conversation_id: Optional[str]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
+    current_delta_type: Optional[ALL_DELTA_TYPES]
 
 
 class RealtimeModalityResponseTransformOutput(TypedDict):
@@ -35,3 +39,4 @@ class RealtimeModalityResponseTransformOutput(TypedDict):
     current_response_id: Optional[str]
     current_conversation_id: Optional[str]
     current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
+    current_delta_type: Optional[ALL_DELTA_TYPES]
