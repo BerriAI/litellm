@@ -39,7 +39,6 @@ class PodLockManager:
         
         Args:
             cronjob_id: The ID of the cron job to lock
-            lock_expiry_seconds: Optional duration in seconds for the lock to expire. If not provided, uses DEFAULT_CRON_JOB_LOCK_TTL_SECONDS.
         """
         if self.redis_cache is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")

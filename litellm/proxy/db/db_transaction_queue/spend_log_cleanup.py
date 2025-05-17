@@ -109,34 +109,23 @@ class SpendLogCleanup:
                     cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
                 )
                 verbose_proxy_logger.info(f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}")
-
+                
                 if not lock_acquired:
                     verbose_proxy_logger.info("Another pod is already running cleanup")
                     return
 
-            try:
-                cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
-                verbose_proxy_logger.info(f"Deleting logs older than {cutoff_date.isoformat()}")
+            cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
+            verbose_proxy_logger.info(f"Deleting logs older than {cutoff_date.isoformat()}")
 
-                # Perform the actual deletion
-                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-
-                verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
-
-                # If we have a pod lock manager, release the lock
-                if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                    await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                    verbose_proxy_logger.info(f"Released cleanup lock {datetime.now()}")
-                return  # Explicitly return after cleanup is complete
-
-            except Exception as e:
-                verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
-                # Ensure lock is released even if an error occurs
-                if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                    await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
-                    verbose_proxy_logger.info("Released cleanup lock after error")
-                return  # Return after error handling
+            # Perform the actual deletion
+            total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+            verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
             return  # Return after error handling
+        finally:
+            # Always release the lock if we have a pod lock manager
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
+                verbose_proxy_logger.info("Released cleanup lock")
