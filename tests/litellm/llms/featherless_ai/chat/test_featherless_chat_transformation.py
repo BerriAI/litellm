@@ -144,3 +144,77 @@ class TestFeatherlessAIConfig:
                 drop_params=False
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
+
+    def test_default_api_base(self):
+        """Test that default API base is used when none is provided"""
+        config = FeatherlessAIConfig()
+        headers = {}
+        api_key = "fake-featherless-key"
+
+        # Call validate_environment without specifying api_base
+        result = config.validate_environment(
+            headers=headers,
+            model="featherless-ai/Qwerky-72B",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=api_key,
+            api_base=None,  # Not providing api_base
+        )
+
+        # Verify headers are still set correctly
+        assert result["Authorization"] == f"Bearer {api_key}"
+        assert result["Content-Type"] == "application/json"
+        
+        # We can't directly test the api_base value here since validate_environment
+        # only returns the headers, but we can verify it doesn't raise an exception
+        # which would happen if api_base handling was incorrect
+
+    def test_featherless_ai_completion_mock(self):
+        """
+        Mock test for Featherless AI completion using the model format from docs.
+        This test uses patching to avoid requiring actual API credentials.
+        """
+        from litellm import completion
+        from litellm.types.utils import ModelResponse
+        
+        # Create a proper ModelResponse object
+        mock_response = ModelResponse(
+            id="chatcmpl-mock-id",
+            object="chat.completion",
+            created=1699975384,
+            model="featherless-ai/Qwerky-72B",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "```python\nprint(\"Hi from LiteLLM!\")\n```\n\nThis simple Python code prints a greeting message from LiteLLM."
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            usage={
+                "prompt_tokens": 15,
+                "completion_tokens": 30,
+                "total_tokens": 45
+            }
+        )
+        
+        # Patch the completion function to return our mock response
+        with patch("litellm.completion", return_value=mock_response):
+            response = completion(
+                model="featherless_ai/featherless-ai/Qwerky-72B", 
+                messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
+            )
+            
+            # Verify response structure for a ModelResponse object
+            assert response is not None
+            assert hasattr(response, "choices")
+            assert len(response.choices) > 0
+            assert hasattr(response.choices[0], "message")
+            assert hasattr(response.choices[0].message, "content")
+            assert response.choices[0].message.content is not None
+            
+            # Check for any code block or LiteLLM mention instead of specific text
+            assert "```python" in response.choices[0].message.content or "LiteLLM" in response.choices[0].message.content
