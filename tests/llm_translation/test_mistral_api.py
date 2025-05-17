@@ -42,3 +42,34 @@ class TestMistralCompletion(BaseLLMChatTest):
         Mistral API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
         """
         pass
+
+    def test_mistral_max_completion_tokens(self):
+        """
+        Test that max_completion_tokens is properly converted to max_tokens for Mistral API
+        """
+        # Test the actual conversion directly
+        # We'll use a real instance of MistralConfig to test the conversion
+        config = litellm.llms.mistral.mistral_chat_transformation.MistralConfig()
+        result = config.map_openai_params(
+            non_default_params={"max_completion_tokens": 100},
+            optional_params={},
+            model="mistral/mistral-small-latest",
+            drop_params=False
+        )
+        
+        # Verify that max_tokens is set correctly in the result
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100
+        
+        # Test with both max_tokens and max_completion_tokens
+        # max_completion_tokens should take priority
+        result = config.map_openai_params(
+            non_default_params={"max_tokens": 50, "max_completion_tokens": 100},
+            optional_params={},
+            model="mistral/mistral-small-latest",
+            drop_params=False
+        )
+        
+        # Verify that max_tokens is set correctly in the result
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100

@@ -106,9 +106,7 @@ class MistralConfig(OpenAIGPTConfig):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
-            if (
-                param == "max_completion_tokens"
-            ):  # max_completion_tokens should take priority
+            elif param == "max_completion_tokens":  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
