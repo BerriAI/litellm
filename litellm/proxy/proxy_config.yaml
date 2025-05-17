@@ -5,11 +5,6 @@ model_list:
       api_key: any_key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-litellm_settings:
-  callbacks:
-    - "langfuse"
-    - "arize_phoenix"
-
 
 general_settings:
   store_prompts_in_spend_logs: true

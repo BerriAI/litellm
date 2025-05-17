@@ -6,6 +6,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
+    LitellmParams,
     PiiEntityType,
 )
 from litellm.types.utils import StandardLoggingGuardrailInformation
@@ -313,6 +314,12 @@ class CustomGuardrail(CustomLogger):
 
         # Mask the content
         return content_string[:start_index] + mask_string + content_string[end_index:]
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        Update the guardrails litellm params in memory
+        """
+        pass
 
 
 def log_guardrail_information(func):
