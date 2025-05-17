@@ -17,6 +17,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     GuardrailInfoResponse,
     GuardrailUIAddGuardrailSettings,
+    LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
     PiiAction,
     PiiEntityType,
@@ -592,11 +593,13 @@ async def get_provider_specific_params():
     # Get fields from the models
     bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
     presidio_fields = _get_fields_from_model(PresidioConfigModel)
+    lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
 
     # Return the provider-specific parameters
     provider_params = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
+        SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
     }
 
     return provider_params
