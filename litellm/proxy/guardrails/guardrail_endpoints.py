@@ -410,6 +410,7 @@ async def delete_guardrail(guardrail_id: str):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -428,6 +429,11 @@ async def delete_guardrail(guardrail_id: str):
 
         result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
+        )
+
+        # delete in memory guardrail
+        IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
+            guardrail_id=guardrail_id,
         )
         return result
     except HTTPException as e:
@@ -487,6 +493,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -536,14 +543,21 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
         )
 
         # Create the guardrail object
+        guardrail = Guardrail(
+            guardrail_name=guardrail_name or "",
+            litellm_params=litellm_params,
+            guardrail_info=guardrail_info,
+        )
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
-            guardrail=Guardrail(
-                guardrail_name=guardrail_name or "",
-                litellm_params=litellm_params,
-                guardrail_info=guardrail_info,
-            ),
+            guardrail=guardrail,
             prisma_client=prisma_client,
+        )
+
+        # update in memory guardrail
+        IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+            guardrail_id=guardrail_id,
+            guardrail=guardrail,
         )
         return result
     except HTTPException as e:

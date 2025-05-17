@@ -143,7 +143,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -198,6 +197,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -2707,10 +2707,10 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
-        from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
 
         try:
             guardrails_in_db: List[
@@ -2722,7 +2722,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                InitializeGuardrails.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
                     guardrail=dict(guardrail),
                 )
         except Exception as e:
@@ -3302,7 +3302,9 @@ class ProxyStartupEvent:
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             spend_log_cleanup = SpendLogCleanup()
             # Get the interval from config or default to 1 day
-            retention_interval = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            retention_interval = general_settings.get(
+                "maximum_spend_logs_retention_interval", "1d"
+            )
             try:
                 interval_seconds = duration_in_seconds(retention_interval)
                 scheduler.add_job(
@@ -3312,7 +3314,9 @@ class ProxyStartupEvent:
                     args=[prisma_client],
                 )
             except ValueError:
-                verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_retention_interval value"
+                )
 
         scheduler.start()
 
