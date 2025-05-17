@@ -401,10 +401,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         <Form.Item
           name="default_on"
           label="Always On"
-          tooltip="If enabled, this guardrail will be applied to all requests by default"
-          valuePropName="checked"
+          tooltip="If enabled, this guardrail will be applied to all requests by default."
         >
-          <Switch />
+          <Select>
+            <Select.Option value={true}>Yes</Select.Option>
+            <Select.Option value={false}>No</Select.Option>
+          </Select>
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
