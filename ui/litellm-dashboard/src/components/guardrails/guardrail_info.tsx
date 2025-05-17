@@ -11,6 +11,7 @@ import {
   TabList,
   TabPanel,
   TabPanels,
+  TextInput,
 } from "@tremor/react";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -191,7 +192,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                       name="guardrail_name"
                       rules={[{ required: true, message: "Please input a guardrail name" }]}
                     >
-                      <Input />
+                      <TextInput />
                     </Form.Item>
                     
                     <Form.Item
@@ -205,7 +206,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
-                      label="Additional Information"
+                      label="Guardrail Information"
                       name="guardrail_info"
                     >
                       <Input.TextArea rows={5} />
