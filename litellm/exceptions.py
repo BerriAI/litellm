@@ -551,6 +551,67 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         return _message
 
 
+class MidStreamFallbackError(ServiceUnavailableError): # type: ignore
+    def __init__(
+            self,
+            message: str,
+            model: str,
+            llm_provider: str, 
+            original_exception: Optional[Exception] = None,
+            response: Optional[httpx.Response] = None,
+            litellm_debug_info: Optional[str] = None,
+            max_retries: Optional[int] = None,
+            num_retries: Optional[int] = None,
+            generated_content: str = "",
+            is_pre_first_chunk: bool = False,
+            ):
+        self.status_code = 503  # Service Unavailable
+        self.message = f"litellm.MidStreamFallbackError: {message}"
+        self.model = model
+        self.llm_provider = llm_provider
+        self.original_exception = original_exception
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        self.generated_content = generated_content
+        self.is_pre_first_chunk = is_pre_first_chunk
+        
+        # Create a response if one wasn't provided
+        if response is None:
+            self.response = httpx.Response(
+                status_code=self.status_code,
+                request=httpx.Request(
+                    method="POST",
+                    url=f"https://{llm_provider}.com/v1/",
+                ),
+            )
+        else:
+            self.response = response
+        
+        # Call the parent constructor
+        super().__init__(
+            message=self.message,
+            llm_provider=llm_provider,
+            model=model,
+            response=self.response,
+            litellm_debug_info=self.litellm_debug_info,
+            max_retries=self.max_retries,
+            num_retries=self.num_retries,
+        )
+
+    def __str__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        if self.original_exception:
+            _message += f" Original exception: {type(self.original_exception).__name__}: {str(self.original_exception)}"
+        return _message
+
+    def __repr__(self):
+        return self.__str__() 
+
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
 class APIError(openai.APIError):  # type: ignore
     def __init__(
@@ -736,6 +797,7 @@ LITELLM_EXCEPTION_TYPES = [
     OpenAIError,
     InternalServerError,
     JSONSchemaValidationError,
+    MidStreamFallbackError,
 ]
 
 
