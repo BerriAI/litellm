@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates
 """
 Support for Llama API's `https://api.llama.com/compat/v1` endpoint.
 
