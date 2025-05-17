@@ -64,8 +64,8 @@ You can configure spend log cleanup by setting the retention period and cleanup 
 
 ```yaml title="litellm proxy_config.yaml" showLineNumbers
 general_settings:
-  maximum_spend_logs_retention_period: "7d" # Keep logs for 7 days
-  maximum_spend_logs_retention_interval: "1d" # Run cleanup every 1 day
+  maximum_spend_logs_retention_period: "7d" # Keep logs for 7 days, i.e the cutoff date, logs older than x should be deleted
+  maximum_spend_logs_retention_interval: "1d" # Run cleanup every 1 day, i.e. the interval in which the job should run
 
 litellm_settings:
   cache: True
