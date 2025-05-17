@@ -1,3 +1,8 @@
+---
+id: spend_locks_deletion
+title: Spend Locks Deletion
+---
+
 # Spend Log Cleanup
 
 Automatically clean up old spend logs to manage database size and performance.
@@ -29,11 +34,9 @@ When cleanup is triggered, an instance will attempt to acquire a distributed loc
 - If no instance has the lock:
   - Cleanup runs without distributed locking
 
-<img src="../../img/spend_log_deletion_working.png" alt="Working of spend log deletions" style="width: 900px; height: auto;" />
+![Working of spend log deletions](../../img/spend_log_deletion_working.png)
 
-<p style="text-align: left; color: #666">
-Working of spend log deletions
-</p>
+_Working of spend log deletions_
 
 ### Stage 2. Batch deletion of old logs
 
@@ -45,11 +48,9 @@ The instance with the lock:
 - Adds small delays between batches to prevent database overload
 - Releases lock when complete
 
-<img src="../../img/spend_log_deletion_multi_pod.jpg" alt="Batch deletion of old logs" style="width: 900px; height: auto;" />
+![Batch deletion of old logs](../../img/spend_log_deletion_multi_pod.jpg)
 
-<p style="text-align: left; color: #666">
-Batch deletion of old logs
-</p>
+_Batch deletion of old logs_
 
 ## Usage
 
