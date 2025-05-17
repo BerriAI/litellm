@@ -530,10 +530,6 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["status"] == "failure"
-
-
-@pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_model(client, monkeypatch):
     # Mock data for the test
     mock_spend_logs = [
         {

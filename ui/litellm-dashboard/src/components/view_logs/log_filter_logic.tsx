@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { modelAvailableCall, uiSpendLogsCall } from "../networking";
+import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
@@ -12,7 +12,6 @@ export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
-  MODEL: "Model",
   USER_ID: "User ID",
   STATUS: "Status",
   KEY_ALIAS: "Key Alias",
@@ -29,8 +28,6 @@ export function useLogFilterLogic({
   pageSize = defaultPageSize,
   isCustomDate,
   setCurrentPage,
-  userID,  
-  userRole 
 }: {
   logs: PaginatedResponse;
   accessToken: string | null;
@@ -39,14 +36,11 @@ export function useLogFilterLogic({
   pageSize?: number;
   isCustomDate: boolean;
   setCurrentPage: (page: number) => void;
-  userID: string | null; 
-  userRole: string | null; 
 }) {
   const defaultFilters = useMemo<LogFilterState>(() => ({
     [FILTER_KEYS.TEAM_ID]: "",
     [FILTER_KEYS.KEY_HASH]: "",
     [FILTER_KEYS.REQUEST_ID]: "",
-    [FILTER_KEYS.MODEL]: "",
     [FILTER_KEYS.USER_ID]: "",
     [FILTER_KEYS.STATUS]: "",
     [FILTER_KEYS.KEY_ALIAS]: ""
@@ -78,7 +72,6 @@ export function useLogFilterLogic({
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
         filters[FILTER_KEYS.STATUS] || undefined,
-        filters[FILTER_KEYS.MODEL] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -140,12 +133,6 @@ export function useLogFilterLogic({
       );
     }
 
-    if (filters[FILTER_KEYS.MODEL]) {
-      filteredData = filteredData.filter(
-        log => log.model === filters[FILTER_KEYS.MODEL]
-      );
-    }
-
     if (filters[FILTER_KEYS.KEY_HASH]) {
       filteredData = filteredData.filter(
         log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
@@ -198,24 +185,6 @@ export function useLogFilterLogic({
     enabled: !!accessToken,
   });
 
-  const { data: allModels = [] } = useQuery<string[], Error>({
-    queryKey: ['allModels', accessToken, userID, userRole],
-    queryFn: async () => {
-      if (!accessToken || !userID || !userRole) return [];
-
-      const response = await modelAvailableCall(
-        accessToken,
-        userID,
-        userRole,
-        false, // return_wildcard_routes
-        null // teamID
-      );
-
-      return response.data.map((model: { id: string }) => model.id);
-    },
-    enabled: !!accessToken && !!userID && !!userRole,
-  });
-
   // Update filters state
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters(prev => {
@@ -252,7 +221,6 @@ export function useLogFilterLogic({
     filteredLogs,
     allKeyAliases,
     allTeams,
-    allModels,
     handleFilterChange,
     handleFilterReset,
   };

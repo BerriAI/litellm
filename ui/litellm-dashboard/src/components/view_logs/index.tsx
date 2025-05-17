@@ -75,7 +75,6 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState(""); 
@@ -151,7 +150,6 @@ export default function SpendLogsTable({
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
       selectedStatus,
-      selectedModel
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -181,7 +179,6 @@ export default function SpendLogsTable({
         pageSize,
         filterByCurrentUser ? userID : undefined,
         selectedStatus,
-        selectedModel
       );
 
       // Trigger prefetch for all logs
@@ -226,7 +223,6 @@ export default function SpendLogsTable({
     filteredLogs,
     allTeams: hookAllTeams,
     allKeyAliases,
-    allModels,
     handleFilterChange,
     handleFilterReset
   } = useLogFilterLogic({
@@ -237,8 +233,6 @@ export default function SpendLogsTable({
     pageSize,
     isCustomDate,
     setCurrentPage,
-    userID,
-    userRole
   })
 
   const fetchKeyHashForAlias = useCallback(async (keyAlias: string) => {
@@ -278,7 +272,6 @@ export default function SpendLogsTable({
       setSelectedTeamId("");
     }
     setSelectedStatus(filters['Status'] || "");
-    setSelectedModel(filters['Model'] || "");
     
     if (filters['Key Hash']) {
       setSelectedKeyHash(filters['Key Hash']);
@@ -328,7 +321,6 @@ export default function SpendLogsTable({
       const matchesSearch =
         !searchTerm ||
         log.request_id.includes(searchTerm) ||
-        log.model.includes(searchTerm) ||
         (log.user && log.user.includes(searchTerm));
       
       // No need for additional filtering since we're now handling this in the API call
@@ -404,21 +396,6 @@ export default function SpendLogsTable({
         { label: 'Success', value: 'success' },
         { label: 'Failure', value: 'failure' }
       ]
-    },
-    {
-      name: 'Model',
-      label: 'Model',
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allModels || allModels.length === 0) return [];
-        const filtered = allModels.filter((model: string) => {
-          return model.toLowerCase().includes(searchText.toLowerCase());
-        });
-        return filtered.map((model: string) => ({
-          label: model,
-          value: model
-        }));
-      }
     },
     {
       name: 'Key Alias',
