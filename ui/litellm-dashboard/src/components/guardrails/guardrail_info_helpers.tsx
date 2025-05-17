@@ -1,9 +1,9 @@
 export enum GuardrailProviders {
     PresidioPII = "Presidio PII",
     Bedrock = "Bedrock Guardrail",
-    LLMGuard = "LLM Guard Endpoint",
-    SecretDetector = "Secret Detector",
-    AIM = "AIM Guardrail",
+    // LLMGuard = "LLM Guard Endpoint",
+    // SecretDetector = "Secret Detector",
+    // AIM = "AIM Guardrail",
     Lakera = "Lakera"
 }
 
@@ -13,7 +13,7 @@ export const guardrail_provider_map: Record<string, string> = {
     LLMGuard: "llmguard_moderations",
     SecretDetector: "hide_secrets",
     AIM: "aim",
-    Lakera: "lakera"
+    Lakera: "lakera_v2"
 };
 
 

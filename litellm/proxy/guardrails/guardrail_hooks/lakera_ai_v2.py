@@ -62,7 +62,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     async def call_v2_guard(
-        self, messages: List[AllMessageValues]
+        self,
+        messages: List[AllMessageValues],
+        request_data: Dict,
     ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
@@ -116,7 +118,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=guardrail_json_response,
                 guardrail_status=status,
-                request_data=dict(request) or {},
+                request_data=request_data,
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
@@ -137,11 +139,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         if not payload:
             return messages
 
-        # Copy so we don’t edit the originals
-        masked = [msg.copy() for msg in messages]
-
         # For each message, find its detections on the fly
-        for idx, msg in enumerate(masked):
+        for idx, msg in enumerate(messages):
             content = msg.get("content", "")
             if not content:
                 continue
@@ -175,7 +174,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     masked_entity_count[typ] = masked_entity_count.get(typ, 0) + 1
 
             msg["content"] = content
-        return masked
+        return messages
 
     async def async_pre_call_hook(
         self,
@@ -197,8 +196,13 @@ class LakeraAIGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        verbose_proxy_logger.debug("Lakera AI: pre_call_hook")
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug(
+                "Lakera AI: not running guardrail. Guardrail is disabled."
+            )
             return data
 
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
@@ -212,7 +216,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages
+            messages=new_messages,
+            request_data=data,
         )
 
         #########################################################
@@ -277,7 +282,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages
+            messages=new_messages,
+            request_data=data,
         )
 
         #########################################################
