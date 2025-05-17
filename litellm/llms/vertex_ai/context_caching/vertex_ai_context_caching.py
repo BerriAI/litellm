@@ -1,9 +1,8 @@
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union, Dict, Any
 
 import httpx
 
 import litellm
-from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -19,14 +18,9 @@ from litellm.types.llms.vertex_ai import (
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 from .transformation import (
-    separate_cached_messages,
-    transform_openai_messages_to_gemini_context_caching,
+    CacheSplitResult,
+    extract_cache_configuration,
 )
-
-local_cache_obj = Cache(
-    type=LiteLLMCacheType.LOCAL
-)  # only used for calling 'get_cache_key' function
-
 
 class ContextCachingEndpoints(VertexBase):
     """
@@ -205,6 +199,7 @@ class ContextCachingEndpoints(VertexBase):
     def check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: Dict[str, Any],
         api_key: str,
         api_base: Optional[str],
         model: str,
@@ -212,8 +207,7 @@ class ContextCachingEndpoints(VertexBase):
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: Logging,
         extra_headers: Optional[dict] = None,
-        cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> CacheSplitResult:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -224,8 +218,19 @@ class ContextCachingEndpoints(VertexBase):
 
         Follows - https://ai.google.dev/api/caching#request-body
         """
-        if cached_content is not None:
-            return messages, cached_content
+
+        cache_split_result = extract_cache_configuration(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+        )
+
+        if (
+            cache_split_result.cache_request_body is None
+            or cache_split_result.cached_content is not None
+            or cache_split_result.cache_key is None
+        ):
+            return cache_split_result
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -252,17 +257,9 @@ class ContextCachingEndpoints(VertexBase):
         else:
             client = client
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
-
-        if len(cached_messages) == 0:
-            return messages, None
-
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
         google_cache_name = self.check_cache(
-            cache_key=generated_cache_key,
+            cache_key=cache_split_result.cache_key,
             client=client,
             headers=headers,
             api_key=api_key,
@@ -270,21 +267,16 @@ class ContextCachingEndpoints(VertexBase):
             logging_obj=logging_obj,
         )
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return cache_split_result.with_cached_content(cached_content=google_cache_name)
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model, messages=cached_messages, cache_key=generated_cache_key
-            )
-        )
 
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
             api_key="",
             additional_args={
-                "complete_input_dict": cached_content_request_body,
+                "complete_input_dict": cache_split_result.cache_request_body,
                 "api_base": url,
                 "headers": headers,
             },
@@ -292,7 +284,7 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url, headers=headers, json=cache_split_result.cache_request_body  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -305,11 +297,12 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return cache_split_result.with_cached_content(cached_content=cached_content_response_obj["name"])
 
     async def async_check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: Dict[str, Any],
         api_key: str,
         api_base: Optional[str],
         model: str,
@@ -317,8 +310,7 @@ class ContextCachingEndpoints(VertexBase):
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: Logging,
         extra_headers: Optional[dict] = None,
-        cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> CacheSplitResult:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -329,15 +321,19 @@ class ContextCachingEndpoints(VertexBase):
 
         Follows - https://ai.google.dev/api/caching#request-body
         """
-        if cached_content is not None:
-            return messages, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
+        cache_split_result = extract_cache_configuration(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
         )
 
-        if len(cached_messages) == 0:
-            return messages, None
+        if (
+            cache_split_result.cache_request_body is None
+            or cache_split_result.cached_content is not None
+            or cache_split_result.cache_key is None
+        ):
+            return cache_split_result
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -362,9 +358,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
         google_cache_name = await self.async_check_cache(
-            cache_key=generated_cache_key,
+            cache_key=cache_split_result.cache_key,
             client=client,
             headers=headers,
             api_key=api_key,
@@ -372,21 +367,16 @@ class ContextCachingEndpoints(VertexBase):
             logging_obj=logging_obj,
         )
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return cache_split_result.with_cached_content(cached_content=google_cache_name)
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model, messages=cached_messages, cache_key=generated_cache_key
-            )
-        )
 
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
             api_key="",
             additional_args={
-                "complete_input_dict": cached_content_request_body,
+                "complete_input_dict": cache_split_result.cache_request_body,
                 "api_base": url,
                 "headers": headers,
             },
@@ -394,7 +384,7 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = await client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url, headers=headers, json=cache_split_result.cache_request_body  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -407,7 +397,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return cache_split_result.with_cached_content(cached_content=cached_content_response_obj["name"])
 
     def get_cache(self):
         pass
