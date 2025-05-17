@@ -331,7 +331,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         generation_config = session_configuration_request_dict.get(
             "generationConfig", {}
         )
-        gemini_modalities = generation_config.get("responseModalities", ["text"])
+        gemini_modalities = generation_config.get("responseModalities", ["TEXT"])
         _modalities = [
             modality.lower() for modality in cast(List[str], gemini_modalities)
         ]
