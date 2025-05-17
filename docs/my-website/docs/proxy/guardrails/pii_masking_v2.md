@@ -6,10 +6,6 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-Use LiteLLM with Presidio for PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data masking. When using LiteLLM with Presido you can:
-- Mask PII, PHI before the LLM call
-- Ensure no PII, PHI is sent to connected Logging Integrations - Langfuse, Arize Phoenix, LiteLLM Logs Page. 
-
 | Property | Details |
 |-------|-------|
 | Description | Use this guardrail to mask PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data.  |
@@ -18,6 +14,14 @@ Use LiteLLM with Presidio for PII (Personally Identifiable Information), PHI (Pr
 | Supported Actions | `MASK`, `BLOCK` |
 | Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
 
+## Deployment options
+
+For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer containers. 
+
+| Deployment Option | Details |
+|------------------|----------|
+| Deploy Presidio Docker Containers | - [Presidio Analyzer Docker Container](https://hub.docker.com/r/microsoft/presidio-analyzer)<br/>- [Presidio Anonymizer Docker Container](https://hub.docker.com/r/microsoft/presidio-anonymizer) |
+| LiteLLM Docker Compose with Presidio | TODO: Add example |
 
 
 ## Usage 
