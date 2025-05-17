@@ -137,11 +137,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         if not payload:
             return messages
 
-        # Copy so we don’t edit the originals
-        masked = [msg.copy() for msg in messages]
-
         # For each message, find its detections on the fly
-        for idx, msg in enumerate(masked):
+        for idx, msg in enumerate(messages):
             content = msg.get("content", "")
             if not content:
                 continue
@@ -175,7 +172,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     masked_entity_count[typ] = masked_entity_count.get(typ, 0) + 1
 
             msg["content"] = content
-        return masked
+        return messages
 
     async def async_pre_call_hook(
         self,
