@@ -1,23 +1,11 @@
-import importlib
-import os
 from typing import Dict, List, Optional
 
 import litellm
-from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 
 # v2 implementation
-from litellm.types.guardrails import (
-    Guardrail,
-    GuardrailEventHooks,
-    GuardrailItem,
-    GuardrailItemSpec,
-    LakeraCategoryThresholds,
-    LitellmParams,
-)
-
-from .guardrail_registry import guardrail_initializer_registry
+from litellm.types.guardrails import Guardrail, GuardrailItem, GuardrailItemSpec
 
 all_guardrails: List[GuardrailItem] = []
 
