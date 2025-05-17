@@ -1614,7 +1614,9 @@ class ModelResponseIterator:
                 and "parts" in gemini_chunk["content"]
             ):
                 if "text" in gemini_chunk["content"]["parts"][0]:
-                    text = gemini_chunk["content"]["parts"][0]["text"]
+                    text = VertexGeminiConfig().get_assistant_content_message(
+                            parts=gemini_chunk["content"]["parts"]
+                        )
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
                     function_call = ChatCompletionToolCallFunctionChunk(
                         name=gemini_chunk["content"]["parts"][0]["functionCall"][
