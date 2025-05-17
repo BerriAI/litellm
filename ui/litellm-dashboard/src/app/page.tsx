@@ -155,7 +155,12 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      const basePath = process.env.UI_BASE_PATH || "";
+      if (basePath) {
+        window.location.href = (proxyBaseUrl || "") + basePath.replace("/ui", "") + "/sso/key/generate"
+      } else {
+        window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      }
     }
   }, [redirectToLogin])
 
