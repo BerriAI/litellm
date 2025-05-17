@@ -1,9 +1,9 @@
 export enum GuardrailProviders {
     PresidioPII = "Presidio PII",
     Bedrock = "Bedrock Guardrail",
-    LLMGuard = "LLM Guard Endpoint",
-    SecretDetector = "Secret Detector",
-    AIM = "AIM Guardrail",
+    // LLMGuard = "LLM Guard Endpoint",
+    // SecretDetector = "Secret Detector",
+    // AIM = "AIM Guardrail",
     Lakera = "Lakera"
 }
 
