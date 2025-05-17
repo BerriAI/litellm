@@ -139,30 +139,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
               </Card>
             </Grid>
 
-            <Card className="mt-6">
-              <Text>Provider Configuration</Text>
-              <div className="mt-2 space-y-2">
-                {Object.entries(guardrailData.litellm_params || {}).map(([key, value]) => {
-                  // Skip mode and guardrail as they're displayed above
-                  if (key === 'mode' || key === 'guardrail' || key === 'default_on') return null;
-                  
-                  return (
-                    <div key={key} className="flex">
-                      <Text className="font-medium w-1/3">{key}</Text>
-                      <Text className="w-2/3">
-                        {typeof value === 'object' 
-                          ? JSON.stringify(value, null, 2) 
-                          : String(value)}
-                      </Text>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-
             {guardrailData.guardrail_info && Object.keys(guardrailData.guardrail_info).length > 0 && (
               <Card className="mt-6">
-                <Text>Additional Information</Text>
+                <Text>Guardrail Info</Text>
                 <div className="mt-2 space-y-2">
                   {Object.entries(guardrailData.guardrail_info).map(([key, value]) => (
                     <div key={key} className="flex">
