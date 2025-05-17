@@ -197,8 +197,13 @@ class LakeraAIGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        verbose_proxy_logger.debug("Lakera AI: pre_call_hook")
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug(
+                "Lakera AI: not running guardrail. Guardrail is disabled."
+            )
             return data
 
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
