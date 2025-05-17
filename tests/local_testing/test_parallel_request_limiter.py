@@ -67,6 +67,35 @@ async def test_global_max_parallel_requests():
         except Exception as e:
             print(e)
 
+    # Test: n requests (up to global_max_parallel_requests) must succeed
+    #       and (n+1)th request must fail.
+    global_max_parallel_requests = 4
+    for _ in range(global_max_parallel_requests):
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "metadata": {
+                    "global_max_parallel_requests": global_max_parallel_requests
+                }
+            },
+            call_type="",
+        )
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "metadata": {
+                    "global_max_parallel_requests": global_max_parallel_requests
+                }
+            },
+            call_type="",
+        )
+        pytest.fail("Expected call to fail")
+    except Exception as e:
+        print(e)
+
 
 @pytest.mark.flaky(retries=6, delay=1)
 @pytest.mark.asyncio
