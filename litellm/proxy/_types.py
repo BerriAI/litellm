@@ -2385,6 +2385,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
+    role: Optional[Literal["admin", "user"]] = None
     max_budget_in_team: Optional[float] = None
 
 
