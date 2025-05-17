@@ -642,8 +642,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         temperature = generation_config.get("temperature")
         max_output_tokens = generation_config.get("maxOutputTokens")
-        _modalities = generation_config.get("responseModalities", ["text"])
-        _modalities = [cast(str, modality).lower() for modality in _modalities]
+        gemini_modalities = generation_config.get("responseModalities", ["TEXT"])
+        _modalities = [
+            modality.lower() for modality in cast(List[str], gemini_modalities)
+        ]
         if "usageMetadata" in message:
             _chat_completion_usage = VertexGeminiConfig()._calculate_usage(
                 completion_response=message,
