@@ -143,6 +143,7 @@ def test_handle_db_exception_with_non_db_error():
     regular_error = litellm.BudgetExceededError(
         current_cost=10,
         max_budget=10,
+        budget_reset_at="2025-01-01T00:00:00Z",
     )
     with pytest.raises(litellm.BudgetExceededError):
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
