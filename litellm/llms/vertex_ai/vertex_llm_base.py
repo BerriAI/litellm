@@ -93,7 +93,6 @@ class VertexBase:
                 project_id = getattr(creds, "project_id", None)
         else:
             creds, creds_project_id = google_auth.default(
-                quota_project_id=project_id,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
             if project_id is None:
