@@ -62,7 +62,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     async def call_v2_guard(
-        self, messages: List[Dict]
+        self, messages: List[AllMessageValues]
     ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
@@ -125,10 +125,10 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     def _mask_pii_in_messages(
         self,
-        messages: List[Dict],
+        messages: List[AllMessageValues],
         lakera_response: Optional[LakeraAIResponse],
         masked_entity_count: Dict,
-    ) -> List[Dict]:
+    ) -> List[AllMessageValues]:
         """
         Return a copy of messages with any detected PII replaced by
         “[MASKED <TYPE>]” tokens.
@@ -199,14 +199,14 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+            return data
 
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Lakera AI: not running guardrail. No messages in data"
             )
-            return
+            return data
 
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########

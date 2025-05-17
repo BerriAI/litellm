@@ -1,8 +1,10 @@
 from typing import Dict, List, Optional, TypedDict
 
+from litellm.types.llms.openai import AllMessageValues
+
 
 class LakeraAIRequest(TypedDict, total=False):
-    messages: List[Dict]
+    messages: List[AllMessageValues]
     project_id: Optional[str]
     payload: Optional[bool]
     breakdown: Optional[bool]
@@ -10,7 +12,7 @@ class LakeraAIRequest(TypedDict, total=False):
     dev_info: Optional[bool]
 
 
-class LakeraAIPayloadItem(TypedDict):
+class LakeraAIPayloadItem(TypedDict, total=False):
     start: Optional[int]
     end: Optional[int]
     text: Optional[str]
@@ -18,7 +20,7 @@ class LakeraAIPayloadItem(TypedDict):
     labels: Optional[List[str]]
 
 
-class LakeraAIBreakdownItem(TypedDict):
+class LakeraAIBreakdownItem(TypedDict, total=False):
     project_id: Optional[str]
     policy_id: Optional[str]
     detector_id: Optional[str]
@@ -26,14 +28,14 @@ class LakeraAIBreakdownItem(TypedDict):
     detected: Optional[bool]
 
 
-class LakeraAIDevInfo(TypedDict):
+class LakeraAIDevInfo(TypedDict, total=False):
     git_revision: Optional[str]
     git_timestamp: Optional[str]
     model_version: Optional[str]
     version: Optional[str]
 
 
-class LakeraAIResponse(TypedDict):
+class LakeraAIResponse(TypedDict, total=False):
     flagged: Optional[bool]
     payload: Optional[List[LakeraAIPayloadItem]]
     breakdown: Optional[List[LakeraAIBreakdownItem]]
