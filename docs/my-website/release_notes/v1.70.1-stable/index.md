@@ -103,8 +103,8 @@ import TabItem from '@theme/TabItem';
 
 ## Logging / Alerting Integrations
 - **[StandardLoggingPayload](../../docs/proxy/logging_spec)**
-    - Log any `x-` headers in requester metadata - [PR](https://github.com/BerriAI/litellm/pull/10818) [NEEDS DOCS]
-    - Guardrail tracing now in standard logging payload - [PR](https://github.com/BerriAI/litellm/pull/10893) [NEEDS DOCS]
+    - Log any `x-` headers in requester metadata - [Get Started](../../docs/proxy/logging_spec#standardloggingmetadata)
+    - Guardrail tracing now in standard logging payload - [Get Started](../../docs/proxy/logging_spec#standardloggingguardrailinformation)
 - **[Generic API Logger](../../docs/proxy/logging#custom-callback-apis-async)**
     - Support passing application/json header 
 - **[Arize Phoenix](../../docs/observability/phoenix_integration)**
