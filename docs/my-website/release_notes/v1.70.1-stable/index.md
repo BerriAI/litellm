@@ -141,7 +141,7 @@ import TabItem from '@theme/TabItem';
 - **Authentication**
     - Handle Bearer $LITELLM_API_KEY in x-litellm-api-key custom header [PR](https://github.com/BerriAI/litellm/pull/10776)
 - **New Enterprise pip package** - `litellm-enterprise` - fixes issue where `enterprise` folder was not found when using pip package  
-- **Proxy CLI**
+- **[Proxy CLI](../../docs/proxy/management_cli)**
     - Add `models import` command - [PR](https://github.com/BerriAI/litellm/pull/10581)
 - **[OpenWebUI](../../docs/tutorials/openweb_ui#per-user-tracking)**
     - Configure LiteLLM to Parse User Headers from Open Web UI
