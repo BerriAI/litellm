@@ -27,8 +27,9 @@ import TabItem from '@theme/TabItem';
         - Handle audio input - [PR](https://github.com/BerriAI/litellm/pull/10739)
         - Fixes maximum recursion depth issue when using deeply nested response schemas with Vertex AI by Increasing DEFAULT_MAX_RECURSE_DEPTH from 10 to 100 in constants. [PR](https://github.com/BerriAI/litellm/pull/10798)
         - Capture reasoning tokens in streaming mode - [PR](https://github.com/BerriAI/litellm/pull/10789)
-    - `/realtime` 
-        - Gemini Multimodal Live API support - [PR](https://github.com/BerriAI/litellm/pull/10841) [NEEDS DOCS]
+- **[Google AI Studio](../../docs/providers/google_ai_studio/realtime)**
+    - `/realtime`
+        - Gemini Multimodal Live API support
         - Audio input/output support, optional param mapping, accurate usage calculation - [PR](https://github.com/BerriAI/litellm/pull/10909)
 - **[VertexAI](../../docs/providers/vertex#metallama-api)**
     - `/chat/completion`

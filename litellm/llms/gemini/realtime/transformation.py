@@ -152,6 +152,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             ]
         return automatic_activity_dection
 
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "instructions",
+            "temperature",
+            "max_response_output_tokens",
+            "modalities",
+            "tools",
+            "input_audio_transcription",
+            "turn_detection",
+        ]
+
     def map_openai_params(
         self, optional_params: dict, non_default_params: dict
     ) -> dict:

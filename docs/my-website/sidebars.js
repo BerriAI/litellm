@@ -309,6 +309,7 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/google_ai_studio/files",
+            "providers/google_ai_studio/realtime",
           ]
         },
         "providers/anthropic",
@@ -496,6 +497,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/gemini_realtime_with_audio",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
