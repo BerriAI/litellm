@@ -144,11 +144,10 @@ jobs:
             cd litellm
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
-                --config-file mypy.ini \
-                --exclude 'cryptography/hazmat/bindings/_rust/.*' \
-                --ignore-missing-imports; then
-                echo "mypy detected errors"
-                exit 1
+                --ignore-missing-imports \
+                --per-module-ignores 'cryptography.hazmat.bindings._rust.*=syntax'; then
+              echo "mypy detected errors"
+              exit 1
             fi
             cd ..
 
