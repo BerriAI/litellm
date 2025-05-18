@@ -69,13 +69,10 @@ import TabItem from '@theme/TabItem';
         - Add ‘supports_pdf_input’ to all vision models - [PR](https://github.com/BerriAI/litellm/pull/10897)
 
 ## LLM API Endpoints
-- **Responses API**
+- [**Responses API**](../../docs/response_api)
     - Fix delete API support - [PR](https://github.com/BerriAI/litellm/pull/10845)
-- **Rerank API**
+- [**Rerank API**](../../docs/rerank)
     - `/v2/rerank` now registered as ‘llm_api_route’ - enabling non-admins to call it - [PR](https://github.com/BerriAI/litellm/pull/10861)
-- **Realtime API**
-    - Gemini Multimodal Live API support - [PR](https://github.com/BerriAI/litellm/pull/10841)
-
 
 ## Spend Tracking Improvements
 - **`/chat/completion`, `/messages`**
