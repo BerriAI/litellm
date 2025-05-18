@@ -118,7 +118,7 @@ import TabItem from '@theme/TabItem';
 
 ## Guardrails
 - **Guardrails**
-    - New `/apply_guardrail` endpoint for directly testing a guardrail - [PR](https://github.com/BerriAI/litellm/pull/10867) [NEEDS DOCS]
+    - New `/apply_guardrail` endpoint for directly testing a guardrail - [PR](https://github.com/BerriAI/litellm/pull/10867)
 - **[Lakera](../../docs/proxy/guardrails/lakera_ai)**
     - `/v2` endpoints support - [PR](https://github.com/BerriAI/litellm/pull/10880)
 - **[Presidio](../../docs/proxy/guardrails/pii_masking_v2)**
