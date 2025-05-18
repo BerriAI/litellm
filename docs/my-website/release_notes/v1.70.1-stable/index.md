@@ -44,7 +44,7 @@ import TabItem from '@theme/TabItem';
         - Add bedrock sonnet prompt caching cost information
         - Mistral Pixtral support - [PR](https://github.com/BerriAI/litellm/pull/10439)
         - Tool caching support - [PR](https://github.com/BerriAI/litellm/pull/10897)
-    - [`/messages`] [NEEDS DOCS]
+    - [`/messages`](../../docs/anthropic_unified)
         - allow using dynamic AWS Params - [PR](https://github.com/BerriAI/litellm/pull/10769)
 - **[Nvidia NIM](../../docs/providers/nvidia_nim)**
     - [`/chat/completion`](../../docs/providers/nvidia_nim#usage---litellm-proxy-server) [NEED DOCS ON SUPPORTED PARAMS]
@@ -59,7 +59,7 @@ import TabItem from '@theme/TabItem';
         - Migrate embedding to use `/v2/embed` - adds support for output_dimensions param - [PR](https://github.com/BerriAI/litellm/pull/10809)
 - **[Anthropic](../../docs/providers/anthropic)**
     - [`/chat/completion`](../../docs/providers/anthropic#usage-with-litellm-proxy)
-        - Web search tool support - native + openai format - [PR](https://github.com/BerriAI/litellm/pull/10846) [NEEDS DOCS]
+        - Web search tool support - native + openai format - [Get Started](../../docs/providers/anthropic#anthropic-hosted-tools-computer-text-editor-web-search)
 - **[VLLM](../../docs/providers/vllm)**
     - `/chat/completion`
         - Support embedding input as list of integers - [PR](https://github.com/BerriAI/litellm/pull/10629) [NEEDS DOCS]
