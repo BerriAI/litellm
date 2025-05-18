@@ -21,8 +21,6 @@ For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer 
 | Deployment Option | Details |
 |------------------|----------|
 | Deploy Presidio Docker Containers | - [Presidio Analyzer Docker Container](https://hub.docker.com/r/microsoft/presidio-analyzer)<br/>- [Presidio Anonymizer Docker Container](https://hub.docker.com/r/microsoft/presidio-anonymizer) |
-| LiteLLM Docker Compose with Presidio | TODO: Add example |
-
 
 ## Usage 
 
@@ -52,6 +50,19 @@ Now select the entity types you want to mask.  See the [supported actions here](
 
 #### 3.1 LiteLLM UI 
 
+On the litellm UI, navigate to the 'Test Keys' page, select the guardrail you created and send the following messaged filled with PII data. 
+
+```text title="PII Request" showLineNumbers
+My credit card is 4111-1111-1111-1111 and my email is test@example.com.
+```
+
+<Image 
+  img={require('../../../img/presidio_3.png')}
+  style={{width: '100%', display: 'block', margin: '0'}}
+/>
+
+
+
 #### 3.2 Code
 
 ### 4. Tracing Guardrail requests
@@ -70,11 +81,12 @@ On the LiteLLM logs page you can see that the PII content was masked for this sp
 
 #### 4.2 Langfuse 
 
-#### 4.3 Arize Phoenix, OTEL compatible logging integrations
+When connecting Litellm to Langfuse, you can see the guardrail information on the Langfuse Trace. 
 
-
-
-
+<Image 
+  img={require('../../../img/presidio_5.png')}
+  style={{width: '60%', display: 'block', margin: '0'}}
+/>
 
 
 
