@@ -189,5 +189,15 @@ pip install litellm==1.70.1
 * [@wwwillchen](https://github.com/wwwillchen) made their first contribution in PR [#10894](https://github.com/BerriAI/litellm/pull/10894)
 
 
+## Demo Instance
+
+Here's a Demo Instance to test changes:
+
+- Instance: https://demo.litellm.ai/
+- Login Credentials:
+    - Username: admin
+    - Password: sk-1234
+
+
 ## [Git Diff](https://github.com/BerriAI/litellm/releases)
 
