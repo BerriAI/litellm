@@ -61,11 +61,11 @@ import TabItem from '@theme/TabItem';
     - [`/chat/completion`](../../docs/providers/anthropic#usage-with-litellm-proxy)
         - Web search tool support - native + openai format - [Get Started](../../docs/providers/anthropic#anthropic-hosted-tools-computer-text-editor-web-search)
 - **[VLLM](../../docs/providers/vllm)**
-    - `/chat/completion`
-        - Support embedding input as list of integers - [PR](https://github.com/BerriAI/litellm/pull/10629) [NEEDS DOCS]
+    - [`/embeddings`](../../docs/providers/vllm#embeddings)
+        - Support embedding input as list of integers
 - **[OpenAI](../../docs/providers/openai)**
-    - `/chat/completion`
-        - Fix - b64 file data input handling - [PR](https://github.com/BerriAI/litellm/pull/10897)
+    - [`/chat/completion`](../../docs/providers/openai#usage---litellm-proxy-server)
+        - Fix - b64 file data input handling - [Get Started](../../docs/providers/openai#pdf-file-parsing)
         - Add ‘supports_pdf_input’ to all vision models - [PR](https://github.com/BerriAI/litellm/pull/10897)
 
 ## LLM API Endpoints
