@@ -147,6 +147,7 @@ jobs:
       - run:
           name: Linting Testing
           command: |
+            pip install "cryptography<40.0.0"
             cd litellm
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
