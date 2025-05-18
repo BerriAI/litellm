@@ -53,6 +53,9 @@ LiteLLM v1.70.1-stable is live now. Here are the key highlights of this release:
 
 ## Gemini Realtime API
 
+<Image img={require('../../img/gemini_realtime.png')}/>
+
+
 This release brings support for calling Gemini's realtime models (e.g. gemini-2.0-flash-live) via OpenAI's /v1/realtime API. This is great for developers as it lets them easily switch from OpenAI to Gemini by just changing the model name. 
 
 Key Highlights: 
@@ -62,16 +65,28 @@ Key Highlights:
 
 This is currently supported via Google AI Studio. We plan to release VertexAI support over the coming week.
 
+[**Read more**](../../docs/providers/google_ai_studio/realtime)
+
 ## Spend Logs Retention Period
+
+<Image img={require('../../img/delete_spend_logs.jpg')}/>
+
+
 
 This release enables deleting LiteLLM Spend Logs older than a certain period. Since we now enable storing the raw request/response in the logs, deleting old logs ensures the database remains performant in production. 
 
+[**Read more**](../../docs/proxy/spend_logs_deletion)
+
 ## PII Masking 2.0
+
+<Image img={require('../../img/pii_masking_v2.png')}/>
 
 This release brings improvements to our Presidio PII Integration. As a Proxy Admin, you now have the ability to:
 
 - Mask or block specific entities (e.g., block medical licenses while masking other entities like emails).
 - Monitor guardrails in production. LiteLLM Logs will now show you the guardrail run, the entities it detected, and its confidence score for each entity.
+
+[**Read more**](../../docs/proxy/guardrails/pii_masking_v2)
 
 ## New Models / Updated Models
 
