@@ -268,6 +268,7 @@ const sidebars = {
         "realtime",
         "fine_tuning",
         "moderation",
+        "apply_guardrail",
       ],
     },
     {
