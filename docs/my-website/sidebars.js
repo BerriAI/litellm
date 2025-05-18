@@ -293,11 +293,17 @@ const sidebars = {
         },
         "providers/text_completion_openai",
         "providers/openai_compatible",
-        "providers/azure",
+        {
+          type: "category",
+          label: "Azure OpenAI",
+          items: [
+            "providers/azure/azure",
+            "providers/azure/azure_embedding",
+          ]
+        },
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-
         {
           type: "category",
           label: "Google AI Studio",
