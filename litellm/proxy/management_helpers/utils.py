@@ -226,11 +226,8 @@ async def send_management_endpoint_alert(
     - An internal user is created, updated, or deleted
     - A team is created, updated, or deleted
     """
-    from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+    from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.types.integrations.slack_alerting import AlertType
-
-    if premium_user is not True:
-        return
 
     management_function_to_event_name = {
         "generate_key_fn": AlertType.new_virtual_key_created,

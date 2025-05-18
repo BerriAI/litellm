@@ -10,7 +10,7 @@ pip install litellm-proxy-extras
 OR 
 
 ```bash
-pip install litellm[proxy] # installs litellm-proxy-extras and other proxy dependencies.
+pip install litellm[proxy] # installs litellm-proxy-extras and other proxy dependencies
 ```
 
 To use the migrations, run:

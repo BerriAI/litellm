@@ -281,3 +281,10 @@ async def test_cohere_request_body_with_allowed_params():
         assert "allowed_openai_params" not in request_data
         assert request_data["response_format"] == test_response_format
         assert request_data["reasoning_effort"] == test_reasoning_effort
+
+
+def test_cohere_embedding_outout_dimensions():
+    litellm._turn_on_debug()
+    response = embedding(model="cohere/embed-v4.0", input="Hello, world!", dimensions=512)
+    print(f"response: {response}\n")
+    assert len(response.data[0]["embedding"]) == 512

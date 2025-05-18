@@ -116,6 +116,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "anthropic_cache_control_hook",
     "bedrock_vector_store",
     "generic_api",
+    "resend_email",
+    "smtp_email",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -197,11 +199,15 @@ baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
+use_litellm_proxy: bool = (
+    False  # when True, requests will be sent to the specified litellm proxy endpoint
+)
 use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
@@ -427,6 +433,7 @@ databricks_models: List = []
 cloudflare_models: List = []
 codestral_models: List = []
 friendliai_models: List = []
+featherless_ai_models: List = []
 palm_models: List = []
 groq_models: List = []
 azure_models: List = []
@@ -435,10 +442,11 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
+novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
 llama_models: List = []
-
+nscale_models: List = []
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -563,6 +571,8 @@ def add_known_models():
             deepseek_models.append(key)
         elif value.get("litellm_provider") == "meta_llama":
             llama_models.append(key)
+        elif value.get("litellm_provider") == "nscale":
+            nscale_models.append(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
@@ -591,12 +601,16 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            novita_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "featherless_ai":
+            featherless_ai_models.append(key)
 
 
 add_known_models()
@@ -670,10 +684,13 @@ model_list = (
     + galadriel_models
     + sambanova_models
     + azure_text_models
+    + novita_models
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
     + llama_models
+    + featherless_ai_models
+    + nscale_models
 )
 
 model_list_set = set(model_list)
@@ -728,10 +745,13 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
+    "novita": novita_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
     "meta_llama": llama_models,
+    "nscale": nscale_models,
+    "featherless_ai": featherless_ai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -862,9 +882,13 @@ from .llms.meta_llama.chat.transformation import LlamaAPIConfig
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaude3MessagesConfig,
+)
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
+from .llms.novita.chat.transformation import NovitaConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
@@ -994,12 +1018,13 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimConfig = NvidiaNimConfig()
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
+from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
@@ -1031,6 +1056,7 @@ from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
+from .llms.nscale.chat.transformation import NscaleConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
