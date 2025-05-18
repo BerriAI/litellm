@@ -1,6 +1,16 @@
-# Maximum Retention Period for Spend Logs
+# ✨ Maximum Retention Period for Spend Logs
 
 This walks through how to set the maximum retention period for spend logs. This helps manage database size by deleting old logs automatically.
+
+:::info
+
+✨ This is on LiteLLM Enterprise
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
+
+:::
 
 ### Requirements
 
