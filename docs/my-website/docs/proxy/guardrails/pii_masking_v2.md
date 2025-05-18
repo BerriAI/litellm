@@ -28,16 +28,25 @@ For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer 
 
 ### 1. Create a PII, PHI Masking Guardrail 
 
+On the LiteLLM UI, navigate to Guardrails. Click "Add Guardrail". On this dropdown select "Presidio PII" and enter your presidio analyzer and anonymizer endpoints. 
+
 <Image 
   img={require('../../../img/presidio_1.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
-<p style={{textAlign: 'left', color: '#666'}}>
-  Presidio PII Masking: Mask PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data.
-</p>
 
 
-### 2. Configure Entity Types
+#### 1.2 Configure Entity Types
+
+Now select the entity types you want to mask.  See the [supported actions here](#supported-actions)
+
+
+<Image 
+  img={require('../../../img/presidio_2.png')}
+  style={{width: '50%', display: 'block', margin: '0'}}
+/>
+
+
 
 ### 3. Test it! 
 
@@ -47,8 +56,17 @@ For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer 
 
 ### 4. Tracing Guardrail requests
 
+Once your guardrail is live in production, you will also be able to trace your guardrail on LiteLLM Logs, Langfuse, Arize Phoenix, etc, all LiteLLM logging integrations. 
 
 #### 4.1 LiteLLM UI 
+
+On the LiteLLM logs page you can see that the PII content was masked for this specific request. And you can see detailed tracing for the guardrail. This allows you to monitor entity types masked with their corresponding confidence score and the duration of the guardrail execution.  
+
+<Image 
+  img={require('../../../img/presidio_4.png')}
+  style={{width: '60%', display: 'block', margin: '0'}}
+/>
+
 
 #### 4.2 Langfuse 
 
