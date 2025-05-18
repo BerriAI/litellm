@@ -43,6 +43,36 @@ pip install litellm==1.70.1
 </Tabs>
 
 
+## Key Highlights
+
+LiteLLM v1.70.1-stable is live now. Here are the key highlights of this release:
+
+- **Gemini Realtime API**: You can now call Gemini's Live API via the OpenAI /v1/realtime API
+- **Spend Logs Retention Period**: Enable deleting spend logs older than a certain period.
+- **PII Masking 2.0**: Easily configure masking or blocking specific PII/PHI entities on the UI
+
+## Gemini Realtime API
+
+This release brings support for calling Gemini's realtime models (e.g. gemini-2.0-flash-live) via OpenAI's /v1/realtime API. This is great for developers as it lets them easily switch from OpenAI to Gemini by just changing the model name. 
+
+Key Highlights: 
+- Support for text + audio input/output
+- Support for setting session configurations (modality, instructions, activity detection) in the OpenAI format
+- Support for logging + usage tracking for realtime sessions
+
+This is currently supported via Google AI Studio. We plan to release VertexAI support over the coming week.
+
+## Spend Logs Retention Period
+
+This release enables deleting LiteLLM Spend Logs older than a certain period. Since we now enable storing the raw request/response in the logs, deleting old logs ensures the database remains performant in production. 
+
+## PII Masking 2.0
+
+This release brings improvements to our Presidio PII Integration. As a Proxy Admin, you now have the ability to:
+
+- Mask or block specific entities (e.g., block medical licenses while masking other entities like emails).
+- Monitor guardrails in production. LiteLLM Logs will now show you the guardrail run, the entities it detected, and its confidence score for each entity.
+
 ## New Models / Updated Models
 
 - **Gemini ([VertexAI](https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server) + [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini))**
