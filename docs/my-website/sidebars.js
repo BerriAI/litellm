@@ -62,7 +62,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/management_client",
         "proxy/management_cli",
         {
           type: "category",
@@ -293,17 +292,24 @@ const sidebars = {
         },
         "providers/text_completion_openai",
         "providers/openai_compatible",
-        "providers/azure",
+        {
+          type: "category",
+          label: "Azure OpenAI",
+          items: [
+            "providers/azure/azure",
+            "providers/azure/azure_embedding",
+          ]
+        },
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-
         {
           type: "category",
           label: "Google AI Studio",
           items: [
             "providers/gemini",
             "providers/google_ai_studio/files",
+            "providers/google_ai_studio/realtime",
           ]
         },
         "providers/anthropic",
@@ -491,6 +497,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/gemini_realtime_with_audio",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
