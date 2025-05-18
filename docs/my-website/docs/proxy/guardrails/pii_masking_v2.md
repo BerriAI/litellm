@@ -36,6 +36,9 @@ On the LiteLLM UI, navigate to Guardrails. Click "Add Guardrail". On this dropdo
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
+<br/>
+<br/>
+
 #### 1.2 Configure Entity Types
 
 Now select the entity types you want to mask. See the [supported actions here](#supported-actions)
@@ -104,6 +107,7 @@ My credit card is 4111-1111-1111-1111 and my email is test@example.com.
   style={{width: '100%', display: 'block', margin: '0'}}
 />
 
+<br/>
 
 #### 3.2 Test in code
 
