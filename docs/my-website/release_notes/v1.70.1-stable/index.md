@@ -69,11 +69,11 @@ import TabItem from '@theme/TabItem';
 
 ## LLM API Endpoints
 - **Responses API**
-    - Fix delete API support - https://github.com/BerriAI/litellm/pull/10845
+    - Fix delete API support - [PR](https://github.com/BerriAI/litellm/pull/10845)
 - **Rerank API**
-    - `/v2/rerank` now registered as ‘llm_api_route’ - enabling non-admins to call it - https://github.com/BerriAI/litellm/pull/10861
+    - `/v2/rerank` now registered as ‘llm_api_route’ - enabling non-admins to call it - [PR](https://github.com/BerriAI/litellm/pull/10861)
 - **Realtime API**
-    - Gemini Multimodal Live API support - https://github.com/BerriAI/litellm/pull/10841
+    - Gemini Multimodal Live API support - [PR](https://github.com/BerriAI/litellm/pull/10841)
 
 
 ## Spend Tracking Improvements
