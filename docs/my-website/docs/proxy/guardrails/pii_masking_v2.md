@@ -2,15 +2,59 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# PII Masking - Presidio
+# PII, PHI Masking - Presidio
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Use this guardrail to mask PII (Personally Identifiable Information), PHI (Protected Health Information), and other sensitive data.  |
+| Provider | [Microsoft Presidio](https://github.com/microsoft/presidio/) |
+| Supported Entity Types | All Presidio Entity Types |
+| Supported Actions | `MASK`, `BLOCK` |
+| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
+
+## Deployment options
+
+For this guardrail you need a deployed Presidio Analyzer and Presido Anonymizer containers. 
+
+| Deployment Option | Details |
+|------------------|----------|
+| Deploy Presidio Docker Containers | - [Presidio Analyzer Docker Container](https://hub.docker.com/r/microsoft/presidio-analyzer)<br/>- [Presidio Anonymizer Docker Container](https://hub.docker.com/r/microsoft/presidio-anonymizer) |
 
 ## Quick Start
 
-LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
 
-### 1. Define Guardrails on your LiteLLM config.yaml 
+### 1. Create a PII, PHI Masking Guardrail 
+
+On the LiteLLM UI, navigate to Guardrails. Click "Add Guardrail". On this dropdown select "Presidio PII" and enter your presidio analyzer and anonymizer endpoints. 
+
+<Image 
+  img={require('../../../img/presidio_1.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+<br/>
+
+#### 1.2 Configure Entity Types
+
+Now select the entity types you want to mask. See the [supported actions here](#supported-actions)
+
+<Image 
+  img={require('../../../img/presidio_2.png')}
+  style={{width: '50%', display: 'block', margin: '0'}}
+/>
+
+</TabItem>
+
+
+<TabItem value="config" label="Config.yaml">
 
 Define your guardrails under the `guardrails` section
+
 ```yaml title="config.yaml" showLineNumbers
 model_list:
   - model_name: gpt-3.5-turbo
@@ -19,7 +63,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
-  - guardrail_name: "presidio-pre-guard"
+  - guardrail_name: "presidio-pii"
     litellm_params:
       guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
       mode: "pre_call"
@@ -38,15 +82,36 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 - `post_call` Run **after** LLM call, on **input & output**
 - `logging_only` Run **after** LLM call, only apply PII Masking before logging to Langfuse, etc. Not on the actual llm api request / response.
 
-
 ### 2. Start LiteLLM Gateway 
-
 
 ```shell title="Start Gateway" showLineNumbers
 litellm --config config.yaml --detailed_debug
 ```
 
-### 3. Test request 
+</TabItem>
+</Tabs>
+
+
+### 3. Test it! 
+
+#### 3.1 LiteLLM UI 
+
+On the litellm UI, navigate to the 'Test Keys' page, select the guardrail you created and send the following messaged filled with PII data. 
+
+```text title="PII Request" showLineNumbers
+My credit card is 4111-1111-1111-1111 and my email is test@example.com.
+```
+
+<Image 
+  img={require('../../../img/presidio_3.png')}
+  style={{width: '100%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+
+#### 3.2 Test in code
+
+In order to apply a guardrail for a request send `guardrails=["presidio-pii"]` in the request body. 
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
@@ -64,7 +129,7 @@ curl http://localhost:4000/chat/completions \
     "messages": [
       {"role": "user", "content": "Hello my name is Jane Doe"}
     ],
-    "guardrails": ["presidio-pre-guard"],
+    "guardrails": ["presidio-pii"],
   }'
 ```
 
@@ -111,14 +176,35 @@ curl http://localhost:4000/chat/completions \
     "messages": [
       {"role": "user", "content": "Hello good morning"}
     ],
-    "guardrails": ["presidio-pre-guard"],
+    "guardrails": ["presidio-pii"],
   }'
 ```
 
 </TabItem>
-
-
 </Tabs>
+
+
+## Tracing Guardrail requests
+
+Once your guardrail is live in production, you will also be able to trace your guardrail on LiteLLM Logs, Langfuse, Arize Phoenix, etc, all LiteLLM logging integrations. 
+
+### LiteLLM UI 
+
+On the LiteLLM logs page you can see that the PII content was masked for this specific request. And you can see detailed tracing for the guardrail. This allows you to monitor entity types masked with their corresponding confidence score and the duration of the guardrail execution.  
+
+<Image 
+  img={require('../../../img/presidio_4.png')}
+  style={{width: '60%', display: 'block', margin: '0'}}
+/>
+
+### Langfuse 
+
+When connecting Litellm to Langfuse, you can see the guardrail information on the Langfuse Trace. 
+
+<Image 
+  img={require('../../../img/presidio_5.png')}
+  style={{width: '60%', display: 'block', margin: '0'}}
+/>
 
 ## Entity Type Configuration
 
