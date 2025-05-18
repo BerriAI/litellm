@@ -139,11 +139,11 @@ jobs:
             python -m black .
             cd ..
       - run:
-        name: Remove bad cryptography stub
-        command: |
-          STUB="$(python3 -c \
-            "import cryptography;import os;print(os.path.dirname(cryptography.__file__)+'/hazmat/bindings/_rust/x509.pyi')")"
-          rm -f "$STUB"
+          name: Remove bad cryptography stub
+          command: |
+            STUB="$(python3 -c \
+              "import cryptography;import os;print(os.path.dirname(cryptography.__file__)+'/hazmat/bindings/_rust/x509.pyi')")"
+            rm -f "$STUB"
       - run:
           name: Linting Testing
           command: |
