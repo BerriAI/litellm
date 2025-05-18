@@ -25,7 +25,7 @@ If you want a server to load balance across different LLM APIs, use our [LiteLLM
 
 ### Quick Start
 
-Loadbalance across multiple [azure](./providers/azure.md)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
+Loadbalance across multiple [azure](./providers/azure)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
