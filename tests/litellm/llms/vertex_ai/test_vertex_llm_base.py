@@ -175,11 +175,12 @@ class TestVertexBase:
         assert token == ""
         assert project == ""
 
-
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
     async def test_authorized_user_credentials(self, is_async):
         vertex_base = VertexBase()
+
+        quota_project_id = "test-project"
 
         credentials = {
             "account": "",
@@ -191,7 +192,15 @@ class TestVertexBase:
             "universe_domain": "googleapis.com"
         }
 
-        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+        mock_creds = MagicMock()
+        mock_creds.token = "token-1"
+        mock_creds.expired = False
+        mock_creds.quota_project_id = quota_project_id
+
+
+        with patch.object(
+            vertex_base, "_credentials_from_authorized_user", return_value=mock_creds
+        ) as mock_credentials_from_authorized_user, patch.object(vertex_base, "refresh_auth") as mock_refresh:
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
 
@@ -207,20 +216,21 @@ class TestVertexBase:
                     credentials=credentials, project_id=None, custom_llm_provider="vertex_ai"
                 )
 
-
+            assert mock_credentials_from_authorized_user.called
             assert token == "refreshed-token"
-            assert project == "test-project"
+            assert project == quota_project_id
 
             # 2. Test that authorized_user-style credentials are correctly handled and uses passed in project_id
+            not_quota_project_id = "new-project"
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
-                    credentials=credentials, project_id="new-project", custom_llm_provider="vertex_ai"
+                    credentials=credentials, project_id=not_quota_project_id, custom_llm_provider="vertex_ai"
                 )
             else:
                 token, project = vertex_base._ensure_access_token(
-                    credentials=credentials, project_id="new-project", custom_llm_provider="vertex_ai"
+                    credentials=credentials, project_id=not_quota_project_id, custom_llm_provider="vertex_ai"
                 )
 
 
             assert token == "refreshed-token"
-            assert project == "new-project"
+            assert project == not_quota_project_id
