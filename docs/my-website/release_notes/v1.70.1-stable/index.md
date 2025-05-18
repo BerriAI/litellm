@@ -187,3 +187,7 @@ pip install litellm==1.70.1
 * [@damgem](https://github.com/damgem) made their first contribution in PR [#9802](https://github.com/BerriAI/litellm/pull/9802)
 * [@hxdror](https://github.com/hxdror) made their first contribution in PR [#10757](https://github.com/BerriAI/litellm/pull/10757)
 * [@wwwillchen](https://github.com/wwwillchen) made their first contribution in PR [#10894](https://github.com/BerriAI/litellm/pull/10894)
+
+
+## [Git Diff](https://github.com/BerriAI/litellm/releases)
+
