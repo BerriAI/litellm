@@ -35,6 +35,7 @@ import {
   TableCell,
 } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { formatRelativeTime, formatFullDate } from "@/utils/dateUtils";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -380,6 +381,19 @@ export function AllKeysTable({
         );
       },
     },
+    {
+      id: "updated_at",
+      accessorKey: "updated_at",
+      header: "Last Used",
+      cell: (info) => {
+        const value = info.getValue() as string | null;
+        return (
+          <Tooltip title={formatFullDate(value)}>
+            <span>{formatRelativeTime(value)}</span>
+          </Tooltip>
+        );
+      },
+    }
   ];
 
   const filterOptions: FilterOption[] = [
