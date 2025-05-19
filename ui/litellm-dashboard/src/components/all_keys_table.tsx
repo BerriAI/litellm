@@ -315,6 +315,15 @@ export function AllKeysTable({
       },
     },
     {
+      id: "updated_at",
+      accessorKey: "updated_at",
+      header: "Updated At",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
+      },
+    },
+    {
       id: "expires",
       accessorKey: "expires",
       header: "Expires",
