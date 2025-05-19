@@ -1,6 +1,10 @@
 from typing import Union
 
-import httpx
+# dynamic import to allow usage even if httpx is not installed in dev env
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -98,3 +102,24 @@ class OllamaModelInfo(BaseLLMModelInfo):
         # assemble full model names
         result = sorted(names)
         return result
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        api_key=None,
+        api_base=None,
+    ) -> dict:
+        """
+        No-op environment validation for Ollama.
+        """
+        return {}
+
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        """
+        Return the base model name for Ollama (no-op).
+        """
+        return model
