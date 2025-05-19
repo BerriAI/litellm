@@ -576,21 +576,24 @@ async def proxy_startup_event(app: FastAPI):
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
     )
+    verbose_proxy_logger.info("🧪 DEBUG TEST — jwt auth finished")
+
 
     if use_background_health_checks:
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
-
+        verbose_proxy_logger.info("🧪 DEBUG TEST — background health check started")
     if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
         prompt_injection_detection_obj.update_environment(router=llm_router)
+        verbose_proxy_logger.info("🧪 DEBUG TEST — prompt injection detection started")
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
         )
-
+        verbose_proxy_logger.info("🧪 DEBUG TEST — proxy budget added to db")
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
@@ -601,9 +604,10 @@ async def proxy_startup_event(app: FastAPI):
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
-
+        verbose_proxy_logger.info("🧪 DEBUG TEST — scheduled background jobs initialized")
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
+    verbose_proxy_logger.info("🧪 DEBUG TEST — dd tracer initialized")
 
     # End of startup event
     yield
