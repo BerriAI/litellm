@@ -734,6 +734,19 @@ async def user_update(
                 user_row_litellm_typed = LiteLLM_UserTable(
                     **user_row.model_dump(exclude_none=True)
                 )
+                
+                # Update user object in cache if Redis is being used
+                # Import user_api_key_cache at runtime to avoid circular imports
+                from litellm.proxy.proxy_server import user_api_key_cache
+                if user_api_key_cache is not None:
+                    # Cache key for user objects is the user_id
+                    cache_key = user_row_litellm_typed.user_id
+                    verbose_proxy_logger.debug(f"Updating user object in cache for user_id: {cache_key}")
+                    await user_api_key_cache.async_set_cache(
+                        key=cache_key,
+                        value=user_row_litellm_typed.model_dump(exclude_none=True)
+                    )
+                
                 asyncio.create_task(
                     UserManagementEventHooks.create_internal_user_audit_log(
                         user_id=user_row_litellm_typed.user_id,
