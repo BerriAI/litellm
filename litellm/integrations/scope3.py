@@ -39,9 +39,9 @@ class Scope3Logger(CustomLogger):
         self.sync_http_handler = HTTPHandler()
         self.url = os.getenv("SCOPE3_API_BASE", "https://aiapi.scope3.com")
         if self.url.endswith("/"):
-            self.url += "v1/log_json"
+            self.url += "v1/impact"
         else:
-            self.url += "/v1/log_json"
+            self.url += "/v1/impact"
         self.access_token = os.getenv("SCOPE3_ACCESS_TOKEN", "")
         if self.access_token == "":
             raise AssertionError("SCOPE3_ACCESS_TOKEN missing or not set correctly. SCOPE3_ACCESS_TOKEN={}".format(self.access_token))
@@ -55,15 +55,14 @@ class Scope3Logger(CustomLogger):
         total_cost = litellm.completion_cost(completion_response=response_obj)
 
         log_row = {
-            "start_time_utc": start_time_utc,
+            "utc_datetime": start_time_utc,
             "integration_source": "litellm",
             "request_id": kwargs["litellm_call_id"],
             "request_cost": total_cost,
-            "request_currency": "USD",
+            "currency": "USD",
             "request_duration_ms": (end_time - start_time).total_seconds() * 1000,
             "model_id": kwargs["model"],
-            "model_id_used": response_obj["model"],
-            "managed_service_id": kwargs["custom_llm_provider"]
+            "model_used_id": response_obj["model"]
         }
 
         if (isinstance(response_obj, litellm.ModelResponse)) and hasattr(response_obj, "usage"):
