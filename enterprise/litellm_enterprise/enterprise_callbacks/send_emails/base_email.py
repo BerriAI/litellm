@@ -169,7 +169,13 @@ class BaseEmailLogger(CustomLogger):
 
         from litellm.proxy.proxy_server import prisma_client
 
-        await asyncio.sleep(5)
+        ################################################################################
+        ########## Sleep for 10 seconds to wait for the invitation link to be created ###
+        ################################################################################
+        # The UI, calls /invitation/new to generate the invitation link
+        # We wait 10 seconds to ensure the link is created
+        ################################################################################
+        await asyncio.sleep(10)
 
         if prisma_client is None:
             verbose_proxy_logger.debug(
