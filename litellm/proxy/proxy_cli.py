@@ -1,3 +1,4 @@
+# ruff: noqa: T201
 import importlib
 import json
 import os
