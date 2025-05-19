@@ -1,19 +1,13 @@
 export enum GuardrailProviders {
     PresidioPII = "Presidio PII",
     Bedrock = "Bedrock Guardrail",
-    LLMGuard = "LLM Guard Endpoint",
-    SecretDetector = "Secret Detector",
-    AIM = "AIM Guardrail",
     Lakera = "Lakera"
 }
 
 export const guardrail_provider_map: Record<string, string> = {
     PresidioPII: "presidio",
     Bedrock: "bedrock",
-    LLMGuard: "llmguard_moderations",
-    SecretDetector: "hide_secrets",
-    AIM: "aim",
-    Lakera: "lakera"
+    Lakera: "lakera_v2"
 };
 
 
@@ -33,9 +27,6 @@ const asset_logos_folder = '../ui/assets/logos/';
 export const guardrailLogoMap: Record<string, string> = {
     [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio.png`,
     [GuardrailProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-    [GuardrailProviders.LLMGuard]: `${asset_logos_folder}llm_guard.png`,
-    [GuardrailProviders.SecretDetector]: `${asset_logos_folder}secret_detect.png`,
-    [GuardrailProviders.AIM]: `${asset_logos_folder}aim_logo.jpeg`,
     [GuardrailProviders.Lakera]: `${asset_logos_folder}lakeraai.jpeg`
 };
 

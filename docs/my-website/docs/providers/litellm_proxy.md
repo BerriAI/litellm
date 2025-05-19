@@ -163,9 +163,11 @@ LiteLLM Proxy works seamlessly with Langchain, LlamaIndex, OpenAI JS, Anthropic 
 
 [Learn how to use LiteLLM proxy with these libraries →](../proxy/user_keys)
 
-## Flags to send requests to litellm proxy
+## Send all SDK requests to LiteLLM Proxy
 
-Use the following options to route all requests through your LiteLLM proxy, regardless of the model specified.
+Use this when calling LiteLLM Proxy from any library / codebase already using the LiteLLM SDK.
+
+These flags will route all requests through your LiteLLM proxy, regardless of the model specified.
 
 When enabled, requests will use `LITELLM_PROXY_API_BASE` with `LITELLM_PROXY_API_KEY` as the authentication.
 
