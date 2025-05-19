@@ -48,7 +48,7 @@ def mock_models_list(mock_client):
     """Fixture to set up common mocking pattern for models list tests"""
     mock_client.return_value.models.list.return_value = [
         {"id": "model-123", "object": "model", "created": 1699848889, "owned_by": "organization-123"},
-        {"id": "model-456", "object": "model", "created": 1699848890, "owned_by": "organization-456"},
+        {"id": "model-456", "object": "model", "created": "1699848890", "owned_by": "organization-456"},
     ]
 
     mock_client.assert_not_called()  # Ensure clean slate
@@ -233,6 +233,10 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
             {"model_name": "gpt-3.5-model", "litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "id-2"}},
             {"model_name": "llama2-model", "litellm_params": {"model": "llama2"}, "model_info": {"id": "id-3"}},
             {"model_name": "other-model", "litellm_params": {"model": "other"}, "model_info": {"id": "id-4"}},
+            # Model with no model_name (should be ignored)
+            {"litellm_params": {"model": "should-be-ignored-no-name"}, "model_info": {"id": "id-x"}},
+            # Model with model_name but no model_info.id (should be ignored)
+            {"model_name": "should-be-ignored-no-id", "litellm_params": {"model": ""}, "model_info": {}},
         ]
     }
     import yaml as pyyaml
@@ -255,6 +259,9 @@ def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_run
     # Should not include llama2 or other
     assert "llama2" not in calls
     assert "other" not in calls
+    # Should not include the ignored models
+    assert "should-be-ignored-no-name" not in calls
+    assert "should-be-ignored-no-id" not in calls
     # Output summary should mention the correct providers
     assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
 
@@ -288,6 +295,11 @@ def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, 
                 "model_name": "no-access-group-model",
                 "litellm_params": {"model": "no-access"},
                 "model_info": {"id": "id-5"},
+            },
+            {
+                "model_name": "no-access-group-model",
+                "litellm_params": {"model": "no-access"},
+                "model_info": {"id": "id-5", "access_groups": "not a list so should be ignored"},
             },
         ]
     }
@@ -372,3 +384,290 @@ def test_format_cost_per_1k_tokens(input_val, expected):
     if actual != expected:
         print(f"input: {input_val}, expected: {expected}, actual: {actual}")
     assert actual == expected
+
+
+def test_models_add_success(mock_client, cli_runner):
+    """Test the models add command with parameters and info, mocking client.models.new"""
+    # Arrange
+    mock_return = {"result": "success", "model_name": "test-model"}
+    mock_client.return_value.models.new.return_value = mock_return
+
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        [
+            "models", "add", "test-model",
+            "--param", "model=gpt-4",
+            "--param", "temperature=0.7",
+            "--info", "description=Test model",
+            "--info", "owner=admin"
+        ]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    # Output should be JSON and contain the mock return
+    assert "success" in result.output
+    assert "test-model" in result.output
+    # The client should be called with correct arguments
+    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.return_value.models.new.assert_called_once_with(
+        model_name="test-model",
+        model_params={"model": "gpt-4", "temperature": "0.7"},
+        model_info={"description": "Test model", "owner": "admin"},
+    )
+
+
+def test_models_delete_success(mock_client, cli_runner):
+    """Test the models delete command, mocking client.models.delete"""
+    # Arrange
+    mock_return = {"result": "deleted", "model_id": "model-123"}
+    mock_client.return_value.models.delete.return_value = mock_return
+
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        ["models", "delete", "model-123"]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    # Output should be JSON and contain the mock return
+    assert "deleted" in result.output
+    assert "model-123" in result.output
+    # The client should be called with correct arguments
+    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.return_value.models.delete.assert_called_once_with(model_id="model-123")
+
+
+def test_models_get_by_id_success(mock_client, cli_runner):
+    """Test the models get command with --id, mocking client.models.get"""
+    # Arrange
+    mock_return = {"result": "found", "model_id": "model-123"}
+    mock_client.return_value.models.get.return_value = mock_return
+
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        ["models", "get", "--id", "model-123"]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    assert "found" in result.output
+    assert "model-123" in result.output
+    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.return_value.models.get.assert_called_once_with(model_id="model-123", model_name=None)
+
+
+def test_models_get_by_name_success(mock_client, cli_runner):
+    """Test the models get command with --name, mocking client.models.get"""
+    # Arrange
+    mock_return = {"result": "found", "model_name": "test-model"}
+    mock_client.return_value.models.get.return_value = mock_return
+
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        ["models", "get", "--name", "test-model"]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    assert "found" in result.output
+    assert "test-model" in result.output
+    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.return_value.models.get.assert_called_once_with(model_id=None, model_name="test-model")
+
+
+def test_models_get_usage_error(mock_client, cli_runner):
+    """Test the models get command with neither --id nor --name, should error"""
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        ["models", "get"]
+    )
+
+    # Assert
+    assert result.exit_code != 0
+    assert "Either --id or --name must be provided" in result.output
+    # Client should not be called at all
+    mock_client.assert_not_called()
+
+
+def test_models_info_unknown_column_warning(mock_models_info, cli_runner):
+    """Test the models info command with an unknown column, should print a warning"""
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        ["models", "info", "--columns", "public_model,unknown_column"]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    assert "Warning: Unknown column 'unknown_column'" in result.output
+    # Should still print the table with the known column
+    assert "Public Model" in result.output
+
+
+def test_models_update_success(mock_client, cli_runner):
+    """Test the models update command with parameters and info, mocking client.models.update"""
+    # Arrange
+    mock_return = {"result": "updated", "model_id": "model-123"}
+    mock_client.return_value.models.update.return_value = mock_return
+
+    # Act
+    result = cli_runner.invoke(
+        cli,
+        [
+            "models", "update", "model-123",
+            "--param", "model=gpt-4",
+            "--param", "temperature=0.9",
+            "--info", "description=Updated model",
+            "--info", "owner=admin"
+        ]
+    )
+
+    # Assert
+    assert result.exit_code == 0
+    assert "updated" in result.output
+    assert "model-123" in result.output
+    mock_client.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
+    mock_client.return_value.models.update.assert_called_once_with(
+        model_id="model-123",
+        model_params={"model": "gpt-4", "temperature": "0.9"},
+        model_info={"description": "Updated model", "owner": "admin"},
+    )
+
+
+def test_models_import_none_matching(tmp_path, mock_client, cli_runner):
+    """Test the models import command where no models match the criteria"""
+    # Prepare a YAML file with models that do not match the regex
+    yaml_content = {
+        "model_list": [
+            {"model_name": "foo-model", "litellm_params": {"model": "foo"}, "model_info": {"id": "id-1"}},
+            {"model_name": "bar-model", "litellm_params": {"model": "bar"}, "model_info": {"id": "id-2"}},
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Use a regex that matches nothing
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file), "--only-models-matching-regex", "doesnotmatch"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    # No models should be imported
+    mock_new.assert_not_called()
+    # Output summary should mention Total 0
+    assert "Total" in result.output
+    assert "]0[" in result.output or " 0" in result.output  # Accept either bold or plain zero
+
+
+def test_models_import_no_model_list(tmp_path, mock_client, cli_runner):
+    """Test the models import command with a YAML file missing model_list key"""
+    # Prepare a YAML file with no model_list key
+    yaml_content = {
+        "not_model_list": [
+            {"model_name": "foo-model", "litellm_params": {"model": "foo"}, "model_info": {"id": "id-1"}},
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Run the import command
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file)])
+
+    # Should fail
+    assert result.exit_code != 0
+    assert "YAML file must contain a 'model_list' key" in result.output
+
+
+def test_models_import_model_list_not_list(tmp_path, mock_client, cli_runner):
+    """Test the models import command with a YAML file where model_list is not a list"""
+    # Prepare a YAML file with model_list as a dict
+    yaml_content = {
+        "model_list": {
+            "model_name": "foo-model",
+            "litellm_params": {"model": "foo"},
+            "model_info": {"id": "id-1"},
+        }
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Run the import command
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file)])
+
+    # Should fail
+    assert result.exit_code != 0
+    assert "'model_list' must be a list of model definitions." in result.output
+
+
+def test_models_import_dry_run(tmp_path, mock_client, cli_runner):
+    """Test the models import command with --dry-run (should not call client.models.new)"""
+    # Prepare a YAML file with a valid model_list
+    yaml_content = {
+        "model_list": [
+            {"model_name": "gpt-4-model", "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "id-1"}},
+            {"model_name": "gpt-3.5-model", "litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "id-2"}},
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Run the import command with --dry-run
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file), "--dry-run"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    # No models should be imported
+    mock_new.assert_not_called()
+    # Output should contain the dry-run table title
+    assert "Models that would be imported if" in result.output
+
+
+def test_models_import_new_raises_exception(tmp_path, mock_client, cli_runner):
+    """Test the models import command where client.models.new raises an exception (should be ignored for summary)"""
+    # Prepare a YAML file with a valid model_list
+    yaml_content = {
+        "model_list": [
+            {"model_name": "gpt-4-model", "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "id-1"}},
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to raise an exception
+    mock_new = mock_client.return_value.models.new
+    mock_new.side_effect = Exception("API error")
+
+    # Run the import command
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file)])
+
+    # Should succeed (exception is ignored for summary)
+    assert result.exit_code == 0
+    # Output should contain the summary table
+    assert "Model Import Summary" in result.output
+    assert "gpt-4" in result.output or "gpt" in result.output
