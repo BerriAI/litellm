@@ -39,13 +39,17 @@ class ResponseMetadata:
 
         ## ADD OTHER HIDDEN PARAMS
         model_id = kwargs.get("model_info", {}).get("id", None)
+        if model and str(model).startswith("ollama"):
+            response_cost = 0
+        else:
+            response_cost = logging_obj._response_cost_calculator(
+            result=self.result, litellm_model_name=model, router_model_id=model_id
+            )
         new_params = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj._response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
-            ),
+            "response_cost": response_cost,
             "additional_headers": process_response_headers(
                 self._get_value_from_hidden_params("additional_headers") or {}
             ),
