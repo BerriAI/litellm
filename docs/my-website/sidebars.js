@@ -472,6 +472,7 @@ const sidebars = {
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
+        "observability/laminar_integration",
         "observability/humanloop",
         "observability/scrub_data",
         "observability/braintrust",
