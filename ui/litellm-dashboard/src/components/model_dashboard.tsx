@@ -62,6 +62,8 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  getRouterSettings,
+  updateRouterSettings,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -114,6 +116,7 @@ import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
+import ModelAliasManagement from "./model_dashboard/model_alias_management";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -670,6 +673,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     handleRefreshClick();
   }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
 
+
+
   if (!modelData) {
     return <div>Loading...</div>;
   }
@@ -1067,13 +1072,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              
+              {all_admin_roles.includes(userRole) && <Tab>Model Group Aliases</Tab>}
             </div>
 
             <div className="flex items-center space-x-2">
               {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
               <Icon
-                icon={RefreshIcon} // Modify as necessary for correct icon name
+                icon={RefreshIcon}
                 variant="shadow"
                 size="xs"
                 className="self-center"
@@ -1601,6 +1606,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
                 Save
               </Button>
+            </TabPanel>
+            <TabPanel>
+              {accessToken && (
+                <ModelAliasManagement 
+                  accessToken={accessToken}
+                  availableModels={availableModelGroups}
+                  onRefresh={handleRefreshClick}
+                />
+              )}
             </TabPanel>
             
           </TabPanels>

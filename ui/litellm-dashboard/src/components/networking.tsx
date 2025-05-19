@@ -5187,3 +5187,58 @@ export const updateGuardrailCall = async (
     throw error;
   }
 };
+
+export const getRouterSettings = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/router_settings` : `/router_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        errorData.detail?.error || "Failed to fetch router settings"
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    handleError(`Error fetching router settings: ${error}`);
+    throw error;
+  }
+};
+
+export const updateRouterSettings = async (
+  accessToken: string,
+  settings: Record<string, any>
+) => {
+  
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/router_settings` : `/router_settings`;
+  try {
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        errorData.detail?.error || "Failed to update router settings"
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    handleError(`Error updating router settings: ${error}`);
+    throw error;
+  }
+};
