@@ -5,6 +5,7 @@ from typing import Any, List, Literal, Optional, Union
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -137,9 +138,12 @@ class PangeaHandler(CustomGuardrail):
 
     async def _call_pangea_guard(
         self, payload: dict, request_data: dict, hook_name: str
-    ) -> None:
+    ) -> list[dict]:
         """
         Makes the API call to the Pangea AI Guard endpoint.
+        The function itself will raise an error in the case that a response
+        should be blocked, but will return a list of redacted messages that the caller
+        should act on.
 
         Args:
             payload (dict): The request payload.
@@ -149,6 +153,9 @@ class PangeaHandler(CustomGuardrail):
         Raises:
             HTTPException: If the Pangea API returns a 'blocked: true' response.
             Exception: For other API call failures.
+
+        Returns:
+            list[dict]: A list of potentially redacted messages
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -190,6 +197,8 @@ class PangeaHandler(CustomGuardrail):
                     request_data=request_data, guardrail_name=self.guardrail_name
                 )
 
+            return result.get("result", {}).get("prompt_messages", [])
+
         except HTTPException as e:
             # Re-raise HTTPException if it's the one we raised for blocking
             raise e
@@ -208,6 +217,8 @@ class PangeaHandler(CustomGuardrail):
                     "exception": str(e),
                 },
             ) from e
+
+        return []
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -265,6 +276,53 @@ class PangeaHandler(CustomGuardrail):
                 status_code=400,
                 detail={"error": str(ve), "guardrail_name": self.guardrail_name},
             )
+
+    @log_guardrail_information
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict:  UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank"
+        ],
+    ) -> dict:
+        messages: Optional[List[AllMessageValues]] = data.get("messages")
+        text_input: Optional[str] = data.get(
+            "input"
+        )  # Assuming 'input' for non-chat models
+
+        if not messages and not text_input:
+            verbose_proxy_logger.warning(
+                f"Pangea Guardrail (moderation_hook): No 'messages' or 'input' found in data for guardrail {self.guardrail_name}. Skipping."
+            )
+            return data
+
+        try:
+            payload = self._prepare_payload(
+                messages=messages, text_input=text_input, request_data=data, recipe=self.pangea_input_recipe
+            )
+            messages = await self._call_pangea_guard(
+                payload=payload, request_data=data, hook_name="moderation_hook"
+            )
+        except ValueError as ve:
+            verbose_proxy_logger.error(
+                f"Pangea Guardrail (moderation_hook): Error preparing payload: {ve}"
+            )
+            # Decide how to handle payload errors (e.g., block or allow)
+            raise HTTPException(
+                status_code=400,
+                detail={"error": str(ve), "guardrail_name": self.guardrail_name},
+            )
+
+        return data
 
     @log_guardrail_information
     async def async_post_call_success_hook(
