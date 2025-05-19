@@ -16,6 +16,7 @@ import litellm
 from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
+    cost_per_token,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -239,6 +240,13 @@ def test_azure_realtime_cost_calculator():
 
     assert cost > 0
 
+def test_ollama_cost_per_token():
+    cost = cost_per_token(
+        model="ollama/llama2",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert cost == (0, 0)
 
 def test_default_image_cost_calculator(monkeypatch):
     from litellm.cost_calculator import default_image_cost_calculator
