@@ -169,6 +169,7 @@ async def list_guardrails_v2():
                     guardrail_definition_location="db",
                 )
             )
+            seen_guardrail_ids.add(guardrail.get("guardrail_id"))
 
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
