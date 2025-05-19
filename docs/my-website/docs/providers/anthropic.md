@@ -847,12 +847,49 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 <TabItem value="web_search" label="Web Search">
 
 :::info
-
-Unified web search (same param across OpenAI + Anthropic) coming soon!
+Live from v1.70.1+
 :::
+
+LiteLLM maps OpenAI's `search_context_size` param to Anthropic's `max_uses` param.
+
+| OpenAI | Anthropic |
+| --- | --- |
+| Low | 1 | 
+| Medium | 5 | 
+| High | 10 | 
+
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```python
+from litellm import completion
+
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "What's the weather like today?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    web_search_options={
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
+)
+
+print(resp)
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
 
 ```python
 from litellm import completion
@@ -873,8 +910,11 @@ resp = completion(
 
 print(resp)
 ```
-
 </TabItem>
+
+</Tabs>
+</TabItem>
+
 <TabItem value="proxy" label="PROXY">
 
 1. Setup config.yaml
@@ -894,21 +934,55 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $LITELLM_KEY" \
   -d '{
     "model": "claude-3-5-sonnet-latest",
-    "messages": [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}],
-    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "web_search_options": {
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
   }'
 ```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "tools": [{
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 5
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
 </TabItem>
 </Tabs>
 
 </TabItem>
 </Tabs>
+
+
 
 ## Usage - Vision 
 
