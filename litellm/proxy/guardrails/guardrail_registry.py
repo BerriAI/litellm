@@ -376,6 +376,12 @@ class InMemoryGuardrailHandler:
         """
         self.IN_MEMORY_GUARDRAILS.pop(guardrail_id, None)
 
+    def list_in_memory_guardrails(self) -> List[Guardrail]:
+        """
+        List all guardrails in memory
+        """
+        return list(self.IN_MEMORY_GUARDRAILS.values())
+
 
 ########################################################
 # In Memory Guardrail Handler for LiteLLM Proxy
