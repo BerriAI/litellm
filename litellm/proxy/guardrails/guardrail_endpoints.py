@@ -15,7 +15,6 @@ from litellm.types.guardrails import (
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
-    GuardrailInfoLiteLLMParamsResponse,
     GuardrailInfoResponse,
     GuardrailParamUITypes,
     GuardrailUIAddGuardrailSettings,
