@@ -164,7 +164,8 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updatedLitellmParams
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo
       };
       
       setLocalModelData(updatedModelData);
@@ -570,7 +571,7 @@ export default function ModelInfoView({
                       ) : (
                         <div className="mt-1 p-2 bg-gray-50 rounded">
                           <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                            {JSON.stringify(modelData.model_info, null, 2)}
+                            {JSON.stringify(localModelData.model_info, null, 2)}
                           </pre>
                         </div>
                       )}
