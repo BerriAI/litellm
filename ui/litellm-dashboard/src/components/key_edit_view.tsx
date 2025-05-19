@@ -169,6 +169,10 @@ export function KeyEditView({
         <Input.TextArea rows={10} />
       </Form.Item>
 
+      <Form.Item label="Team ID" name="team_id">
+        <Input />
+      </Form.Item>
+
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
         <Input />
