@@ -638,6 +638,7 @@ class LangFuseLogger:
 
             generation_id = None
             usage = None
+            usage_details = None
             if response_obj is not None:
                 if (
                     hasattr(response_obj, "id")
@@ -654,6 +655,13 @@ class LangFuseLogger:
                         "completion_tokens": _usage_obj.completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
+                    usage_details = {
+                        "input": _usage_obj.prompt_tokens,
+                        "output": _usage_obj.completion_tokens,
+                        "cache_creation_input_tokens": _usage_obj.get('cache_creation_input_tokens', 0),
+                        "cache_read_input_tokens": _usage_obj.get('cache_read_input_tokens', 0)
+                    }
+
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
                 # if `generation_name` is None, use sensible default values
@@ -686,6 +694,7 @@ class LangFuseLogger:
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
+                "usage_details": usage_details,
                 "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
