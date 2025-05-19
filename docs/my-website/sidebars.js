@@ -371,7 +371,7 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/netmind"
+        "providers/netmind",
         "providers/featherless_ai"
       ],
     },
