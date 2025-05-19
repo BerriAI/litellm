@@ -51,8 +51,14 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
     setIsLoading(true);
     try {
       const settings = await getRouterSettings(accessToken);
+      console.log("Router settings response:", settings); // Log the response for debugging
+      
+      // Check both possible structures for model_group_alias
       if (settings?.router_settings?.model_group_alias) {
         setModelGroupAliases(settings.router_settings.model_group_alias);
+      } else if (settings?.model_group_alias) {
+        // Direct structure as shown in user's example
+        setModelGroupAliases(settings.model_group_alias);
       } else {
         setModelGroupAliases({});
       }
