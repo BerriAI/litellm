@@ -201,6 +201,27 @@ const Teams: React.FC<TeamProps> = ({
     fetchGuardrails();
   }, [accessToken]);
 
+  useEffect(() => {
+    const fetchTeamInfo = async () => {
+      if (!teams || !accessToken) return;
+      
+      const teamInfoPromises = teams.map(async (team) => {
+        try {
+          const info = await teamInfoCall(accessToken, team.team_id);
+          return { [team.team_id]: info };
+        } catch (error) {
+          console.error(`Error fetching info for team ${team.team_id}:`, error);
+          return { [team.team_id]: null };
+        }
+      });
+
+      const results = await Promise.all(teamInfoPromises);
+      const newPerTeamInfo = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      setPerTeamInfo(newPerTeamInfo);
+    };
+
+    fetchTeamInfo();
+  }, [teams, accessToken]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -721,8 +742,9 @@ const Teams: React.FC<TeamProps> = ({
                             {perTeamInfo &&
                               team.team_id &&
                               perTeamInfo[team.team_id] &&
-                              perTeamInfo[team.team_id].members_with_roles &&
-                              perTeamInfo[team.team_id].members_with_roles.length}{" "}
+                              perTeamInfo[team.team_id].team_info &&
+                              perTeamInfo[team.team_id].team_info.members_with_roles &&
+                              perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
                             Members
                           </Text>
                         </TableCell>
