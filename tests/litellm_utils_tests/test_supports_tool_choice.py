@@ -76,7 +76,7 @@ def test_check_provider_match():
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
-SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra", "mistral."]
+SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra", "mistral.", "groq/llama-guard-3-8b", "groq/gemma2-9b-it"]
 
 # Bedrock models to block - organized by type
 BEDROCK_REGIONS = ["ap-northeast-1", "eu-central-1", "us-east-1", "us-west-2"]

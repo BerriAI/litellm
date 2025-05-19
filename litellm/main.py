@@ -185,6 +185,7 @@ from .types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
+    OpenAIWebSearchOptions,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -353,6 +354,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -472,6 +474,7 @@ async def acompletion(
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
+        "web_search_options": web_search_options,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -835,6 +838,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
@@ -1168,6 +1172,7 @@ def completion(  # type: ignore # noqa: PLR0915
             messages=messages,
             reasoning_effort=reasoning_effort,
             thinking=thinking,
+            web_search_options=web_search_options,
             allowed_openai_params=kwargs.get("allowed_openai_params"),
             **non_default_params,
         )

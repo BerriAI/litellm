@@ -28,6 +28,7 @@ from typing import (
 from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -196,6 +197,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -382,14 +384,22 @@ enterprise_router = APIRouter()
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-    from enterprise.proxy.enterprise_routes import router as enterprise_router
 except Exception:
     # when using litellm docker image
     try:
         import enterprise  # type: ignore
-        from enterprise.proxy.enterprise_routes import router as enterprise_router
     except Exception:
         pass
+
+###################
+# Import enterprise routes
+try:
+    from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+
+    enterprise_router = _enterprise_router
+except ImportError:
+    pass
+###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
@@ -2697,10 +2707,10 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
-        from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
 
         try:
             guardrails_in_db: List[
@@ -2712,7 +2722,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                InitializeGuardrails.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
                     guardrail=dict(guardrail),
                 )
         except Exception as e:
@@ -3288,6 +3298,26 @@ class ProxyStartupEvent:
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
+        ### SPEND LOG CLEANUP ###
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            spend_log_cleanup = SpendLogCleanup()
+            # Get the interval from config or default to 1 day
+            retention_interval = general_settings.get(
+                "maximum_spend_logs_retention_interval", "1d"
+            )
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds,
+                    args=[prisma_client],
+                )
+            except ValueError:
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_retention_interval value"
+                )
+
         scheduler.start()
 
     @classmethod
@@ -3844,23 +3874,26 @@ async def embeddings(  # noqa: PLR0915
             and isinstance(data["input"][0], list)
             and isinstance(data["input"][0][0], int)
         ):  # check if array of tokens passed in
-            # check if non-openai/azure model called - e.g. for langchain integration
+            # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_model_list is not None and data["model"] in router_model_names:
                 for m in llm_model_list:
-                    if m["model_name"] == data["model"] and (
-                        m["litellm_params"]["model"] in litellm.open_ai_embedding_models
-                        or m["litellm_params"]["model"].startswith("azure/")
-                    ):
-                        pass
-                    else:
-                        # non-openai/azure embedding model called with token input
-                        input_list = []
-                        for i in data["input"]:
-                            input_list.append(
-                                litellm.decode(model="gpt-3.5-turbo", tokens=i)
-                            )
-                        data["input"] = input_list
-                        break
+                    if m["model_name"] == data["model"]:
+                        if m["litellm_params"][
+                            "model"
+                        ] in litellm.open_ai_embedding_models or any(
+                            m["litellm_params"]["model"].startswith(provider)
+                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+                        ):
+                            pass
+                        else:
+                            # non-openai/azure embedding model called with token input
+                            input_list = []
+                            for i in data["input"]:
+                                input_list.append(
+                                    litellm.decode(model="gpt-3.5-turbo", tokens=i)
+                                )
+                            data["input"] = input_list
+                            break
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
