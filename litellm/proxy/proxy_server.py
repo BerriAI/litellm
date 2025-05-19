@@ -607,14 +607,24 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
-    with open("/tmp/litellm-started", "w") as f:
-        f.write("ok\n")
-    verbose_proxy_logger.debug("🟢 LiteLLM startup marker written to /tmp/litellm-started")
+    try:
+        with open("/tmp/litellm-started", "w") as f:
+            f.write("ok\n")
+        verbose_proxy_logger.debug("🟢 LiteLLM startup marker written to /tmp/litellm-started")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"⚠️ Failed to write startup marker: {e}")
 
+    if scheduler.running:
+        jobs = scheduler.get_jobs()
+        verbose_proxy_logger.info(f"📆 Scheduler running with {len(jobs)} jobs")
+        for job in jobs:
+            verbose_proxy_logger.info(f"↪️ Job {job.id}: next run = {job.next_run_time}")
+    else:
+        verbose_proxy_logger.warning("⚠️ Scheduler not running!")
 
-    # End of startup event
+    verbose_proxy_logger.info("✅ Reached `yield` in proxy_startup_event")
     yield
-    verbose_proxy_logger.debug("✅ FastAPI proxy startup_event completed")
+    verbose_proxy_logger.info("⏹️ Exiting `proxy_startup_event`, initiating shutdown.")
 
 
     # Shutdown event
