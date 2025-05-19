@@ -1,22 +1,12 @@
-import importlib
-import json
 import os
-import socket
-import subprocess
 import sys
-from unittest.mock import MagicMock, mock_open, patch
-
-import click
-import httpx
+from unittest.mock import MagicMock, patch
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import litellm
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
