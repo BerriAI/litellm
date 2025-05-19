@@ -2332,8 +2332,10 @@ class PrismaClient:
         This is used later to determine if we should run expensive UI Usage queries.
         """
         from litellm.proxy.proxy_server import proxy_state
+        verbose_proxy_logger.info("🧪 DEBUG TEST — _set_spend_logs_row_count_in_proxy_state reached")
 
         _num_spend_logs_rows = await self._get_spend_logs_row_count()
+        verbose_proxy_logger.info(f"🧪 DEBUG TEST — _num_spend_logs_rows = {_num_spend_logs_rows}")
         proxy_state.set_proxy_state_variable(
             variable_name="spend_logs_row_count",
             value=_num_spend_logs_rows,

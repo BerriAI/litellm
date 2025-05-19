@@ -3130,6 +3130,7 @@ class ProxyStartupEvent:
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
+        verbose_proxy_logger.info("🧪 DEBUG TEST — initialize_startup_logging reached")
 
     @classmethod
     def _initialize_jwt_auth(
@@ -3151,7 +3152,7 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
-
+        verbose_proxy_logger.info("🧪 DEBUG TEST — _initialize_jwt_auth reached")
     @classmethod
     def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
         """Adds a global proxy budget to db"""
@@ -3351,7 +3352,7 @@ class ProxyStartupEvent:
                 asyncio.create_task(
                     prisma_client._set_spend_logs_row_count_in_proxy_state()
                 )  # set the spend logs row count in proxy state. Don't block execution
-
+                verbose_proxy_logger.info("🧪 DEBUG TEST — startup reached")
                 # run a health check to ensure the DB is ready
                 if (
                     get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
