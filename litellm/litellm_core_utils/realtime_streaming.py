@@ -9,10 +9,11 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
-    OpenAIRealtimeResponseTextDelta,
+    OpenAIRealtimeResponseDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
+from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -55,13 +56,13 @@ class RealTimeStreaming:
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
         self.model = model
-        self.current_delta_chunks: Optional[
-            List[OpenAIRealtimeResponseTextDelta]
-        ] = None
+        self.current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]] = None
         self.current_output_item_id: Optional[str] = None
         self.current_response_id: Optional[str] = None
         self.current_conversation_id: Optional[str] = None
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
+        self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
+        self.session_configuration_request: Optional[str] = None
 
     def _should_store_message(
         self,
@@ -112,9 +113,7 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
-    async def backend_to_client_send_messages(
-        self, session_configuration_request: Optional[str] = None
-    ):
+    async def backend_to_client_send_messages(self):
         import websockets
 
         try:
@@ -132,12 +131,13 @@ class RealTimeStreaming:
                         self.model,
                         self.logging_obj,
                         realtime_response_transform_input={
-                            "session_configuration_request": session_configuration_request,
+                            "session_configuration_request": self.session_configuration_request,
                             "current_output_item_id": self.current_output_item_id,
                             "current_response_id": self.current_response_id,
                             "current_delta_chunks": self.current_delta_chunks,
                             "current_conversation_id": self.current_conversation_id,
                             "current_item_chunks": self.current_item_chunks,
+                            "current_delta_type": self.current_delta_type,
                         },
                     )
 
@@ -151,6 +151,10 @@ class RealTimeStreaming:
                         "current_conversation_id"
                     ]
                     self.current_item_chunks = returned_object["current_item_chunks"]
+                    self.current_delta_type = returned_object["current_delta_type"]
+                    self.session_configuration_request = returned_object[
+                        "session_configuration_request"
+                    ]
                     if isinstance(transformed_response, list):
                         for event in transformed_response:
                             event_str = json.dumps(event)
@@ -186,33 +190,20 @@ class RealTimeStreaming:
                 self.store_input(message=message)
                 ## FORWARD TO BACKEND
                 if self.provider_config:
-                    message = self.provider_config.transform_realtime_request(message)
+                    message = self.provider_config.transform_realtime_request(
+                        message, self.model
+                    )
 
-                await self.backend_ws.send(message)
-        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
-            verbose_logger.debug("Connection closed")
-            pass
+                    for msg in message:
+                        await self.backend_ws.send(msg)
+                else:
+                    await self.backend_ws.send(message)
+
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
-        session_configuration_request: Optional[str] = None
-        if (
-            self.provider_config
-            and self.provider_config.requires_session_configuration()
-        ):
-            session_configuration_request = (
-                self.provider_config.session_configuration_request(self.model)
-            )
-            if session_configuration_request is None:
-                raise ValueError(
-                    "Session configuration request is None, but requires_session_configuration is True"
-                )
-            await self.backend_ws.send(session_configuration_request)
-
-        forward_task = asyncio.create_task(
-            self.backend_to_client_send_messages(session_configuration_request)
-        )
+        forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
         except self.websocket.exceptions.ConnectionClosed:  # type: ignore

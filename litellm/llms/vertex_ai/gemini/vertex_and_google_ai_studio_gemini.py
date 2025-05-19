@@ -63,6 +63,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
+    CompletionTokensDetailsWrapper,
     GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
@@ -803,10 +804,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
+        response_tokens: Optional[int] = None
+        response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
             ]
+
+        ## GEMINI LIVE API ONLY PARAMS ##
+        if "responseTokenCount" in completion_response["usageMetadata"]:
+            response_tokens = completion_response["usageMetadata"]["responseTokenCount"]
+        if "responseTokensDetails" in completion_response["usageMetadata"]:
+            response_tokens_details = CompletionTokensDetailsWrapper()
+            for detail in completion_response["usageMetadata"]["responseTokensDetails"]:
+                if detail["modality"] == "TEXT":
+                    response_tokens_details.text_tokens = detail["tokenCount"]
+                elif detail["modality"] == "AUDIO":
+                    response_tokens_details.audio_tokens = detail["tokenCount"]
+        #########################################################
+
         if "promptTokensDetails" in completion_response["usageMetadata"]:
             for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -823,7 +839,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             text_tokens=text_tokens,
         )
 
-        completion_tokens = completion_response["usageMetadata"].get(
+        completion_tokens = response_tokens or completion_response["usageMetadata"].get(
             "candidatesTokenCount", 0
         )
         if (
@@ -842,6 +858,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
+            completion_tokens_details=response_tokens_details,
         )
 
         return usage
@@ -1637,7 +1654,7 @@ class ModelResponseIterator:
                         "reasoning_tokens": processed_chunk["usageMetadata"].get(
                             "thoughtsTokenCount", 0
                         )
-                    }
+                    },
                 )
 
             returned_chunk = GenericStreamingChunk(

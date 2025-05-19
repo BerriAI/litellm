@@ -211,8 +211,13 @@ class PiiEntityCategoryMap(TypedDict):
     entities: List[PiiEntityType]
 
 
-class PresidioConfigModel(BaseModel):
-    """Configuration parameters for the Presidio PII masking guardrail"""
+class GuardrailParamUITypes(str, Enum):
+    BOOL = "bool"
+    STR = "str"
+
+
+class PresidioPresidioConfigModelUserInterface(BaseModel):
+    """Configuration parameters for the Presidio PII masking guardrail on LiteLLM UI"""
 
     presidio_analyzer_api_base: Optional[str] = Field(
         default=None,
@@ -222,11 +227,19 @@ class PresidioConfigModel(BaseModel):
         default=None,
         description="Base URL for the Presidio anonymizer API",
     )
+    output_parse_pii: Optional[bool] = Field(
+        default=None,
+        description="When True, LiteLLM will replace the masked text with the original text in the response",
+        # extra param to let the ui know this is a boolean
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
+
+
+class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
+    """Configuration parameters for the Presidio PII masking guardrail"""
+
     pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
-    )
-    output_parse_pii: Optional[bool] = Field(
-        default=None, description="Whether to parse PII in model outputs"
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
@@ -312,7 +325,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: str = Field(
+    mode: Union[str, List[str]] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
     api_key: Optional[str] = Field(
@@ -354,6 +367,7 @@ class LitellmParams(
 
 
 class Guardrail(TypedDict, total=False):
+    guardrail_id: Optional[str]
     guardrail_name: str
     litellm_params: LitellmParams
     guardrail_info: Optional[Dict]
@@ -382,6 +396,7 @@ class GuardrailLiteLLMParamsResponse(BaseModel):
     guardrail: str
     mode: Union[str, List[str]]
     default_on: bool = Field(default=False)
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
 
     def __init__(self, **kwargs):
         default_on = kwargs.get("default_on")
@@ -432,3 +447,14 @@ class ApplyGuardrailRequest(BaseModel):
 
 class ApplyGuardrailResponse(BaseModel):
     response_text: str
+
+
+class PatchGuardrailLitellmParams(BaseModel):
+    default_on: Optional[bool] = None
+    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
+
+
+class PatchGuardrailRequest(BaseModel):
+    guardrail_name: Optional[str] = None
+    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    guardrail_info: Optional[Dict[str, Any]] = None

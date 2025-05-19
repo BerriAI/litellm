@@ -4,11 +4,13 @@ from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     router as email_events_router,
 )
 
+from .guardrails.endpoints import router as guardrails_router
 from .utils import _should_block_robots
 from .vector_stores.endpoints import router as vector_stores_router
 
 router = APIRouter()
 router.include_router(vector_stores_router)
+router.include_router(guardrails_router)
 router.include_router(email_events_router)
 
 
