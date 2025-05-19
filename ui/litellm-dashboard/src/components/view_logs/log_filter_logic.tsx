@@ -1,86 +1,105 @@
+import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { LogEntry } from "./columns"; 
-import { uiSpendLogsCall, Organization, Team, UserInfo, teamListCall, userListCall, keyListCall as fetchAllKeysCall, modelAvailableCall } from "../networking"; 
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Setter } from "@/types";
+import { modelAvailableCall, uiSpendLogsCall } from "../networking";
+import { Team } from "../key_team_helpers/key_list";
+import { useQuery } from "@tanstack/react-query";
+import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
-import moment from "moment";
-import { fetchAllKeyAliases, fetchAllTeams } from "../key_team_helpers/filter_helpers"; // Import fetchAllTeams
+import { PaginatedResponse } from ".";
 
-// Define the shape of the filter state for logs
-export interface LogFilterState {
-  'Team ID': string;
-  'Organization ID': string; // Added for potential future use
-  'Key Alias': string;
-  'Key Hash': string;
-  'Request ID': string;
-  'Model': string;
-  'User': string; 
-  'Cache Hit': 'true' | 'false' | ''; // Example for boolean filter
-  'Status': 'success' | 'failure' | ''; // Example for status filter
-  [key: string]: string | ''; // Allow for other string-based filters
-}
+export const FILTER_KEYS = {
+  TEAM_ID: "Team ID",
+  KEY_HASH: "Key Hash",
+  REQUEST_ID: "Request ID",
+  MODEL: "Model",
+  USER_ID: "User ID",
+  STATUS: "Status",
+  KEY_ALIAS: "Key Alias",
+} as const;
 
-// Define the shape of the pagination state
-export interface PaginationState {
-  currentPage: number;
-  totalPages: number;
-  totalCount: number;
-  pageSize: number;
-}
+export type FilterKey = keyof typeof FILTER_KEYS;
+export type LogFilterState = Record<typeof FILTER_KEYS[FilterKey], string>;
 
 export function useLogFilterLogic({
+  logs,
   accessToken,
   startTime, // Receive from SpendLogsTable
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
-  initialPage = 1,
-  initialFilters = {},
+  isCustomDate,
+  setCurrentPage,
   userID,  
   userRole 
 }: {
+  logs: PaginatedResponse;
   accessToken: string | null;
   startTime: string;
   endTime: string;
   pageSize?: number;
-  initialPage?: number;
-  initialFilters?: Partial<LogFilterState>;
+  isCustomDate: boolean;
+  setCurrentPage: (page: number) => void;
   userID: string | null; 
   userRole: string | null; 
 }) {
-  const defaultFilters: LogFilterState = {
-    'Team ID': '',
-    'Organization ID': '',
-    'Key Alias': '',
-    'Key Hash': '',
-    'Request ID': '',
-    'Model': '',
-    'User': '',
-    'Cache Hit': '',
-    'Status': '',
-    ...initialFilters
-  };
+  const defaultFilters = useMemo<LogFilterState>(() => ({
+    [FILTER_KEYS.TEAM_ID]: "",
+    [FILTER_KEYS.KEY_HASH]: "",
+    [FILTER_KEYS.REQUEST_ID]: "",
+    [FILTER_KEYS.MODEL]: "",
+    [FILTER_KEYS.USER_ID]: "",
+    [FILTER_KEYS.STATUS]: "",
+    [FILTER_KEYS.KEY_ALIAS]: ""
+  }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-  const [currentPage, setCurrentPage] = useState<number>(initialPage);
-  const queryClient = useQueryClient();
-  
-  // States for manually managed data, loading, and error
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
-  const [paginationDetails, setPaginationDetails] = useState<PaginationState>({ 
-    currentPage: initialPage, 
-    totalPages: 0, 
-    totalCount: 0, 
-    pageSize 
-  });
-  const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
-  const [logsError, setLogsError] = useState<Error | null>(null);
+  const [filteredLogs, setFilteredLogs] = useState<PaginatedResponse>(logs);
   const lastSearchTimestamp = useRef(0);
+  const performSearch = useCallback(async (filters: LogFilterState, page = 1) => {
+    if (!accessToken) return;
+
+    const currentTimestamp = Date.now();
+    lastSearchTimestamp.current = currentTimestamp;
+
+    const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+    const formattedEndTime = isCustomDate
+      ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+      : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+    try {
+      const response = await uiSpendLogsCall(
+        accessToken,
+        filters[FILTER_KEYS.KEY_HASH] || undefined,
+        filters[FILTER_KEYS.TEAM_ID] || undefined,
+        filters[FILTER_KEYS.REQUEST_ID] || undefined,
+        formattedStartTime,
+        formattedEndTime,
+        page,
+        pageSize,
+        filters[FILTER_KEYS.USER_ID] || undefined,
+        filters[FILTER_KEYS.STATUS] || undefined,
+        filters[FILTER_KEYS.MODEL] || undefined
+      );
+
+      if (currentTimestamp === lastSearchTimestamp.current && response.data) {
+        setFilteredLogs(response);
+      }
+    } catch (error) {
+      console.error("Error searching users:", error);
+    }
+  }, [accessToken, startTime, endTime, isCustomDate, pageSize]);
+
+  const debouncedSearch = useMemo(
+    () => debounce((filters: LogFilterState, page: number) => performSearch(filters, page), 300),
+    [performSearch]
+  );
+
+  useEffect(() => {
+    return () => debouncedSearch.cancel();
+  }, [debouncedSearch]);
 
   const queryAllKeysQuery = useQuery({
-    queryKey: ['allKeysForLogFilters', accessToken], // Ensure unique queryKey
+    queryKey: ['allKeys'],
     queryFn: async () => {
       if (!accessToken) throw new Error('Access token required');
       return await fetchAllKeyAliases(accessToken);
@@ -89,6 +108,82 @@ export function useLogFilterLogic({
   });
   const allKeyAliases = queryAllKeysQuery.data || []
 
+  // Apply filters to keys whenever logs or filters change
+  useEffect(() => {
+    if (!logs || !logs.data) {
+      setFilteredLogs({
+        data: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 0
+      });
+      return;
+    }
+  
+    let filteredData = [...logs.data];
+  
+    if (filters[FILTER_KEYS.TEAM_ID]) {
+      filteredData = filteredData.filter(
+        log => log.team_id === filters[FILTER_KEYS.TEAM_ID]
+      );
+    }
+
+    if (filters[FILTER_KEYS.STATUS]) {
+      filteredData = filteredData.filter(
+        log => {
+          if (filters[FILTER_KEYS.STATUS] === 'success') {
+            return !log.status || log.status === 'success';
+          }
+          return log.status === filters[FILTER_KEYS.STATUS];
+        }
+      );
+    }
+
+    if (filters[FILTER_KEYS.MODEL]) {
+      filteredData = filteredData.filter(
+        log => log.model === filters[FILTER_KEYS.MODEL]
+      );
+    }
+
+    if (filters[FILTER_KEYS.KEY_HASH]) {
+      filteredData = filteredData.filter(
+        log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
+      );
+    }
+    
+    // Add key alias filtering
+    if (filters[FILTER_KEYS.KEY_ALIAS]) {
+      // We need to fetch the key info to get the key hash for the selected alias
+        try {
+          // Get the key hash for the selected alias
+          const selectedKey = filters[FILTER_KEYS.KEY_ALIAS]
+
+          if (selectedKey) {
+            // Filter logs by the key hash
+            filteredData = filteredData.filter(
+              log => log.metadata?.user_api_key_alias === selectedKey
+            );
+          }
+        } catch (error) {
+          console.error("Error fetching key info for alias:", error);
+        }
+    }
+
+    const newFilteredLogs: PaginatedResponse = {
+      data: filteredData,
+      total: logs.total,
+      page: logs.page,
+      page_size: logs.page_size,
+      total_pages: logs.total_pages,
+    };
+  
+    if (JSON.stringify(newFilteredLogs) !== JSON.stringify(filteredLogs)) {
+      setFilteredLogs(newFilteredLogs);
+    }
+  }, [logs, filters, filteredLogs, accessToken]);
+
+  
 
   // Fetch all teams and users for potential filter dropdowns (optional, can be adapted)
   const { data: allTeams } = useQuery<Team[], Error>({
@@ -99,17 +194,6 @@ export function useLogFilterLogic({
       // Assuming fetchAllTeams returns Team[] directly
       const teamsData = await fetchAllTeams(accessToken);
       return teamsData || []; // Ensure it returns an array
-    },
-    enabled: !!accessToken,
-  });
-
-  const { data: allUsers } = useQuery<UserInfo[], Error>({
-    queryKey: ["allUsersForLogFilters", accessToken],
-    queryFn: async () => {
-      if (!accessToken) return [];
-      // Assuming userListCall fetches all users. Adapt if pagination or specific params are needed.
-      const response = await userListCall(accessToken, null, 1, 1000); // Fetch a large number for dropdown
-      return response.users || [];
     },
     enabled: !!accessToken,
   });
@@ -131,145 +215,45 @@ export function useLogFilterLogic({
     },
     enabled: !!accessToken && !!userID && !!userRole,
   });
-  
-  // Debounced API call
-  const debouncedSearch = useCallback(
-    debounce(async (currentFilters: LogFilterState, pageToFetch: number) => {
-      if (!accessToken) {
-        setLogEntries([]);
-        setPaginationDetails({ currentPage: pageToFetch, totalPages: 0, totalCount: 0, pageSize });
-        setIsLoadingLogs(false);
-        setLogsError(null);
-        return;
-      }
 
-      const currentTimestamp = Date.now();
-      lastSearchTimestamp.current = currentTimestamp;
-      setIsLoadingLogs(true);
-      setLogsError(null);
-
-      try {
-        const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
-        const formattedEndTime = moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss");
-
-        const apiKeyParam = currentFilters['Key Hash'] || undefined;
-        const teamIdParam = currentFilters['Team ID'] || undefined;
-        const requestIdParam = currentFilters['Request ID'] || undefined;
-        const userIdParam = currentFilters['User'] || undefined;
-        const statusParam = currentFilters['Status'] || undefined;
-        const modelParam = currentFilters['Model'] || undefined;
-
-        const response = await uiSpendLogsCall(
-          accessToken,
-          apiKeyParam,
-          teamIdParam,
-          requestIdParam,
-          formattedStartTime,
-          formattedEndTime,
-          pageToFetch,
-          pageSize,
-          userIdParam,
-          statusParam, 
-          modelParam, 
-        );
-
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          if (response && response.data) {
-            setLogEntries(response.data);
-            setPaginationDetails({
-              currentPage: response.page,
-              totalPages: response.total_pages,
-              totalCount: response.total,
-              pageSize: response.page_size || pageSize,
-            });
-          } else {
-            setLogEntries([]);
-            setPaginationDetails({ currentPage: pageToFetch, totalPages: 0, totalCount: 0, pageSize });
-          }
-        }
-      } catch (error: any) {
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          console.error("Error fetching logs:", error);
-          setLogsError(error);
-          setLogEntries([]);
-          setPaginationDetails({ currentPage: pageToFetch, totalPages: 0, totalCount: 0, pageSize });
-        }
-      } finally {
-        if (currentTimestamp === lastSearchTimestamp.current) {
-          setIsLoadingLogs(false);
-        }
-      }
-    }, 300),
-    [accessToken, startTime, endTime, pageSize, setLogEntries, setPaginationDetails, setIsLoadingLogs, setLogsError]
-  );
-
-  // useEffect to trigger debouncedSearch when dependencies change
-  useEffect(() => {
-    if (accessToken) {
-      debouncedSearch(filters, currentPage);
-    } else {
-      // Clear data if accessToken is lost or not present
-      setLogEntries([]);
-      setPaginationDetails(prev => ({ ...prev, currentPage, totalPages: 0, totalCount: 0 }));
-      setIsLoadingLogs(false);
-      setLogsError(null);
-    }
-    // Cleanup function for debounce
-    return () => {
-      debouncedSearch.cancel();
-    };
-  }, [accessToken, filters, currentPage, startTime, endTime, pageSize, debouncedSearch]);
-
-
+  // Update filters state
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters(prev => {
-      const updatedFilters = { ...prev, ...newFilters }; // Simpler update
+      const updatedFilters = { ...prev, ...newFilters };
+      
       // Ensure all keys in LogFilterState are present, defaulting to '' if not in newFilters
       for (const key of Object.keys(defaultFilters) as Array<keyof LogFilterState>) {
         if (!(key in updatedFilters)) {
           updatedFilters[key] = defaultFilters[key];
         }
       }
+      
+      // Only call debouncedSearch if filters have actually changed
+      if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
+        setCurrentPage(1);
+        debouncedSearch(updatedFilters, 1);
+      }
+      
       return updatedFilters as LogFilterState;
     });
-    setCurrentPage(1); // Reset to first page when filters change
-    // debouncedSearch will be called by the useEffect hook
   };
+    
 
   const handleFilterReset = () => {
+    // Reset filters state
     setFilters(defaultFilters);
-    setCurrentPage(1);
-    // debouncedSearch will be called by the useEffect hook
-  };
-
-  const pagination: PaginationState = {
-    currentPage: paginationDetails.currentPage,
-    totalPages: paginationDetails.totalPages,
-    totalCount: paginationDetails.totalCount,
-    pageSize: paginationDetails.pageSize,
-  };
-
-  const handleRefresh = () => {
-    // Reset to first page
-    setCurrentPage(1);
-    // The useEffect in useLogFilterLogic will automatically trigger a refetch
-    // when currentPage changes
+    
+    // Reset selections
+    debouncedSearch(defaultFilters, 1);
   };
 
   return {
     filters,
-    filteredLogs: logEntries,
+    filteredLogs,
     allKeyAliases,
-    allTeams: allTeams || [],
-    allUsers: allUsers || [],
-    allOrganizations: [], // Placeholder for now, can be fetched if needed
-    allModels: allModels || [],
+    allTeams,
+    allModels,
     handleFilterChange,
     handleFilterReset,
-    isLoading: isLoadingLogs,
-    pagination,
-    setCurrentPage,
-    error: logsError,
-    handleRefresh
   };
-} 
+}

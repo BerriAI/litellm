@@ -34,6 +34,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -1208,8 +1209,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if budget_duration is None:  # one-time budget
         reset_at = None
     else:
-        duration_s = duration_in_seconds(duration=budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        reset_at = get_budget_reset_time(budget_duration=budget_duration)
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)

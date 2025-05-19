@@ -37,7 +37,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.1.17 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.1.21 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
 tiktoken==0.8.0 # for calculating usage
@@ -52,4 +52,8 @@ tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
-####
+
+########################
+# LITELLM ENTERPRISE DEPENDENCIES
+########################
+litellm-enterprise==0.1.4

@@ -16,6 +16,7 @@ Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to
 ### Supported Caches
 
 - In Memory Cache
+- Disk Cache
 - Redis Cache 
 - Qdrant Semantic Cache
 - Redis Semantic Cache
@@ -338,7 +339,7 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache: True          # set cache responses to True
   cache_params:
     type: "redis-semantic"  
     similarity_threshold: 0.8   # similarity threshold for semantic cache
@@ -369,6 +370,40 @@ $ litellm --config /path/to/config.yaml
 </TabItem>
 
 
+<TabItem value="local" label="In Memory Cache">
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: local
+```
+
+#### Step 2: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+</TabItem>
+
+<TabItem value="disk" label="Disk Cache">
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: disk
+    disk_cache_dir: /tmp/litellm-cache  # OPTIONAL, default to ./.litellm_cache
+```
+
+#### Step 2: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+</TabItem>
 
 </Tabs>
 

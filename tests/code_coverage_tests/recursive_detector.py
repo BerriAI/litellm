@@ -20,6 +20,8 @@ IGNORE_FUNCTIONS = [
     "_sanitize_value", # testing added for circular reference
     "set_schema_property_ordering", # testing added for infinite recursion
     "process_items", # testing added for infinite recursion + max depth set.
+    "_can_object_call_model", # max depth set.
+    "encode_unserializable_types" # max depth set.
 ]
 
 

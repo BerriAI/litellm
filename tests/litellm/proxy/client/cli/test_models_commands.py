@@ -1,6 +1,7 @@
 # stdlib imports
 import json
 import os
+import time
 from unittest.mock import patch, MagicMock
 
 # third party imports
@@ -9,7 +10,11 @@ import pytest
 
 # local imports
 from litellm.proxy.client.cli import cli
-from litellm.proxy.client.cli.commands.models import format_timestamp
+from litellm.proxy.client.cli.commands.models import (
+    format_timestamp,
+    format_iso_datetime_str,
+    format_cost_per_1k_tokens,
+)
 
 
 @pytest.fixture
@@ -28,7 +33,13 @@ def cli_runner():
 @pytest.fixture(autouse=True)
 def mock_env():
     """Fixture to set up environment variables for all tests"""
-    with patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000", "LITELLM_PROXY_API_KEY": "sk-test"}):
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_PROXY_URL": "http://localhost:4000",
+            "LITELLM_PROXY_API_KEY": "sk-test",
+        },
+    ):
         yield
 
 
@@ -63,6 +74,24 @@ def mock_models_info(mock_client):
 
     mock_client.assert_not_called()
     return mock_client
+
+
+@pytest.fixture
+def force_utc_tz():
+    """Fixture to force UTC timezone for tests that depend on system TZ."""
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    if hasattr(time, "tzset"):
+        time.tzset()
+    yield
+    # Restore previous TZ
+    if old_tz is not None:
+        os.environ["TZ"] = old_tz
+    else:
+        if "TZ" in os.environ:
+            del os.environ["TZ"]
+    if hasattr(time, "tzset"):
+        time.tzset()
 
 
 def test_models_list_json_format(mock_models_list, cli_runner):
@@ -257,3 +286,151 @@ def test_models_list_sort_by_created_desc(cli_runner, mock_models_http_response)
     idx_b = result.output.find("b-model")
     idx_a = result.output.find("a-model")
     assert 0 <= idx_c < idx_b < idx_a
+def test_models_import_only_models_matching_regex(tmp_path, mock_client, cli_runner):
+    """Test the --only-models-matching-regex option for models import command"""
+    # Prepare a YAML file with a mix of models
+    yaml_content = {
+        "model_list": [
+            {"model_name": "gpt-4-model", "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "id-1"}},
+            {"model_name": "gpt-3.5-model", "litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "id-2"}},
+            {"model_name": "llama2-model", "litellm_params": {"model": "llama2"}, "model_info": {"id": "id-3"}},
+            {"model_name": "other-model", "litellm_params": {"model": "other"}, "model_info": {"id": "id-4"}},
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Only match models containing 'gpt' in their litellm_params.model
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file), "--only-models-matching-regex", "gpt"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    # Only the two gpt models should be imported
+    calls = [call.kwargs["model_params"]["model"] for call in mock_new.call_args_list]
+    assert set(calls) == {"gpt-4", "gpt-3.5-turbo"}
+    # Should not include llama2 or other
+    assert "llama2" not in calls
+    assert "other" not in calls
+    # Output summary should mention the correct providers
+    assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
+
+
+def test_models_import_only_access_groups_matching_regex(tmp_path, mock_client, cli_runner):
+    """Test the --only-access-groups-matching-regex option for models import command"""
+    # Prepare a YAML file with a mix of models
+    yaml_content = {
+        "model_list": [
+            {
+                "model_name": "gpt-4-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "id-1", "access_groups": ["beta-models", "prod-models"]},
+            },
+            {
+                "model_name": "gpt-3.5-model",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "id-2", "access_groups": ["alpha-models"]},
+            },
+            {
+                "model_name": "llama2-model",
+                "litellm_params": {"model": "llama2"},
+                "model_info": {"id": "id-3", "access_groups": ["beta-models"]},
+            },
+            {
+                "model_name": "other-model",
+                "litellm_params": {"model": "other"},
+                "model_info": {"id": "id-4", "access_groups": ["other-group"]},
+            },
+            {
+                "model_name": "no-access-group-model",
+                "litellm_params": {"model": "no-access"},
+                "model_info": {"id": "id-5"},
+            },
+        ]
+    }
+    import yaml as pyyaml
+
+    yaml_file = tmp_path / "models.yaml"
+    with open(yaml_file, "w") as f:
+        pyyaml.safe_dump(yaml_content, f)
+
+    # Patch client.models.new to track calls
+    mock_new = mock_client.return_value.models.new
+
+    # Only match models with access_groups containing 'beta'
+    result = cli_runner.invoke(cli, ["models", "import", str(yaml_file), "--only-access-groups-matching-regex", "beta"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    # Only the two models with 'beta-models' in access_groups should be imported
+    calls = [call.kwargs["model_params"]["model"] for call in mock_new.call_args_list]
+    assert set(calls) == {"gpt-4", "llama2"}
+    # Should not include gpt-3.5, other, or no-access
+    assert "gpt-3.5-turbo" not in calls
+    assert "other" not in calls
+    assert "no-access" not in calls
+    # Output summary should mention the correct providers
+    assert "gpt-4".split("-")[0] in result.output or "gpt" in result.output
+
+
+@pytest.mark.parametrize(
+    "input_str,expected",
+    [
+        (None, ""),
+        ("", ""),
+        ("2024-05-01T12:34:56Z", "2024-05-01 12:34"),
+        ("2024-05-01T12:34:56+00:00", "2024-05-01 12:34"),
+        ("2024-05-01T12:34:56.123456+00:00", "2024-05-01 12:34"),
+        ("2024-05-01T12:34:56.123456Z", "2024-05-01 12:34"),
+        ("2024-05-01T12:34:56-04:00", "2024-05-01 12:34"),
+        ("2024-05-01", "2024-05-01 00:00"),
+        ("not-a-date", "not-a-date"),
+    ],
+)
+def test_format_iso_datetime_str(input_str, expected):
+    assert format_iso_datetime_str(input_str) == expected
+
+
+@pytest.mark.parametrize(
+    "input_val,expected",
+    [
+        (None, ""),
+        (1699848889, "2023-11-13 04:14"),
+        (1699848889.0, "2023-11-13 04:14"),
+        ("not-a-timestamp", "not-a-timestamp"),
+        ([1, 2, 3], "[1, 2, 3]"),
+    ],
+)
+def test_format_timestamp(input_val, expected, force_utc_tz):
+    actual = format_timestamp(input_val)
+    if actual != expected:
+        print(f"input: {input_val}, expected: {expected}, actual: {actual}")
+    assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "input_val,expected",
+    [
+        (None, ""),
+        (0, "$0.0000"),
+        (0.0, "$0.0000"),
+        (0.00001, "$0.0100"),
+        (0.00002, "$0.0200"),
+        (1, "$1000.0000"),
+        (1.5, "$1500.0000"),
+        ("0.00001", "$0.0100"),
+        ("1.5", "$1500.0000"),
+        ("not-a-number", "not-a-number"),
+        (1e-10, "$0.0000"),
+    ],
+)
+def test_format_cost_per_1k_tokens(input_val, expected):
+    actual = format_cost_per_1k_tokens(input_val)
+    if actual != expected:
+        print(f"input: {input_val}, expected: {expected}, actual: {actual}")
+    assert actual == expected
