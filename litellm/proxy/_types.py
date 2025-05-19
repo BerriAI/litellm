@@ -1987,6 +1987,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Lago Billing",
     )
 
+    scope3: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="scope3",
+        litellm_callback_params=[
+            "SCOPE3_API_BASE",
+            "SCOPE3_ACCESS_TOKEN",
+        ],
+        ui_callback_name="Scope3",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
