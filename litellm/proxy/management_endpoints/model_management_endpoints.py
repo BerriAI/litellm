@@ -501,6 +501,13 @@ async def delete_model(
             premium_user=premium_user,
         )
 
+        # delete team model alias
+        if model_params.model_info.team_id is not None:
+            await delete_team_model_alias(
+                public_model_name=model_params.model_name,
+                prisma_client=prisma_client,
+            )
+
         # update DB
         if store_model_in_db is True:
             """
@@ -563,6 +570,34 @@ async def delete_model(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+async def delete_team_model_alias(
+    public_model_name: str,
+    prisma_client: PrismaClient,
+):
+    """
+    Delete a team model alias
+
+    Iterate through all team model aliases and delete the one that matches the model_id
+    """
+    team_model_aliases = await prisma_client.db.litellm_modeltable.find_many()
+    tasks = []
+    for team_model_alias in team_model_aliases:
+        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        id = team_model_alias.id
+        if public_model_name in model_aliases.values():
+            key = list(model_aliases.keys())[
+                list(model_aliases.values()).index(public_model_name)
+            ]
+            del model_aliases[key]
+            tasks.append(
+                prisma_client.db.litellm_modeltable.update(
+                    where={"id": id},
+                    data={"model_aliases": json.dumps(model_aliases)},
+                )
+            )
+    await asyncio.gather(*tasks)
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964

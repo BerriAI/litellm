@@ -199,3 +199,101 @@ class TestModelManagementAuthChecks:
                 premium_user=True,
             )
         assert "403" in str(exc_info.value)
+
+
+class MockModelTable:
+    def __init__(self, model_aliases):
+        self.model_aliases = model_aliases
+        self.id = "test_id"
+
+
+class MockPrismaDB:
+    def __init__(self, model_aliases_list):
+        self.litellm_modeltable = self
+        self.model_aliases_list = model_aliases_list
+        self.update_calls = []
+
+    async def find_many(self):
+        return [MockModelTable(aliases) for aliases in self.model_aliases_list]
+
+    async def update(self, where, data):
+        self.update_calls.append({"where": where, "data": data})
+        return None
+
+
+class MockPrismaWrapper:
+    def __init__(self, model_aliases_list):
+        self.litellm_modeltable = MockPrismaDB(model_aliases_list)
+
+
+class TestDeleteTeamModelAlias:
+    @pytest.mark.asyncio
+    async def test_delete_team_model_alias_success(self):
+        """Test successful deletion of a team model alias"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        # Setup test data
+        model_aliases_list = [
+            {"alias1": "public_model_1", "alias2": "public_model_2"},
+            {
+                "alias3": "public_model_3",
+                "alias4": "public_model_1",
+            },  # public_model_1 appears twice
+        ]
+
+        # Create mock prisma client
+        mock_prisma = PrismaClient(database_url="test_url", proxy_logging_obj=None)
+        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+
+        # Call the function
+        await delete_team_model_alias(
+            public_model_name="public_model_1", prisma_client=mock_prisma
+        )
+
+        # Verify results
+        mock_db = mock_prisma.db.litellm_modeltable
+        assert (
+            len(mock_db.update_calls) == 2
+        )  # Should have 2 update calls since public_model_1 appears twice
+
+        # Verify first update
+        first_update = mock_db.update_calls[0]
+        assert first_update["where"] == {"id": "test_id"}
+        assert json.loads(first_update["data"]["model_aliases"]) == {
+            "alias2": "public_model_2"
+        }
+
+        # Verify second update
+        second_update = mock_db.update_calls[1]
+        assert second_update["where"] == {"id": "test_id"}
+        assert json.loads(second_update["data"]["model_aliases"]) == {
+            "alias3": "public_model_3"
+        }
+
+    @pytest.mark.asyncio
+    async def test_delete_team_model_alias_no_matches(self):
+        """Test deletion when no matching model alias exists"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        # Setup test data with no matching model
+        model_aliases_list = [
+            {"alias1": "public_model_1", "alias2": "public_model_2"},
+            {"alias3": "public_model_3", "alias4": "public_model_4"},
+        ]
+
+        # Create mock prisma client
+        mock_prisma = PrismaClient(database_url="test_url", proxy_logging_obj=None)
+        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+
+        # Call the function with non-existent model
+        await delete_team_model_alias(
+            public_model_name="non_existent_model", prisma_client=mock_prisma
+        )
+
+        # Verify no updates were made
+        mock_db = mock_prisma.db.litellm_modeltable
+        assert len(mock_db.update_calls) == 0
