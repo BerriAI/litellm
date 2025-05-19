@@ -147,6 +147,7 @@ class LitellmTableNames(str, enum.Enum):
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
+    CONFIG_TABLE_NAME = "LiteLLM_Config"
 
 
 class Litellm_EntityType(enum.Enum):
