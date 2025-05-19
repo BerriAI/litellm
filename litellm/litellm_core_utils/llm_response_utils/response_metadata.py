@@ -39,8 +39,9 @@ class ResponseMetadata:
 
         ## ADD OTHER HIDDEN PARAMS
         model_id = kwargs.get("model_info", {}).get("id", None)
+        response_cost: float | None
         if model and str(model).startswith("ollama"):
-            response_cost = 0
+            response_cost = 0.0
         else:
             response_cost = logging_obj._response_cost_calculator(
             result=self.result, litellm_model_name=model, router_model_id=model_id
