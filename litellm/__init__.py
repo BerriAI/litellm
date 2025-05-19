@@ -599,7 +599,7 @@ def add_known_models():
             cerebras_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
-        elif value.get("litellm_provider") == "sambanova_models":
+        elif value.get("litellm_provider") == "sambanova":
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
