@@ -5,18 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-from litellm.proxy.proxy_server import (
-    LITELLM_PROXY_ADMIN_NAME,
-    LitellmTableNames,
-    LitellmUserRoles,
-    ProxyErrorTypes,
-    ProxyException,
-    prisma_client,
-    store_model_in_db,
-)
-from litellm.proxy.types import UserAPIKeyAuth
 from litellm.types.proxy.management_endpoints.router_management_endpoints import (
     GetRouterSettingsResponse,
     PatchRouterSettingsRequest,
@@ -38,6 +30,16 @@ async def update_router_settings(
     Update router settings in the database.
     Only accessible by proxy admin users.
     """
+    from litellm.proxy.proxy_server import (
+        LITELLM_PROXY_ADMIN_NAME,
+        LitellmTableNames,
+        LitellmUserRoles,
+        ProxyErrorTypes,
+        ProxyException,
+        prisma_client,
+        store_model_in_db,
+    )
+
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -70,7 +72,7 @@ async def update_router_settings(
         )
 
         # new router settings
-        new_router_settings = copy.deepcopy(existing_router_settings)
+        new_router_settings: dict = copy.deepcopy(dict(existing_router_settings))
 
         # update new router settings with request body
         new_router_settings.update(router_settings.model_dump(exclude_none=True))
@@ -81,12 +83,10 @@ async def update_router_settings(
             data={
                 "create": {
                     "param_name": "router_settings",
-                    "param_value": new_router_settings,
-                    "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                    "param_value": safe_dumps(new_router_settings),
                 },
                 "update": {
-                    "param_value": new_router_settings,
-                    "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                    "param_value": safe_dumps(new_router_settings),
                 },
             },
         )
@@ -132,6 +132,14 @@ async def get_router_settings(
     Get current router settings from the database.
     Only accessible by proxy admin users.
     """
+    from litellm.proxy.proxy_server import (
+        LitellmUserRoles,
+        ProxyErrorTypes,
+        ProxyException,
+        prisma_client,
+        store_model_in_db,
+    )
+
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -164,7 +172,12 @@ async def get_router_settings(
         if router_settings is None:
             return {"router_settings": {}}
 
-        return GetRouterSettingsResponse(**router_settings.param_value)
+        router_settings_dict = {}
+        if isinstance(router_settings.param_value, str):
+            router_settings_dict = safe_json_loads(router_settings.param_value)
+        elif isinstance(router_settings.param_value, dict):
+            router_settings_dict = router_settings.param_value
+        return GetRouterSettingsResponse(**router_settings_dict)
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting router settings: {str(e)}")
