@@ -616,14 +616,6 @@ async def proxy_startup_event(app: FastAPI):
     except Exception as e:
         verbose_proxy_logger.warning(f"⚠️ Failed to write startup marker: {e}")
 
-    if scheduler.running:
-        jobs = scheduler.get_jobs()
-        verbose_proxy_logger.info(f"📆 Scheduler running with {len(jobs)} jobs")
-        for job in jobs:
-            verbose_proxy_logger.info(f"↪️ Job {job.id}: next run = {job.next_run_time}")
-    else:
-        verbose_proxy_logger.warning("⚠️ Scheduler not running!")
-
     verbose_proxy_logger.info("✅ Reached `yield` in proxy_startup_event")
     yield
     verbose_proxy_logger.info("⏹️ Exiting `proxy_startup_event`, initiating shutdown.")
