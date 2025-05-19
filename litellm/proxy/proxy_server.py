@@ -495,6 +495,8 @@ async def proxy_shutdown_event():
 async def proxy_startup_event(app: FastAPI):
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
+    import os
+
 
     init_verbose_loggers()
     ## CHECK PREMIUM USER
@@ -605,11 +607,21 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    with open("/tmp/litellm-started", "w") as f:
+        f.write("ok\n")
+    verbose_proxy_logger.debug("🟢 LiteLLM startup marker written to /tmp/litellm-started")
+
+
     # End of startup event
     yield
+    verbose_proxy_logger.debug("✅ FastAPI proxy startup_event completed")
+
 
     # Shutdown event
     await proxy_shutdown_event()
+    if os.path.exists("/tmp/litellm-started"):
+        os.remove("/tmp/litellm-started")
+        verbose_proxy_logger.debug("🔴 LiteLLM shutdown — startup marker removed")
 
 
 app = FastAPI(
