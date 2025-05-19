@@ -32,9 +32,6 @@ class Scope3Logger(CustomLogger):
         self.async_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        self.async_http_handler = httpx.AsyncClient()
-        if self.async_http_handler is None:
-            raise AssertionError("Failed to get async httpx client")
         self.sync_http_handler = HTTPHandler()
         self.url = os.getenv("SCOPE3_API_BASE", "https://aiapi.scope3.com")
         if self.url.endswith("/"):
