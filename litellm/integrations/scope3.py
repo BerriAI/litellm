@@ -3,8 +3,7 @@
 
 import json
 import os
-import traceback
-from typing import Literal, Optional
+from typing import Optional
 from datetime import datetime, timezone
 
 import httpx
@@ -72,7 +71,7 @@ class Scope3Logger(CustomLogger):
         if kwargs.get("response_headers") and kwargs["response_headers"].get("openai-processing-ms"):
             log_row["processing_duration_ms"] = float(kwargs["response_headers"]["openai-processing-ms"])
 
-        if kwargs.get("litellm_params") != None and kwargs["litellm_params"].get("metadata") != None:
+        if kwargs.get("litellm_params") is not None and kwargs["litellm_params"].get("metadata") is not None:
             metadata = kwargs.get("litellm_params", {}).get("metadata")
             for key, value in metadata.items():
                 if key.startswith("scope3_"):  
