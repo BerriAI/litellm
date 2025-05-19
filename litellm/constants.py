@@ -223,6 +223,7 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "novita",
     "meta_llama",
+    "featherless_ai",
     "nscale",
 ]
 
@@ -292,6 +293,7 @@ openai_compatible_endpoints: List = [
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
+    "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
 ]
 
@@ -325,6 +327,7 @@ openai_compatible_providers: List = [
     "galadriel",
     "novita",
     "meta_llama",
+    "featherless_ai",
     "nscale",
 ]
 openai_text_completion_compatible_providers: List = (
@@ -334,6 +337,7 @@ openai_text_completion_compatible_providers: List = (
         "hosted_vllm",
         "meta_llama",
         "llamafile",
+        "featherless_ai",
     ]
 )
 _openai_like_providers: List = [
@@ -480,6 +484,18 @@ baseten_models: List = [
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+featherless_ai_models: List = [
+    "featherless-ai/Qwerky-72B",
+    "featherless-ai/Qwerky-QwQ-32B",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "all-hands/openhands-lm-32b-v0.1",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "mistralai/Mistral-Small-24B-Instruct-2501",
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+]
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -616,9 +632,11 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
-PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics_job"
+PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
+SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
+SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
-    os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
+    os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)git
 )  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
