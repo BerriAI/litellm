@@ -151,23 +151,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (accessToken == null) {
         return;
       }
-  
+
       const member: Member = {
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
       }
-      console.log("🧪 DEBUG TEST — member:", member);
-  
-      const response = await teamMemberUpdateCall(accessToken, teamId, member);
-      console.log("🧪 DEBUG TEST — response:", response);
-  
+      message.destroy(); // Remove all existing toasts
+
+      await teamMemberUpdateCall(accessToken, teamId, member);
+
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
       fetchTeamInfo();
     } catch (error: any) {
       let errMsg = "Failed to update team member";
-  
       if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
         errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
       } else if (error?.message) {
@@ -175,7 +173,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       setIsEditMemberModalVisible(false);
 
-  
+      message.destroy(); // Remove all existing toasts
+
       message.error(errMsg);
       console.error("Error updating team member:", error);
     }
