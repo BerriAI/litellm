@@ -230,7 +230,7 @@ LITELLM_CHAT_PROVIDERS = [
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
-    "hosted_vllm"
+    "hosted_vllm",
 ]
 
 
@@ -593,6 +593,7 @@ PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
+MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################

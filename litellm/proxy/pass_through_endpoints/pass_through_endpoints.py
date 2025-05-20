@@ -23,6 +23,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -734,7 +735,7 @@ async def pass_through_request(  # noqa: PLR0915
             original_exception=e,
             request_data=_parsed_body or {},
             traceback_str=traceback.format_exc(
-                limit=100,
+                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
             ),
         )
 
