@@ -40,7 +40,6 @@ from litellm.proxy._types import (
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
