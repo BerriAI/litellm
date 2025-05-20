@@ -1,4 +1,5 @@
 from typing import Union
+from litellm import verbose_logger
 
 # dynamic import to allow usage even if httpx is not installed in dev env
 try:
@@ -7,7 +8,6 @@ except ImportError:
     httpx = None  # type: ignore
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
 
 class OllamaError(BaseLLMException):
     def __init__(
@@ -91,13 +91,15 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 nm = entry.get('name') or entry.get('model')
                 if isinstance(nm, str):
                     names.add(nm)
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"Error retrieving ollama tag endpoint: {e}")
             # If tags endpoint fails, fall back to static list
             try:
                 from litellm import models_by_provider
                 static = models_by_provider.get("ollama", []) or []
                 return [f"ollama/{m}" for m in static]
-            except Exception:
+            except Exception as e1:
+                verbose_logger.warning(f"Error retrieving static ollama models as fallback: {e1}")
                 return []
         # assemble full model names
         result = sorted(names)

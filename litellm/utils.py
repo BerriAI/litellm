@@ -5827,7 +5827,7 @@ def _get_valid_models_from_provider_api(
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []
 
 
@@ -5892,7 +5892,7 @@ def get_valid_models(
 
         return valid_models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []  # NON-Blocking
 
 
