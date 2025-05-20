@@ -116,6 +116,10 @@ class PassthroughEndpointRouter:
         Add the vertex credentials for the given project-id, location
         """
 
+        verbose_router_logger.debug(
+            f"Adding vertex credentials for project_id: {project_id}, location: {location}, vertex_credentials length: {len(vertex_credentials)}"
+        )
+
         deployment_key = self._get_deployment_key(
             project_id=project_id,
             location=location,
