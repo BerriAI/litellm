@@ -9,6 +9,7 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
+  Button as TremorButton,
 } from "@tremor/react";
 import {
   Input,
@@ -166,14 +167,13 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
   };
 
   return (
-    <Card className="shadow-md rounded-lg">
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <Title className="text-xl font-semibold">Model Group Aliases</Title>
-          <Text className="text-gray-500">
-            Map model alias names to actual model names. Aliases can be used interchangeably with the original model names in API calls.
-          </Text>
-        </div>
+    <div>
+    <Title>Model Group Aliases</Title>
+    <Text className="text-tremor-content">
+      Map model alias names to actual model names. Aliases can be used interchangeably with the original model names in API calls.
+    </Text>
+    <Card className="shadow-md rounded-lg mt-6">
+      <div className="flex justify-between items-center mb-4">
         <Tooltip title="Reload aliases">
           <Button 
             type="default" 
@@ -233,25 +233,23 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
           
           <div className="flex items-end gap-2 md:w-1/5">
             <Form.Item className="mb-0 flex-grow">
-              <Button 
-                type="primary"
-                htmlType="submit"
+              <TremorButton 
+                variant="primary"
                 loading={formLoading}
-                icon={editingAlias ? <PencilIcon className="h-4 w-4" /> : <PlusIcon className="h-4 w-4" />}
-                block
               >
                 {editingAlias ? "Update" : "Add Alias"}
-              </Button>
+              </TremorButton>
             </Form.Item>
             
             {editingAlias && (
               <Form.Item className="mb-0">
-                <Button 
+                <TremorButton 
+                  variant="secondary"
                   onClick={handleCancelEdit}
                   disabled={formLoading}
                 >
                   Cancel
-                </Button>
+                </TremorButton>
               </Form.Item>
             )}
           </div>
@@ -321,6 +319,7 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
         </div>
       </Spin>
     </Card>
+    </div>
   );
 };
 
