@@ -2,12 +2,11 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankRequest
+from litellm.types.rerank import OptionalRerankParams
 from litellm.types.utils import RerankResponse
 
 
@@ -42,14 +41,17 @@ class MorphRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
         custom_llm_provider: Optional[str] = None,
         top_n: Optional[int] = None,
-        return_documents: Optional[bool] = True,
+        rank_fields: Optional[List[str]] = None,
+        return_documents: Optional[bool] = None,
+        max_chunks_per_doc: Optional[int] = None,
+        max_tokens_per_doc: Optional[int] = None,
         embedding_ids: Optional[List[str]] = None,
     ) -> OptionalRerankParams:
         """
@@ -58,18 +60,25 @@ class MorphRerankConfig(BaseRerankConfig):
         Returns all supported params
         """
         # Start with basic parameters
-        params = OptionalRerankParams(
-            query=query,
-            documents=documents,
-            top_n=top_n,
-            return_documents=return_documents,
-        )
+        params: OptionalRerankParams = {
+            "query": query,
+            "documents": documents,
+        }
         
+        # Add optional parameters
+        if top_n is not None:
+            params["top_n"] = top_n
+        if return_documents is not None:
+            params["return_documents"] = return_documents
+            
         # Add Morph-specific parameter if available
-        if embedding_ids:
-            params["embedding_ids"] = embedding_ids
+        if embedding_ids is not None:
+            # We can't add this directly to OptionalRerankParams because it's not in the TypedDict
+            # but we need to pass it to the API, so we'll add it as a custom parameter
+            params = dict(params)  # type: ignore
+            params["embedding_ids"] = embedding_ids  # type: ignore
         
-        return params
+        return params  # type: ignore
 
     def validate_environment(
         self,
@@ -106,25 +115,30 @@ class MorphRerankConfig(BaseRerankConfig):
             raise ValueError("query is required for Morph rerank")
         
         # Either documents or embedding_ids must be provided
-        if "documents" not in optional_rerank_params and "embedding_ids" not in optional_rerank_params:
+        documents_provided = "documents" in optional_rerank_params
+        # Cast to dict to access embedding_ids which is not in the OptionalRerankParams type
+        params_dict = dict(optional_rerank_params)  # type: ignore
+        embedding_ids_provided = "embedding_ids" in params_dict
+        
+        if not documents_provided and not embedding_ids_provided:
             raise ValueError("Either documents or embedding_ids is required for Morph rerank")
         
         # Create request with the model name stripped of any prefix
-        request_data = {
+        request_data: Dict[str, Any] = {
             "model": model.replace("morph/", ""),
             "query": optional_rerank_params["query"],
         }
         
         # Add either documents or embedding_ids
-        if "documents" in optional_rerank_params:
+        if documents_provided:
             request_data["documents"] = optional_rerank_params["documents"]
-        if "embedding_ids" in optional_rerank_params:
-            request_data["embedding_ids"] = optional_rerank_params["embedding_ids"]
+        if embedding_ids_provided:
+            request_data["embedding_ids"] = params_dict.get("embedding_ids")
         
         # Add optional parameters
-        if "top_n" in optional_rerank_params:
+        if "top_n" in optional_rerank_params and optional_rerank_params["top_n"] is not None:
             request_data["top_n"] = optional_rerank_params["top_n"]
-        if "return_documents" in optional_rerank_params:
+        if "return_documents" in optional_rerank_params and optional_rerank_params["return_documents"] is not None:
             request_data["return_documents"] = optional_rerank_params["return_documents"]
             
         return request_data

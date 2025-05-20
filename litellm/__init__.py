@@ -858,6 +858,8 @@ from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.morph.embedding.transformation import MorphEmbeddingConfig
+from .llms.morph.rerank.transformation import MorphRerankConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
@@ -1044,7 +1046,6 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 )
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.morph.embedding.transformation import MorphEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.volcengine import VolcEngineConfig
