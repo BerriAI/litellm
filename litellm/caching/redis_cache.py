@@ -57,11 +57,12 @@ class RedisCache(BaseCache):
         socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
-        from litellm._service_logger import ServiceLogging
+    from litellm._service_logger import ServiceLogging
+    from litellm import verbose_logger # Ensure verbose_logger is available if not already imported at top level
 
-        from .._redis import get_redis_client, get_redis_connection_pool
+    from .._redis import get_redis_client, get_redis_connection_pool
 
-        redis_kwargs = {}
+    redis_kwargs = {}
         if host is not None:
             redis_kwargs["host"] = host
         if port is not None:
@@ -136,27 +137,27 @@ class RedisCache(BaseCache):
     def init_async_client(
         self,
     ) -> Union[async_redis_client, async_redis_cluster_client]:
-        from litellm import in_memory_llm_clients_cache
-
+        # Always create a new client and connection pool for the current event loop
+        # This prevents "Task attached to a different loop" errors in multi-loop scenarios.
         from .._redis import get_redis_async_client, get_redis_connection_pool
-
-        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
-        if cached_client is not None:
-            redis_async_client = cast(
-                Union[async_redis_client, async_redis_cluster_client], cached_client
-            )
-        else:
-            # Create new connection pool and client for current event loop
-            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
-            redis_async_client = get_redis_async_client(
-                connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-            )
-            in_memory_llm_clients_cache.set_cache(
-                key="async-redis-client", value=self.redis_async_client
-            )
-
-        self.redis_async_client = redis_async_client  # type: ignore
-        return redis_async_client
+        
+        verbose_logger.debug(
+            "init_async_client: Creating new async Redis connection pool and client for the current event loop."
+        )
+        
+        # Create a new connection pool. This pool will be associated with the current event loop.
+        current_connection_pool = get_redis_connection_pool(**self.redis_kwargs)
+        
+        # Create a new async Redis client using the new pool.
+        current_redis_client = get_redis_async_client(
+            connection_pool=current_connection_pool, **self.redis_kwargs
+        )
+        
+        # Note: We are not assigning these to self.async_redis_conn_pool or self.redis_async_client here
+        # because this RedisCache instance might be shared. If we stored them on self,
+        # a subsequent call to init_async_client from a different loop might incorrectly
+        # reuse these loop-bound objects. Returning a fresh client ensures loop safety.
+        return current_redis_client # type: ignore
 
     def check_and_fix_namespace(self, key: str) -> str:
         """
