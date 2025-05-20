@@ -687,8 +687,8 @@ async def _base_vertex_proxy_route(
         headers.pop("content-length", None)
         headers.pop("host", None)
     else:
-        vertex_project = vertex_credentials.vertex_project
-        vertex_location = vertex_credentials.vertex_location
+        vertex_project = vertex_credentials.vertex_project or vertex_project
+        vertex_location = vertex_credentials.vertex_location or vertex_location
         vertex_credentials_str = vertex_credentials.vertex_credentials
 
         _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
