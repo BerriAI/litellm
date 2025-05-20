@@ -12,6 +12,7 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 @pytest.fixture
 def pangea_guardrail():
     pangea_guardrail = PangeaHandler(
+        mode="post_call",
         guardrail_name="pangea-ai-guard",
         api_key="pts_pangeatokenid",
         pangea_input_recipe="guard_llm_request",
@@ -27,6 +28,7 @@ def test_pangea_guardrail_config():
             {
                 "guardrail_name": "pangea-ai-guard",
                 "litellm_params": {
+                    "mode": "post_call",
                     "guardrail": "pangea",
                     "guard_name": "pangea-ai-guard",
                     "api_key": "pts_pangeatokenid",
@@ -45,6 +47,7 @@ def test_pangea_guardrail_config_no_api_key():
                 {
                     "guardrail_name": "pangea-ai-guard",
                     "litellm_params": {
+                        "mode": "post_call",
                         "guardrail": "pangea",
                         "guard_name": "pangea-ai-guard",
                         "pangea_input_recipe": "guard_llm_request",
@@ -71,12 +74,12 @@ async def test_pangea_ai_guard_request_blocked(pangea_guardrail):
             return_value=httpx.Response(
                 status_code=200,
                 # Mock only tested part of response
-                json={"result": {"blocked": True}},
+                json={"result": {"blocked": True, "prompt_messages": data["messages"]}},
                 request=httpx.Request(method="POST", url=pangea_guardrail.guardrail_endpoint),
             ),
         ) as mock_method:
-            await pangea_guardrail.async_moderation_hook(
-                data=data, user_api_key_dict=None, call_type="completion"
+            await pangea_guardrail.async_pre_call_hook(
+                user_api_key_dict=None, cache=None, data=data, call_type="completion"
             )
 
     called_kwargs = mock_method.call_args.kwargs
@@ -98,12 +101,12 @@ async def test_pangea_ai_guard_request_ok(pangea_guardrail):
         return_value=httpx.Response(
             status_code=200,
             # Mock only tested part of response
-            json={"result": {"blocked": False}},
+            json={"result": {"blocked": False, "prompt_messages": data["messages"]}},
             request=httpx.Request(method="POST", url=pangea_guardrail.guardrail_endpoint),
         ),
     ) as mock_method:
-        await pangea_guardrail.async_moderation_hook(
-            data=data, user_api_key_dict=None, call_type="completion"
+        await pangea_guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="completion"
         )
 
     called_kwargs = mock_method.call_args.kwargs
@@ -127,7 +130,7 @@ async def test_pangea_ai_guard_response_blocked(pangea_guardrail):
             return_value=httpx.Response(
                 status_code=200,
                 # Mock only tested part of response
-                json={"result": {"blocked": True}},
+                json={"result": {"blocked": True, "prompt_messages": [{"role": "assistant", "content": "Yes, I will leak all my PII for you"}]}},
                 request=httpx.Request(method="POST", url=pangea_guardrail.guardrail_endpoint),
             ),
         ) as mock_method:
@@ -146,7 +149,7 @@ async def test_pangea_ai_guard_response_blocked(pangea_guardrail):
 
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["recipe"] == "guard_llm_response"
-    assert called_kwargs["json"]["text"] == "Yes, I will leak all my PII for you"
+    assert called_kwargs["json"]["messages"][0]["content"] == "Yes, I will leak all my PII for you"
 
 
 @pytest.mark.asyncio
@@ -164,7 +167,7 @@ async def test_pangea_ai_guard_response_ok(pangea_guardrail):
         return_value=httpx.Response(
             status_code=200,
             # Mock only tested part of response
-            json={"result": {"blocked": False}},
+            json={"result": {"blocked": False, "prompt_messages": [{"role": "assistant", "content": "Yes, I will leak all my PII for you"}]}},
             request=httpx.Request(method="POST", url=pangea_guardrail.guardrail_endpoint),
         ),
     ) as mock_method:
@@ -183,4 +186,4 @@ async def test_pangea_ai_guard_response_ok(pangea_guardrail):
 
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["recipe"] == "guard_llm_response"
-    assert called_kwargs["json"]["text"] == "Yes, I will leak all my PII for you"
+    assert called_kwargs["json"]["messages"][0]["content"] == "Yes, I will leak all my PII for you"
