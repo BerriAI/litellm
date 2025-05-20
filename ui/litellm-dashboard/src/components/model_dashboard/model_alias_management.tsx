@@ -23,6 +23,7 @@ import {
   Empty,
   Divider,
   Modal,
+  Typography,
 } from "antd";
 import {
   PencilIcon,
@@ -32,6 +33,8 @@ import {
   RefreshIcon,
 } from "@heroicons/react/outline";
 import { getRouterSettings, updateRouterSettings, modelAvailableCall } from "../networking";
+
+const { Text: AntText } = Typography;
 
 interface ModelAliasManagementProps {
   accessToken: string;
@@ -246,7 +249,8 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
       </Text>
       <Card className="shadow-md rounded-lg mt-6 border border-gray-200">
         <div className="flex justify-between items-center mb-4">
-          <Tooltip title="Reload aliases">
+          <h3 className="text-base font-medium text-gray-700 m-0">Configured Aliases</h3>
+          <Tooltip title="Refresh aliases">
             <Button 
               type="default" 
               icon={<RefreshIcon className="h-4 w-4 text-blue-600" />} 
@@ -267,49 +271,57 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
           className="mb-8 p-6 bg-gray-50 rounded-md border border-gray-200 shadow-sm"
           initialValues={{ aliasName: "", targetModel: "" }}
         >
-          <div className="flex flex-col md:flex-row md:items-end gap-4">
-            <Form.Item
-              name="aliasName"
-              label={<span className="font-medium text-gray-700">Alias Name</span>}
-              className="mb-0 md:w-2/5"
-              rules={[{ required: true, message: "Please enter an alias name" }]}
-            >
-              <Input 
-                placeholder="Enter alias name" 
-                disabled={formLoading}
-                className="rounded-md border-gray-300 hover:border-blue-400 focus:border-blue-500 transition-colors"
-                suffix={
-                  <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
-                    <InformationCircleIcon className="h-4 w-4 text-gray-400" />
-                  </Tooltip>
-                }
-              />
-            </Form.Item>
-            
-            <Form.Item
-              name="targetModel"
-              label={<span className="font-medium text-gray-700">Target Model</span>}
-              className="mb-0 md:w-2/5"
-              rules={[{ required: true, message: "Please select a target model" }]}
-            >
-              <Select
-                placeholder="Select model"
-                disabled={formLoading}
-                showSearch
-                optionFilterProp="children"
-                className="rounded-md border-gray-300"
-                dropdownStyle={{ borderRadius: '0.375rem' }}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+            <div className="md:col-span-5">
+              <Form.Item
+                name="aliasName"
+                label={<span className="font-medium text-gray-700">Alias Name</span>}
+                rules={[{ 
+                  required: true,
+                  message: "Please enter an alias name"
+                }]}
               >
-                {availableModels.map((model, idx) => (
-                  <Select.Option key={idx} value={model}>
-                    {model}
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
+                <Input 
+                  placeholder="Enter alias name" 
+                  disabled={formLoading}
+                  className="rounded-md border-gray-300 hover:border-blue-400 focus:border-blue-500 transition-colors"
+                  suffix={
+                    <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
+                      <InformationCircleIcon className="h-4 w-4 text-gray-400" />
+                    </Tooltip>
+                  }
+                />
+              </Form.Item>
+            </div>
             
-            <div className="md:w-1/5">
-              <Form.Item className="mb-0 flex-grow">
+            <div className="md:col-span-5">
+              <Form.Item
+                name="targetModel"
+                label={<span className="font-medium text-gray-700">Target Model</span>}
+                rules={[{ 
+                  required: true,
+                  message: "Please select a target model"
+                }]}
+              >
+                <Select
+                  placeholder="Select model"
+                  disabled={formLoading}
+                  showSearch
+                  optionFilterProp="children"
+                  className="rounded-md border-gray-300"
+                  dropdownStyle={{ borderRadius: '0.375rem' }}
+                >
+                  {availableModels.map((model, idx) => (
+                    <Select.Option key={idx} value={model}>
+                      {model}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </div>
+            
+            <div className="md:col-span-2 flex items-end">
+              <Form.Item className="w-full">
                 <TremorButton 
                   variant="primary"
                   loading={formLoading}
@@ -369,15 +381,6 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                         className="my-6"
                       >
-                        <Button 
-                          type="primary" 
-                          icon={<PlusIcon className="h-4 w-4 mr-1" />}
-                          onClick={() => addForm.setFieldsValue({ aliasName: "", targetModel: "" })}
-                          disabled={formLoading}
-                          className="bg-blue-600 hover:bg-blue-700 border-blue-600 shadow-sm mt-2"
-                        >
-                          Create New Alias
-                        </Button>
                       </Empty>
                     </TableCell>
                   </TableRow>
@@ -408,7 +411,11 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
             <Form.Item
               name="aliasName"
               label={<span className="font-medium text-gray-700">Alias Name</span>}
-              rules={[{ required: true, message: "Please enter an alias name" }]}
+              rules={[{ 
+                required: true,
+                message: "Please enter an alias name"
+              }]}
+              className="mb-4"
             >
               <Input 
                 placeholder="Enter alias name" 
@@ -425,7 +432,11 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
             <Form.Item
               name="targetModel"
               label={<span className="font-medium text-gray-700">Target Model</span>}
-              rules={[{ required: true, message: "Please select a target model" }]}
+              rules={[{ 
+                required: true,
+                message: "Please select a target model"
+              }]}
+              className="mb-6"
             >
               <Select
                 placeholder="Select model"
@@ -442,7 +453,7 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
               </Select>
             </Form.Item>
             
-            <div className="flex justify-end gap-3 mt-8">
+            <div className="flex justify-end gap-3">
               <TremorButton
                 variant="secondary"
                 onClick={closeEditModal}
