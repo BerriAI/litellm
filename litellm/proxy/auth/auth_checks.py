@@ -103,7 +103,7 @@ async def common_checks(
 
     # 2. If team can call model
     if _model and team_object:
-        if not await can_team_access_model(
+        if not can_team_access_model(
             model=_model,
             team_object=team_object,
             llm_router=llm_router,
@@ -1284,7 +1284,7 @@ def can_org_access_model(
     )
 
 
-async def can_team_access_model(
+def can_team_access_model(
     model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],

@@ -14,6 +14,7 @@ from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
 
 from litellm.proxy._types import Litellm_EntityType, WebhookEvent
 from litellm.types.enterprise.enterprise_callbacks.send_emails import (
+    EmailEvent,
     SendKeyCreatedEmailEvent,
 )
 
@@ -199,3 +200,81 @@ async def test_send_key_created_email_no_email(
     # Test that it raises ValueError
     with pytest.raises(ValueError, match="User email not found"):
         await base_email_logger.send_key_created_email(event)
+
+
+@pytest.mark.asyncio
+async def test_get_invitation_link(base_email_logger):
+    # Mock prisma client and its response
+    mock_invitation_row = mock.MagicMock()
+    mock_invitation_row.id = "test-invitation-id"
+
+    mock_prisma = mock.MagicMock()
+
+    # Create an async mock for find_many
+    async def mock_find_many(*args, **kwargs):
+        return [mock_invitation_row]
+
+    mock_prisma.db.litellm_invitationlink.find_many = mock_find_many
+
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        # Test with valid user_id
+        result = await base_email_logger._get_invitation_link(
+            user_id="test-user", base_url="http://test.com"
+        )
+        assert result == "http://test.com/ui?invitation_id=test-invitation-id"
+
+        # Test with None user_id
+        result = await base_email_logger._get_invitation_link(
+            user_id=None, base_url="http://test.com"
+        )
+        assert result == "http://test.com"
+
+        # Test with no invitation links
+        async def mock_find_many_empty(*args, **kwargs):
+            return []
+
+        mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
+        result = await base_email_logger._get_invitation_link(
+            user_id="test-user", base_url="http://test.com"
+        )
+        assert result == "http://test.com"
+
+
+def test_construct_invitation_link(base_email_logger):
+    # Test invitation link construction
+    result = base_email_logger._construct_invitation_link(
+        invitation_id="test-id-123", base_url="http://test.com"
+    )
+    assert result == "http://test.com/ui?invitation_id=test-id-123"
+
+
+@pytest.mark.asyncio
+async def test_get_email_params_user_invitation(
+    base_email_logger, mock_lookup_user_email
+):
+    # Mock environment variables
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_LOGO_URL": "https://test-logo.com",
+            "EMAIL_SUPPORT_CONTACT": "support@test.com",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        # Mock invitation link
+        with mock.patch.object(
+            base_email_logger,
+            "_get_invitation_link",
+            return_value="http://test.com/ui?invitation_id=test-id",
+        ):
+            # Test with user invitation event
+            result = await base_email_logger._get_email_params(
+                email_event=EmailEvent.new_user_invitation,
+                user_id="test-user",
+                user_email="test@example.com",
+            )
+
+            assert result.logo_url == "https://test-logo.com"
+            assert result.support_contact == "support@test.com"
+            assert result.base_url == "http://test.com/ui?invitation_id=test-id"
+            assert result.recipient_email == "test@example.com"
