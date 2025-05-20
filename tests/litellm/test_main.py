@@ -12,7 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock, patch
-
+import urllib.parse
 import litellm
 
 
@@ -387,6 +387,17 @@ async def test_openai_env_base(
     # verify we had a response
     assert response.choices[0].message.content == "Hello from mocked response!"
 
+
+
+def build_database_url(username, password, host, dbname):
+    username_enc = urllib.parse.quote_plus(username)
+    password_enc = urllib.parse.quote_plus(password)
+    dbname_enc = urllib.parse.quote_plus(dbname)
+    return f"postgresql://{username_enc}:{password_enc}@{host}/{dbname_enc}"
+
+def test_build_database_url():
+    url = build_database_url("user@name", "p@ss:word", "localhost", "db/name")
+    assert url == "postgresql://user%40name:p%40ss%3Aword@localhost/db%2Fname"
 
 def test_bedrock_llama():
     litellm._turn_on_debug()

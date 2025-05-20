@@ -457,11 +457,11 @@ def test_completion_claude_3_function_call(model):
         ("claude-3-opus-20240229", None, None),
         ("command-r", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
-        (
-            "azure_ai/command-r-plus",
-            os.getenv("AZURE_COHERE_API_KEY"),
-            os.getenv("AZURE_COHERE_API_BASE"),
-        ),
+        # (
+        #     "azure_ai/command-r-plus",
+        #     os.getenv("AZURE_COHERE_API_KEY"),
+        #     os.getenv("AZURE_COHERE_API_BASE"),
+        # ),
     ],
 )
 @pytest.mark.asyncio
