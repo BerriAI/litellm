@@ -404,12 +404,6 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   userID={userID}
                 />
-              ) : page == "mcp-tools" ? (
-                <MCPToolsViewer
-                  accessToken={accessToken}
-                  userRole={userRole}
-                  userID={userID}
-                />
               ) : page == "tag-management" ? (
                 <TagManagement
                   accessToken={accessToken}
