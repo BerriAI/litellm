@@ -380,7 +380,7 @@ class PangeaHandler(CustomGuardrail):
             "messages": messages,
         }
         if self.pangea_output_recipe:
-            ai_guard_payload["recipe"] = self.pangea_input_recipe
+            ai_guard_payload["recipe"] = self.pangea_output_recipe
 
         ai_guard_response = await self._call_pangea_guard(ai_guard_payload, "post_call_success_hook")
         prompt_messages = ai_guard_response.get("result", {}).get("prompt_messages", [])
