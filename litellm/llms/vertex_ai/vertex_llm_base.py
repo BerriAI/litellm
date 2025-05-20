@@ -255,12 +255,21 @@ class VertexBase:
         4. If expired, refresh credentials
         5. Return access token and project id
         """
+        verbose_logger.debug(
+            f"Sandy built docker image is running"
+        )
 
         # Convert dict credentials to string for caching
         cache_credentials = (
             json.dumps(credentials) if isinstance(credentials, dict) else credentials
         )
+        verbose_logger.debug(
+            f"Sandy cache_credentials: {cache_credentials}"
+        )
         credential_cache_key = (cache_credentials, project_id)
+        verbose_logger.debug(
+            f"Sandy credential_cache_key: {credential_cache_key}"
+        )
         _credentials: Optional[GoogleCredentialsObject] = None
 
         verbose_logger.debug(
@@ -269,23 +278,25 @@ class VertexBase:
 
         if credential_cache_key in self._credentials_project_mapping:
             verbose_logger.debug(
-                f"Cached credentials found for project_id: {project_id}."
+                f"Sandy cached credentials found for project_id: {project_id}."
             )
             _credentials = self._credentials_project_mapping[credential_cache_key]
-            verbose_logger.debug("Using cached credentials")
+            verbose_logger.debug("Sandy using cached credentials")
             credential_project_id = _credentials.quota_project_id or getattr(
                 _credentials, "project_id", None
             )
-
+            verbose_logger.debug("Sandy credential_project_id: {credential_project_id}")
         else:
             verbose_logger.debug(
-                f"Credential cache key not found for project_id: {project_id}, loading new credentials"
+                f"Sandy credential cache key not found for project_id: {project_id}, loading new credentials"
             )
 
             try:
                 _credentials, credential_project_id = self.load_auth(
                     credentials=credentials, project_id=project_id
                 )
+                verbose_logger.debug("Sandy after load_auth _credentials: {_credentials}")
+                verbose_logger.debug("Sandy after load_auth credential_project_id: {credential_project_id}")
             except Exception as e:
                 verbose_logger.exception(
                     "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
@@ -302,7 +313,9 @@ class VertexBase:
             self._credentials_project_mapping[credential_cache_key] = _credentials
 
         ## VALIDATE CREDENTIALS
-        verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
+        verbose_logger.debug(f"Sandy validating credentials for project_id: {project_id}")
+        verbose_logger.debug(f"Sandy credential_project_id: {credential_project_id}")
+        verbose_logger.debug(f"Sandy project_id: {project_id}")
         if (
             project_id is not None
             and credential_project_id
@@ -321,6 +334,7 @@ class VertexBase:
             project_id = credential_project_id
 
         if _credentials.expired:
+            verbose_logger.debug("Sandy _credentials.expired: {_credentials.expired}")
             self.refresh_auth(_credentials)
 
         ## VALIDATION STEP
@@ -334,6 +348,8 @@ class VertexBase:
         if project_id is None:
             raise ValueError("Could not resolve project_id")
 
+        verbose_logger.debug("Sandy returning _credentials.token: {_credentials.token}")
+        verbose_logger.debug("Sandy returning project_id: {project_id}")
         return _credentials.token, project_id
 
     async def _ensure_access_token_async(
