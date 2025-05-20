@@ -7,12 +7,13 @@ Endpoints here:
 - GET `/v1/mcp/server/{server_id}` - Returns the the specific mcp server in the db given `server_id` filtered by requestor's access
 - GET `/v1/mcp/server/{server_id}/tools` - Get all the tools from the mcp server specified by the `server_id`
 - POST `/v1/mcp/server` - Add a new external mcp server.
+- PUT `/v1/mcp/server` -  Edits an existing mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 """
 
 from typing import Iterable, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Response, status
 from fastapi.responses import JSONResponse
 from prisma.models import LiteLLM_MCPServerTable
 
@@ -36,6 +37,7 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     UserAPIKeyAuth,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
@@ -130,6 +132,7 @@ async def fetch_mcp_server(
     exists = does_mcp_server_exist(mcp_server_records, server_id)
 
     if exists:
+        global_mcp_server_manager.add_update_server(mcp_server)
         return mcp_server
     else:
         raise HTTPException(
@@ -138,31 +141,6 @@ async def fetch_mcp_server(
                 "error": f"User does not have permission to view mcp server with id {server_id}. You can only view mcp servers that you have access to."
             },
         )
-
-@router.get(
-    "/server/{server_id}/tools",
-    description="Returns the mcp server's tools",
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=LiteLLM_MCPServerTable,
-)
-async def fetch_mcp_server_tools(
-    server_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Get all the tools from the mcp server specified by the `server_id`
-    Parameters:
-    - server_id: str - Required. The unique identifier of the mcp server to get info on.
-    ```
-    curl --location 'http://localhost:4000/v1/mcp/server/server_id/tools' \
-    --header 'Authorization: Bearer your_api_key_here'
-    ```
-    """
-    # TODO: Find the mcp servers for the key and make tool call request
-    # TODO: implement authz restriction from requested user
-    # TODO: request the tools
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="Coming soon!")
-
 
 @router.post(
     "/server",
@@ -212,11 +190,12 @@ async def add_mcp_server(
 
     # TODO: audit log for create
 
-    # attempt to create the mcp server
+    # Attempt to create the mcp server
     try:
         new_mcp_server = await create_mcp_server(
             prisma_client, payload, touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
+        global_mcp_server_manager.add_update_server(new_mcp_server)
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
         raise HTTPException(
@@ -275,6 +254,7 @@ async def remove_mcp_server(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": f"MCP Server not found, passed server_id={server_id}"},
         )
+    global_mcp_server_manager.remove_server(mcp_server_record_deleted)
 
     # TODO: Enterprise: Finish audit log trail
     if litellm.store_audit_logs:
@@ -283,6 +263,8 @@ async def remove_mcp_server(
     # TODO: Delete from virtual keys
 
     # TODO: Delete from teams
+
+    # Update from global mcp store
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
@@ -327,7 +309,7 @@ async def edit_mcp_server(
             },
         )
 
-    # try to delete the mcp server
+    # try to update the mcp server
     mcp_server_record_updated = await update_mcp_server(prisma_client, payload, touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME)
 
     if mcp_server_record_updated is None:
@@ -335,6 +317,7 @@ async def edit_mcp_server(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
         )
+    global_mcp_server_manager.add_update_server(mcp_server_record_updated)
 
     # TODO: Enterprise: Finish audit log trail
     if litellm.store_audit_logs:

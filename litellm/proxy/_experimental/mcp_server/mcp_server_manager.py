@@ -80,7 +80,20 @@ class MCPServerManager:
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
-    def add_server(self, mcp_server: LiteLLM_MCPServerTable):
+    def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
+        """
+        Remove a server from the registry
+        """
+        if mcp_server.alias in self.get_registry():
+            del self.registry[mcp_server.alias]
+            verbose_logger.debug(f"Removed MCP Server: {mcp_server.alias}")
+        elif mcp_server.server_id in self.get_registry():
+            del self.registry[mcp_server.server_id]
+            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_id}")
+        else:
+            verbose_logger.warning(f"Server ID {mcp_server.server_id} not found in registry")
+    
+    def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             new_server = MCPServer(
                 name=mcp_server.alias or mcp_server.server_id,

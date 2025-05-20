@@ -28,7 +28,7 @@ LiteLLM exposes the following MCP endpoints:
 - POST `/mcp/tools/call` - Call a specific tool with the provided arguments
 - GET `/v1/mcp/server` - Returns all of the configured mcp servers in the db filtered by requestor's access
 - GET `/v1/mcp/server/{server_id}` - Returns the the specific mcp server in the db given `server_id` filtered by requestor's access
-- GET `/v1/mcp/server/{server_id}/tools` - Get all the tools from the mcp server specified by the `server_id`
+- PUT  `/v1/mcp/server` - Updates an existing external mcp server.
 - POST `/v1/mcp/server` - Add a new external mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 

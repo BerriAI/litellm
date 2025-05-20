@@ -11,7 +11,6 @@ from fastapi.responses import StreamingResponse
 from prisma.models import LiteLLM_MCPServerTable
 from pydantic import ConfigDict, ValidationError
 
-from litellm._version import version
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -283,7 +282,7 @@ if MCP_AVAILABLE:
             )
         # ensure the global_mcp_server_manager is up to date with the db
         for server in db_mcp_servers:
-            global_mcp_server_manager.add_server(server)
+            global_mcp_server_manager.add_update_server(server)
 
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
         for server in global_mcp_server_manager.get_registry().values():
