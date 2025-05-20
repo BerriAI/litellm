@@ -22,6 +22,7 @@ import {
   Space,
   Empty,
   Divider,
+  Modal,
 } from "antd";
 import {
   PencilIcon,
@@ -44,12 +45,14 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
   onRefresh,
 }) => {
   const [modelGroupAliases, setModelGroupAliases] = useState<Record<string, string>>({});
-  const [newAliasName, setNewAliasName] = useState<string>("");
-  const [selectedModelForAlias, setSelectedModelForAlias] = useState<string>("");
-  const [editingAlias, setEditingAlias] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [formLoading, setFormLoading] = useState<boolean>(false);
-  const [form] = Form.useForm();
+  const [addForm] = Form.useForm();
+  const [editForm] = Form.useForm();
+  
+  // Modal state
+  const [isEditModalVisible, setIsEditModalVisible] = useState<boolean>(false);
+  const [editingAlias, setEditingAlias] = useState<string | null>(null);
 
   // Fetch router settings
   useEffect(() => {
@@ -80,8 +83,45 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
     }
   };
 
-  // Handle adding or updating a model group alias
-  const handleSaveModelGroupAlias = async (values: any) => {
+  // Handle adding a new model group alias
+  const handleAddModelGroupAlias = async (values: any) => {
+    const { aliasName, targetModel } = values;
+    
+    if (!accessToken || !aliasName || !targetModel) {
+      message.error("Alias name and model selection are required");
+      return;
+    }
+
+    setFormLoading(true);
+    try {
+      const updatedAliases = { ...modelGroupAliases };
+      updatedAliases[aliasName] = targetModel;
+      
+      await updateRouterSettings(accessToken, {
+        model_group_alias: updatedAliases
+      });
+      
+      setModelGroupAliases(updatedAliases);
+      addForm.resetFields();
+      
+      message.success({
+        content: "Model alias created successfully",
+        key: 'aliasUpdate',
+      });
+      onRefresh();
+    } catch (error) {
+      console.error("Failed to save model group alias:", error);
+      message.error({
+        content: "Failed to create model alias",
+        key: 'aliasError',
+      });
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  // Handle updating a model group alias
+  const handleUpdateModelGroupAlias = async (values: any) => {
     const { aliasName, targetModel } = values;
     
     if (!accessToken || !aliasName || !targetModel) {
@@ -93,7 +133,7 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
     try {
       const updatedAliases = { ...modelGroupAliases };
       
-      // If editing, remove the old alias first
+      // If alias name changed, remove the old one
       if (editingAlias && editingAlias !== aliasName) {
         delete updatedAliases[editingAlias];
       }
@@ -105,18 +145,17 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
       });
       
       setModelGroupAliases(updatedAliases);
-      form.resetFields();
-      setEditingAlias(null);
+      closeEditModal();
       
       message.success({
-        content: `Model alias ${editingAlias ? 'updated' : 'created'} successfully`,
+        content: "Model alias updated successfully",
         key: 'aliasUpdate',
       });
       onRefresh();
     } catch (error) {
-      console.error("Failed to save model group alias:", error);
+      console.error("Failed to update model group alias:", error);
       message.error({
-        content: `Failed to ${editingAlias ? 'update' : 'create'} model alias`,
+        content: "Failed to update model alias",
         key: 'aliasError',
       });
     } finally {
@@ -152,17 +191,20 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
     }
   };
 
-  // Handle editing a model group alias
-  const handleEditModelGroupAlias = (aliasName: string) => {
+  // Handle opening the edit modal
+  const openEditModal = (aliasName: string) => {
     setEditingAlias(aliasName);
-    form.setFieldsValue({
+    editForm.setFieldsValue({
       aliasName: aliasName,
       targetModel: modelGroupAliases[aliasName] || "",
     });
+    setIsEditModalVisible(true);
   };
 
-  const handleCancelEdit = () => {
-    form.resetFields();
+  // Handle closing the edit modal
+  const closeEditModal = () => {
+    editForm.resetFields();
+    setIsEditModalVisible(false);
     setEditingAlias(null);
   };
 
@@ -186,10 +228,11 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
       
       <Divider className="my-5" />
       
+      {/* Add New Alias Form */}
       <Form
-        form={form}
+        form={addForm}
         layout="horizontal"
-        onFinish={handleSaveModelGroupAlias}
+        onFinish={handleAddModelGroupAlias}
         className="mb-8 p-5 bg-gray-50 rounded-md border border-gray-200"
         initialValues={{ aliasName: "", targetModel: "" }}
       >
@@ -237,21 +280,9 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
                 variant="primary"
                 loading={formLoading}
               >
-                {editingAlias ? "Update" : "Add Alias"}
+                Add Alias
               </TremorButton>
             </Form.Item>
-            
-            {editingAlias && (
-              <Form.Item className="mb-0">
-                <TremorButton 
-                  variant="secondary"
-                  onClick={handleCancelEdit}
-                  disabled={formLoading}
-                >
-                  Cancel
-                </TremorButton>
-              </Form.Item>
-            )}
           </div>
         </div>
       </Form>
@@ -277,7 +308,7 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
                         <Button
                           type="text"
                           icon={<PencilIcon className="h-4 w-4 text-blue-500" />}
-                          onClick={() => handleEditModelGroupAlias(alias)}
+                          onClick={() => openEditModal(alias)}
                           disabled={formLoading}
                           className="hover:bg-blue-50"
                         />
@@ -305,7 +336,7 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
                       <Button 
                         type="primary" 
                         icon={<PlusIcon className="h-4 w-4" />}
-                        onClick={() => form.setFieldsValue({ aliasName: "", targetModel: "" })}
+                        onClick={() => addForm.setFieldsValue({ aliasName: "", targetModel: "" })}
                         disabled={formLoading}
                       >
                         Create New Alias
@@ -318,6 +349,74 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
           </Table>
         </div>
       </Spin>
+      
+      {/* Edit Modal */}
+      <Modal
+        title="Edit Model Alias"
+        open={isEditModalVisible}
+        onCancel={closeEditModal}
+        footer={null}
+        maskClosable={!formLoading}
+        closable={!formLoading}
+      >
+        <Form
+          form={editForm}
+          layout="vertical"
+          onFinish={handleUpdateModelGroupAlias}
+          initialValues={{ aliasName: "", targetModel: "" }}
+        >
+          <Form.Item
+            name="aliasName"
+            label="Alias Name"
+            rules={[{ required: true, message: "Please enter an alias name" }]}
+          >
+            <Input 
+              placeholder="Enter alias name" 
+              disabled={formLoading}
+              suffix={
+                <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
+                  <InformationCircleIcon className="h-4 w-4 text-gray-400" />
+                </Tooltip>
+              }
+            />
+          </Form.Item>
+          
+          <Form.Item
+            name="targetModel"
+            label="Target Model"
+            rules={[{ required: true, message: "Please select a target model" }]}
+          >
+            <Select
+              placeholder="Select model"
+              disabled={formLoading}
+              showSearch
+              optionFilterProp="children"
+            >
+              {availableModels.map((model, idx) => (
+                <Select.Option key={idx} value={model}>
+                  {model}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          
+          <div className="flex justify-end gap-2 mt-4">
+            <TremorButton
+              variant="secondary"
+              onClick={closeEditModal}
+              disabled={formLoading}
+            >
+              Cancel
+            </TremorButton>
+            <TremorButton
+              variant="primary"
+              loading={formLoading}
+            >
+              Update Alias
+            </TremorButton>
+          </div>
+        </Form>
+      </Modal>
     </Card>
     </div>
   );
