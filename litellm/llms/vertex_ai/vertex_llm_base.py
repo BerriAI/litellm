@@ -98,6 +98,9 @@ class VertexBase:
             if project_id is None:
                 project_id = creds_project_id
 
+        verbose_logger.debug(
+            f"Refreshing credentials for project_id: {project_id}, creds: {creds}"
+        )
         self.refresh_auth(creds)
 
         if not project_id:
@@ -311,6 +314,9 @@ class VertexBase:
                     credentials=credentials, project_id=project_id
                 )
             except Exception as e:
+                import traceback
+
+                traceback.print_exc()
                 verbose_logger.exception(
                     f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Tried using project_id: {project_id}. Error: {str(e)}"
                 )
