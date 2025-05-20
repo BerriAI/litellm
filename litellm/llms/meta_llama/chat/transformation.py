@@ -20,22 +20,25 @@ class LlamaAPIConfig(OpenAIGPTConfig):
         Tool calling, Functional Calling, tool choice are not working right now
         response_format: only json_schema is working
         """
-        supports_function_calling: Optional[bool] = None
-        supports_tool_choice: Optional[bool] = None
+        from litellm.utils import supports_function_calling, supports_tool_choice
+
+        supports_function_calling_flag: Optional[bool] = None
+        supports_tool_choice_flag: Optional[bool] = None
         try:
-            model_info = get_model_info(model, custom_llm_provider="meta_llama")
-            supports_function_calling = model_info.get(
-                "supports_function_calling", False
+            supports_function_calling_flag = supports_function_calling(
+                model, custom_llm_provider="meta_llama"
             )
-            supports_tool_choice = model_info.get("supports_tool_choice", False)
+            supports_tool_choice_flag = supports_tool_choice(
+                model, custom_llm_provider="meta_llama"
+            )
         except Exception as e:
             verbose_logger.debug(f"Error getting supported openai params: {e}")
             pass
 
         optional_params = super().get_supported_openai_params(model)
-        if not supports_function_calling:
+        if not supports_function_calling_flag:
             optional_params.remove("function_call")
-        if not supports_tool_choice:
+        if not supports_tool_choice_flag:
             optional_params.remove("tools")
             optional_params.remove("tool_choice")
         return optional_params
