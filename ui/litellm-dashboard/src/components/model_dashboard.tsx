@@ -1256,7 +1256,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               {accessToken && (
                 <ModelAliasManagement 
                   accessToken={accessToken}
-                  availableModels={availableModelGroups}
+                  userID={userID}
+                  userRole={userRole}
                   onRefresh={handleRefreshClick}
                 />
               )}

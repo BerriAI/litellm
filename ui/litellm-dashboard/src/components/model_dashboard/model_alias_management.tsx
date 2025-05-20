@@ -31,24 +31,27 @@ import {
   InformationCircleIcon,
   RefreshIcon,
 } from "@heroicons/react/outline";
-import { getRouterSettings, updateRouterSettings } from "../networking";
+import { getRouterSettings, updateRouterSettings, modelAvailableCall } from "../networking";
 
 interface ModelAliasManagementProps {
   accessToken: string;
-  availableModels: string[];
   onRefresh: () => void;
+  userID?: string;
+  userRole?: string;
 }
 
 const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
   accessToken,
-  availableModels,
   onRefresh,
+  userID,
+  userRole,
 }) => {
   const [modelGroupAliases, setModelGroupAliases] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [formLoading, setFormLoading] = useState<boolean>(false);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   
   // Modal state
   const [isEditModalVisible, setIsEditModalVisible] = useState<boolean>(false);
@@ -58,6 +61,33 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
   useEffect(() => {
     fetchRouterSettings();
   }, [accessToken]);
+
+  // Fetch available models
+  useEffect(() => {
+    fetchAvailableModels();
+  }, [accessToken, userID, userRole]);
+
+  const fetchAvailableModels = async () => {
+    if (!accessToken || !userID || !userRole) return;
+
+    try {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      
+      const available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      
+      console.log("available_model_names for aliases:", available_model_names);
+      setAvailableModels(available_model_names);
+    } catch (error) {
+      console.error("Error fetching available models:", error);
+      message.error("Failed to load available models");
+    }
+  };
 
   const fetchRouterSettings = async () => {
     if (!accessToken) return;
