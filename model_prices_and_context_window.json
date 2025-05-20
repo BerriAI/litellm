@@ -12745,5 +12745,25 @@
         "max_output_tokens": 4096,
         "litellm_provider": "featherless_ai",
         "mode": "chat"
+    },
+    "morph/morph-v2": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "litellm_provider": "morph",
+        "mode": "chat"
+    },
+    "morph/morph-embedding-v2": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "morph",
+        "mode": "embedding"
+    },
+    "morph/morph-rerank-v2": {
+        "max_tokens": 8192,
+        "input_cost_per_query": 0.000001,
+        "litellm_provider": "morph",
+        "mode": "rerank"
     }
 }

@@ -434,6 +434,7 @@ cloudflare_models: List = []
 codestral_models: List = []
 friendliai_models: List = []
 featherless_ai_models: List = []
+morph_models: List = []
 palm_models: List = []
 groq_models: List = []
 azure_models: List = []
@@ -611,6 +612,8 @@ def add_known_models():
             snowflake_models.append(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.append(key)
+        elif value.get("litellm_provider") == "morph":
+            morph_models.append(key)
 
 
 add_known_models()
@@ -691,6 +694,7 @@ model_list = (
     + llama_models
     + featherless_ai_models
     + nscale_models
+    + morph_models
 )
 
 model_list_set = set(model_list)
@@ -752,6 +756,7 @@ models_by_provider: dict = {
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
+    "morph": morph_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -852,6 +857,7 @@ from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
+from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
@@ -1038,6 +1044,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
 )
 from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from .llms.morph.embedding.transformation import MorphEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.volcengine import VolcEngineConfig
