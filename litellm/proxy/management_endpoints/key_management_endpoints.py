@@ -684,6 +684,16 @@ def prepare_key_update_data(
     return non_default_values
 
 
+def is_different_team(
+    data: UpdateKeyRequest, existing_key_row: LiteLLM_VerificationToken
+) -> bool:
+    if data.team_id is None:
+        return False
+    if existing_key_row.team_id is None:
+        return True
+    return data.team_id != existing_key_row.team_id
+
+
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -790,9 +800,9 @@ async def update_key_fn(
         )
 
         # if team change - check if this is possible
-        if data.team_id is not None:
+        if is_different_team(data=data, existing_key_row=existing_key_row):
             team_obj = await get_team_object(
-                team_id=data.team_id,
+                team_id=cast(str, data.team_id),
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 check_db_only=True,
