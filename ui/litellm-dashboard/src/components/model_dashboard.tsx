@@ -112,7 +112,7 @@ import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
-import { all_admin_roles } from "@/utils/roles";
+import { all_admin_roles, isAdminRole } from "@/utils/roles";
 import { Table as TableInstance } from '@tanstack/react-table';
 
 interface ModelDashboardProps {
@@ -1055,12 +1055,27 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           }}
         />
       ) : (
+        
         <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-          
+          <div className="mb-4">
+            {isAdminRole(userRole) && (
+              <Button 
+                className="mx-auto" 
+                onClick={() => {
+                  const addModelTab = document.querySelector('[data-tab="add-model"]');
+                  if (addModelTab) {
+                    (addModelTab as HTMLElement).click();
+                  }
+                }}
+              >
+                + Create New Model
+              </Button>
+            )}
+          </div>
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab>Add Model</Tab>
+              <Tab data-tab="add-model">Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
@@ -1098,6 +1113,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         </Text>
                       )}
                     </div>
+                    
                   </div>
 
                   <div className="bg-white rounded-lg shadow">
