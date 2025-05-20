@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from typing import Dict, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -64,12 +65,16 @@ async def update_router_settings(
                 detail={"error": "Only proxy admin users can update router settings"},
             )
 
-        existing_router_settings = (
-            await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "router_settings"}
-            )
-            or {}
+        router_settings_row = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "router_settings"}
         )
+        existing_router_settings: dict = {}
+        if router_settings_row:
+            param_value: Union[Dict, str] = router_settings_row.param_value
+            if isinstance(param_value, str):
+                existing_router_settings = safe_json_loads(data=param_value)
+            elif isinstance(param_value, dict):
+                existing_router_settings = param_value
 
         # new router settings
         new_router_settings: dict = copy.deepcopy(dict(existing_router_settings))
@@ -86,6 +91,7 @@ async def update_router_settings(
                     "param_value": safe_dumps(new_router_settings),
                 },
                 "update": {
+                    "param_name": "router_settings",
                     "param_value": safe_dumps(new_router_settings),
                 },
             },
