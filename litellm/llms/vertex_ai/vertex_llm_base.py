@@ -312,7 +312,7 @@ class VertexBase:
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {str(e)}"
                 )
                 raise e
 
