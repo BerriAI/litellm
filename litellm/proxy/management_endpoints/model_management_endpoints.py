@@ -11,6 +11,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 #### MODEL MANAGEMENT ####
 
 import asyncio
+import datetime
 import json
 import uuid
 from typing import Dict, List, Literal, Optional, Union, cast
@@ -119,9 +120,12 @@ def update_db_model(
         )
 
     if "model_info" in merged_deployment_dict:
-        prisma_compatible_model_dict["model_info"] = json.dumps(
-            merged_deployment_dict["model_info"]
-        )
+        model_info = merged_deployment_dict["model_info"]
+        for key, value in model_info.items():
+            if isinstance(value, datetime.datetime):
+                model_info[key] = value.isoformat()
+        prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
+
     return prisma_compatible_model_dict
 
 

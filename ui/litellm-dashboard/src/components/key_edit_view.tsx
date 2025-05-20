@@ -169,6 +169,20 @@ export function KeyEditView({
         <Input.TextArea rows={10} />
       </Form.Item>
 
+      <Form.Item label="Team ID" name="team_id">
+        <Select
+          placeholder="Select team"
+          style={{ width: "100%" }}
+        >
+          {/* Only show All Team Models if team has models */}
+          {teams?.map(team => (
+            <Select.Option key={team.team_id} value={team.team_id}>
+              {`${team.team_alias} (${team.team_id})`}
+            </Select.Option>
+          ))}
+        </Select>
+      </Form.Item>
+
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
         <Input />
