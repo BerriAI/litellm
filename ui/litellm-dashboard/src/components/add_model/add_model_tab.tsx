@@ -72,7 +72,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   return (
     <>
-      <Title>Create new model</Title>
       <Card>
         <Form
           form={form}

@@ -258,6 +258,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
 
+  const [isAddModelModalVisible, setIsAddModelModalVisible] = useState<boolean>(false);
+
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -1061,12 +1063,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             {isAdminRole(userRole) && (
               <Button 
                 className="mx-auto" 
-                onClick={() => {
-                  const addModelTab = document.querySelector('[data-tab="add-model"]');
-                  if (addModelTab) {
-                    (addModelTab as HTMLElement).click();
-                  }
-                }}
+                onClick={() => setIsAddModelModalVisible(true)}
               >
                 + Create New Model
               </Button>
@@ -1075,14 +1072,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <TabList className="flex justify-between mt-2 w-full items-center">
             <div className="flex">
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab data-tab="add-model">Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1243,22 +1238,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Grid>
             </TabPanel>
             <TabPanel className="h-full">
-              <AddModelTab
-                form={form}
-                handleOk={handleOk}
-                selectedProvider={selectedProvider}
-                setSelectedProvider={setSelectedProvider}
-                providerModels={providerModels}
-                setProviderModelsFn={setProviderModelsFn}
-                getPlaceholder={getPlaceholder}
-                uploadProps={uploadProps}
-                showAdvancedSettings={showAdvancedSettings}
-                setShowAdvancedSettings={setShowAdvancedSettings}
-                teams={teams}
-                credentials={credentialsList}
-                accessToken={accessToken}
-                userRole={userRole}
-              />
+              <Modal
+                title="Create New Model"
+                open={isAddModelModalVisible}
+                onCancel={() => setIsAddModelModalVisible(false)}
+                footer={null}
+                width={800}
+                style={{ top: 20 }}
+              >
+                <AddModelTab
+                  form={form}
+                  handleOk={() => {
+                    handleOk();
+                    setIsAddModelModalVisible(false);
+                  }}
+                  selectedProvider={selectedProvider}
+                  setSelectedProvider={setSelectedProvider}
+                  providerModels={providerModels}
+                  setProviderModelsFn={setProviderModelsFn}
+                  getPlaceholder={getPlaceholder}
+                  uploadProps={uploadProps}
+                  showAdvancedSettings={showAdvancedSettings}
+                  setShowAdvancedSettings={setShowAdvancedSettings}
+                  teams={teams}
+                  credentials={credentialsList}
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              </Modal>
             </TabPanel>
             <TabPanel>
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
