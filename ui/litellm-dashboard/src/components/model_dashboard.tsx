@@ -1067,12 +1067,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
               <Tab>Add Model</Tab>
               {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Aliases</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>
                 <pre>/health Models</pre>
               </Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
               {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Model Group Aliases</Tab>}
             </div>
 
             <div className="flex items-center space-x-2">
@@ -1251,6 +1251,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </TabPanel>
             <TabPanel>
               <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+            </TabPanel>
+            <TabPanel>
+              {accessToken && (
+                <ModelAliasManagement 
+                  accessToken={accessToken}
+                  availableModels={availableModelGroups}
+                  onRefresh={handleRefreshClick}
+                />
+              )}
             </TabPanel>
             <TabPanel>
               <Card>
@@ -1606,15 +1615,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
                 Save
               </Button>
-            </TabPanel>
-            <TabPanel>
-              {accessToken && (
-                <ModelAliasManagement 
-                  accessToken={accessToken}
-                  availableModels={availableModelGroups}
-                  onRefresh={handleRefreshClick}
-                />
-              )}
             </TabPanel>
             
           </TabPanels>
