@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import json
+import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
@@ -440,10 +441,10 @@ class HttpPassThroughEndpointHelpers:
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[field_name] = (
-                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                        upload_file=field_value
-                    )
+                files[
+                    field_name
+                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                    upload_file=field_value
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -470,12 +471,16 @@ async def pass_through_request(  # noqa: PLR0915
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
 ):
+    """
+    Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
     litellm_call_id = str(uuid.uuid4())
     url: Optional[httpx.URL] = None
+    _parsed_body: Optional[dict] = None
     try:
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
@@ -497,7 +502,6 @@ async def pass_through_request(  # noqa: PLR0915
             str(url)
         )
 
-        _parsed_body = None
         if custom_body:
             _parsed_body = custom_body
         else:
@@ -724,6 +728,16 @@ async def pass_through_request(  # noqa: PLR0915
                 str(e)
             )
         )
+
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_parsed_body or {},
+            traceback_str=traceback.format_exc(
+                limit=100,
+            ),
+        )
+
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -783,9 +797,9 @@ def _init_kwargs_for_pass_through_endpoint(
         "passthrough_logging_payload": passthrough_logging_payload,
     }
 
-    logging_obj.model_call_details["passthrough_logging_payload"] = (
-        passthrough_logging_payload
-    )
+    logging_obj.model_call_details[
+        "passthrough_logging_payload"
+    ] = passthrough_logging_payload
 
     return kwargs
 
