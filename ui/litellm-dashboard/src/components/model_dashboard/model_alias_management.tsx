@@ -239,215 +239,229 @@ const ModelAliasManagement: React.FC<ModelAliasManagementProps> = ({
   };
 
   return (
-    <div>
-    <Title>Model Group Aliases</Title>
-    <Text className="text-tremor-content">
-      Map model alias names to actual model names. Aliases can be used interchangeably with the original model names in API calls.
-    </Text>
-    <Card className="shadow-md rounded-lg mt-6">
-      <div className="flex justify-between items-center mb-4">
-        <Tooltip title="Reload aliases">
-          <Button 
-            type="default" 
-            icon={<RefreshIcon className="h-4 w-4 text-blue-500" />} 
-            onClick={fetchRouterSettings} 
-            disabled={isLoading}
-          />
-        </Tooltip>
-      </div>
-      
-      <Divider className="my-5" />
-      
-      {/* Add New Alias Form */}
-      <Form
-        form={addForm}
-        layout="horizontal"
-        onFinish={handleAddModelGroupAlias}
-        className="mb-8 p-5 bg-gray-50 rounded-md border border-gray-200"
-        initialValues={{ aliasName: "", targetModel: "" }}
-      >
-        <div className="flex flex-col md:flex-row gap-4">
-          <Form.Item
-            name="aliasName"
-            label="Alias Name"
-            className="mb-0 md:w-2/5"
-            rules={[{ required: true, message: "Please enter an alias name" }]}
-          >
-            <Input 
-              placeholder="Enter alias name" 
-              disabled={formLoading}
-              suffix={
-                <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
-                  <InformationCircleIcon className="h-4 w-4 text-gray-400" />
-                </Tooltip>
-              }
+    <div className="bg-white rounded-lg">
+      <Title>Model Group Aliases</Title>
+      <Text className="text-tremor-content text-sm">
+        Map model alias names to actual model names. Aliases can be used interchangeably with the original model names in API calls.
+      </Text>
+      <Card className="shadow-md rounded-lg mt-6 border border-gray-200">
+        <div className="flex justify-between items-center mb-4">
+          <Tooltip title="Reload aliases">
+            <Button 
+              type="default" 
+              icon={<RefreshIcon className="h-4 w-4 text-blue-600" />} 
+              onClick={fetchRouterSettings} 
+              disabled={isLoading}
+              className="border-blue-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
             />
-          </Form.Item>
-          
-          <Form.Item
-            name="targetModel"
-            label="Target Model"
-            className="mb-0 md:w-2/5"
-            rules={[{ required: true, message: "Please select a target model" }]}
-          >
-            <Select
-              placeholder="Select model"
-              disabled={formLoading}
-              showSearch
-              optionFilterProp="children"
-            >
-              {availableModels.map((model, idx) => (
-                <Select.Option key={idx} value={model}>
-                  {model}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          
-          <div className="flex items-end gap-2 md:w-1/5">
-            <Form.Item className="mb-0 flex-grow">
-              <TremorButton 
-                variant="primary"
-                loading={formLoading}
-              >
-                Add Alias
-              </TremorButton>
-            </Form.Item>
-          </div>
+          </Tooltip>
         </div>
-      </Form>
-      
-      <Spin spinning={isLoading} tip="Loading aliases...">
-        <div className="border rounded-md overflow-hidden">
-          <Table className="mt-0">
-            <TableHead className="bg-gray-50">
-              <TableRow>
-                <TableHeaderCell className="py-3 font-semibold text-gray-700">Alias Name</TableHeaderCell>
-                <TableHeaderCell className="py-3 font-semibold text-gray-700">Target Model</TableHeaderCell>
-                <TableHeaderCell className="py-3 font-semibold text-gray-700 w-1/6">Actions</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {Object.entries(modelGroupAliases).map(([alias, model], idx) => (
-                <TableRow key={idx} className="hover:bg-gray-50 transition-colors">
-                  <TableCell className="py-3 font-medium">{alias}</TableCell>
-                  <TableCell className="py-3 text-gray-600">{model}</TableCell>
-                  <TableCell className="py-3">
-                    <Space>
-                      <Tooltip title="Edit alias">
-                        <Button
-                          type="text"
-                          icon={<PencilIcon className="h-4 w-4 text-blue-500" />}
-                          onClick={() => openEditModal(alias)}
-                          disabled={formLoading}
-                          className="hover:bg-blue-50"
-                        />
-                      </Tooltip>
-                      <Tooltip title="Delete alias">
-                        <Button
-                          type="text"
-                          icon={<TrashIcon className="h-4 w-4 text-red-500" />}
-                          onClick={() => handleDeleteModelGroupAlias(alias)}
-                          disabled={formLoading}
-                          className="hover:bg-red-50"
-                        />
-                      </Tooltip>
-                    </Space>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {Object.keys(modelGroupAliases).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={3} className="py-12">
-                    <Empty 
-                      description="No model aliases defined" 
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    >
-                      <Button 
-                        type="primary" 
-                        icon={<PlusIcon className="h-4 w-4" />}
-                        onClick={() => addForm.setFieldsValue({ aliasName: "", targetModel: "" })}
-                        disabled={formLoading}
-                      >
-                        Create New Alias
-                      </Button>
-                    </Empty>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </Spin>
-      
-      {/* Edit Modal */}
-      <Modal
-        title="Edit Model Alias"
-        open={isEditModalVisible}
-        onCancel={closeEditModal}
-        footer={null}
-        maskClosable={!formLoading}
-        closable={!formLoading}
-      >
+        
+        <Divider className="my-5" />
+        
+        {/* Add New Alias Form */}
         <Form
-          form={editForm}
-          layout="vertical"
-          onFinish={handleUpdateModelGroupAlias}
+          form={addForm}
+          layout="horizontal"
+          onFinish={handleAddModelGroupAlias}
+          className="mb-8 p-6 bg-gray-50 rounded-md border border-gray-200 shadow-sm"
           initialValues={{ aliasName: "", targetModel: "" }}
         >
-          <Form.Item
-            name="aliasName"
-            label="Alias Name"
-            rules={[{ required: true, message: "Please enter an alias name" }]}
-          >
-            <Input 
-              placeholder="Enter alias name" 
-              disabled={formLoading}
-              suffix={
-                <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
-                  <InformationCircleIcon className="h-4 w-4 text-gray-400" />
-                </Tooltip>
-              }
-            />
-          </Form.Item>
-          
-          <Form.Item
-            name="targetModel"
-            label="Target Model"
-            rules={[{ required: true, message: "Please select a target model" }]}
-          >
-            <Select
-              placeholder="Select model"
-              disabled={formLoading}
-              showSearch
-              optionFilterProp="children"
+          <div className="flex flex-col md:flex-row md:items-end gap-4">
+            <Form.Item
+              name="aliasName"
+              label={<span className="font-medium text-gray-700">Alias Name</span>}
+              className="mb-0 md:w-2/5"
+              rules={[{ required: true, message: "Please enter an alias name" }]}
             >
-              {availableModels.map((model, idx) => (
-                <Select.Option key={idx} value={model}>
-                  {model}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          
-          <div className="flex justify-end gap-2 mt-4">
-            <TremorButton
-              variant="secondary"
-              onClick={closeEditModal}
-              disabled={formLoading}
+              <Input 
+                placeholder="Enter alias name" 
+                disabled={formLoading}
+                className="rounded-md border-gray-300 hover:border-blue-400 focus:border-blue-500 transition-colors"
+                suffix={
+                  <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
+                    <InformationCircleIcon className="h-4 w-4 text-gray-400" />
+                  </Tooltip>
+                }
+              />
+            </Form.Item>
+            
+            <Form.Item
+              name="targetModel"
+              label={<span className="font-medium text-gray-700">Target Model</span>}
+              className="mb-0 md:w-2/5"
+              rules={[{ required: true, message: "Please select a target model" }]}
             >
-              Cancel
-            </TremorButton>
-            <TremorButton
-              variant="primary"
-              loading={formLoading}
-            >
-              Update Alias
-            </TremorButton>
+              <Select
+                placeholder="Select model"
+                disabled={formLoading}
+                showSearch
+                optionFilterProp="children"
+                className="rounded-md border-gray-300"
+                dropdownStyle={{ borderRadius: '0.375rem' }}
+              >
+                {availableModels.map((model, idx) => (
+                  <Select.Option key={idx} value={model}>
+                    {model}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+            
+            <div className="md:w-1/5">
+              <Form.Item className="mb-0 flex-grow">
+                <TremorButton 
+                  variant="primary"
+                  loading={formLoading}
+                  className="w-full justify-center shadow-sm"
+                >
+                  Add Alias
+                </TremorButton>
+              </Form.Item>
+            </div>
           </div>
         </Form>
-      </Modal>
-    </Card>
+        
+        <Spin spinning={isLoading} tip="Loading aliases...">
+          <div className="border border-gray-200 rounded-md overflow-hidden shadow-sm">
+            <Table className="mt-0">
+              <TableHead className="bg-gray-50 border-b border-gray-200">
+                <TableRow>
+                  <TableHeaderCell className="py-4 font-semibold text-gray-700">Alias Name</TableHeaderCell>
+                  <TableHeaderCell className="py-4 font-semibold text-gray-700">Target Model</TableHeaderCell>
+                  <TableHeaderCell className="py-4 font-semibold text-gray-700 w-1/6 text-right pr-6">Actions</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {Object.entries(modelGroupAliases).map(([alias, model], idx) => (
+                  <TableRow key={idx} className="hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-none">
+                    <TableCell className="py-4 font-medium text-gray-800">{alias}</TableCell>
+                    <TableCell className="py-4 text-gray-600 font-mono text-sm">{model}</TableCell>
+                    <TableCell className="py-4 text-right">
+                      <Space>
+                        <Tooltip title="Edit alias">
+                          <Button
+                            type="text"
+                            icon={<PencilIcon className="h-4 w-4 text-blue-600" />}
+                            onClick={() => openEditModal(alias)}
+                            disabled={formLoading}
+                            className="hover:bg-blue-50 rounded-md"
+                          />
+                        </Tooltip>
+                        <Tooltip title="Delete alias">
+                          <Button
+                            type="text"
+                            icon={<TrashIcon className="h-4 w-4 text-red-600" />}
+                            onClick={() => handleDeleteModelGroupAlias(alias)}
+                            disabled={formLoading}
+                            className="hover:bg-red-50 rounded-md"
+                          />
+                        </Tooltip>
+                      </Space>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {Object.keys(modelGroupAliases).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="py-16">
+                      <Empty 
+                        description={<span className="text-gray-500">No model aliases defined</span>}
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        className="my-6"
+                      >
+                        <Button 
+                          type="primary" 
+                          icon={<PlusIcon className="h-4 w-4 mr-1" />}
+                          onClick={() => addForm.setFieldsValue({ aliasName: "", targetModel: "" })}
+                          disabled={formLoading}
+                          className="bg-blue-600 hover:bg-blue-700 border-blue-600 shadow-sm mt-2"
+                        >
+                          Create New Alias
+                        </Button>
+                      </Empty>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </Spin>
+        
+        {/* Edit Modal */}
+        <Modal
+          title={<span className="text-lg font-semibold">Edit Model Alias</span>}
+          open={isEditModalVisible}
+          onCancel={closeEditModal}
+          footer={null}
+          maskClosable={!formLoading}
+          closable={!formLoading}
+          className="rounded-lg"
+          width={520}
+        >
+          <Form
+            form={editForm}
+            layout="vertical"
+            onFinish={handleUpdateModelGroupAlias}
+            initialValues={{ aliasName: "", targetModel: "" }}
+            className="mt-4"
+          >
+            <Form.Item
+              name="aliasName"
+              label={<span className="font-medium text-gray-700">Alias Name</span>}
+              rules={[{ required: true, message: "Please enter an alias name" }]}
+            >
+              <Input 
+                placeholder="Enter alias name" 
+                disabled={formLoading}
+                className="rounded-md border-gray-300"
+                suffix={
+                  <Tooltip title="This name will be used in API calls as an alternative to the actual model name">
+                    <InformationCircleIcon className="h-4 w-4 text-gray-400" />
+                  </Tooltip>
+                }
+              />
+            </Form.Item>
+            
+            <Form.Item
+              name="targetModel"
+              label={<span className="font-medium text-gray-700">Target Model</span>}
+              rules={[{ required: true, message: "Please select a target model" }]}
+            >
+              <Select
+                placeholder="Select model"
+                disabled={formLoading}
+                showSearch
+                optionFilterProp="children"
+                className="rounded-md"
+              >
+                {availableModels.map((model, idx) => (
+                  <Select.Option key={idx} value={model}>
+                    {model}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+            
+            <div className="flex justify-end gap-3 mt-8">
+              <TremorButton
+                variant="secondary"
+                onClick={closeEditModal}
+                disabled={formLoading}
+                className="shadow-sm hover:bg-gray-100"
+              >
+                Cancel
+              </TremorButton>
+              <TremorButton
+                variant="primary"
+                loading={formLoading}
+                className="shadow-sm"
+              >
+                Update Alias
+              </TremorButton>
+            </div>
+          </Form>
+        </Modal>
+      </Card>
     </div>
   );
 };
