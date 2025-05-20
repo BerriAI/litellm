@@ -4,7 +4,7 @@ CRUD endpoints for storing reusable credentials.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Path
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -203,14 +203,14 @@ async def get_credential(
 
 
 @router.delete(
-    "/credentials/{credential_name}",
+    "/credentials/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
 async def delete_credential(
     request: Request,
     fastapi_response: Response,
-    credential_name: str,
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
