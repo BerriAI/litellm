@@ -52,3 +52,30 @@ If you do not want to store spend logs in DB, you can opt out with this setting
 general_settings:
   disable_spend_logs: True   # Disable writing spend logs to DB
 ```
+
+## Automatically Deleting Old Spend Logs
+
+If you're storing spend logs, it might be a good idea to delete them regularly to keep the database fast.
+
+LiteLLM lets you configure this in your `proxy_config.yaml`:
+
+```yaml
+general_settings:
+  maximum_spend_logs_retention_period: "7d"  # Delete logs older than 7 days
+
+  # Optional: how often to run cleanup
+  maximum_spend_logs_retention_interval: "1d"  # Run once per day
+```
+
+You can control how many logs are deleted per run using this environment variable:
+
+`SPEND_LOG_RUN_LOOPS=200  # Deletes up to 200,000 logs in one run (batch size = 1000)`
+
+For detailed architecture and how it works, see [Spend Logs Deletion](../proxy/spend_logs_deletion).
+
+
+
+
+
+
+
