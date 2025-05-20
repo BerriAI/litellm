@@ -57,12 +57,12 @@ class RedisCache(BaseCache):
         socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
         **kwargs,
     ):
-    from litellm._service_logger import ServiceLogging
-    from litellm import verbose_logger # Ensure verbose_logger is available if not already imported at top level
+        from litellm._service_logger import ServiceLogging
+        from litellm import verbose_logger # Ensure verbose_logger is available if not already imported at top level
 
-    from .._redis import get_redis_client, get_redis_connection_pool
+        from .._redis import get_redis_client, get_redis_connection_pool
 
-    redis_kwargs = {}
+        redis_kwargs = {}
         if host is not None:
             redis_kwargs["host"] = host
         if port is not None:
