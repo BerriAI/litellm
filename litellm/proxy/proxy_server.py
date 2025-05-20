@@ -197,6 +197,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -2706,10 +2707,10 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
-        from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
 
         try:
             guardrails_in_db: List[
@@ -2721,7 +2722,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                InitializeGuardrails.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
                     guardrail=dict(guardrail),
                 )
         except Exception as e:
@@ -3297,6 +3298,26 @@ class ProxyStartupEvent:
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
+        ### SPEND LOG CLEANUP ###
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            spend_log_cleanup = SpendLogCleanup()
+            # Get the interval from config or default to 1 day
+            retention_interval = general_settings.get(
+                "maximum_spend_logs_retention_interval", "1d"
+            )
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds,
+                    args=[prisma_client],
+                )
+            except ValueError:
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_retention_interval value"
+                )
+
         scheduler.start()
 
     @classmethod
@@ -3369,6 +3390,7 @@ async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
     team_id: Optional[str] = None,
+    include_model_access_groups: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -3389,6 +3411,7 @@ async def model_list(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     team_models: List[str] = user_api_key_dict.team_models
@@ -3408,6 +3431,7 @@ async def model_list(
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     all_models = get_complete_model_list(
@@ -3418,6 +3442,8 @@ async def model_list(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     return dict(

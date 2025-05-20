@@ -235,6 +235,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 
@@ -1824,6 +1825,7 @@ def supports_response_schema(
     PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA = [
         litellm.LlmProviders.PREDIBASE,
         litellm.LlmProviders.FIREWORKS_AI,
+        litellm.LlmProviders.LM_STUDIO,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -4884,6 +4886,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DEEPINFRA_API_KEY")
+        elif custom_llm_provider == "featherless_ai":
+            if "FEATHERLESS_AI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("FEATHERLESS_AI_API_KEY")
         elif custom_llm_provider == "gemini":
             if "GEMINI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6409,6 +6416,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.FEATHERLESS_AI == provider:
+            return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
@@ -6480,7 +6489,10 @@ class ProviderConfigManager:
         api_base: Optional[str],
         present_version_params: List[str],
     ) -> BaseRerankConfig:
-        if litellm.LlmProviders.COHERE == provider:
+        if (
+            litellm.LlmProviders.COHERE == provider
+            or litellm.LlmProviders.COHERE_CHAT == provider
+        ):
             if should_use_cohere_v1_client(api_base, present_version_params):
                 return litellm.CohereRerankConfig()
             else:
@@ -6628,6 +6640,17 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        return None
+
+    @staticmethod
+    def get_provider_realtime_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseRealtimeConfig]:
+        if LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+            return GeminiRealtimeConfig()
         return None
 
 
@@ -6864,3 +6887,11 @@ def jsonify_tools(tools: List[Any]) -> List[Dict]:
         if isinstance(tool, dict):
             new_tools.append(tool)
     return new_tools
+
+
+def get_empty_usage() -> Usage:
+    return Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+    )

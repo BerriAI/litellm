@@ -633,23 +633,23 @@ class Message(OpenAIObject):
         if audio is None:
             # delete audio from self
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, 'audio'):
+            if hasattr(self, "audio"):
                 del self.audio
 
         if annotations is None:
             # ensure default response matches OpenAI spec
             # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, 'annotations'):
+            if hasattr(self, "annotations"):
                 del self.annotations
 
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
-            if hasattr(self, 'reasoning_content'):
+            if hasattr(self, "reasoning_content"):
                 del self.reasoning_content
 
         if thinking_blocks is None:
             # ensure default response matches OpenAI spec
-            if hasattr(self, 'thinking_blocks'):
+            if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
@@ -1870,8 +1870,24 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
-    guardrail_response: Optional[Union[dict, str]]
+    guardrail_request: Optional[dict]
+    guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
+    start_time: Optional[float]
+    end_time: Optional[float]
+    duration: Optional[float]
+    """
+    Duration of the guardrail in seconds
+    """
+
+    masked_entity_count: Optional[Dict[str, int]]
+    """
+    Count of masked entities
+    {
+        "CREDIT_CARD": 2,
+        "PHONE": 1
+    }
+    """
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -2160,6 +2176,7 @@ class LlmProviders(str, Enum):
     XINFERENCE = "xinference"
     FIREWORKS_AI = "fireworks_ai"
     FRIENDLIAI = "friendliai"
+    FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"

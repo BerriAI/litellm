@@ -70,6 +70,22 @@ def remove_index_from_tool_calls(
     return
 
 
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: dict, metadata: dict
+) -> dict:
+    """
+    Helper to get litellm metadata for spend tracking
+
+    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
+    and user_api_key values are in 'metadata'.
+    """
+    potential_spend_tracking_metadata_substring = "user_api_key"
+    for key, value in metadata.items():
+        if potential_spend_tracking_metadata_substring in key:
+            litellm_metadata[key] = value
+    return litellm_metadata
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -80,6 +96,10 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     if litellm_params:
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
+        if litellm_metadata and metadata:
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
+                litellm_metadata, metadata
+            )
         if litellm_metadata:
             return litellm_metadata
         elif metadata:

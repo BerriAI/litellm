@@ -104,7 +104,8 @@ export const fetchTeamModels = async (userID: string, userRole: string, accessTo
         userID,
         userRole,
         true,
-        teamID
+        teamID,
+        true
       );
       let available_model_names = model_available["data"].map(
         (element: { id: string }) => element.id
