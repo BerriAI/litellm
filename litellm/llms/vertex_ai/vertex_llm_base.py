@@ -80,7 +80,9 @@ class VertexBase:
                     scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
                 if project_id is None:
-                    project_id = creds.quota_project_id # authorized user credentials don't have a project_id, only quota_project_id
+                    project_id = (
+                        creds.quota_project_id
+                    )  # authorized user credentials don't have a project_id, only quota_project_id
             else:
                 creds = self._credentials_from_service_account(
                     json_obj,
@@ -107,24 +109,31 @@ class VertexBase:
             )
 
         return creds, project_id
-    
+
     # Google Auth Helpers -- extracted for mocking purposes in tests
     def _credentials_from_identity_pool(self, json_obj):
         from google.auth import identity_pool
+
         return identity_pool.Credentials.from_info(json_obj)
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
-        return google.oauth2.credentials.Credentials.from_authorized_user_info(json_obj, scopes=scopes)
+
+        return google.oauth2.credentials.Credentials.from_authorized_user_info(
+            json_obj, scopes=scopes
+        )
 
     def _credentials_from_service_account(self, json_obj, scopes):
         import google.oauth2.service_account
-        return google.oauth2.service_account.Credentials.from_service_account_info(json_obj, scopes=scopes)
+
+        return google.oauth2.service_account.Credentials.from_service_account_info(
+            json_obj, scopes=scopes
+        )
 
     def _credentials_from_default_auth(self, scopes):
         import google.auth as google_auth
-        return google_auth.default(scopes=scopes)
 
+        return google_auth.default(scopes=scopes)
 
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import (
@@ -319,16 +328,6 @@ class VertexBase:
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
         if (
-            project_id is not None
-            and credential_project_id
-            and credential_project_id != project_id
-        ):
-            raise ValueError(
-                "Could not resolve project_id. Credential project_id: {} does not match requested project_id: {}".format(
-                    _credentials.quota_project_id, project_id
-                )
-            )
-        elif (
             project_id is None
             and credential_project_id is not None
             and isinstance(credential_project_id, str)
