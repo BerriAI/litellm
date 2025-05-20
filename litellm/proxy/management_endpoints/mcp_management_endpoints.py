@@ -169,6 +169,7 @@ async def fetch_mcp_server_tools(
     description="Allows creation of mcp servers",
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_MCPServerTable,
+    status_code=status.HTTP_201_CREATED,
 )
 @management_endpoint_wrapper
 async def add_mcp_server(
@@ -230,6 +231,7 @@ async def add_mcp_server(
     description="Allows deleting mcp serves in the db",
     dependencies=[Depends(user_api_key_auth)],
     response_class=JSONResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 @management_endpoint_wrapper
 async def remove_mcp_server(
