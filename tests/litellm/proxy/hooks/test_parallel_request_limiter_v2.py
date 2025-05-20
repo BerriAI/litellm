@@ -10,12 +10,12 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from enterprise.enterprise_hooks.parallel_request_limiter_v2 import (
-    _PROXY_MaxParallelRequestsHandler,
-)
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.parallel_request_limiter_v2 import (
+    _PROXY_MaxParallelRequestsHandler_v2 as _PROXY_MaxParallelRequestsHandler,
+)
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 
 
