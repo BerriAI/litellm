@@ -93,11 +93,11 @@ def test_guardrail_list_of_event_hooks():
 
 
 def test_guardrail_info_response():
-    from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams, GuardrailLiteLLMParamsResponse
+    from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams, GuardrailInfoLiteLLMParamsResponse
 
     guardrail_info = GuardrailInfoResponse(
         guardrail_name="aporia-pre-guard",
-        litellm_params=GuardrailLiteLLMParamsResponse(
+        litellm_params=GuardrailInfoLiteLLMParamsResponse(
             guardrail="aporia",
             mode="pre_call",
         ),
