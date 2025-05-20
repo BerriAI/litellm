@@ -141,8 +141,9 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
-class ToolBlock(TypedDict):
+class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    cachePoint: Optional[CachePointBlock]
 
 
 class SpecificToolChoiceBlock(TypedDict):

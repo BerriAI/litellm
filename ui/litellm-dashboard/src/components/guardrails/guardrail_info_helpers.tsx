@@ -1,9 +1,13 @@
 export enum GuardrailProviders {
     PresidioPII = "Presidio PII",
+    Bedrock = "Bedrock Guardrail",
+    Lakera = "Lakera"
 }
 
 export const guardrail_provider_map: Record<string, string> = {
     PresidioPII: "presidio",
+    Bedrock: "bedrock",
+    Lakera: "lakera_v2"
 };
 
 
@@ -21,7 +25,9 @@ export const shouldRenderPIIConfigSettings = (provider: string | null) => {
 const asset_logos_folder = '../ui/assets/logos/';
 
 export const guardrailLogoMap: Record<string, string> = {
-    [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio.png`
+    [GuardrailProviders.PresidioPII]: `${asset_logos_folder}presidio.png`,
+    [GuardrailProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+    [GuardrailProviders.Lakera]: `${asset_logos_folder}lakeraai.jpeg`
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string, displayName: string } => {

@@ -27,9 +27,12 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from langfuse.client import StatefulTraceClient
+
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
+    StatefulTraceClient = Any
 
 
 class LangFuseLogger:
@@ -626,15 +629,16 @@ class LangFuseLogger:
                         if key.lower() not in ["authorization", "cookie", "referer"]:
                             clean_headers[key] = value
 
-                # clean_metadata["request"] = {
-                #     "method": method,
-                #     "url": url,
-                #     "headers": clean_headers,
-                # }
-            trace = self.Langfuse.trace(**trace_params)
+            trace: StatefulTraceClient = self.Langfuse.trace(**trace_params)
 
             # Log provider specific information as a span
             log_provider_specific_information_as_span(trace, clean_metadata)
+
+            # Log guardrail information as a span
+            self._log_guardrail_information_as_span(
+                trace=trace,
+                standard_logging_object=standard_logging_object,
+            )
 
             generation_id = None
             usage = None
@@ -808,6 +812,47 @@ class LangFuseLogger:
             [int] The flush interval to use to initialize the Langfuse client
         """
         return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
+
+    def _log_guardrail_information_as_span(
+        self,
+        trace: StatefulTraceClient,
+        standard_logging_object: Optional[StandardLoggingPayload],
+    ):
+        """
+        Log guardrail information as a span
+        """
+        if standard_logging_object is None:
+            verbose_logger.debug(
+                "Not logging guardrail information as span because standard_logging_object is None"
+            )
+            return
+
+        guardrail_information = standard_logging_object.get(
+            "guardrail_information", None
+        )
+        if guardrail_information is None:
+            verbose_logger.debug(
+                "Not logging guardrail information as span because guardrail_information is None"
+            )
+            return
+
+        span = trace.span(
+            name="guardrail",
+            input=guardrail_information.get("guardrail_request", None),
+            output=guardrail_information.get("guardrail_response", None),
+            metadata={
+                "guardrail_name": guardrail_information.get("guardrail_name", None),
+                "guardrail_mode": guardrail_information.get("guardrail_mode", None),
+                "guardrail_masked_entity_count": guardrail_information.get(
+                    "masked_entity_count", None
+                ),
+            },
+            start_time=guardrail_information.get("start_time", None),  # type: ignore
+            end_time=guardrail_information.get("end_time", None),  # type: ignore
+        )
+
+        verbose_logger.debug(f"Logged guardrail information as span: {span}")
+        span.end()
 
 
 def _add_prompt_to_generation_params(

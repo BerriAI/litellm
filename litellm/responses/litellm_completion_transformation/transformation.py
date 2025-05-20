@@ -211,9 +211,9 @@ class LiteLLMCompletionResponsesConfig:
             _messages = litellm_completion_request.get("messages") or []
             session_messages = chat_completion_session.get("messages") or []
             litellm_completion_request["messages"] = session_messages + _messages
-            litellm_completion_request["litellm_trace_id"] = (
-                chat_completion_session.get("litellm_session_id")
-            )
+            litellm_completion_request[
+                "litellm_trace_id"
+            ] = chat_completion_session.get("litellm_session_id")
         return litellm_completion_request
 
     @staticmethod
@@ -671,9 +671,12 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
-        chat_completion_response: ModelResponse,
+        chat_completion_response: Union[ModelResponse, Usage],
     ) -> ResponseAPIUsage:
-        usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
+        if isinstance(chat_completion_response, ModelResponse):
+            usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
+        else:
+            usage = chat_completion_response
         if usage is None:
             return ResponseAPIUsage(
                 input_tokens=0,
