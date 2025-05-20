@@ -115,7 +115,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const handleMemberCreate = async (values: any) => {
     try {
-      console.log("🧪 DEBUG TEST — handleMemberCreate reached")
       if (accessToken == null) return;
   
       const member: Member = {
@@ -158,18 +157,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       }
+      console.log("🧪 DEBUG TEST — member:", member);
   
       const response = await teamMemberUpdateCall(accessToken, teamId, member);
+      console.log("🧪 DEBUG TEST — response:", response);
   
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
       fetchTeamInfo();
     } catch (error: any) {
-      let errMsg = error?.message || "Failed to update team member";
+      let errMsg = "Failed to update team member";
   
-      if (errMsg.includes("Assigning team admins is a premium feature")) {
-        errMsg = "❌ Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      } else if (error?.message) {
+        errMsg = error.message;
       }
+      setIsEditMemberModalVisible(false);
+
   
       message.error(errMsg);
       console.error("Error updating team member:", error);
