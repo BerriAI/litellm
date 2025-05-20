@@ -39,13 +39,5 @@ export const formatRelativeTime = (date: Date | string | null): string => {
 export const formatFullDate = (date: Date | string | null): string => {
   if (!date) return "Never";
   const dateObj = typeof date === 'string' ? new Date(date) : date;
-  return dateObj.toLocaleString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
+  return dateObj.toLocaleString();
 }; 
