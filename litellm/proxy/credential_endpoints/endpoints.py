@@ -131,7 +131,7 @@ async def get_credentials(
 
 
 @router.get(
-    "/credentials/by_name/{credential_name}",
+    "/credentials/by_name/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=CredentialItem,
@@ -145,7 +145,7 @@ async def get_credentials(
 async def get_credential(
     request: Request,
     fastapi_response: Response,
-    credential_name: Optional[str] = None,
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     model_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -278,15 +278,15 @@ def update_db_credential(
 
 
 @router.patch(
-    "/credentials/{credential_name}",
+    "/credentials/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
 )
 async def update_credential(
     request: Request,
     fastapi_response: Response,
-    credential_name: str,
     credential: CredentialItem,
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
