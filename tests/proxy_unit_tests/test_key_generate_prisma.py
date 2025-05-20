@@ -1323,10 +1323,10 @@ def test_generate_and_update_key(prisma_client):
 
             print("response1=", response1)
 
-            # update the team id
+            # update the tpm limit
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
+                data=UpdateKeyRequest(key=generated_key, tpm_limit=1000),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     api_key="sk-1234",
@@ -1350,7 +1350,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == _team_2
+            assert result["info"]["tpm_limit"] == 1000
             assert result["info"]["budget_duration"] == "1mo"
             assert result["info"]["max_budget"] == 100
 

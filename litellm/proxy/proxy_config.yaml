@@ -2,9 +2,25 @@ model_list:
   - model_name: openai/gpt-4o
     litellm_params:
       model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+      api_key: any_key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
-litellm_settings:
-    callbacks: ["smtp_email"]
-  
+general_settings:
+  store_prompts_in_spend_logs: true
+
+
+
+guardrails:
+  - guardrail_name: "custom-pre-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  # 👈 Key change
+      mode: "pre_call"                  # runs async_pre_call_hook
+  - guardrail_name: "custom-during-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "during_call"               # runs async_moderation_hook
+  - guardrail_name: "custom-post-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "post_call"                 # runs async_post_call_success_hook

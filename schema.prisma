@@ -471,3 +471,13 @@ model LiteLLM_ManagedVectorStoresTable {
   updated_at DateTime @updatedAt
   litellm_credential_name String?
 }
+
+// Guardrails table for storing guardrail configurations
+model LiteLLM_GuardrailsTable {
+  guardrail_id String @id @default(uuid())
+  guardrail_name String @unique
+  litellm_params Json
+  guardrail_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}

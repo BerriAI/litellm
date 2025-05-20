@@ -142,10 +142,13 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
+            pip install "cryptography<40.0.0"
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
+            if ! python -m mypy . \
+                --config-file mypy.ini \
+                --ignore-missing-imports; then
+                echo "mypy detected errors"
+                exit 1
             fi
             cd ..
 
@@ -659,6 +662,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -804,6 +808,51 @@ jobs:
           paths:
             - mcp_coverage.xml
             - mcp_coverage
+  guardrails_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+            pip install "pydantic==2.10.2"
+            pip install "boto3==1.34.34"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/guardrails_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml guardrails_coverage.xml
+            mv .coverage guardrails_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - guardrails_coverage.xml
+            - guardrails_coverage
   llm_responses_api_testing:
     docker:
       - image: cimg/python:3.11
@@ -881,7 +930,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=10
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1498,7 +1547,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
@@ -2357,7 +2406,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2847,6 +2896,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - guardrails_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - llm_responses_api_testing:
           filters:
             branches:
@@ -2893,6 +2948,7 @@ workflows:
           requires:
             - llm_translation_testing
             - mcp_testing
+            - guardrails_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
             - batches_testing
@@ -2984,4 +3040,5 @@ workflows:
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
             - publish_proxy_extras
+            - guardrails_testing
 
