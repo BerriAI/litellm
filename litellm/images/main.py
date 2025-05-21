@@ -27,6 +27,7 @@ from litellm.main import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -41,7 +42,6 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-from .types.llms.openai import ImageGenerationRequestQuality
 from .utils import ImageEditRequestUtils
 
 

@@ -183,12 +183,10 @@ from .types.llms.openai import (
     ChatCompletionPredictionContentParam,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
-    ImageGenerationRequestQuality,
     OpenAIModerationResponse,
     OpenAIWebSearchOptions,
 )
 from .types.utils import (
-    LITELLM_IMAGE_VARIATION_PROVIDERS,
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
     CompletionTokensDetails,
@@ -204,7 +202,6 @@ encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     Choices,
     EmbeddingResponse,
-    ImageResponse,
     Message,
     ModelResponse,
     TextChoices,

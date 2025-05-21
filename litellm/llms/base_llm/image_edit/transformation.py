@@ -7,18 +7,20 @@ import httpx
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.utils import ImageResponse as _ImageResponse
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
+    ImageResponse = _ImageResponse
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+    ImageResponse = Any
 
 
 class BaseImageEditConfig(ABC):
