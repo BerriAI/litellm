@@ -210,7 +210,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               <TableCell>
                                 {org.created_at ? new Date(org.created_at).toLocaleDateString() : "N/A"}
                               </TableCell>
-                              <TableCell>{org.spend}</TableCell>
+                              <TableCell>{org.spend.toFixed(4)}</TableCell>
                               <TableCell>
                                 {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
