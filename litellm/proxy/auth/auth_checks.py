@@ -700,7 +700,7 @@ async def get_user_object(
                 new_user_params: Dict[str, Any] = {
                     "user_id": user_id,
                 }
-                if litellm.default_internal_user_params:
+                if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
 
                 response = await prisma_client.db.litellm_usertable.create(
