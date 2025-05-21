@@ -11,6 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import Request, status
@@ -668,6 +669,11 @@ class UserObjectCache:
         """
         - update user object in cache
         """
+        if isinstance(user_object, LiteLLM_UserTable):
+            user_object = user_object.model_dump()
+            for k, v in user_object.items():
+                if isinstance(v, datetime):
+                    user_object[k] = v.isoformat()
         await self.user_api_key_cache.async_set_cache(key=user_id, value=user_object)
         if self.internal_usage_cache is not None:
             await self.internal_usage_cache.async_set_cache(
@@ -687,7 +693,9 @@ class UserObjectCache:
         ## CHECK REDIS CACHE ##
         if self.internal_usage_cache is not None:
             cached_obj = await self.internal_usage_cache.async_get_cache(
-                key=user_id, litellm_parent_otel_span=litellm_parent_otel_span
+                key=user_id,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                redis_only=True,
             )
 
         if cached_obj is None:
