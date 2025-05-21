@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Dict, Optional, Union, Tuple
+from typing import Any, Callable, Dict, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
