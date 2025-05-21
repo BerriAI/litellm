@@ -1654,6 +1654,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=50, description="Number of items per page", ge=1, le=100
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by model"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1706,6 +1714,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if team_id is not None:
             where_conditions["team_id"] = team_id
 
+        status_condition = _build_status_filter_condition(status_filter)
+        if status_condition:
+            where_conditions.update(status_condition)
+
         if api_key is not None:
             where_conditions["api_key"] = api_key
 
@@ -1714,6 +1726,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if request_id is not None:
             where_conditions["request_id"] = request_id
+
+        if model is not None:
+            where_conditions["model"] = model
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
@@ -2902,3 +2917,27 @@ async def ui_view_session_spend_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
             )
+
+
+def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
+    """
+    Helper function to build the status filter condition for database queries.
+    
+    Args:
+        status_filter (Optional[str]): The status to filter by. Can be "success" or "failure".
+        
+    Returns:
+        Dict[str, Any]: A dictionary containing the status filter condition.
+    """
+    if status_filter is None:
+        return {}
+        
+    if status_filter == "success":
+        return {
+            "OR": [
+                {"status": {"equals": "success"}},
+                {"status": None}
+            ]
+        }
+    else:
+        return {"status": {"equals": status_filter}}

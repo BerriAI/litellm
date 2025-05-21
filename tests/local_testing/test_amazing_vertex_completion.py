@@ -3216,18 +3216,6 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.total_tokens == 172
 
 
-def test_vertexai_code_gecko():
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    response = completion(
-        model="vertex_ai/code-gecko@002",
-        messages=[{"role": "user", "content": "Hello world!"}],
-        stream=True,
-    )
-
-    for chunk in response:
-        print(chunk)
-
 
 def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
     mock_response = MagicMock()

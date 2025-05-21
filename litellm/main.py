@@ -34,6 +34,7 @@ from typing import (
     Type,
     Union,
     cast,
+    get_args,
 )
 
 import dotenv
@@ -73,7 +74,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
@@ -184,6 +185,7 @@ from .types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
+    OpenAIWebSearchOptions,
 )
 from .types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -352,6 +354,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -471,6 +474,7 @@ async def acompletion(
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
+        "web_search_options": web_search_options,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -834,6 +838,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
@@ -1167,6 +1172,7 @@ def completion(  # type: ignore # noqa: PLR0915
             messages=messages,
             reasoning_effort=reasoning_effort,
             thinking=thinking,
+            web_search_options=web_search_options,
             allowed_openai_params=kwargs.get("allowed_openai_params"),
             **non_default_params,
         )
@@ -1220,6 +1226,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
             tenant_id=kwargs.get("tenant_id"),
@@ -2663,19 +2670,21 @@ def completion(  # type: ignore # noqa: PLR0915
             response = _model_response
         elif custom_llm_provider == "sagemaker_chat":
             # boto3 reads keys from .env
-            model_response = sagemaker_chat_completion.completion(
+            model_response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                custom_llm_provider="sagemaker_chat",
                 timeout=timeout,
-                custom_prompt_dict=custom_prompt_dict,
-                logger_fn=logger_fn,
+                headers=headers,
                 encoding=encoding,
-                logging_obj=logging,
-                acompletion=acompletion,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
 
@@ -2722,9 +2731,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3324,7 +3333,6 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-
         if (
             response is not None
             and isinstance(response, EmbeddingResponse)
@@ -3646,8 +3654,8 @@ def embedding(  # noqa: PLR0915
             cohere_key = (
                 api_key
                 or litellm.cohere_key
-                or get_secret("COHERE_API_KEY")
-                or get_secret("CO_API_KEY")
+                or get_secret_str("COHERE_API_KEY")
+                or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
 
@@ -3655,18 +3663,21 @@ def embedding(  # noqa: PLR0915
                 headers = extra_headers
             else:
                 headers = {}
-            response = cohere_embed.embedding(
+
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
-                optional_params=optional_params,
-                encoding=encoding,
-                api_key=cohere_key,  # type: ignore
-                headers=headers,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=cohere_key,
                 logging_obj=logging,
-                model_response=EmbeddingResponse(),
-                aembedding=aembedding,
                 timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
                 client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
@@ -4448,9 +4459,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -4658,9 +4669,11 @@ def image_generation(  # noqa: PLR0915
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
         headers: dict = kwargs.get("headers", None) or {}
+        base_model = kwargs.get("base_model", None)
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        dynamic_api_key: Optional[str] = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,  # type: ignore
@@ -4694,8 +4707,20 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
+        image_generation_config: Optional[BaseImageGenerationConfig] = None
+        if (
+            custom_llm_provider is not None
+            and custom_llm_provider in LlmProviders._member_map_.values()
+        ):
+            image_generation_config = (
+                ProviderConfigManager.get_provider_image_generation_config(
+                    model=base_model or model,
+                    provider=LlmProviders(custom_llm_provider),
+                )
+            )
+
         optional_params = get_optional_params_image_gen(
-            model=model,
+            model=base_model or model,
             n=n,
             quality=quality,
             response_format=response_format,
@@ -4703,6 +4728,7 @@ def image_generation(  # noqa: PLR0915
             style=style,
             user=user,
             custom_llm_provider=custom_llm_provider,
+            provider_config=image_generation_config,
             **non_default_params,
         )
 
@@ -4788,7 +4814,7 @@ def image_generation(  # noqa: PLR0915
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
-                api_key=api_key,
+                api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
@@ -5372,6 +5398,7 @@ def speech(  # noqa: PLR0915
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     response_format: Optional[str] = None,
     speed: Optional[int] = None,
+    instructions: Optional[str] = None,
     client=None,
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
@@ -5393,7 +5420,8 @@ def speech(  # noqa: PLR0915
         optional_params["response_format"] = response_format
     if speed is not None:
         optional_params["speed"] = speed  # type: ignore
-
+    if instructions is not None:
+        optional_params["instructions"] = instructions
     if timeout is None:
         timeout = litellm.request_timeout
 
@@ -5901,9 +5929,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         reasoning_chunks = [
             chunk
@@ -5914,9 +5942,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk

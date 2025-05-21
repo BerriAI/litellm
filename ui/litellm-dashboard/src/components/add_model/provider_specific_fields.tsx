@@ -241,7 +241,16 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     }
   ],
-  [Providers.Ollama]: [], // No specific fields needed
+  [Providers.Ollama]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "http://localhost:11434",
+      defaultValue: "http://localhost:11434",
+      required: false,
+      tooltip: "The base URL for your Ollama server. Defaults to http://localhost:11434 if not specified."
+    }
+  ],
   [Providers.Anthropic]: [{
     key: "api_key",
     label: "API Key",
@@ -435,11 +444,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
             <Row>
-              <Col span={10}></Col>
-              <Col span={10}>
+              <Col>
                 <Text className="mb-3 mt-1">
-                  Give litellm a gcp service account(.json file), so it
-                  can make the relevant calls
+                  Give a gcp service account(.json file)
                 </Text>
               </Col>
             </Row>
