@@ -44,6 +44,7 @@ from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     FileSearchTool,
+    FineTuningJob,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -2254,6 +2255,10 @@ class ProviderSpecificHeader(TypedDict):
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
     tokenizer: Any
+
+
+class LiteLLMFineTuningJob(FineTuningJob):
+    _hidden_params: dict = {}
 
 
 class LiteLLMBatch(Batch):

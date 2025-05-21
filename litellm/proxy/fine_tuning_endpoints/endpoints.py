@@ -21,6 +21,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.llms.openai import FineTuningJob
+from litellm.types.utils import LiteLLMFineTuningJob
 
 router = APIRouter()
 
@@ -100,7 +101,6 @@ async def create_fine_tuning_job(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
         llm_router,
         premium_user,
@@ -139,7 +139,7 @@ async def create_fine_tuning_job(
         ## CHECK IF MANAGED FILE ID
         unified_file_id: Union[str, Literal[False]] = False
         training_file = fine_tuning_request.training_file
-        response: Optional[FineTuningJob] = None
+        response: Optional[LiteLLMFineTuningJob] = None
         if training_file:
             unified_file_id = _is_base64_encoded_unified_file_id(training_file)
         ## IF SO, Route based on that
@@ -154,9 +154,10 @@ async def create_fine_tuning_job(
                 )
 
             response = cast(
-                FineTuningJob, await llm_router.acreate_fine_tuning_job(**data)
+                LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data)
             )
             response.training_file = unified_file_id
+
         ## ELSE, Route based on custom_llm_provider
         elif fine_tuning_request.custom_llm_provider:
             # get configs for custom_llm_provider
@@ -169,7 +170,6 @@ async def create_fine_tuning_job(
                 data.update(llm_provider_config)
 
             response = await litellm.acreate_fine_tuning_job(**data)
-
         if response is None:
             raise ValueError(
                 "Invalid request, No litellm managed file id or custom_llm_provider provided."
