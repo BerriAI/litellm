@@ -2,24 +2,25 @@ model_list:
   - model_name: openai/gpt-4o
     litellm_params:
       model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: claude-3-5-sonnet-with-vector-store
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-latest
-      api_key: os.environ/ANTHROPIC_API_KEY
-      vector_store_ids: ["T37J8R4WTM"]
+      api_key: any_key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-# vector_stores:
-#   - vector_store_name: "bedrock-litellm-website-knowledgebase"
-#     litellm_params:
-#       custom_llm_provider: "bedrock"
-#       vector_store_id: "T37J8R4WTM"
-#       vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
-#       vector_store_metadata:
-#         source: "https://www.litellm.com/docs"
-        
 
 general_settings:
-  alerting: ["webhook"]
+  store_prompts_in_spend_logs: true
 
 
+
+guardrails:
+  - guardrail_name: "custom-pre-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  # 👈 Key change
+      mode: "pre_call"                  # runs async_pre_call_hook
+  - guardrail_name: "custom-during-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "during_call"               # runs async_moderation_hook
+  - guardrail_name: "custom-post-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "post_call"                 # runs async_post_call_success_hook

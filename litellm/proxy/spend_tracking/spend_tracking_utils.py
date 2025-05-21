@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Any, List, Optional, cast
+from typing import Any, List, Literal, Optional, cast
 
 from pydantic import BaseModel
 
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kw
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
@@ -48,6 +49,7 @@ def _get_spend_logs_metadata(
     vector_store_request_metadata: Optional[
         List[StandardLoggingVectorStoreRequest]
     ] = None,
+    guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
@@ -71,6 +73,7 @@ def _get_spend_logs_metadata(
             vector_store_request_metadata=None,
             model_map_information=None,
             usage_object=None,
+            guardrail_information=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -88,9 +91,10 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -252,6 +256,11 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        guardrail_information=(
+            standard_logging_payload.get("guardrail_information", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -309,6 +318,9 @@ def get_logging_payload(  # noqa: PLR0915
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
+            ),
+            status=_get_status_for_spend_log(
+                metadata=metadata,
             ),
         )
 
@@ -530,3 +542,17 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings.get("store_prompts_in_spend_logs") is True
+
+
+def _get_status_for_spend_log(
+    metadata: dict,
+) -> Literal["success", "failure"]:
+    """
+    Get the status for the spend log.
+
+    It's only a failure if metadata.get("status") is "failure"
+    """
+    _status: Optional[str] = metadata.get("status", None)
+    if _status == "failure":
+        return "failure"
+    return "success"

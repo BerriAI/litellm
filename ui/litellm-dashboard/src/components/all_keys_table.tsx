@@ -276,7 +276,11 @@ export function AllKeysTable({
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find(u => u.user_id === userId);
-        return user?.user_email ? user.user_email : "-";
+        return user?.user_email ? (
+          <Tooltip title={user?.user_email}>
+            <span>{user?.user_email.slice(0, 20)}...</span>
+          </Tooltip>
+        ) : "-";
       },
     },
     {
@@ -308,6 +312,15 @@ export function AllKeysTable({
       cell: (info) => {
         const value = info.getValue();
         return value ? value : "Unknown";
+      },
+    },
+    {
+      id: "updated_at",
+      accessorKey: "updated_at",
+      header: "Updated At",
+      cell: (info) => {
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {

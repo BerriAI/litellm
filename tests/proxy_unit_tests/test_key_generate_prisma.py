@@ -1323,10 +1323,10 @@ def test_generate_and_update_key(prisma_client):
 
             print("response1=", response1)
 
-            # update the team id
+            # update the tpm limit
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
+                data=UpdateKeyRequest(key=generated_key, tpm_limit=1000),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     api_key="sk-1234",
@@ -1350,7 +1350,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == _team_2
+            assert result["info"]["tpm_limit"] == 1000
             assert result["info"]["budget_duration"] == "1mo"
             assert result["info"]["max_budget"] == 100
 
@@ -4056,3 +4056,38 @@ async def test_reset_budget_job(prisma_client, entity_type):
 
     assert entity_after is not None
     assert entity_after.spend == 0.0
+
+def test_delete_nonexistent_key_returns_404(prisma_client):
+    # Try to delete a key that does not exist, expect a 404 error
+    import random, string
+    from litellm.proxy._types import KeyRequest, UserAPIKeyAuth, LitellmUserRoles, ProxyException
+    from litellm.proxy.management_endpoints.key_management_endpoints import delete_key_fn
+    from starlette.datastructures import URL
+    from fastapi import Request
+
+    print("prisma client=", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            # Generate a random key that does not exist
+            random_key = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=24))
+            delete_key_request = KeyRequest(keys=[random_key])
+            bearer_token = "Bearer sk-1234"
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+            # use admin to auth in
+            result = await litellm.proxy.proxy_server.user_api_key_auth(request=request, api_key=bearer_token)
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
+            try:
+                await delete_key_fn(data=delete_key_request, user_api_key_dict=result)
+                pytest.fail("Expected ProxyException 404 for non-existent key, but delete_key_fn did not raise.")
+            except ProxyException as e:
+                print("Caught ProxyException:", e)
+                assert str(e.code) == "404"
+                assert "No keys found" in str(e.message) or "No matching keys or aliases found to delete" in str(e.message)
+        import asyncio
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")

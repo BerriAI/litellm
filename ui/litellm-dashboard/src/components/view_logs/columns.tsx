@@ -47,6 +47,7 @@ export type LogEntry = {
   response: string | any[] | Record<string, any>;
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
+  status?: string;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
@@ -160,11 +161,6 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => (
       <span>${Number(info.getValue() || 0).toFixed(6)}</span>
     ),
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
   {
     header: "Team Name",
@@ -319,8 +315,12 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
   const requestStr = typeof request === 'object' ? JSON.stringify(request, null, 2) : String(request || '{}');
   const responseStr = typeof response === 'object' ? JSON.stringify(response, null, 2) : String(response || '{}');
   
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
   };
   
   return (

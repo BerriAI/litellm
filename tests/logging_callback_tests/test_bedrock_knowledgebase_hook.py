@@ -23,7 +23,7 @@ from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVecto
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload, StandardLoggingVectorStoreRequest
-from litellm.types.vector_stores import VectorStorSearchResponse
+from litellm.types.vector_stores import VectorStoreSearchResponse
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
@@ -262,7 +262,7 @@ async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
     assert vector_store_request_metadata.get("custom_llm_provider") == "bedrock"
 
 
-    vector_store_search_response: VectorStorSearchResponse = vector_store_request_metadata.get("vector_store_search_response")
+    vector_store_search_response: VectorStoreSearchResponse = vector_store_request_metadata.get("vector_store_search_response")
     assert vector_store_search_response is not None
     assert vector_store_search_response.get("search_query") == "what is litellm?"
     assert len(vector_store_search_response.get("data", [])) >=0

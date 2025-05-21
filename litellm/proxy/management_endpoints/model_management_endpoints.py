@@ -11,6 +11,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 #### MODEL MANAGEMENT ####
 
 import asyncio
+import datetime
 import json
 import uuid
 from typing import Dict, List, Literal, Optional, Union, cast
@@ -79,6 +80,7 @@ def update_db_model(
         litellm_params=LiteLLMParamsTypedDict(
             **db_model.litellm_params.model_dump(exclude_none=True)  # type: ignore
         ),
+        model_info=db_model.model_info.model_dump(exclude_none=True),
     )
     # update model name
     if updated_patch.model_name:
@@ -118,9 +120,12 @@ def update_db_model(
         )
 
     if "model_info" in merged_deployment_dict:
-        prisma_compatible_model_dict["model_info"] = json.dumps(
-            merged_deployment_dict["model_info"]
-        )
+        model_info = merged_deployment_dict["model_info"]
+        for key, value in model_info.items():
+            if isinstance(value, datetime.datetime):
+                model_info[key] = value.isoformat()
+        prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
+
     return prisma_compatible_model_dict
 
 
@@ -154,6 +159,7 @@ async def patch_model(
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         llm_router,
+        premium_user,
         prisma_client,
         store_model_in_db,
     )
@@ -193,6 +199,12 @@ async def patch_model(
                 param=None,
             )
 
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=db_model,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
         # Create update dictionary only for provided fields
         update_data = update_db_model(db_model=db_model, updated_patch=patch_data)
 
