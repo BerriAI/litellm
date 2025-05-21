@@ -695,11 +695,9 @@ class CustomStreamWrapper:
 
         Ensure model id is always the same across all chunks.
 
-        If a valid ID is received in any chunk, use it for the response.
+        If first chunk sent + id set, use that id for all chunks.
         """
-        if id and isinstance(id, str) and id.strip():
-            self.response_id = id
-        elif self.response_id is None:
+        if self.response_id is None:
             self.response_id = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
