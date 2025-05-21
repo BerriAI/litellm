@@ -446,7 +446,7 @@ class Logging(LiteLLMLoggingBaseClass):
         user: Optional[str] = None,
         **additional_params,
     ):
-        self.optional_params = optional_params
+        self.optional_params = copy.deepcopy(optional_params)
         if model is not None:
             self.model = model
         self.user = user
