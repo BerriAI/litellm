@@ -3594,7 +3594,10 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_error_information(
         original_exception: Optional[Exception],
+        traceback_str: Optional[str] = None,
     ) -> StandardLoggingPayloadErrorInformation:
+        from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+
         error_status: str = str(getattr(original_exception, "status_code", ""))
         error_class: str = (
             str(original_exception.__class__.__name__) if original_exception else ""
@@ -3602,14 +3605,14 @@ class StandardLoggingPayloadSetup:
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
 
         # Get traceback information (first 100 lines)
-        traceback_info = ""
+        traceback_info = traceback_str or ""
         if original_exception:
             tb = getattr(original_exception, "__traceback__", None)
             if tb:
-                import traceback
-
                 tb_lines = traceback.format_tb(tb)
-                traceback_info = "".join(tb_lines[:100])  # Limit to first 100 lines
+                traceback_info += "".join(
+                    tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
+                )  # Limit to first 100 lines
 
         # Get additional error details
         error_message = str(original_exception)
