@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 Get a [Pangea token for the AI Guard service and its domain](https://pangea.cloud/docs/ai-guard/#get-a-free-pangea-account-and-enable-the-ai-guard-service).
 
-### 2. Add Pangea to your LiteLLM config.yaml 
+### 2. Add Pangea to your LiteLLM config.yaml
 
 Define your guardrails under the `guardrails` section
 ```yaml
@@ -23,6 +23,7 @@ guardrails:
 -   guardrail_name: pangea-ai-guard,
     litellm_params:
       guardrail: pangea,
+      mode: post_call,
       api_key: pts_pangeatokenid,  # Pangea token with access to AI Guard service.
       api_base: "https://ai-guard.aws.us.pangea.cloud",  # Pangea AI Guard base url for your pangea domain.  Uses this value as default if not included.
       pangea_input_recipe: "example_input",  # Pangea AI Guard recipe name to run before prompt submission to LLM
@@ -102,3 +103,5 @@ The above request should not be blocked, and you should receive a regular LLM re
 ```
 
 </TabItem>
+
+</Tabs>
