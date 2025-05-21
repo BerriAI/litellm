@@ -5,7 +5,7 @@ import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -51,6 +51,11 @@ from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging as ProxyLoggingObj
+else:
+    ProxyLoggingObj = Any
 
 router = APIRouter()
 
@@ -555,6 +560,74 @@ class HttpPassThroughEndpointHelpers:
             return model_in_url
         return None
 
+    @staticmethod
+    async def handle_pass_through_endpoint_exception(
+        proxy_logging_obj: ProxyLoggingObj,
+        e: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        litellm_call_id: str,
+        url: Optional[httpx.URL],
+        _parsed_body: Optional[dict] = None,
+        kwargs: Optional[dict] = None,
+    ) -> None:
+        """
+        Handle Pass Through Endpoint Exceptions
+
+        - Will log the exception to proxy_logging_obj.post_call_failure_hook
+        - Will raise relevant exceptions based on the type of exception
+        """
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=litellm_call_id,
+            model_id=None,
+            cache_key=None,
+            api_base=str(url._uri_reference) if url else None,
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+
+        #########################################################
+        # Monitoring: Trigger post_call_failure_hook
+        # for pass through endpoint failure
+        #########################################################
+        request_payload: dict = _parsed_body or {}
+        # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
+        if kwargs:
+            for key, value in kwargs.items():
+                request_payload[key] = value
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=request_payload,
+            traceback_str=traceback.format_exc(
+                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
+            ),
+        )
+
+        #########################################################
+
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                headers=custom_headers,
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+                headers=custom_headers,
+            )
+
 
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
@@ -826,56 +899,15 @@ async def pass_through_request(  # noqa: PLR0915
             ),
         )
     except Exception as e:
-        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        await HttpPassThroughEndpointHelpers.handle_pass_through_endpoint_exception(
+            proxy_logging_obj=proxy_logging_obj,
+            e=e,
             user_api_key_dict=user_api_key_dict,
-            call_id=litellm_call_id,
-            model_id=None,
-            cache_key=None,
-            api_base=str(url._uri_reference) if url else None,
+            litellm_call_id=litellm_call_id,
+            url=url,
+            _parsed_body=_parsed_body,
+            kwargs=kwargs,
         )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-
-        #########################################################
-        # Monitoring: Trigger post_call_failure_hook
-        # for pass through endpoint failure
-        #########################################################
-        request_payload: dict = _parsed_body or {}
-        # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=request_payload,
-            traceback_str=traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
-            ),
-        )
-
-        #########################################################
-
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                headers=custom_headers,
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
-                headers=custom_headers,
-            )
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
