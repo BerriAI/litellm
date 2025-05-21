@@ -46,7 +46,6 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
-from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
