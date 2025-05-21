@@ -40,7 +40,12 @@ async def async_data_generator_anthropic(
                 user_api_key_dict=user_api_key_dict, response=chunk
             )
 
-            yield chunk
+            # Convert dictionary to a properly formatted SSE string for streaming
+            if isinstance(chunk, dict):
+                chunk_str = json.dumps(chunk)
+                yield f"data: {chunk_str}\n\n"
+            else:
+                yield chunk
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
