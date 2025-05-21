@@ -33,6 +33,7 @@ class _ProxyDBLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
@@ -62,6 +63,7 @@ class _ProxyDBLogger(CustomLogger):
             "error_information"
         ] = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
+            traceback_str=traceback_str,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
