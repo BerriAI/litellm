@@ -546,3 +546,11 @@ def image_variation(
             f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
     return response
+
+
+def image_edit():
+    pass
+
+
+async def aimage_edit():
+    pass
