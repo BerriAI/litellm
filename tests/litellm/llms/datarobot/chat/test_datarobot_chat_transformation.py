@@ -1,9 +1,12 @@
 import os
+from unittest.mock import patch
+
 import pytest
 
 from litellm.llms.datarobot.chat.transformation import DataRobotConfig
 
 
+@patch.dict(os.environ, {}, clear=True)
 class TestDataRobotConfig:
     @pytest.fixture
     def handler(self):
@@ -24,6 +27,25 @@ class TestDataRobotConfig:
     )
     def test_resolve_api_base(self, api_base, expected_url, handler):
         assert handler._resolve_api_base(api_base) == expected_url
+
+        # Check that the complete url with the resolution is expected
+        assert handler.get_complete_url(
+            api_base=handler._resolve_api_base(api_base),
+            api_key="PASSTHROUGH_KEY",
+            model="datarobot/vertex_ai/gemini-1.5-flash-002",
+            optional_params={},
+            litellm_params={},
+        ) == expected_url
+
+        # Check that the complete url with the original api_base does not change the url
+        if api_base is not None:
+            assert handler.get_complete_url(
+                api_base=api_base,
+                api_key="PASSTHROUGH_KEY",
+                model="datarobot/vertex_ai/gemini-1.5-flash-002",
+                optional_params={},
+                litellm_params={},
+            ) == api_base
 
     def test_resolve_api_base_with_environment_variable(self, handler):
         os.environ["DATAROBOT_API_BASE"] = "https://env.datarobot.com"

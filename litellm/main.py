@@ -2322,25 +2322,23 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
 
         elif custom_llm_provider == "datarobot":
-            response = openai_like_chat_completion.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                custom_prompt_dict=custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
-                api_key=api_key,
-                optional_params=optional_params,
-                acompletion=acompletion,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                logging_obj=logging,
                 headers=headers,
-                timeout=timeout,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
                 client=client,
-                custom_endpoint=True,  # DataRobot requires custom_endpoint true
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=provider_config,
             )
         elif custom_llm_provider == "openrouter":
             api_base = (

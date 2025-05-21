@@ -42,7 +42,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         if not api_base.endswith("/"):
             api_base += "/"
 
-        return api_base # type: ignore
+        return api_base  # type: ignore
 
     def _get_openai_compatible_provider_info(
         self,
@@ -59,3 +59,22 @@ class DataRobotConfig(OpenAILikeChatConfig):
         dynamic_api_key = DataRobotConfig._resolve_api_key(api_key)
 
         return api_base, dynamic_api_key
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for the API call. Datarobot's API base is set to
+        the complete value, so it does not need to be updated to additionally add
+        chat completions.
+
+        Returns:
+            str: The complete URL for the API call.
+        """
+        return str(api_base)  # type: ignore

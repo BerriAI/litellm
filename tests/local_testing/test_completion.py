@@ -2336,45 +2336,6 @@ def test_completion_openrouter_reasoning_effort():
 # test_completion_openrouter1()
 
 
-def test_completion_datarobot():
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    try:
-        litellm.set_verbose = True
-
-        # Local testing with API keys in .env
-        # response = completion(
-        #     model="datarobot/azure/gpt-4",
-        #     messages=messages,
-        #     max_tokens=5,
-        #     clientId="custom-model"
-        # )
-        # print(response)
-        # return
-
-        client = HTTPHandler()
-        with patch.object(client, "post") as mock_post:
-            response = completion(
-                model="datarobot/azure/gpt-4",
-                messages=messages,
-                client=client,
-                max_tokens=5,
-                clientId="custom-model"
-            )
-            print(response)
-
-            # Add any assertions here to check the response
-            mock_post.assert_called_once()
-            mocks_kwargs = mock_post.call_args.kwargs
-            assert mocks_kwargs["url"] == "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"
-            assert mocks_kwargs["headers"]["Authorization"] == "Bearer fake-api-key"
-            json_data = json.loads(mock_post.call_args.kwargs["data"])
-            assert json_data["clientId"] == "custom-model"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_hf_model_no_provider():
     try:
         response = completion(

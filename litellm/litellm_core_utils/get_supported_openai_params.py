@@ -125,8 +125,6 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "datarobot":
-        return litellm.DataRobotConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
