@@ -238,23 +238,15 @@ async def new_user(
                 else:
                     raise e
 
-        new_user_response = NewUserResponse(
-            key=response.get("token", ""),
-            expires=response.get("expires", None),
-            max_budget=response["max_budget"],
-            user_id=response["user_id"],
-            user_role=response.get("user_role", None),
-            user_email=response.get("user_email", None),
-            user_alias=response.get("user_alias", None),
-            teams=response.get("teams", None),
-            team_id=response.get("team_id", None),
-            metadata=response.get("metadata", None),
-            models=response.get("models", None),
-            tpm_limit=response.get("tpm_limit", None),
-            rpm_limit=response.get("rpm_limit", None),
-            budget_duration=response.get("budget_duration", None),
-            model_max_budget=response.get("model_max_budget", None),
-        )
+        special_keys = ["token"]
+        response_dict = {}
+        for key, value in response.items():
+            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+                response_dict[key] = value
+
+        response_dict["key"] = response.get("token", "")
+
+        new_user_response = NewUserResponse(**response_dict)
 
         #########################################################
         ########## USER CREATED HOOK ################
