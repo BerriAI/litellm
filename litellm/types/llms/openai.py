@@ -999,9 +999,8 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     metadata: Optional[Dict]
     model: Optional[str]
     object: Optional[str]
-    output: Union[
-        List[ResponseOutputItem],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+    output: List[
+        Union[GenericResponseOutputItem, OutputFunctionToolCall, ResponseOutputItem]
     ]
     parallel_tool_calls: bool
     temperature: Optional[float]
