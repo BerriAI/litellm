@@ -43,8 +43,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
+    PassthroughEndpointInitKwargs,
     PassthroughStandardLoggingPayload,
 )
+from litellm.types.utils import CallTypes as LiteLLMCallTypes
 from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
 
 from .streaming_handler import PassThroughStreamingHandler
@@ -468,7 +470,7 @@ class HttpPassThroughEndpointHelpers:
         logging_obj: LiteLLMLoggingObj,
         _parsed_body: Optional[dict] = None,
         litellm_call_id: Optional[str] = None,
-    ) -> dict:
+    ) -> PassthroughEndpointInitKwargs:
         _parsed_body = _parsed_body or {}
         _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
         _metadata = dict(
@@ -492,20 +494,66 @@ class HttpPassThroughEndpointHelpers:
             metadata=_metadata,
         )
 
-        kwargs = {
-            "litellm_params": {
+        kwargs = PassthroughEndpointInitKwargs(
+            litellm_params={
                 "metadata": _metadata,
             },
-            "call_type": "pass_through_endpoint",
-            "litellm_call_id": litellm_call_id,
-            "passthrough_logging_payload": passthrough_logging_payload,
-        }
+            model=HttpPassThroughEndpointHelpers.get_model_used_for_pass_through_endpoint(
+                parsed_body=_parsed_body,
+                request=request,
+            ),
+            call_type=LiteLLMCallTypes.pass_through,
+            litellm_call_id=litellm_call_id,
+            passthrough_logging_payload=passthrough_logging_payload,
+        )
 
         logging_obj.model_call_details[
             "passthrough_logging_payload"
         ] = passthrough_logging_payload
 
         return kwargs
+
+    @staticmethod
+    def get_model_used_for_pass_through_endpoint(
+        parsed_body: dict,
+        request: Request,
+    ) -> Optional[str]:
+        """
+        Parent function to return the `model` used for the pass-through endpoint
+
+        This is then used in our logging callbacks on our Database, GCS Bucket, s3 bucket, etc.
+        """
+        model_in_body = parsed_body.get("model", None)
+        if model_in_body:
+            return model_in_body
+
+        model_in_url = HttpPassThroughEndpointHelpers._get_model_defined_in_url(
+            request=request
+        )
+        if model_in_url:
+            return model_in_url
+
+        return None
+
+    @staticmethod
+    def _get_model_defined_in_url(request: Request) -> Optional[str]:
+        """
+        Parent function to return the `model` defined in the Request URL
+
+        If we onboard a new provider that only specifies the model in the URL then add the url parsing logic here
+
+        For now, only Vertex AI pass-through endpoints specify the model in the URL
+        """
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        model_in_url = VertexPassthroughLoggingHandler.extract_model_from_url(
+            url=str(request.url)
+        )
+        if model_in_url:
+            return model_in_url
+        return None
 
 
 async def pass_through_request(  # noqa: PLR0915
@@ -581,7 +629,9 @@ async def pass_through_request(  # noqa: PLR0915
         )
         async_client = async_client_obj.client
 
-        # create logging object
+        #########################################################
+        # Initialize logging object and variables for pass-through endpoint
+        #########################################################
         start_time = datetime.now()
         logging_obj = Logging(
             model="unknown",
@@ -597,23 +647,26 @@ async def pass_through_request(  # noqa: PLR0915
             request_body=_parsed_body,
             request_method=getattr(request, "method", None),
         )
-        kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            _parsed_body=_parsed_body,
-            passthrough_logging_payload=passthrough_logging_payload,
-            litellm_call_id=litellm_call_id,
-            request=request,
-            logging_obj=logging_obj,
+        initialized_kwargs: PassthroughEndpointInitKwargs = (
+            HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                _parsed_body=_parsed_body,
+                passthrough_logging_payload=passthrough_logging_payload,
+                litellm_call_id=litellm_call_id,
+                request=request,
+                logging_obj=logging_obj,
+            )
         )
-        # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
+        kwargs = dict(initialized_kwargs)
         logging_obj.update_environment_variables(
-            model="unknown",
-            user="unknown",
+            model=kwargs.get("model"),
+            user=kwargs.get("user"),
             optional_params={},
             litellm_params=kwargs["litellm_params"],
-            call_type="pass_through_endpoint",
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+        #########################################################
+        #########################################################
 
         # combine url with query params for logging
         requested_query_params: Optional[dict] = (
