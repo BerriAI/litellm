@@ -1141,3 +1141,99 @@ async def test_embedding_with_extra_headers(sync_mode):
 
         mock_post.assert_called_once()
         assert "my-test-param" in mock_post.call_args.kwargs["headers"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_nebius_embedding(sync_mode):
+    """
+    Tests Nebius embedding functionality.
+    """
+    embedding_model = "BAAI/bge-en-icl"
+    try:
+        litellm.set_verbose = True
+        
+        # Test with a single string
+        if sync_mode:
+            response = embedding(
+                model=f"nebius/{embedding_model}",
+                input="Hello world",
+            )
+            
+            # Verify the response structure
+            assert "data" in response, "Embedding response does not contain 'data'"
+            assert len(response["data"]) > 0, "Embedding data is empty"
+            assert "embedding" in response["data"][0], "Embedding vector not found in response"
+            assert len(response["data"][0]["embedding"]) > 0, "Embedding vector is empty"
+            
+            # Test with a list of strings
+            batch_response = embedding(
+                model=f"nebius/{embedding_model}",
+                input=["Hello world", "Testing Nebius embeddings"],
+            )
+            
+            # Verify the batch response structure
+            assert "data" in batch_response, "Batch embedding response does not contain 'data'"
+            assert len(batch_response["data"]) == 2, "Batch embedding should return 2 embeddings"
+            
+            # Check both embeddings
+            for i in range(2):
+                assert "embedding" in batch_response["data"][i], f"Embedding {i} vector not found in response"
+                assert len(batch_response["data"][i]["embedding"]) > 0, f"Embedding {i} vector is empty"
+        else:
+            # Async mode
+            response = await litellm.aembedding(
+                model=f"nebius/{embedding_model}",
+                input="Hello world",
+            )
+            
+            # Verify the response structure
+            assert "data" in response, "Embedding response does not contain 'data'"
+            assert len(response["data"]) > 0, "Embedding data is empty"
+            assert "embedding" in response["data"][0], "Embedding vector not found in response"
+            assert len(response["data"][0]["embedding"]) > 0, "Embedding vector is empty"
+            
+            # Test with a list of strings
+            batch_response = await litellm.aembedding(
+                model=f"nebius/{embedding_model}",
+                input=["Hello world", "Testing Nebius embeddings"],
+            )
+            
+            # Verify the batch response structure
+            assert "data" in batch_response, "Batch embedding response does not contain 'data'"
+            assert len(batch_response["data"]) == 2, "Batch embedding should return 2 embeddings"
+            
+            # Check both embeddings
+            for i in range(2):
+                assert "embedding" in batch_response["data"][i], f"Embedding {i} vector not found in response"
+                assert len(batch_response["data"][i]["embedding"]) > 0, f"Embedding {i} vector is empty"
+        
+        print("Nebius embedding test successful")
+        
+    except Exception as e:
+        pytest.fail(f"Error in Nebius embedding test: {e}")
+
+
+def test_nebius_embedding_bad_key():
+    """
+    Tests Nebius error handling with an invalid API key.
+    """
+    embedding_model = "BAAI/bge-en-icl"
+    try:
+        api_key = "bad-key"
+        
+        # Attempt embedding with bad key
+        embedding(
+            model=f"nebius/{embedding_model}",
+            input="Hello world",
+            api_key=api_key,
+        )
+        
+        # Should not reach here, expecting an auth error
+        pytest.fail("Did not raise expected authentication error")
+    except litellm.exceptions.AuthenticationError:
+        # Expected behavior
+        pass
+    except Exception as e:
+        # Another error occurred
+        pytest.fail(f"Unexpected error with bad key: {e}")
