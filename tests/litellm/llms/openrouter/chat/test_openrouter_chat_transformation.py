@@ -26,6 +26,11 @@ class TestOpenRouterChatCompletionStreamingHandler:
             "id": "test_id",
             "created": 1234567890,
             "model": "test_model",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            },
             "choices": [
                 {"delta": {"content": "test content", "reasoning": "test reasoning"}}
             ],
@@ -39,6 +44,10 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert result.object == "chat.completion.chunk"
         assert result.created == 1234567890
         assert result.model == "test_model"
+        # Verify usage is passed correctly
+        assert result.usage.prompt_tokens == chunk["usage"]["prompt_tokens"]
+        assert result.usage.completion_tokens == chunk["usage"]["completion_tokens"]
+        assert result.usage.total_tokens == chunk["usage"]["total_tokens"]
         assert len(result.choices) == 1
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
@@ -95,3 +104,7 @@ def test_openrouter_extra_body_transformation():
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
+
+    # Verify usage parameter is included for OpenRouter usage accounting
+    assert "usage" in transformed_request
+    assert transformed_request["usage"] == {"include": True}
