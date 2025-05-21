@@ -196,6 +196,7 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        redis_only: bool = False,
         **kwargs,
     ):
         # Try to fetch from in-memory cache first
@@ -204,7 +205,7 @@ class DualCache(BaseCache):
                 f"async get cache: cache key: {key}; local_only: {local_only}"
             )
             result = None
-            if self.in_memory_cache is not None:
+            if self.in_memory_cache is not None and not redis_only:
                 in_memory_result = await self.in_memory_cache.async_get_cache(
                     key, **kwargs
                 )
@@ -213,7 +214,7 @@ class DualCache(BaseCache):
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if result is None and self.redis_cache is not None and local_only is False:
+            if result is None and self.redis_cache is not None and not local_only:
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result = await self.redis_cache.async_get_cache(
                     key, parent_otel_span=parent_otel_span
