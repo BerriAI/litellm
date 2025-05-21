@@ -229,6 +229,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -1966,6 +1967,7 @@ def supports_prompt_caching(
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_caching",
     )
+
 
 def supports_computer_use(
     model: str, custom_llm_provider: Optional[str] = None
@@ -6676,6 +6678,13 @@ class ProviderConfigManager:
 
             return GeminiRealtimeConfig()
         return None
+
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageEditConfig]:
+        pass
 
 
 def get_end_user_id_for_cost_tracking(

@@ -7,10 +7,11 @@ import httpx
 
 import litellm
 from litellm import Logging, client, exception_type, get_litellm_params
+from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
-from litellm.llms.base_llm import BaseImageGenerationConfig
+from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_llm import CustomLLM
 
@@ -24,6 +25,7 @@ from litellm.main import (
     vertex_image_generation,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     FileTypes,
@@ -553,8 +555,8 @@ def image_variation(
 @client
 def image_edit(
     image: FileTypes,
-    model: str,
     prompt: str,
+    model: Optional[str] = None,
     mask: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
@@ -574,9 +576,69 @@ def image_edit(
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
-    # Placeholder implementation that returns an empty ImageResponse
-    # TODO: Implement actual image edit functionality
-    return ImageResponse()
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("adelete_responses", False) is True
+
+        # get llm provider logic
+        litellm_params = GenericLiteLLMParams(**kwargs)
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
+
+        # get provider config
+        image_edit_provider_config: Optional[
+            BaseImageEditConfig
+        ] = ProviderConfigManager.get_provider_image_edit_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
+
+        if image_edit_provider_config is None:
+            raise ValueError(f"image edit is not supported for {custom_llm_provider}")
+
+        local_vars.update(kwargs)
+
+        # Pre Call logging
+        # litellm_logging_obj.update_environment_variables(
+        #     model=None,
+        #     optional_params={
+        #         "response_id": response_id,
+        #     },
+        #     litellm_params={
+        #         "litellm_call_id": litellm_call_id,
+        #     },
+        #     custom_llm_provider=custom_llm_provider,
+        # )
+
+        # # Call the handler with _is_async flag instead of directly calling the async handler
+        # response = base_llm_http_handler.delete_response_api_handler(
+        #     response_id=response_id,
+        #     custom_llm_provider=custom_llm_provider,
+        #     responses_api_provider_config=responses_api_provider_config,
+        #     litellm_params=litellm_params,
+        #     logging_obj=litellm_logging_obj,
+        #     extra_headers=extra_headers,
+        #     extra_body=extra_body,
+        #     timeout=timeout or request_timeout,
+        #     _is_async=_is_async,
+        #     client=kwargs.get("client"),
+        # )
+        return ImageResponse()
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
 
 
 @client
