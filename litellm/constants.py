@@ -153,12 +153,14 @@ FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 
+############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
