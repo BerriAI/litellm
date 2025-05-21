@@ -13,8 +13,10 @@ from datetime import datetime, timedelta
 import pytest
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LitellmUserRoles,
     SSOUserDefinedValues,
 )
@@ -110,3 +112,53 @@ def test_get_key_object_from_ui_hash_key_invalid():
     # Test with invalid token
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key("invalid_token")
     assert key_object is None
+
+
+@pytest.mark.asyncio
+async def test_get_object_from_cache_redis():
+    """Test that _get_object_from_cache retrieves from Redis cache when available"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.auth.auth_checks import _get_object_from_cache
+
+    # Create mock objects
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache = AsyncMock()
+    mock_user_api_key_cache = DualCache()
+
+    # Create test data
+    test_key = "test_key"
+    test_data = {
+        "token": "test_token",
+        "key_name": "test_key_name",
+        "spend": 0.0,
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    # Mock Redis cache response
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache.return_value = (
+        test_data
+    )
+
+    # Call the function
+    result = await _get_object_from_cache(
+        key=test_key,
+        proxy_logging_obj=mock_proxy_logging,
+        user_api_key_cache=mock_user_api_key_cache,
+        parent_otel_span=None,
+        base_model=LiteLLM_VerificationToken,
+    )
+
+    # Verify Redis cache was checked
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache.assert_called_once_with(
+        key=test_key, parent_otel_span=None
+    )
+
+    # Verify result is correct
+    assert isinstance(result, LiteLLM_VerificationToken)
+    assert result.token == "test_token"
+    assert result.key_name == "test_key_name"
+    assert result.spend == 0.0
+    assert result.models == ["gpt-3.5-turbo"]

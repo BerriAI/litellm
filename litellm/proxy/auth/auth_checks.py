@@ -11,7 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import Request, status
 from pydantic import BaseModel
@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LiteLLMRoutes,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -1014,6 +1015,38 @@ class ExperimentalUIJWTToken:
             )
 
 
+async def _get_object_from_cache(
+    key: str,
+    proxy_logging_obj: Optional[ProxyLogging],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+    base_model: Type[BaseModel],
+) -> Optional[BaseModel]:
+    cached_obj: Optional[Union[dict, BaseModel]] = None
+
+    ## CHECK REDIS CACHE ##
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
+    ):
+        cached_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key, parent_otel_span=parent_otel_span
+            )
+        )
+
+    if cached_obj is None:
+        cached_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_obj is not None:
+        if isinstance(cached_obj, dict):
+            return base_model(**cached_obj)
+        elif isinstance(cached_obj, base_model):
+            return cached_obj
+
+    return None
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -1036,15 +1069,16 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
-        key=key
+    cached_key_obj = await _get_object_from_cache(
+        key=key,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        base_model=LiteLLM_VerificationToken,
     )
 
     if cached_key_obj is not None:
-        if isinstance(cached_key_obj, dict):
-            return UserAPIKeyAuth(**cached_key_obj)
-        elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+        return UserAPIKeyAuth(**cached_key_obj.model_dump(exclude_none=True))
 
     if check_cache_only:
         raise Exception(
