@@ -670,15 +670,20 @@ class UserObjectCache:
         - update user object in cache
         """
         if isinstance(user_object, LiteLLM_UserTable):
-            user_object = user_object.model_dump()
-            for k, v in user_object.items():
-                if isinstance(v, datetime):
-                    user_object[k] = v.isoformat()
-        await self.user_api_key_cache.async_set_cache(key=user_id, value=user_object)
+            user_object_dict = user_object.model_dump()
+        else:
+            user_object_dict = user_object
+
+        for k, v in user_object_dict.items():
+            if isinstance(v, datetime):
+                user_object_dict[k] = v.isoformat()
+        await self.user_api_key_cache.async_set_cache(
+            key=user_id, value=user_object_dict
+        )
         if self.internal_usage_cache is not None:
             await self.internal_usage_cache.async_set_cache(
                 key=user_id,
-                value=user_object,
+                value=user_object_dict,
                 litellm_parent_otel_span=litellm_parent_otel_span,
             )
 

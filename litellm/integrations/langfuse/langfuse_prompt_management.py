@@ -130,9 +130,12 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         return "langfuse"
 
     def _get_prompt_from_id(
-        self, langfuse_prompt_id: str, langfuse_client: LangfuseClass
+        self,
+        langfuse_prompt_id: str,
+        langfuse_client: LangfuseClass,
+        prompt_label: Optional[str] = None,
     ) -> PROMPT_CLIENT:
-        return langfuse_client.get_prompt(langfuse_prompt_id)
+        return langfuse_client.get_prompt(langfuse_prompt_id, label=prompt_label)
 
     def _compile_prompt(
         self,
@@ -176,11 +179,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+        prompt_label: Optional[str] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict,]:
         return self.get_chat_completion_prompt(
             model,
             messages,
@@ -188,6 +188,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
+            prompt_label=prompt_label,
         )
 
     def should_run_prompt_management(
@@ -211,6 +212,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> PromptManagementClient:
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
@@ -219,7 +221,9 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
+            langfuse_prompt_id=prompt_id,
+            langfuse_client=langfuse_client,
+            prompt_label=prompt_label,
         )
 
         ## SET PROMPT

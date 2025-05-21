@@ -85,6 +85,7 @@ class PromptManagementBase(ABC):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         if prompt_id is None:
             raise ValueError("prompt_id is required for Prompt Management Base class")
@@ -98,6 +99,7 @@ class PromptManagementBase(ABC):
             prompt_variables=prompt_variables,
             client_messages=messages,
             dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
         )
 
         completed_messages = prompt_template["completed_messages"] or messages
