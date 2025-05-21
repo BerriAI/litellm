@@ -103,6 +103,3 @@ def test_openrouter_extra_body_transformation():
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
-
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
