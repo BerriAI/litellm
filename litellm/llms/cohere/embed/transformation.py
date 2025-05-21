@@ -50,7 +50,10 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
-                optional_params["embedding_types"] = v
+                if isinstance(v, list):
+                    optional_params["embedding_types"] = v
+                else:
+                    optional_params["embedding_types"] = [v]
             elif k == "dimensions":
                 optional_params["output_dimension"] = v
         return optional_params
