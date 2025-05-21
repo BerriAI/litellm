@@ -33,6 +33,7 @@ class _ProxyDBLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
@@ -62,6 +63,7 @@ class _ProxyDBLogger(CustomLogger):
             "error_information"
         ] = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
+            traceback_str=traceback_str,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -96,11 +98,7 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            update_cache,
-        )
+        from litellm.proxy.proxy_server import proxy_logging_obj, update_cache
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
@@ -134,7 +132,7 @@ class _ProxyDBLogger(CustomLogger):
                     )
 
                 verbose_proxy_logger.debug(
-                    f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
+                    f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,

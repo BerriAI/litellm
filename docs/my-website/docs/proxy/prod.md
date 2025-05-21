@@ -219,7 +219,13 @@ The migrate deploy command:
 3. When you upgrade to a new version of LiteLLM, the migration file is applied to the database. [See code](https://github.com/BerriAI/litellm/blob/52b35cd8093b9ad833987b24f494586a1e923209/litellm-proxy-extras/litellm_proxy_extras/utils.py#L42)
 
 
+### Read-only File System
 
+If you see a `Permission denied` error, it means the LiteLLM pod is running with a read-only file system.
+
+To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in your environment.
+
+LiteLLM will use this directory to write migration files.
 
 ## Extras
 ### Expected Performance in Production

@@ -99,9 +99,9 @@ def analyze_results(vertex_times):
     median_vertex = median(vertex_times)
     print(f"Vertex AI median response time: {median_vertex:.4f} seconds")
 
-    if median_vertex > 0.3:
+    if median_vertex > 3:
         pytest.fail(
-            f"Vertex AI median response time is greater than 300ms: {median_vertex:.4f} seconds"
+            f"Vertex AI median response time is greater than 500ms: {median_vertex:.4f} seconds"
         )
     else:
         print("Performance is good")

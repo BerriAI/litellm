@@ -11,7 +11,8 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import Request, status
 from pydantic import BaseModel
@@ -20,18 +21,20 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LiteLLMRoutes,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -42,10 +45,17 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.proxy.utils import (
+    InternalUsageCache,
+    PrismaClient,
+    ProxyLogging,
+    log_db_metrics,
+)
 from litellm.router import Router
+from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
+from .auth_utils import get_model_from_request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -88,7 +98,9 @@ async def common_checks(
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _model: Optional[str] = cast(Optional[str], request_body.get("model", None))
+    _model: Optional[Union[str, List[str]]] = get_model_from_request(
+        request_body, route
+    )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -98,7 +110,7 @@ async def common_checks(
 
     # 2. If team can call model
     if _model and team_object:
-        if not await can_team_access_model(
+        if not can_team_access_model(
             model=_model,
             team_object=team_object,
             llm_router=llm_router,
@@ -635,6 +647,69 @@ async def _get_fuzzy_user_object(
     return response
 
 
+class UserObjectCache:
+    def __init__(
+        self,
+        user_api_key_cache: DualCache,
+        internal_usage_cache: Optional[InternalUsageCache] = None,
+    ):
+        """
+        - user_api_key_cache: cache for user api keys
+        - internal_usage_cache: cache for internal usage (connected to Redis)
+        """
+        self.user_api_key_cache = user_api_key_cache
+        self.internal_usage_cache = internal_usage_cache
+
+    async def update_user_object(
+        self,
+        user_id: str,
+        user_object: Union[dict, LiteLLM_UserTable],
+        litellm_parent_otel_span: Optional[Span] = None,
+    ):
+        """
+        - update user object in cache
+        """
+        if isinstance(user_object, LiteLLM_UserTable):
+            user_object = user_object.model_dump()
+            for k, v in user_object.items():
+                if isinstance(v, datetime):
+                    user_object[k] = v.isoformat()
+        await self.user_api_key_cache.async_set_cache(key=user_id, value=user_object)
+        if self.internal_usage_cache is not None:
+            await self.internal_usage_cache.async_set_cache(
+                key=user_id,
+                value=user_object,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
+
+    async def get_user_object(
+        self, user_id: str, litellm_parent_otel_span: Optional[Span] = None
+    ) -> Optional[LiteLLM_UserTable]:
+        """
+        - get user object from cache
+        """
+        cached_obj: Optional[Union[dict, LiteLLM_UserTable]] = None
+
+        ## CHECK REDIS CACHE ##
+        if self.internal_usage_cache is not None:
+            cached_obj = await self.internal_usage_cache.async_get_cache(
+                key=user_id,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                redis_only=True,
+            )
+
+        if cached_obj is None:
+            cached_obj = await self.user_api_key_cache.async_get_cache(key=user_id)
+
+        if cached_obj is not None:
+            if isinstance(cached_obj, dict):
+                return LiteLLM_UserTable(**cached_obj)
+            elif isinstance(cached_obj, LiteLLM_UserTable):
+                return cached_obj
+
+        return None
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],
@@ -652,18 +727,23 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
+    user_object_cache = UserObjectCache(
+        user_api_key_cache=user_api_key_cache,
+        internal_usage_cache=proxy_logging_obj.internal_usage_cache
+        if proxy_logging_obj is not None
+        else None,
+    )
 
     if user_id is None:
         return None
 
     # check if in cache
     if not check_db_only:
-        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        cached_user_obj = await user_object_cache.get_user_object(
+            user_id=user_id, litellm_parent_otel_span=parent_otel_span
+        )
         if cached_user_obj is not None:
-            if isinstance(cached_user_obj, dict):
-                return LiteLLM_UserTable(**cached_user_obj)
-            elif isinstance(cached_user_obj, LiteLLM_UserTable):
-                return cached_user_obj
+            return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -692,8 +772,14 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                new_user_params: Dict[str, Any] = {
+                    "user_id": user_id,
+                }
+                if litellm.default_internal_user_params is not None:
+                    new_user_params.update(litellm.default_internal_user_params)
+
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id},
+                    data=new_user_params,
                     include={"organization_memberships": True},
                 )
             else:
@@ -715,7 +801,9 @@ async def get_user_object(
         response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+        await user_object_cache.update_user_object(
+            user_id=user_id, user_object=response_dict
+        )
 
         # save to db access time
         _update_last_db_access_time(
@@ -956,7 +1044,7 @@ async def get_team_object(
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
-        from datetime import UTC, datetime, timedelta
+        from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             encrypt_value_helper,
@@ -966,7 +1054,7 @@ class ExperimentalUIJWTToken:
             raise Exception("User role is required for experimental UI login")
 
         # Calculate expiration time (10 minutes from now)
-        expiration_time = datetime.now(UTC) + timedelta(minutes=10)
+        expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
@@ -1009,6 +1097,38 @@ class ExperimentalUIJWTToken:
             )
 
 
+async def _get_object_from_cache(
+    key: str,
+    proxy_logging_obj: Optional[ProxyLogging],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+    base_model: Type[BaseModel],
+) -> Optional[BaseModel]:
+    cached_obj: Optional[Union[dict, BaseModel]] = None
+
+    ## CHECK REDIS CACHE ##
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
+    ):
+        cached_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key, parent_otel_span=parent_otel_span
+            )
+        )
+
+    if cached_obj is None:
+        cached_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_obj is not None:
+        if isinstance(cached_obj, dict):
+            return base_model(**cached_obj)
+        elif isinstance(cached_obj, base_model):
+            return cached_obj
+
+    return None
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -1031,15 +1151,16 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
-        key=key
+    cached_key_obj = await _get_object_from_cache(
+        key=key,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        base_model=LiteLLM_VerificationToken,
     )
 
     if cached_key_obj is not None:
-        if isinstance(cached_key_obj, dict):
-            return UserAPIKeyAuth(**cached_key_obj)
-        elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+        return UserAPIKeyAuth(**cached_key_obj.model_dump(exclude_none=True))
 
     if check_cache_only:
         raise Exception(
@@ -1118,12 +1239,13 @@ async def get_org_object(
         )
 
 
-async def _can_object_call_model(
-    model: str,
+def _can_object_call_model(
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
-    object_type: Literal["user", "team", "key"] = "user",
+    object_type: Literal["user", "team", "key", "org"] = "user",
+    fallback_depth: int = 0,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -1133,7 +1255,7 @@ async def _can_object_call_model(
         - llm_router: Optional[Router]
         - models: List[str]
         - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key"]. We use the object type to raise the correct exception type
+        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
 
     Returns:
         - True: if token allowed to call model
@@ -1141,6 +1263,24 @@ async def _can_object_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise Exception(
+            "Unable to parse model, max fallback depth exceeded - received model: {}".format(
+                model
+            )
+        )
+    if isinstance(model, list):
+        for m in model:
+            _can_object_call_model(
+                model=m,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                object_type=object_type,
+                fallback_depth=fallback_depth + 1,
+            )
+        return True
+
     if model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
 
@@ -1218,7 +1358,7 @@ def _model_in_team_aliases(
 
 
 async def can_key_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_model_list: Optional[list],
     valid_token: UserAPIKeyAuth,
     llm_router: Optional[litellm.Router],
@@ -1232,7 +1372,7 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.models,
@@ -1241,8 +1381,27 @@ async def can_key_call_model(
     )
 
 
-async def can_team_access_model(
+def can_org_access_model(
     model: str,
+    org_object: Optional[LiteLLM_OrganizationTable],
+    llm_router: Optional[Router],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+) -> Literal[True]:
+    """
+    Returns True if the team can access a specific model.
+
+    """
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=org_object.models if org_object else [],
+        team_model_aliases=team_model_aliases,
+        object_type="org",
+    )
+
+
+def can_team_access_model(
+    model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
@@ -1251,7 +1410,7 @@ async def can_team_access_model(
     Returns True if the team can access a specific model.
 
     """
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=team_object.models if team_object else [],
@@ -1261,7 +1420,7 @@ async def can_team_access_model(
 
 
 async def can_user_call_model(
-    model: str,
+    model: Union[str, List[str]],
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
 ) -> Literal[True]:
@@ -1276,7 +1435,7 @@ async def can_user_call_model(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    return await _can_object_call_model(
+    return _can_object_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
@@ -1338,6 +1497,7 @@ async def _virtual_key_max_budget_check(
             team_id=valid_token.team_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1383,6 +1543,7 @@ async def _virtual_key_soft_budget_check(
             team_alias=valid_token.team_alias,
             user_email=None,
             key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
         )
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
@@ -1418,6 +1579,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(

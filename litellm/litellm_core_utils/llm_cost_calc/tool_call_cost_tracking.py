@@ -2,16 +2,22 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
+from litellm.types.llms.openai import (
+    FileSearchTool,
+    ResponsesAPIResponse,
+    WebSearchOptions,
+)
 from litellm.types.utils import (
+    Message,
     ModelInfo,
     ModelResponse,
     SearchContextCostPerQuery,
     StandardBuiltInToolsParams,
+    Usage,
 )
 
 
@@ -23,9 +29,45 @@ class StandardBuiltInToolCostTracking:
     """
 
     @staticmethod
+    def get_cost_for_anthropic_web_search(
+        model_info: Optional[ModelInfo] = None,
+        usage: Optional[Usage] = None,
+    ) -> float:
+        """
+        Get the cost of using a web search tool for Anthropic.
+        """
+        ## Check if web search requests are in the usage object
+        if model_info is None:
+            return 0.0
+
+        if (
+            usage is None
+            or usage.server_tool_use is None
+            or usage.server_tool_use.web_search_requests is None
+        ):
+            return 0.0
+
+        ## Get the cost per web search request
+        search_context_pricing: SearchContextCostPerQuery = (
+            model_info.get("search_context_cost_per_query", {}) or {}
+        )
+        cost_per_web_search_request = search_context_pricing.get(
+            "search_context_size_medium", 0.0
+        )
+        if cost_per_web_search_request is None or cost_per_web_search_request == 0.0:
+            return 0.0
+
+        ## Calculate the total cost
+        total_cost = (
+            cost_per_web_search_request * usage.server_tool_use.web_search_requests
+        )
+        return total_cost
+
+    @staticmethod
     def get_cost_for_built_in_tools(
         model: str,
         response_object: Any,
+        usage: Optional[Usage] = None,
         custom_llm_provider: Optional[str] = None,
         standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     ) -> float:
@@ -36,15 +78,25 @@ class StandardBuiltInToolCostTracking:
         - Web Search
 
         """
-        if standard_built_in_tools_params is not None:
-            if (
-                standard_built_in_tools_params.get("web_search_options", None)
-                is not None
-            ):
-                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
-                    model=model, custom_llm_provider=custom_llm_provider
+        standard_built_in_tools_params = standard_built_in_tools_params or {}
+        #########################################################
+        # Web Search
+        #########################################################
+        if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+            response_object=response_object,
+            usage=usage,
+        ):
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            if custom_llm_provider == "anthropic":
+                return (
+                    StandardBuiltInToolCostTracking.get_cost_for_anthropic_web_search(
+                        model_info=model_info,
+                        usage=usage,
+                    )
                 )
-
+            else:
                 return StandardBuiltInToolCostTracking.get_cost_for_web_search(
                     web_search_options=standard_built_in_tools_params.get(
                         "web_search_options", None
@@ -52,22 +104,111 @@ class StandardBuiltInToolCostTracking:
                     model_info=model_info,
                 )
 
-            if standard_built_in_tools_params.get("file_search", None) is not None:
-                return StandardBuiltInToolCostTracking.get_cost_for_file_search(
-                    file_search=standard_built_in_tools_params.get("file_search", None),
-                )
+        #########################################################
+        # File Search
+        #########################################################
+        elif StandardBuiltInToolCostTracking.response_object_includes_file_search_call(
+            response_object=response_object
+        ):
+            return StandardBuiltInToolCostTracking.get_cost_for_file_search(
+                file_search=standard_built_in_tools_params.get("file_search", None),
+            )
 
-        if isinstance(response_object, ModelResponse):
-            if StandardBuiltInToolCostTracking.chat_completion_response_includes_annotations(
-                response_object
-            ):
-                model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
-                return StandardBuiltInToolCostTracking.get_default_cost_for_web_search(
-                    model_info
-                )
         return 0.0
+
+    @staticmethod
+    def response_object_includes_web_search_call(
+        response_object: Any, usage: Optional[Usage] = None
+    ) -> bool:
+        """
+        Check if the response object includes a web search call.
+
+        This covers:
+        - Chat Completion Response (ModelResponse)
+        - ResponsesAPIResponse (streaming + non-streaming)
+        """
+        if isinstance(response_object, ModelResponse):
+            # chat completions only include url_citation annotations when a web search call is made
+            return StandardBuiltInToolCostTracking.response_includes_annotation_type(
+                response_object=response_object, annotation_type="url_citation"
+            )
+        elif isinstance(response_object, ResponsesAPIResponse):
+            # response api explicitly includes web_search_call in the output
+            return StandardBuiltInToolCostTracking.response_includes_output_type(
+                response_object=response_object, output_type="web_search_call"
+            )
+        elif (
+            usage is not None
+            and hasattr(usage, "server_tool_use")
+            and usage.server_tool_use is not None
+            and usage.server_tool_use.web_search_requests is not None
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def response_object_includes_file_search_call(
+        response_object: Any,
+    ) -> bool:
+        """
+        Check if the response object includes a file search call.
+
+        This covers:
+            - Chat Completion Response (ModelResponse)
+            - ResponsesAPIResponse (streaming + non-streaming)
+        """
+        if isinstance(response_object, ModelResponse):
+            # chat completions only include file_citation annotations when a file search call is made
+            return StandardBuiltInToolCostTracking.response_includes_annotation_type(
+                response_object=response_object, annotation_type="file_citation"
+            )
+        elif isinstance(response_object, ResponsesAPIResponse):
+            # response api explicitly includes file_search_call in the output
+            return StandardBuiltInToolCostTracking.response_includes_output_type(
+                response_object=response_object, output_type="file_search_call"
+            )
+        return False
+
+    @staticmethod
+    def response_includes_annotation_type(
+        response_object: ModelResponse,
+        annotation_type: Literal["url_citation", "file_citation"],
+    ) -> bool:
+        if isinstance(response_object, ModelResponse):
+            for choice in response_object.choices:
+                message: Optional[Message] = getattr(choice, "message", None)
+                if message is None:
+                    continue
+                if annotations := getattr(message, "annotations", None):
+                    if len(annotations) > 0:
+                        for annotation in annotations:
+                            if annotation.get("type", None) == annotation_type:
+                                return True
+        return False
+
+    @staticmethod
+    def response_includes_output_type(
+        response_object: ResponsesAPIResponse,
+        output_type: Literal["web_search_call", "file_search_call"],
+    ) -> bool:
+        """
+        Check if the ResponsesAPIResponse includes one of the specified output types.
+
+        This is used for cost tracking of built-in tools.
+
+        Args:
+            response_object: The ResponsesAPIResponse object to check.
+            output_type: The type of output to check for.
+
+        Returns:
+            True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
+        """
+        output = response_object.output
+        for output_item in output:
+            _output_type: Optional[str] = getattr(output_item, "type", None)
+            if _output_type == output_type:
+                return True
+        return False
 
     @staticmethod
     def _safe_get_model_info(
@@ -88,8 +229,7 @@ class StandardBuiltInToolCostTracking:
         """
         If request includes `web_search_options`, calculate the cost of the web search.
         """
-        if web_search_options is None:
-            return 0.0
+        web_search_options = web_search_options or {}
         if model_info is None:
             return 0.0
 

@@ -104,7 +104,7 @@ def test_hanging_request_azure():
                 {
                     "model_name": "azure-gpt",
                     "litellm_params": {
-                        "model": "azure/chatgpt-v-3",
+                        "model": "azure/gpt-4o-new-test",
                         "api_base": os.environ["AZURE_API_BASE"],
                         "api_key": os.environ["AZURE_API_KEY"],
                     },

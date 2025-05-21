@@ -13,7 +13,9 @@ export async function makeOpenAIChatCompletionRequest(
     onReasoningContent?: (content: string) => void,
     onTimingData?: (timeToFirstToken: number) => void,
     onUsageData?: (usage: TokenUsage) => void,
-    traceId?: string
+    traceId?: string,
+    vector_store_ids?: string[],
+    guardrails?: string[]
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -56,6 +58,8 @@ export async function makeOpenAIChatCompletionRequest(
         },
         litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
+        ...(vector_store_ids ? { vector_store_ids } : {}),
+        ...(guardrails ? { guardrails } : {}),
       }, { signal });
   
       for await (const chunk of response) {
@@ -118,8 +122,6 @@ export async function makeOpenAIChatCompletionRequest(
     } catch (error) {
       if (signal?.aborted) {
         console.log("Chat completion request was cancelled");
-      } else {
-        message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
       }
       throw error; // Re-throw to allow the caller to handle the error
     }

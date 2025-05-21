@@ -41,6 +41,7 @@ def test_transform_usage():
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
 
+
 def test_transform_system_message():
     config = AmazonConverseConfig()
 
@@ -96,7 +97,11 @@ def test_transform_system_message():
         {
             "role": "system",
             "content": [
-                {"type": "text", "text": "Cache this!", "cache_control": {"type": "ephemeral"}},
+                {
+                    "type": "text",
+                    "text": "Cache this!",
+                    "cache_control": {"type": "ephemeral"},
+                },
                 {"type": "text", "text": "Don't cache this!"},
             ],
         },
@@ -121,6 +126,7 @@ def test_transform_system_message():
     assert out_messages[1]["role"] == "assistant"
     assert system_blocks == []
 
+
 def test_transform_thinking_blocks_with_redacted_content():
     thinking_blocks = [
         {
@@ -139,3 +145,92 @@ def test_transform_thinking_blocks_with_redacted_content():
     assert transformed_thinking_blocks[0]["type"] == "thinking"
     assert transformed_thinking_blocks[1]["type"] == "redacted_thinking"
 
+
+def test_apply_tool_call_transformation_if_needed():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tool_calls = [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_function",
+                "arguments": "test_arguments",
+            },
+        },
+    ]
+    tool_response = {
+        "type": "function",
+        "name": "test_function",
+        "parameters": {"test": "test"},
+    }
+    message = Message(
+        role="user",
+        content=json.dumps(tool_response),
+    )
+    transformed_message, _ = config.apply_tool_call_transformation_if_needed(
+        message, tool_calls
+    )
+    assert len(transformed_message.tool_calls) == 1
+    assert transformed_message.tool_calls[0].function.name == "test_function"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        tool_response["parameters"]
+    )
+
+
+def test_transform_tool_call_with_cache_control():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    messages = [{"role": "user", "content": "Am I lost?"}]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_location",
+                "description": "Get the user's location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" in result
+    assert "tools" in result["toolConfig"]
+
+    assert len(result["toolConfig"]["tools"]) == 2
+
+    function_out_msg = result["toolConfig"]["tools"][0]
+    print(function_out_msg)
+    assert function_out_msg["toolSpec"]["name"] == "get_location"
+    assert function_out_msg["toolSpec"]["description"] == "Get the user's location"
+    assert (
+        function_out_msg["toolSpec"]["inputSchema"]["json"]["properties"]["location"][
+            "type"
+        ]
+        == "string"
+    )
+
+    transformed_cache_msg = result["toolConfig"]["tools"][1]
+    assert "cachePoint" in transformed_cache_msg
+    assert transformed_cache_msg["cachePoint"]["type"] == "default"
