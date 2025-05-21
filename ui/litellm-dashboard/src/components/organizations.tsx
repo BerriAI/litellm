@@ -23,7 +23,7 @@ import NumericalInput from "./shared/numerical_input";
 import { Input } from "antd";
 import { Modal, Form, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { PencilAltIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from './key_team_helpers/fetch_available_models_team_key';
 import { message } from 'antd';
@@ -65,6 +65,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (organizations.length === 0 && accessToken) {
@@ -214,32 +215,102 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                               <TableCell>
                                 {org.litellm_budget_table?.max_budget !== null && org.litellm_budget_table?.max_budget !== undefined ? org.litellm_budget_table?.max_budget : "No limit"}
                               </TableCell>
-                              <TableCell>
-                                {Array.isArray(org.models) && (
-                                  <div className="flex flex-col">
-                                    {org.models.length === 0 ? (
-                                      <Badge size={"xs"} className="mb-1" color="red">
-                                        <Text>All Proxy Models</Text>
-                                      </Badge>
-                                    ) : (
-                                      org.models.map((model, index) =>
-                                        model === "all-proxy-models" ? (
-                                          <Badge key={index} size={"xs"} className="mb-1" color="red">
-                                            <Text>All Proxy Models</Text>
-                                          </Badge>
-                                        ) : (
-                                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                                            <Text>
-                                              {model.length > 30
-                                                ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                : getModelDisplayName(model)}
-                                            </Text>
-                                          </Badge>
-                                        )
-                                      )
-                                    )}
-                                  </div>
-                                )}
+                              <TableCell
+                                style={{
+                                  maxWidth: "8-x",
+                                  whiteSpace: "pre-wrap",
+                                  overflow: "hidden",
+                                }}
+                                className={org.models.length > 3 ? "px-0" : ""}
+                              >
+                                <div className="flex flex-col">
+                                  {Array.isArray(org.models) ? (
+                                    <div className="flex flex-col">
+                                      {org.models.length === 0 ? (
+                                        <Badge size={"xs"} className="mb-1" color="red">
+                                          <Text>All Proxy Models</Text>
+                                        </Badge>
+                                      ) : (
+                                        <>
+                                          <div className="flex items-start">
+                                            {org.models.length > 3 && (
+                                              <div>
+                                                <Icon
+                                                  icon={expandedAccordions[org.organization_id || ''] ? ChevronDownIcon : ChevronRightIcon}
+                                                  className="cursor-pointer"
+                                                  size="xs"
+                                                  onClick={() => {
+                                                    setExpandedAccordions(prev => ({
+                                                      ...prev,
+                                                      [org.organization_id || '']: !prev[org.organization_id || '']
+                                                    }));
+                                                  }}
+                                                />
+                                              </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-1">
+                                              {org.models.slice(0, 3).map((model, index) => (
+                                                model === "all-proxy-models" ? (
+                                                  <Badge
+                                                    key={index}
+                                                    size={"xs"}
+                                                    color="red"
+                                                  >
+                                                    <Text>All Proxy Models</Text>
+                                                  </Badge>
+                                                ) : (
+                                                  <Badge
+                                                    key={index}
+                                                    size={"xs"}
+                                                    color="blue"
+                                                  >
+                                                    <Text>
+                                                      {model.length > 30
+                                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                        : getModelDisplayName(model)}
+                                                    </Text>
+                                                  </Badge>
+                                                )
+                                              ))}
+                                              {org.models.length > 3 && !expandedAccordions[org.organization_id || ''] && (
+                                                <Badge size={"xs"} color="gray" className="cursor-pointer">
+                                                  <Text>+{org.models.length - 3} more models</Text>
+                                                </Badge>
+                                              )}
+                                              {expandedAccordions[org.organization_id || ''] && (
+                                                <div className="flex flex-wrap gap-1">
+                                                  {org.models.slice(3).map((model, index) => (
+                                                    model === "all-proxy-models" ? (
+                                                      <Badge
+                                                        key={index + 3}
+                                                        size={"xs"}
+                                                        color="red"
+                                                      >
+                                                        <Text>All Proxy Models</Text>
+                                                      </Badge>
+                                                    ) : (
+                                                      <Badge
+                                                        key={index + 3}
+                                                        size={"xs"}
+                                                        color="blue"
+                                                      >
+                                                        <Text>
+                                                          {model.length > 30
+                                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                            : getModelDisplayName(model)}
+                                                        </Text>
+                                                      </Badge>
+                                                    )
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ) : null}
+                                </div>
                               </TableCell>
                               <TableCell>
                                 <Text>
