@@ -540,7 +540,7 @@ def image_variation(
             api_base=api_base,
             model=model,
             image=image,
-            timeout=litellm_params.get("timeout", None),
+            timeout=litellm_params.get("timeout", None) or DEFAULT_REQUEST_TIMEOUT,
             custom_llm_provider=custom_llm_provider,
             logging_obj=litellm_logging_obj,
             optional_params={},

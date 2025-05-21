@@ -1,5 +1,5 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -83,7 +83,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         #########################################################
         _images = request_dict.get("image") or []
         data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
-        files_list = []
+        files_list: List[Tuple[str, Any]] = []
         for _image in _images:
             if isinstance(_image, BufferedReader):
                 files_list.append(("image[]", (_image.name, _image, "image/png")))

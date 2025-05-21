@@ -458,7 +458,7 @@ class BaseLLMAIOHTTPHandler:
         api_key: str,
         model: Optional[str],
         image: FileTypes,
-        timeout: Optional[float],
+        timeout: float,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
