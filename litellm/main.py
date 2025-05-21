@@ -1748,6 +1748,34 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 stream=stream,
             )
+        elif custom_llm_provider == "chat":
+            from litellm.llms.chat.transformation import ChatConfig
+            api_base = api_base or litellm.api_base
+            api_key  = api_key  or litellm.api_key
+            headers  = headers or litellm.headers
+            # load ChatConfig defaults
+            chat_cfg = ChatConfig()
+            for k,v in chat_cfg.get_config().items():
+                optional_params.setdefault(k, v)
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+                provider_config=chat_cfg,
+            )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
