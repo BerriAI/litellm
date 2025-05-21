@@ -4,7 +4,7 @@ Calling logic for Nebius embeddings
 
 from typing import Optional
 
-from litellm.llms.openai_like.embedding.handler import openai_like_embeddings
+from litellm.llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.nebius import NebiusAIEndpoint
 from litellm.utils import ModelResponse
@@ -24,15 +24,18 @@ def nebius_embeddings(
     """
     Handle embeddings for Nebius models
     """
-    return openai_like_embeddings(
+    handler = OpenAILikeEmbeddingHandler()
+    return handler.embedding(
         model=model,
         input=input,
         api_key=api_key,
         api_base=api_base,
         logging_obj=logging_obj,
         model_response=model_response,
-        optional_params=optional_params,
-        litellm_params=litellm_params,
-        logger_fn=logger_fn,
-        endpoint_type=NebiusAIEndpoint.EMBEDDINGS.value.strip("/"),
+        optional_params=optional_params or {},
+        timeout=litellm_params.get("timeout", 600) if litellm_params else 600,
+        client=litellm_params.get("client") if litellm_params else None,
+        aembedding=litellm_params.get("aembedding") if litellm_params else None,
+        custom_endpoint=True,
+        headers=litellm_params.get("extra_headers") if litellm_params else None,
     ) 
