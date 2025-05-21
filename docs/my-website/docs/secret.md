@@ -96,6 +96,33 @@ litellm --config /path/to/config.yaml
 ```
 
 
+#### Using K/V pairs in 1 AWS Secret
+
+You can read multiple keys from a single AWS Secret using the `primary_secret_name` parameter:
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager"
+  key_management_settings:
+    hosted_keys: [
+      "OPENAI_API_KEY_MODEL_1",
+      "OPENAI_API_KEY_MODEL_2",
+    ]
+    primary_secret_name: "litellm_secrets" # 👈 Read multiple keys from one JSON secret
+```
+
+The `primary_secret_name` allows you to read multiple keys from a single AWS Secret as a JSON object. For example, the "litellm_secrets" would contain:
+
+```json
+{
+  "OPENAI_API_KEY_MODEL_1": "sk-key1...",
+  "OPENAI_API_KEY_MODEL_2": "sk-key2..."
+}
+```
+
+This reduces the number of AWS Secrets you need to manage.
+
+
 ## Hashicorp Vault
 
 
@@ -353,4 +380,7 @@ general_settings:
     
     # Hosted Keys Settings
     hosted_keys: ["litellm_master_key"] # OPTIONAL. Specify which env keys you stored on AWS
+
+    # K/V pairs in 1 AWS Secret Settings
+    primary_secret_name: "litellm_secrets" # OPTIONAL. Read multiple keys from one JSON secret on AWS Secret Manager
 ```

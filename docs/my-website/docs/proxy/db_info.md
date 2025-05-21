@@ -46,18 +46,17 @@ You can see the full DB Schema [here](https://github.com/BerriAI/litellm/blob/ma
 
 | Table Name | Description | Row Insert Frequency |
 |------------|-------------|---------------------|
-| LiteLLM_SpendLogs | Detailed logs of all API requests. Records token usage, spend, and timing information. Tracks which models and keys were used. | **High - every LLM API request** |
-| LiteLLM_ErrorLogs | Captures failed requests and errors. Stores exception details and request information. Helps with debugging and monitoring. | **Medium - on errors only** |
+| LiteLLM_SpendLogs | Detailed logs of all API requests. Records token usage, spend, and timing information. Tracks which models and keys were used. | **High - every LLM API request - Success or Failure** |
 | LiteLLM_AuditLog | Tracks changes to system configuration. Records who made changes and what was modified. Maintains history of updates to teams, users, and models. | **Off by default**, **High - when enabled** |
 
-## Disable `LiteLLM_SpendLogs` & `LiteLLM_ErrorLogs`
+## Disable `LiteLLM_SpendLogs`
 
 You can disable spend_logs and error_logs by setting `disable_spend_logs` and `disable_error_logs` to `True` on the `general_settings` section of your proxy_config.yaml file.
 
 ```yaml
 general_settings:
   disable_spend_logs: True   # Disable writing spend logs to DB
-  disable_error_logs: True   # Disable writing error logs to DB
+  disable_error_logs: True   # Only disable writing error logs to DB, regular spend logs will still be written unless `disable_spend_logs: True`
 ```
 
 ### What is the impact of disabling these logs?

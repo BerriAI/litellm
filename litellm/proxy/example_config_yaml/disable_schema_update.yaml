@@ -4,6 +4,11 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
   callbacks: ["gcs_bucket"]

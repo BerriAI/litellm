@@ -18,9 +18,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
-from litellm.proxy.utils import (
-    duration_in_seconds,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
     _extract_from_regex,
@@ -35,7 +33,6 @@ from litellm.utils import (
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
-    token_counter,
     trim_messages,
     validate_environment,
 )
@@ -43,10 +40,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
-
-
+@pytest.fixture(autouse=True)
+def reset_mock_cache():
+    from litellm.utils import _model_cache
+    _model_cache.flush_cache()
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
+    litellm._turn_on_debug()
     messages = [
         {
             "role": "user",
@@ -305,6 +305,24 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=None,
+        provider=LlmProviders(custom_llm_provider),
+    )
+    assert provider_config is not None
+    valid_models = get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider=custom_llm_provider
+    )
+    print(valid_models)
+    assert len(valid_models) > 0
+    assert provider_config.get_models() == valid_models
+
+
 # test_get_valid_models()
 
 
@@ -427,41 +445,6 @@ def test_function_to_dict():
 
 # test_function_to_dict()
 
-
-def test_token_counter():
-    try:
-        messages = [{"role": "user", "content": "hi how are you what time is it"}]
-        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-        print("gpt-35-turbo")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="claude-2", messages=messages)
-        print("claude-2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="gemini/chat-bison", messages=messages)
-        print("gemini/chat-bison")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="ollama/llama2", messages=messages)
-        print("ollama/llama2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
-        print("anthropic.claude-instant-v1")
-        print(tokens)
-        assert tokens > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_token_counter()
-
-
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
@@ -475,6 +458,45 @@ def test_token_counter():
 def test_supports_function_calling(model, expected_bool):
     try:
         assert litellm.supports_function_calling(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-4o-mini-search-preview", True),
+        ("openai/gpt-4o-mini-search-preview", True),
+        ("gpt-4o-search-preview", True),
+        ("openai/gpt-4o-search-preview", True),
+        ("groq/deepseek-r1-distill-llama-70b", False),
+        ("groq/llama-3.3-70b-versatile", False),
+        ("codestral/codestral-latest", False),
+    ],
+)
+def test_supports_web_search(model, expected_bool):
+    try:
+        assert litellm.supports_web_search(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("openai/o3-mini", True),
+        ("o3-mini", True),
+        ("xai/grok-3-mini-beta", True),
+        ("xai/grok-3-mini-fast-beta", True),
+        ("xai/grok-2", False),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_supports_reasoning(model, expected_bool):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert litellm.supports_reasoning(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -721,6 +743,14 @@ def test_duration_in_seconds():
     assert value - expected_duration < 2
 
 
+def test_duration_in_seconds_basic():
+    assert duration_in_seconds(duration="3s") == 3
+    assert duration_in_seconds(duration="3m") == 180
+    assert duration_in_seconds(duration="3h") == 10800
+    assert duration_in_seconds(duration="3d") == 259200
+    assert duration_in_seconds(duration="3w") == 1814400
+
+
 def test_get_llm_provider_ft_models():
     """
     All ft prefixed models should map to OpenAI
@@ -863,6 +893,25 @@ def test_convert_model_response_object():
             e.message
             == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
         )
+
+
+@pytest.mark.parametrize(
+    "content, expected_reasoning, expected_content",
+    [
+        (None, None, None),
+        (
+            "<think>I am thinking here</think>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
+        ),
+        ("I am a regular response", None, "I am a regular response"),
+    ],
+)
+def test_parse_content_for_reasoning(content, expected_reasoning, expected_content):
+    assert litellm.utils._parse_content_for_reasoning(content) == (
+        expected_reasoning,
+        expected_content,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1074,6 +1123,26 @@ def test_is_base64_encoded_2():
                 {
                     "role": "user",
                     "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "123",
+                                "file_name": "test.txt",
+                                "file_size": 100,
+                                "file_type": "text/plain",
+                                "file_url": "https://example.com/test.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
                         {"type": "image_url", "url": "https://example.com/image.png"}
                     ],
                 }
@@ -1140,6 +1209,9 @@ def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     from litellm import models_by_provider
 
     providers = set()
@@ -1434,6 +1506,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
+        print("valid_models", valid_models)
         mock_post.assert_called_once()
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
@@ -1850,3 +1923,239 @@ def test_dict_to_response_format_helper():
         "ref_template": "/$defs/{model}",
     }
     _dict_to_response_format_helper(**args)
+
+
+def test_validate_user_messages_invalid_content_type():
+    from litellm.utils import validate_chat_completion_user_messages
+
+    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+
+    with pytest.raises(Exception) as e:
+        validate_chat_completion_user_messages(messages)
+
+    assert "Invalid message" in str(e)
+    print(e)
+
+
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.utils import get_applied_guardrails
+from unittest.mock import Mock
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {
+            "name": "default_on_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
+            ],
+            "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "request_specific_guardrail",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {
+                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
+            },
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "multiple_guardrails",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
+                CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
+            ],
+            "kwargs": {
+                "metadata": {
+                    "requester_metadata": {"guardrails": ["request_guardrail"]}
+                }
+            },
+            "expected": ["default_guardrail", "request_guardrail"],
+        },
+        {
+            "name": "empty_metadata",
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {},
+            "expected": [],
+        },
+        {
+            "name": "none_callback",
+            "callbacks": [
+                None,
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+        {
+            "name": "non_guardrail_callback",
+            "callbacks": [
+                Mock(),
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True),
+            ],
+            "kwargs": {},
+            "expected": ["test_guardrail"],
+        },
+    ],
+)
+def test_get_applied_guardrails(test_case):
+
+    # Setup
+    litellm.callbacks = test_case["callbacks"]
+
+    # Execute
+    result = get_applied_guardrails(test_case["kwargs"])
+
+    # Assert
+    assert sorted(result) == sorted(test_case["expected"])
+
+
+@pytest.mark.parametrize(
+    "endpoint, params, expected_bool",
+    [
+        ("localhost:4000/v1/rerank", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_chunks_per_doc"], False),
+        ("localhost:4000", ["max_chunks_per_doc"], True),
+        ("localhost:4000/v1/rerank", ["max_tokens_per_doc"], True),
+        ("localhost:4000/v2/rerank", ["max_tokens_per_doc"], False),
+        ("localhost:4000", ["max_tokens_per_doc"], False),
+        (
+            "localhost:4000/v1/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            True,
+        ),
+        (
+            "localhost:4000/v2/rerank",
+            ["max_chunks_per_doc", "max_tokens_per_doc"],
+            False,
+        ),
+        ("localhost:4000", ["max_chunks_per_doc", "max_tokens_per_doc"], False),
+    ],
+)
+def test_should_use_cohere_v1_client(endpoint, params, expected_bool):
+    assert litellm.utils.should_use_cohere_v1_client(endpoint, params) == expected_bool
+
+
+def test_add_openai_metadata():
+    from litellm.utils import add_openai_metadata
+
+    metadata = {
+        "user_api_key_end_user_id": "123",
+        "hidden_params": {"api_key": "123"},
+        "litellm_parent_otel_span": MagicMock(),
+        "none-val": None,
+        "int-val": 1,
+        "dict-val": {"a": 1, "b": 2},
+    }
+
+    result = add_openai_metadata(metadata)
+
+    assert result == {
+        "user_api_key_end_user_id": "123",
+    }
+
+
+def test_message_object():
+    from litellm.types.utils import Message
+
+    message = Message(content="Hello, world!", role="user")
+    assert message.content == "Hello, world!"
+    assert message.role == "user"
+    assert not hasattr(message, "audio")
+    assert not hasattr(message, "thinking_blocks")
+    assert not hasattr(message, "reasoning_content")
+
+
+def test_delta_object():
+    from litellm.types.utils import Delta
+
+    delta = Delta(content="Hello, world!", role="user")
+    assert delta.content == "Hello, world!"
+    assert delta.role == "user"
+    assert not hasattr(delta, "thinking_blocks")
+    assert not hasattr(delta, "reasoning_content")
+
+
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+        ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+    ],
+)
+
+def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
+    from litellm.utils import supports_pdf_input
+    
+    assert supports_pdf_input(model) == expected_bool
+
+    
+def test_get_valid_models_from_provider():
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import get_valid_models
+
+    valid_models = get_valid_models(custom_llm_provider="openai")
+    assert len(valid_models) > 0
+    assert "gpt-4o-mini" in valid_models
+
+    print("Valid models: ", valid_models)
+    valid_models.remove("gpt-4o-mini")
+    assert "gpt-4o-mini" not in valid_models
+
+    valid_models = get_valid_models(custom_llm_provider="openai")
+    assert len(valid_models) > 0
+    assert "gpt-4o-mini" in valid_models
+
+
+
+def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import _model_cache
+
+    monkeypatch.setenv("OPENAI_API_KEY", "123")
+
+    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
+    monkeypatch.delenv("OPENAI_API_KEY")
+
+    assert _model_cache.get_cached_model_info("openai") is None
+
+
+
+def test_get_valid_models_from_dynamic_api_key():
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import get_valid_models
+    from litellm.types.router import CredentialLiteLLMParams
+
+    creds = CredentialLiteLLMParams(api_key="123")
+
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) == 0
+
+    creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) > 0
+    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+
+    

@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -130,12 +133,17 @@ async def run_async_fallback(
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": kwargs.get("model", None)}
             )  # update model_group used, if fallbacks are done
-            kwargs["fallback_depth"] = fallback_depth + 1
+            fallback_depth = fallback_depth + 1
+            kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
             response = await litellm_router.async_function_with_fallbacks(
                 *args, **kwargs
             )
             verbose_router_logger.info("Successful fallback b/w models.")
+            response = add_fallback_headers_to_response(
+                response=response,
+                attempted_fallbacks=fallback_depth,
+            )
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
                 original_model_group=original_model_group,
@@ -150,55 +158,6 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-    raise error_from_fallbacks
-
-
-def run_sync_fallback(
-    litellm_router: LitellmRouter,
-    *args: Tuple[Any],
-    fallback_model_group: List[str],
-    original_model_group: str,
-    original_exception: Exception,
-    **kwargs,
-) -> Any:
-    """
-    Synchronous version of run_async_fallback.
-    Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
-
-    If the call is successful, returns the response.
-    If the call fails, continues to the next fallback model group.
-    If all fallback model groups fail, it raises the most recent exception.
-
-    Args:
-        litellm_router: The litellm router instance.
-        *args: Positional arguments.
-        fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
-        original_model_group: The original model group. example: "gpt-3.5-turbo"
-        original_exception: The original exception.
-        **kwargs: Keyword arguments.
-
-    Returns:
-        The response from the successful fallback model group.
-    Raises:
-        The most recent exception if all fallback model groups fail.
-    """
-    error_from_fallbacks = original_exception
-    for mg in fallback_model_group:
-        if mg == original_model_group:
-            continue
-        try:
-            # LOGGING
-            kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
-            verbose_router_logger.info(f"Falling back to model_group = {mg}")
-            kwargs["model"] = mg
-            kwargs.setdefault("metadata", {}).update(
-                {"model_group": mg}
-            )  # update model_group used, if fallbacks are done
-            response = litellm_router.function_with_fallbacks(*args, **kwargs)
-            verbose_router_logger.info("Successful fallback b/w models.")
-            return response
-        except Exception as e:
-            error_from_fallbacks = e
     raise error_from_fallbacks
 
 

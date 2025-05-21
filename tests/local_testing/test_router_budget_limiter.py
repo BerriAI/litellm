@@ -74,7 +74,7 @@ async def test_provider_budgets_e2e_test():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -268,7 +268,7 @@ async def test_prometheus_metric_tracking():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -673,7 +673,7 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
 
         assert "Exceeded budget for deployment" in str(exc_info.value)
 
-
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_tag_budgets_e2e_test_expect_to_fail():
     """

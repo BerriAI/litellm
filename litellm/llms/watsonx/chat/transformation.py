@@ -15,7 +15,6 @@ from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "temperature",  # equivalent to temperature
@@ -80,9 +79,11 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)

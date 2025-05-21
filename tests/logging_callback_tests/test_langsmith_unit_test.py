@@ -264,7 +264,6 @@ async def test_langsmith_key_based_logging(mocker):
                         "model_parameters": {
                             "temperature": 0.2,
                             "max_tokens": 10,
-                            "extra_body": {},
                         },
                     },
                     "outputs": {

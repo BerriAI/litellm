@@ -1,7 +1,7 @@
 import json
 import time
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 import aiohttp
 import httpx
@@ -9,7 +9,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -105,7 +109,7 @@ class OllamaChatConfig(OpenAIGPTConfig):
         system: Optional[str] = None,
         template: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -152,13 +156,21 @@ class OllamaChatConfig(OpenAIGPTConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "response_format" and value["type"] == "json_object":
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value.get("type") == "json_object"
+            ):
                 optional_params["format"] = "json"
-            if param == "response_format" and value["type"] == "json_schema":
-                optional_params["format"] = value["json_schema"]["schema"]
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value.get("type") == "json_schema"
+            ):
+                if value.get("json_schema") and value["json_schema"].get("schema"):
+                    optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
-                # ollama actually supports json output
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:
                     model_info = litellm.get_model_info(
@@ -181,14 +193,23 @@ class OllamaChatConfig(OpenAIGPTConfig):
                         ][0]["function"]["name"]
 
             if param == "functions":
-                # ollama actually supports json output
-                optional_params["format"] = "json"
-                litellm.add_function_to_prompt = (
-                    True  # so that main.py adds the function call to the prompt
-                )
-                optional_params["functions_unsupported_model"] = non_default_params.get(
-                    "functions"
-                )
+                ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
+                try:
+                    model_info = litellm.get_model_info(
+                        model=model, custom_llm_provider="ollama"
+                    )
+                    if model_info.get("supports_function_calling") is True:
+                        optional_params["tools"] = value
+                    else:
+                        raise Exception
+                except Exception:
+                    optional_params["format"] = "json"
+                    litellm.add_function_to_prompt = (
+                        True  # so that main.py adds the function call to the prompt
+                    )
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.get("functions")
+                    )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
@@ -205,6 +226,7 @@ def get_ollama_response(  # noqa: PLR0915
     api_key: Optional[str] = None,
     acompletion: bool = False,
     encoding=None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
     if api_base.endswith("/api/chat"):
         url = api_base
@@ -301,7 +323,11 @@ def get_ollama_response(  # noqa: PLR0915
     headers: Optional[dict] = None
     if api_key is not None:
         headers = {"Authorization": "Bearer {}".format(api_key)}
-    response = litellm.module_level_client.post(
+
+    sync_client = litellm.module_level_client
+    if client is not None and isinstance(client, HTTPHandler):
+        sync_client = client
+    response = sync_client.post(
         url=url,
         json=data,
         headers=headers,
@@ -508,6 +534,7 @@ async def ollama_async_streaming(
         verbose_logger.exception(
             "LiteLLM.ollama(): Exception occured - {}".format(str(e))
         )
+        raise e
 
 
 async def ollama_acompletion(

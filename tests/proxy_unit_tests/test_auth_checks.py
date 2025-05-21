@@ -13,9 +13,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, litellm
 import httpx
-from litellm.proxy.auth.auth_checks import (
-    _handle_failed_db_connection_for_get_key_object,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
@@ -27,7 +24,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
-    _team_model_access_check,
+    can_team_access_model,
     _virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -76,36 +73,6 @@ async def test_get_end_user_object(customer_spend, customer_budget):
                     customer_spend, customer_budget, str(e)
                 )
             )
-
-
-@pytest.mark.asyncio
-async def test_handle_failed_db_connection():
-    """
-    Test cases:
-    1. When allow_requests_on_db_unavailable=True -> return UserAPIKeyAuth
-    2. When allow_requests_on_db_unavailable=False -> raise original error
-    """
-    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name
-
-    # Test case 1: allow_requests_on_db_unavailable=True
-    general_settings["allow_requests_on_db_unavailable"] = True
-    mock_error = httpx.ConnectError("Failed to connect to DB")
-
-    result = await _handle_failed_db_connection_for_get_key_object(e=mock_error)
-
-    assert isinstance(result, UserAPIKeyAuth)
-    assert result.key_name == "failed-to-connect-to-db"
-    assert result.token == "failed-to-connect-to-db"
-    assert result.user_id == litellm_proxy_admin_name
-
-    # Test case 2: allow_requests_on_db_unavailable=False
-    general_settings["allow_requests_on_db_unavailable"] = False
-
-    with pytest.raises(httpx.ConnectError) as exc_info:
-        await _handle_failed_db_connection_for_get_key_object(e=mock_error)
-    print("_handle_failed_db_connection_for_get_key_object got exception", exc_info)
-
-    assert str(exc_info.value) == "Failed to connect to DB"
 
 
 @pytest.mark.parametrize(
@@ -427,9 +394,9 @@ async def test_virtual_key_max_budget_check(
     ],
 )
 @pytest.mark.asyncio
-async def test_team_model_access_check(model, team_models, expect_to_work):
+async def test_can_team_access_model(model, team_models, expect_to_work):
     """
-    Test cases for _team_model_access_check:
+    Test cases for can_team_access_model:
     1. Exact model match
     2. all-proxy-models access
     3. Wildcard (*) access
@@ -438,16 +405,16 @@ async def test_team_model_access_check(model, team_models, expect_to_work):
     6. Empty model list
     7. None model list
     """
-    team_object = LiteLLM_TeamTable(
-        team_id="test-team",
-        models=team_models,
-    )
-
     try:
-        _team_model_access_check(
+        team_object = LiteLLM_TeamTable(
+            team_id="test-team",
+            models=team_models,
+        )
+        result = can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,
+            team_model_aliases=None,
         )
         if not expect_to_work:
             pytest.fail(
@@ -551,6 +518,30 @@ async def test_can_user_call_model():
 
 
 @pytest.mark.asyncio
+async def test_can_user_call_model_with_no_default_models():
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from unittest.mock import MagicMock
+
+    args = {
+        "model": "anthropic-claude",
+        "llm_router": MagicMock(),
+        "user_object": LiteLLM_UserTable(
+            user_id="testuser21@mycompany.com",
+            max_budget=None,
+            spend=0.0042295,
+            model_max_budget={},
+            model_spend={},
+            user_email="testuser@mycompany.com",
+            models=[SpecialModelNames.no_default_models.value],
+        ),
+    }
+
+    with pytest.raises(ProxyException) as e:
+        await can_user_call_model(**args)
+
+
+@pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
     from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
     from litellm.proxy.utils import PrismaClient
@@ -633,3 +624,52 @@ async def test_get_fuzzy_user_object():
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
     )
+
+
+@pytest.mark.parametrize(
+    "model, alias_map, expect_to_work",
+    [
+        ("gpt-4", {"gpt-4": "gpt-4-team1"}, True),  # model matches alias value
+        ("gpt-5", {"gpt-4": "gpt-4-team1"}, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work):
+    """
+    Test if can_key_call_model correctly handles model aliases in the token
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    llm_model_list = [
+        {
+            "model_name": "gpt-4-team1",
+            "litellm_params": {
+                "model": "gpt-4",
+                "api_key": "test-api-key",
+            },
+        }
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+
+    user_api_key_object = UserAPIKeyAuth(
+        models=[
+            "gpt-4-team1",
+        ],
+        team_model_aliases=alias_map,
+    )
+
+    if expect_to_work:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+    else:
+        with pytest.raises(Exception) as e:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )

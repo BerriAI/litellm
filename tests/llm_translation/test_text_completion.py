@@ -64,28 +64,6 @@ def test_convert_chat_to_text_completion():
     )
 
 
-def test_convert_provider_response_logprobs():
-    """Test converting provider logprobs to text completion logprobs"""
-    response = ModelResponse(
-        id="test123",
-        _hidden_params={
-            "original_response": {
-                "details": {"tokens": [{"text": "hello", "logprob": -1.0}]}
-            }
-        },
-    )
-
-    result = LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
-        response=response, custom_llm_provider="huggingface"
-    )
-
-    # Note: The actual assertion here depends on the implementation of
-    # litellm.huggingface._transform_logprobs, but we can at least test the function call
-    assert (
-        result is not None or result is None
-    )  # Will depend on the actual implementation
-
-
 def test_convert_provider_response_logprobs_non_huggingface():
     """Test converting provider logprobs for non-huggingface provider"""
     response = ModelResponse(id="test123", _hidden_params={})
@@ -139,3 +117,38 @@ def test_convert_chat_to_text_completion_multiple_choices():
         completion_tokens_details=None,
         prompt_tokens_details=None,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_text_completion_include_usage(sync_mode):
+    """Test text completion with include_usage"""
+    last_chunk = None
+    if sync_mode:
+        response = await litellm.atext_completion(
+            model="gpt-3.5-turbo",
+            prompt="Hello, world!",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        async for chunk in response:
+            print(chunk)
+            last_chunk = chunk
+    else:
+        response = litellm.text_completion(
+            model="gpt-3.5-turbo",
+            prompt="Hello, world!",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        for chunk in response:
+            print(chunk)
+            last_chunk = chunk
+
+    assert last_chunk is not None
+    assert last_chunk.usage is not None
+    assert last_chunk.usage.prompt_tokens > 0
+    assert last_chunk.usage.completion_tokens > 0
+    assert last_chunk.usage.total_tokens > 0

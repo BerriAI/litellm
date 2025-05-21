@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Card,
   Title,
@@ -16,11 +16,16 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
+import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
+
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
+import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
-import EditModelModal from "./edit_model/edit_model_modal";
+import CredentialsPanel from "@/components/model_add/credentials";
+import { getDisplayModelName } from "./view_model/model_name_display";
+import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
@@ -65,7 +70,7 @@ import {
   Popover,
   Form,
   Input,
-  Select as Select2,
+  Select as AntdSelect,
   InputNumber,
   message,
   Descriptions,
@@ -90,6 +95,7 @@ import {
   FilterIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  TableIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -99,7 +105,15 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder } from "./provider_info_helpers";
+import { Team } from "./key_team_helpers/key_list";
+import TeamInfoView from "./team/team_info";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
+import ModelInfoView from "./model_info_view";
+import AddModelTab from "./add_model/add_model_tab";
+import { ModelDataTable } from "./model_dashboard/table";
+import { columns } from "./model_dashboard/columns";
+import { all_admin_roles } from "@/utils/roles";
+import { Table as TableInstance } from '@tanstack/react-table';
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -110,6 +124,7 @@ interface ModelDashboardProps {
   keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
+  teams: Team[] | null;
 }
 
 interface EditModelModalProps {
@@ -163,6 +178,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   keys,
   setModelData,
   premiumUser,
+  teams,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
@@ -178,10 +194,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
   );
-  const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
-  const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
@@ -223,8 +238,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+
+  // Add these state variables
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [editModel, setEditModel] = useState<boolean>(false);
+
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+
+  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
+
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<TableInstance<any>>(null);
+
+  const setProviderModelsFn = (provider: Providers) => {
+    const _providerModels = getProviderModels(provider, modelMap);
+    setProviderModels(_providerModels);
+    console.log(`providerModels: ${_providerModels}`);
+  };
 
   const updateModelMetrics = async (
     modelGroup: string | null,
@@ -241,7 +279,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       "endTime:",
       endTime
     );
-    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
+    setSelectedModelGroup(modelGroup);
 
     let selected_token = selectedAPIKey?.token;
     if (selected_token === undefined) {
@@ -261,7 +299,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     endTime.setHours(23);
     endTime.setMinutes(59);
     endTime.setSeconds(59);
-
 
     try {
       const modelMetricsResponse = await modelMetricsCall(
@@ -350,6 +387,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
+  const fetchCredentials = async (accessToken: string) => {
+    try {
+      const response: CredentialsResponse = await credentialListCall(accessToken);
+      console.log(`credentials: ${JSON.stringify(response)}`);
+      setCredentialsList(response.credentials);
+    } catch (error) {
+      console.error('Error fetching credentials:', error);
+    }
+  };
+
 
   useEffect(() => {
     updateModelMetrics(
@@ -357,7 +404,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       dateValue.from,
       dateValue.to
     );
-  }, [selectedAPIKey, selectedCustomer]);
+  }, [selectedAPIKey, selectedCustomer, selectedTeam]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -373,73 +431,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setEditModalVisible(true);
   };
 
-  const handleInfoClick = (model: any) => {
-    setSelectedModel(model);
-    setInfoModalVisible(true);
-  };
-
   const handleEditCancel = () => {
     setEditModalVisible(false);
     setSelectedModel(null);
   };
 
-  const handleInfoCancel = () => {
-    setInfoModalVisible(false);
-    setSelectedModel(null);
-  };
 
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
-
-    console.log("handleEditSubmit:", formValues);
-    if (accessToken == null) {
-      return;
-    }
-
-    let newLiteLLMParams: Record<string, any> = {};
-    let model_info_model_id = null;
-
-    if (formValues.input_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1_000_000;
-    }
-    if (formValues.output_cost_per_token) {
-      // Convert from per 1M tokens to per token
-      formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
-    }
-  
-
-    for (const [key, value] of Object.entries(formValues)) {
-      if (key !== "model_id") {
-        newLiteLLMParams[key] = value;
-      } else {
-        model_info_model_id = value;
-      }
-    }
-
-    let payload = {
-      litellm_params: newLiteLLMParams,
-      model_info: {
-        id: model_info_model_id,
-      },
-    };
-
-    console.log("handleEditSubmit payload:", payload);
-
-    try {
-      let newModelValue = await modelUpdateCall(accessToken, payload);
-      message.success(
-        "Model updated successfully, restart server to see updates"
-      );
-
-      setEditModalVisible(false);
-      setSelectedModel(null);
-    } catch (error) {
-      console.log(`Error occurred`);
-    }
-  };
-
-  const props: UploadProps = {
+  const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
     beforeUpload: (file) => {
@@ -447,8 +445,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
-            const jsonStr = e.target.result as string;
+            const jsonStr = e.target.result as string; 
+            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
+            console.log("Form values right after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
@@ -457,6 +457,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return false;
     },
     onChange(info) {
+      console.log("Upload onChange triggered with values:", info);
+      console.log("Current form values:", form.getFieldsValue());
+      
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
@@ -503,9 +506,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        const _providerSettings = await modelSettingsCall(accessToken);
-        setProviderSettings(_providerSettings);
-
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(
           accessToken,
@@ -514,6 +514,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         );
         console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
+        const _providerSettings = await modelSettingsCall(accessToken);
+        if (_providerSettings) {
+          setProviderSettings(_providerSettings);
+        }
+
+        
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -662,7 +668,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed]);
+  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -772,22 +778,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
   // when users click request access show pop up to allow them to request access
 
-  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
-  if (modelData.data && modelData.data.length > 0) {
-    modelData.data.sort((a: any, b: any) => {
-      if (a.provider && b.provider) {
-        return a.provider.localeCompare(b.provider);
-      } else if (a.provider && !b.provider) {
-        return -1;
-      } else if (!a.provider && b.provider) {
-        return 1;
-      } else {
-        return 0;
-      }
-    });
-  }
-
-
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -799,48 +789,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
-
-  const setProviderModelsFn = (provider: string) => {
-    console.log(`received provider string: ${provider}`);
-    let providerKey = provider;
-    if (providerKey) {
-      let _providerModels: Array<string> = [];
-      if (typeof modelMap === "object") {
-        Object.entries(modelMap).forEach(([key, value]) => {
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === providerKey ||
-              (value as any)["litellm_provider"].includes(providerKey))
-          ) {
-            _providerModels.push(key);
-          }
-        });
-
-        // Special case for cohere_chat
-        // we need both cohere_chat and cohere models to show on dropdown
-        if (providerKey == Providers.Cohere) {
-          console.log("adding cohere chat model")
-          Object.entries(modelMap).forEach(([key, value]) => {
-            if (
-              value !== null &&
-              typeof value === "object" &&
-              "litellm_provider" in (value as object) &&
-              ((value as any)["litellm_provider"] === "cohere")
-            ) {
-              _providerModels.push(key);
-            }
-          });
-        }
-      }
-
-      
-
-      setProviderModels(_providerModels);
-      console.log(`providerModels: ${providerModels}`);
-    }
-  };
 
   const runHealthCheck = async () => {
     try {
@@ -890,125 +838,95 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </SelectItem>
                         );
                       }
-                      return null; // Add this line to handle the case when the condition is not met
+                      return null;
                     })}
                   </Select>
           
+              <Text className="mt-1">
+                Select Customer Name
+              </Text>
+              
+              <Select defaultValue="all-customers">
+                <SelectItem
+                  key="all-customers"
+                  value="all-customers"
+                  onClick={() => {
+                    setSelectedCustomer(null);
+                  }}
+                >
+                  All Customers
+                </SelectItem>
+                {
+                  allEndUsers?.map((user: any, index: number) => {
+                    return (
+                      <SelectItem
+                        key={index}
+                        value={user}
+                        onClick={() => {
+                          setSelectedCustomer(user);
+                        }}
+                      >
+                        {user}
+                      </SelectItem>
+                    );
+                  })
+                }
+              </Select>
 
-          <Text className="mt-1">
-            Select Customer Name
-          </Text>
-          
-          <Select defaultValue="all-customers">
-          <SelectItem
-            key="all-customers"
-            value="all-customers"
-            onClick={() => {
-              setSelectedCustomer(null);
-            }}
-          >
-            All Customers
-            </SelectItem>
-            {
-              allEndUsers?.map((user: any, index: number) => {
-                return (
+              <Text className="mt-1">
+                Select Team
+              </Text>
+              
+              <Select
+                className="w-64 relative z-50"
+                defaultValue="all"
+                value={selectedTeamFilter ?? "all"}
+                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+              >
+                <SelectItem value="all">All Teams</SelectItem>
+                {teams?.filter(team => team.team_id).map((team) => (
                   <SelectItem
-                    key={index}
-                    value={user}
-                    onClick={() => {
-                      setSelectedCustomer(user);
-                    }}
+                    key={team.team_id}
+                    value={team.team_id}
                   >
-                    {user}
+                    {team.team_alias 
+                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                      : `Team ${team.team_id.slice(0, 8)}...`
+                    }
                   </SelectItem>
-                );
-              })
-            }
-          </Select>
-            
+                ))}
+              </Select>
             </div>
           ): (
             <div>
-
-<Select defaultValue="all-keys">
+              {/* ... existing non-premium user content ... */}
+              <Text className="mt-1">
+                Select Team
+              </Text>
+              
+              <Select
+                className="w-64 relative z-50"
+                defaultValue="all"
+                value={selectedTeamFilter ?? "all"}
+                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+              >
+                <SelectItem value="all">All Teams</SelectItem>
+                {teams?.filter(team => team.team_id).map((team) => (
                   <SelectItem
-                    key="all-keys"
-                    value="all-keys"
-                    onClick={() => {
-                      setSelectedAPIKey(null);
-                    }}
+                    key={team.team_id}
+                    value={team.team_id}
                   >
-                    All Keys
+                    {team.team_alias 
+                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                      : `Team ${team.team_id.slice(0, 8)}...`
+                    }
                   </SelectItem>
-                    {keys?.map((key: any, index: number) => {
-                      if (
-                        key &&
-                        key["key_alias"] !== null &&
-                        key["key_alias"].length > 0
-                      ) {
-                        return (
-                          
-                          <SelectItem
-                            key={index}
-                            value={String(index)}
-                            // @ts-ignore
-                            disabled={true}
-                            onClick={() => {
-                              setSelectedAPIKey(key);
-                            }}
-                          >
-                            ✨ {key["key_alias"]} (Enterprise only Feature)
-                          </SelectItem>
-                        );
-                      }
-                      return null; // Add this line to handle the case when the condition is not met
-                    })}
-                  </Select>
-          
-
-          <Text className="mt-1">
-            Select Customer Name
-          </Text>
-          
-          <Select defaultValue="all-customers">
-          <SelectItem
-            key="all-customers"
-            value="all-customers"
-            onClick={() => {
-              setSelectedCustomer(null);
-            }}
-          >
-            All Customers
-            </SelectItem>
-            {
-              allEndUsers?.map((user: any, index: number) => {
-                return (
-                  <SelectItem
-                    key={index}
-                    value={user}
-                    // @ts-ignore
-                    disabled={true}
-                    onClick={() => {
-                      setSelectedCustomer(user);
-                    }}
-                  >
-                    ✨ {user} (Enterprise only Feature)
-                  </SelectItem>
-                );
-              })
-            }
-          </Select>
-            
+                ))}
+              </Select>
             </div>
           )
         }
-        
-
-        
-            
-
-        </div>
-
+      </div>
   );
 
   const customTooltip = (props: any) => {
@@ -1068,8 +986,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
       .validateFields()
       .then((values) => {
-        handleAddModelSubmit(values, accessToken, form);
-        // form.resetFields();
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -1084,59 +1001,534 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 
   let dynamicProviderForm: ProviderSettings | undefined = undefined;
-  if (providerKey) {
+  if (providerKey && providerSettings) {
     dynamicProviderForm = providerSettings.find(
       (provider) => provider.name === provider_map[providerKey]
     );
   }
 
+  // If a team is selected, render TeamInfoView in full page layout
+  if (selectedTeamId) {
+    return (
+      <div className="w-full h-full">
+        <TeamInfoView 
+          teamId={selectedTeamId} 
+          onClose={() => setSelectedTeamId(null)}
+          accessToken={accessToken}
+          is_team_admin={userRole === "Admin"}
+          is_proxy_admin={userRole === "Proxy Admin"}
+          userModels={all_models_on_proxy}
+          editTeam={false}
+          onUpdate={handleRefreshClick}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%" }}>
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-        <TabList className="flex justify-between mt-2 w-full items-center">
-          <div className="flex">
-            <Tab>All Models</Tab>
-            <Tab>Add Model</Tab>
-            <Tab>
-              <pre>/health Models</pre>
-            </Tab>
-            <Tab>Model Analytics</Tab>
-            <Tab>Model Retry Settings</Tab>
-          </div>
+      {selectedModelId ? (
+        <ModelInfoView 
+          modelId={selectedModelId}
+          editModel={true}
+          onClose={() => {
+            setSelectedModelId(null);
+            setEditModel(false);
+          }}
+          modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          setEditModalVisible={setEditModalVisible}
+          setSelectedModel={setSelectedModel}
+          onModelUpdate={(updatedModel) => {
+            // Update the model in the modelData.data array
+            const updatedModelData = {
+              ...modelData,
+              data: modelData.data.map((model: any) => 
+                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
+              )
+            };
+            setModelData(updatedModelData);
+            // Trigger a refresh to update UI
+            handleRefreshClick();
+          }}
+        />
+      ) : (
+        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+          
+          <TabList className="flex justify-between mt-2 w-full items-center">
+            <div className="flex">
+              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
+              <Tab>Add Model</Tab>
+              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>
+                <pre>/health Models</pre>
+              </Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
+              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
+              
+            </div>
 
-          <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon} // Modify as necessary for correct icon name
-              variant="shadow"
-              size="xs"
-              className="self-center"
-              onClick={handleRefreshClick}
-            />
-          </div>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <Grid>
+            <div className="flex items-center space-x-2">
+              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+              <Icon
+                icon={RefreshIcon} // Modify as necessary for correct icon name
+                variant="shadow"
+                size="xs"
+                className="self-center"
+                onClick={handleRefreshClick}
+              />
+            </div>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              <Grid>
+                <div className="flex flex-col space-y-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <div>
+                      <Title>Model Management</Title>
+                      {!all_admin_roles.includes(userRole) ? (
+                        <Text className="text-tremor-content">
+                          Add models for teams you are an admin for.
+                        </Text>
+                      ) : (
+                        <Text className="text-tremor-content">
+                          Add and manage models for the proxy
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-lg shadow">
+                    <div className="border-b px-6 py-4">
+                      <div className="flex flex-col space-y-4">
+                        {/* Search and Filter Controls */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {/* Model Name Filter */}
+                            <div className="flex items-center gap-2">
+                              <Text>Filter by Public Model Name:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue={selectedModelGroup ?? "all"}
+                                onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
+                                value={selectedModelGroup ?? "all"}
+                              >
+                                <SelectItem value="all">All Models</SelectItem>
+                                {availableModelGroups.map((group, idx) => (
+                                  <SelectItem
+                                    key={idx}
+                                    value={group}
+                                  >
+                                    {group}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                            </div>
+
+                            {/* Team Filter */}
+                            <div className="flex items-center gap-2">
+                              <Text>Filter by Team:</Text>
+                              <Select
+                                className="w-64"
+                                defaultValue="all"
+                                value={selectedTeamFilter ?? "all"}
+                                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
+                              >
+                                <SelectItem value="all">All Teams</SelectItem>
+                                {teams?.filter(team => team.team_id).map((team) => (
+                                  <SelectItem
+                                    key={team.team_id}
+                                    value={team.team_id}
+                                  >
+                                    {team.team_alias 
+                                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                                      : `Team ${team.team_id.slice(0, 8)}...`
+                                    }
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                            </div>
+                          </div>
+                          
+                          {/* Column Selector will be rendered here */}
+                          {/* <div className="relative" ref={dropdownRef}>
+                            <button
+                              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                            >
+                              <TableIcon className="h-4 w-4" />
+                              Columns
+                            </button>
+                            {isDropdownOpen && tableRef.current && (
+                              <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
+                                <div className="py-1">
+                                  {tableRef.current.getAllLeafColumns().map((column: any) => {
+                                    if (column.id === 'actions') return null;
+                                    return (
+                                      <div
+                                        key={column.id}
+                                        className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+                                        onClick={() => column.toggleVisibility()}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={column.getIsVisible()}
+                                          onChange={() => column.toggleVisibility()}
+                                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span className="ml-2">
+                                          {typeof column.columnDef.header === 'string' 
+                                            ? column.columnDef.header 
+                                            : column.columnDef.header?.props?.children || column.id}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div> */}
+                        </div>
+
+                        {/* Results Count */}
+                        <div className="flex justify-between items-center">
+                          <Text className="text-sm text-gray-700">
+                            Showing {modelData && modelData.data.length > 0 ? modelData.data.length : 0} results
+                          </Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <ModelDataTable
+                      columns={columns(
+                        userRole,
+                        userID,
+                        premiumUser,
+                        setSelectedModelId,
+                        setSelectedTeamId,
+                        getDisplayModelName,
+                        handleEditClick,
+                        handleRefreshClick,
+                        setEditModel,
+                      )}
+                      data={modelData.data.filter(
+                        (model: any) => (
+                          (selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup) &&
+                          (selectedTeamFilter === "all" || model.model_info["team_id"] === selectedTeamFilter || !selectedTeamFilter)
+                        )
+                      )}
+                      isLoading={false}
+                      table={tableRef}
+                    />
+                  </div>
+                </div>
+              </Grid>
+            </TabPanel>
+            <TabPanel className="h-full">
+              <AddModelTab
+                form={form}
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+                credentials={credentialsList}
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </TabPanel>
+            <TabPanel>
+              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
+            </TabPanel>
+            <TabPanel>
+              <Card>
+                <Text>
+                  `/health` will run a very small request through your models
+                  configured on litellm
+                </Text>
+
+                <Button onClick={runHealthCheck}>Run `/health`</Button>
+                {healthCheckResponse && (
+                  <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
+                )}
+              </Card>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={4} className="mt-2 mb-2">
+                <Col>
+                  <Text>Select Time Range</Text>
+                  <DateRangePicker
+                    enableSelect={true}
+                    value={dateValue}
+                    className="mr-2"
+                    onValueChange={(value) => {
+                      setDateValue(value);
+                      updateModelMetrics(
+                        selectedModelGroup,
+                        value.from,
+                        value.to
+                      ); // Call updateModelMetrics with the new date range
+                    }}
+                  />
+                </Col>
+                <Col className="ml-2">
+                  <Text>Select Model Group</Text>
+                  <Select
+                    defaultValue={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                    value={
+                      selectedModelGroup
+                        ? selectedModelGroup
+                        : availableModelGroups[0]
+                    }
+                  >
+                    {availableModelGroups.map((group, idx) => (
+                      <SelectItem
+                        key={idx}
+                        value={group}
+                        onClick={() =>
+                          updateModelMetrics(group, dateValue.from, dateValue.to)
+                        }
+                      >
+                        {group}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </Col>
+                <Col>
+                <Popover
+                  trigger="click" content={FilterByContent}
+                  overlayStyle={{
+                    width: "20vw"
+                  }}
+                  >
+                <Button
+                icon={FilterIcon}
+                size="md"
+                variant="secondary"
+                className="mt-4 ml-2"
+                style={{
+                  border: "none",
+                }}
+                onClick={() => setShowAdvancedFilters(true)}
+                  >
+                </Button>      
+                </Popover>
+                </Col>
+
+                </Grid>
+
+
+              <Grid numItems={2}>
+                <Col>
+                  <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                    <TabGroup>
+                      <TabList variant="line" defaultValue="1">
+                        <Tab value="1">Avg. Latency per Token</Tab>
+                        <Tab value="2">Time to first token</Tab>
+                      </TabList>
+                      <TabPanels>
+                        <TabPanel>
+                          <p className="text-gray-500 italic"> (seconds/token)</p>
+                          <Text className="text-gray-500 italic mt-1 mb-1">
+                            average Latency for successfull requests divided by
+                            the total tokens
+                          </Text>
+                          {modelMetrics && modelMetricsCategories && (
+                            <AreaChart
+                              title="Model Latency"
+                              className="h-72"
+                              data={modelMetrics}
+                              showLegend={false}
+                              index="date"
+                              categories={modelMetricsCategories}
+                              connectNulls={true}
+                              customTooltip={customTooltip}
+                            />
+                          )}
+                        </TabPanel>
+                        <TabPanel>
+                          <TimeToFirstToken
+                            modelMetrics={streamingModelMetrics}
+                            modelMetricsCategories={
+                              streamingModelMetricsCategories
+                            }
+                            customTooltip={customTooltip}
+                            premiumUser={premiumUser}
+                          />
+                        </TabPanel>
+                      </TabPanels>
+                    </TabGroup>
+                  </Card>
+                </Col>
+                <Col>
+                  <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Deployment</TableHeaderCell>
+                          <TableHeaderCell>Success Responses</TableHeaderCell>
+                          <TableHeaderCell>
+                            Slow Responses <p>Success Responses taking 600+s</p>
+                          </TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {slowResponsesData.map((metric, idx) => (
+                          <TableRow key={idx}>
+                            <TableCell>{metric.api_base}</TableCell>
+                            <TableCell>{metric.total_count}</TableCell>
+                            <TableCell>{metric.slow_count}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </Col>
+              </Grid>
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+              <Card>
+
+              <Title>All Exceptions for {selectedModelGroup}</Title>
+               
+              <BarChart
+                      className="h-60"
+                      data={modelExceptions}
+                      index="model"
+                      categories={allExceptions}
+                      stack={true}
+                      
+                      yAxisWidth={30}
+                /> 
+                            </Card>
+            
+              </Grid>
+
+
+              <Grid numItems={1} className="gap-2 w-full mt-2">
+                  <Card>
+                  <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                  <Grid numItems={1}>
+                  <Col>
+                  <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                  <BarChart
+                      className="h-40"
+                      data={globalExceptionData.daily_data}
+                      index="date"
+                      colors={['rose']}
+                      categories={['num_rate_limit_exceptions']}
+                      onValueChange={(v) => console.log(v)}
+                    />
+                    </Col>
+                    <Col>
+
+                 
+
+                  </Col>
+
+                  </Grid>
+                  
+
+                  </Card>
+
+                  {
+                    premiumUser ? ( 
+                      <>
+                      {globalExceptionPerDeployment.map((globalActivity, index) => (
+                    <Card key={index}>
+                      <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                      <Grid numItems={1}>
+                        <Col>
+                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                          <BarChart
+                            className="h-40"
+                            data={globalActivity.daily_data}
+                            index="date"
+                            colors={['rose']}
+                            categories={['num_rate_limit_exceptions']}
+                
+                            onValueChange={(v) => console.log(v)}
+                          />
+                          
+                        </Col>
+                      </Grid>
+                    </Card>
+                  ))}
+                      </>
+                    ) : 
+                    <>
+                    {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                      globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                        <Card key={index}>
+                          <Title>✨ Rate Limit Errors by Deployment</Title>
+                          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                          <Button variant="primary" className="mb-2">
+                            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                              Get Free Trial
+                            </a>
+                          </Button>
+                          <Card>
+                          <Title>{globalActivity.api_base}</Title>
+                          <Grid numItems={1}>
+                            <Col>
+                              <Subtitle
+                                style={{
+                                  fontSize: "15px",
+                                  fontWeight: "normal",
+                                  color: "#535452",
+                                }}
+                              >
+                                Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                              </Subtitle>
+                              <BarChart
+                                  className="h-40"
+                                  data={globalActivity.daily_data}
+                                  index="date"
+                                  colors={['rose']}
+                                  categories={['num_rate_limit_exceptions']}
+                
+                                  onValueChange={(v) => console.log(v)}
+                                />
+                            </Col>
+                            
+                            
+                          </Grid>
+                          </Card>
+                        </Card>
+                      ))}
+                  </>
+                  }              
+                </Grid>
+                
+            </TabPanel>
+            <TabPanel>
               <div className="flex items-center">
                 <Text>Filter by Public Model Name</Text>
+
                 <Select
                   className="mb-4 mt-2 ml-2 w-50"
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : undefined
-                  }
-                  onValueChange={(value) =>
-                    setSelectedModelGroup(value === "all" ? "all" : value)
+                      : availableModelGroups[0]
                   }
                   value={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : undefined
+                      : availableModelGroups[0]
                   }
+                  onValueChange={(value) => setSelectedModelGroup(value)}
                 >
-                  <SelectItem value={"all"}>All Models</SelectItem>
                   {availableModelGroups.map((group, idx) => (
                     <SelectItem
                       key={idx}
@@ -1148,970 +1540,72 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   ))}
                 </Select>
               </div>
-              <Card>
-                <Table style={{ maxWidth: "1500px", width: "100%" }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Public Model Name
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Provider
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "150px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        LiteLLM Model
-                      </TableHeaderCell>
-                      {userRole === "Admin" && (
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          API Base
-                        </TableHeaderCell>
-                      )}
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Input Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "85px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Output Price{" "}
-                        <p style={{ fontSize: "10px", color: "gray" }}>
-                          /1M Tokens ($)
-                        </p>
-                      </TableHeaderCell>
 
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created At"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created At
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {premiumUser ? (
-                          "Created By"
-                        ) : (
-                          <a
-                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                            target="_blank"
-                            style={{ color: "#72bcd4" }}
-                          >
-                            {" "}
-                            ✨ Created By
-                          </a>
-                        )}
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "50px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px",
-                        }}
-                      >
-                        Status
-                      </TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {modelData.data
-                      .filter(
-                        (model: any) =>
-                          selectedModelGroup === "all" ||
-                          model.model_name === selectedModelGroup ||
-                          selectedModelGroup === null ||
-                          selectedModelGroup === undefined ||
-                          selectedModelGroup === ""
-                      )
-                      .map((model: any, index: number) => (
-                        <TableRow
-                          key={index}
-                          style={{ maxHeight: "1px", minHeight: "1px" }}
-                        >
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p className="text-xs">{model.model_name || "-"}</p>
-                          </TableCell>
-                          <TableCell
-                              style={{
-                                maxWidth: "100px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <div className="flex items-center space-x-2">
-                                {model.provider && (
-                                  <img
-                                    src={getProviderLogoAndName(model.provider).logo}
-                                    alt={`${model.provider} logo`}
-                                    className="w-4 h-4"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                        fallbackDiv.textContent = model.provider?.charAt(0) || '-';
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
-                                )}
-                                <p className="text-xs">{model.provider || "-"}</p>
-                              </div>
-                          </TableCell>
-                          
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Tooltip title={model && model.litellm_model_name}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.litellm_model_name
-                                      ? model.litellm_model_name
-                                      : ""
-                                  }
-                                >
-                                  {model && model.litellm_model_name
-                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
-                            
-                          </TableCell>
-                          {userRole === "Admin" && (
-                            <TableCell
-                              style={{
-                                maxWidth: "150px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <Tooltip title={model && model.api_base}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.api_base
-                                      ? model.api_base
-                                      : ""
-                                  }
-                                >
-                                  {model && model.api_base
-                                    ? model.api_base.slice(0, 20)
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
-                            </TableCell>
-                          )}
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.input_cost
-                                ? model.input_cost
-                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .input_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <pre className="text-xs">
-                              {model.output_cost
-                                ? model.output_cost
-                                : model.litellm_params.output_cost_per_token
-                                  ? (
-                                      Number(
-                                        model.litellm_params
-                                          .output_cost_per_token
-                                      ) * 1000000
-                                    ).toFixed(2)
-                                  : null}
-                            </pre>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? formatCreatedAt(
-                                    model.model_info.created_at
-                                  ) || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-xs">
-                              {premiumUser
-                                ? model.model_info.created_by || "-"
-                                : "-"}
-                            </p>
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {model.model_info.db_model ? (
-                              <Badge size="xs" className="text-white">
-                                <p className="text-xs">DB Model</p>
-                              </Badge>
-                            ) : (
-                              <Badge size="xs" className="text-black">
-                                <p className="text-xs">Config Model</p>
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "150px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <Grid numItems={3}>
-                              <Col>
-                                <Icon
-                                  icon={InformationCircleIcon}
-                                  size="sm"
-                                  onClick={() => handleInfoClick(model)}
-                                />
-                              </Col>
-                              <Col>
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => handleEditClick(model)}
-                                />
-                              </Col>
-
-                              <Col>
-                                <DeleteModelButton
-                                  modelID={model.model_info.id}
-                                  accessToken={accessToken}
-                                />
-                              </Col>
-                            </Grid>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
-            </Grid>
-            <EditModelModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              model={selectedModel}
-              onSubmit={handleEditSubmit}
-            />
-            <Modal
-              title={selectedModel && selectedModel.model_name}
-              visible={infoModalVisible}
-              width={800}
-              footer={null}
-              onCancel={handleInfoCancel}
-            >
-              <Title>Model Info</Title>
-              <SyntaxHighlighter language="json">
-                {selectedModel && JSON.stringify(selectedModel, null, 2)}
-              </SyntaxHighlighter>
-            </Modal>
-          </TabPanel>
-          <TabPanel className="h-full">
-            <Title2 level={2}>Add new model</Title2>
-            <Card>
-              <Form
-                form={form}
-                onFinish={handleOk}
-                labelCol={{ span: 10 }}
-                wrapperCol={{ span: 16 }}
-                labelAlign="left"
-              >
-                <>
-                  {/* Provider Selection */}
-                  <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="Provider:"
-                    name="custom_llm_provider"
-                    tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                    labelCol={{ span: 10 }}
-                    labelAlign="left"
-                  >
-                    <Select
-                      value={selectedProvider as string}
-                      onChange={(value) => {
-                        // Set the selected provider
-                        setSelectedProvider(value as unknown as string);
-                        // Update provider-specific models
-                        setProviderModelsFn(provider_map[value as unknown as string]);
-                        // Reset the 'model' field
-                        form.setFieldsValue({ model: [] });
-                        // Reset the 'model_name' field
-                        form.setFieldsValue({ model_name: undefined });
-                      }}
-                    >
-                      {Object.keys(Providers).map((providerKey) => (
-                        <SelectItem
-                          key={providerKey}
-                          value={Providers[providerKey as keyof typeof Providers]}
-                          onClick={() => {
-                            setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
-                            setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
-                          }}
-                        >
-                          <div className="flex items-center space-x-2">
-                            <img
-                              src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
-                              alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
-                              className="w-5 h-5"
-                              onError={(e) => {
-                                // Create a div with provider initial as fallback
-                                const target = e.target as HTMLImageElement;
-                                const parent = target.parentElement;
-                                if (parent) {
-                                  const fallbackDiv = document.createElement('div');
-                                  fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
-                                  parent.replaceChild(fallbackDiv, target);
-                                }
-                              }}
-                            />
-                            <span>{Providers[providerKey as keyof typeof Providers]}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </Select>
-                  </Form.Item>
-                  <LiteLLMModelNameField
-                      selectedProvider={selectedProvider as string}
-                      providerModels={providerModels}
-                      getPlaceholder={getPlaceholder}
-                    />
-                  
-                  {/* Conditionally Render "Public Model Name" */}
-                  <ConditionalPublicModelName  />
-
-                  {/* Provider-specific fields */}
-                  {dynamicProviderForm !== undefined &&
-                    dynamicProviderForm.fields.length > 0 && (
-                      <DynamicFields
-                        fields={dynamicProviderForm.fields}
-                        selectedProvider={dynamicProviderForm.name}
-                      />
-                  )}
-
-                  {selectedProvider != Providers.Bedrock &&
-                    selectedProvider != Providers.Vertex_AI &&
-                    selectedProvider != Providers.Ollama &&
-                    (dynamicProviderForm === undefined ||
-                      dynamicProviderForm.fields.length == 0) && (
-                      <Form.Item
-                        rules={[{ required: true, message: "Required" }]}
-                        label="API Key"
-                        name="api_key"
-                        tooltip="LLM API Credentials"
-                      >
-                        <TextInput placeholder="sk-" type="password" />
-                      </Form.Item>
-                    )}
-                  {selectedProvider == Providers.OpenAI && (
-                    <Form.Item label="Organization ID" name="organization">
-                      <TextInput placeholder="[OPTIONAL] my-unique-org" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Project"
-                      name="vertex_project"
-                    >
-                      <TextInput placeholder="adroit-cadet-1234.." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Location"
-                      name="vertex_location"
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="Vertex Credentials"
-                      name="vertex_credentials"
-                      className="mb-0"
-                    >
-                      <Upload {...props}>
-                        <Button2 icon={<UploadOutlined />}>
-                          Click to Upload
-                        </Button2>
-                      </Upload>
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Vertex_AI && (
-                    <Row>
-                      <Col span={10}></Col>
-                      <Col span={10}>
-                        <Text className="mb-3 mt-1">
-                          Give litellm a gcp service account(.json file), so it
-                          can make the relevant calls
-                        </Text>
-                      </Col>
-                    </Row>
-                  )}
-                  {(selectedProvider == Providers.Azure ||
-                    selectedProvider == Providers.OpenAI_Compatible) && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="API Base"
-                      name="api_base"
-                    >
-                      <TextInput placeholder="https://..." />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <Form.Item
-                      label="API Version"
-                      name="api_version"
-                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
-                    >
-                      <TextInput placeholder="2023-07-01-preview" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Azure && (
-                    <div>
-                      <Form.Item
-                        label="Base Model"
-                        name="base_model"
-                        className="mb-0"
-                      >
-                        <TextInput placeholder="azure/gpt-3.5-turbo" />
-                      </Form.Item>
-                      <Row>
-                        <Col span={10}></Col>
-                        <Col span={10}>
-                          <Text className="mb-2">
-                            The actual model your azure deployment uses. Used
-                            for accurate cost tracking. Select name from{" "}
-                            <Link
-                              href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                              target="_blank"
-                            >
-                              here
-                            </Link>
-                          </Text>
-                        </Col>
-                      </Row>
-                    </div>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Access Key ID"
-                      name="aws_access_key_id"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Secret Access Key"
-                      name="aws_secret_access_key"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="" />
-                    </Form.Item>
-                  )}
-                  {selectedProvider == Providers.Bedrock && (
-                    <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
-                      label="AWS Region Name"
-                      name="aws_region_name"
-                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                    >
-                      <TextInput placeholder="us-east-1" />
-                    </Form.Item>
-                  )}
-
-                  <AdvancedSettings 
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                  />
-                  
-
-                  <div className="flex justify-between items-center mb-4">
-                    <Tooltip title="Get help on our github">
-                      <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                        Need Help?
-                      </Typography.Link>
-                    </Tooltip>
-                    <Button2 htmlType="submit">Add Model</Button2>
-                  </div>
-                </>
-              </Form>
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Card>
-              <Text>
-                `/health` will run a very small request through your models
-                configured on litellm
+              <Title>Retry Policy for {selectedModelGroup}</Title>
+              <Text className="mb-6">
+                How many retries should be attempted based on the Exception
               </Text>
+              {retry_policy_map && (
+                <table>
+                  <tbody>
+                    {Object.entries(retry_policy_map).map(
+                      ([exceptionType, retryPolicyKey], idx) => {
+                        let retryCount =
+                          modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                            retryPolicyKey
+                          ];
+                        if (retryCount == null) {
+                          retryCount = defaultRetry;
+                        }
 
-              <Button onClick={runHealthCheck}>Run `/health`</Button>
-              {healthCheckResponse && (
-                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-              )}
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Grid numItems={4} className="mt-2 mb-2">
-              <Col>
-                <Text>Select Time Range</Text>
-                <DateRangePicker
-                  enableSelect={true}
-                  value={dateValue}
-                  className="mr-2"
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateModelMetrics(
-                      selectedModelGroup,
-                      value.from,
-                      value.to
-                    ); // Call updateModelMetrics with the new date range
-                  }}
-                />
-              </Col>
-              <Col className="ml-2">
-                <Text>Select Model Group</Text>
-                <Select
-                  defaultValue={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  value={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                >
-                  {availableModelGroups.map((group, idx) => (
-                    <SelectItem
-                      key={idx}
-                      value={group}
-                      onClick={() =>
-                        updateModelMetrics(group, dateValue.from, dateValue.to)
-                      }
-                    >
-                      {group}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </Col>
-              <Col>
-              <Popover
-                trigger="click" content={FilterByContent}
-                overlayStyle={{
-                  width: "20vw"
-                }}
-                >
-              <Button
-              icon={FilterIcon}
-              size="md"
-              variant="secondary"
-              className="mt-4 ml-2"
-              style={{
-                border: "none",
-              }}
-              onClick={() => setShowAdvancedFilters(true)}
-                >
-              </Button>      
-              </Popover>
-              </Col>
-  
-              </Grid>
-
-
-            <Grid numItems={2}>
-              <Col>
-                <Card className="mr-2 max-h-[400px] min-h-[400px]">
-                  <TabGroup>
-                    <TabList variant="line" defaultValue="1">
-                      <Tab value="1">Avg. Latency per Token</Tab>
-                      <Tab value="2">✨ Time to first token</Tab>
-                    </TabList>
-                    <TabPanels>
-                      <TabPanel>
-                        <p className="text-gray-500 italic"> (seconds/token)</p>
-                        <Text className="text-gray-500 italic mt-1 mb-1">
-                          average Latency for successfull requests divided by
-                          the total tokens
-                        </Text>
-                        {modelMetrics && modelMetricsCategories && (
-                          <AreaChart
-                            title="Model Latency"
-                            className="h-72"
-                            data={modelMetrics}
-                            showLegend={false}
-                            index="date"
-                            categories={modelMetricsCategories}
-                            connectNulls={true}
-                            customTooltip={customTooltip}
-                          />
-                        )}
-                      </TabPanel>
-                      <TabPanel>
-                        <TimeToFirstToken
-                          modelMetrics={streamingModelMetrics}
-                          modelMetricsCategories={
-                            streamingModelMetricsCategories
-                          }
-                          customTooltip={customTooltip}
-                          premiumUser={premiumUser}
-                        />
-                      </TabPanel>
-                    </TabPanels>
-                  </TabGroup>
-                </Card>
-              </Col>
-              <Col>
-                <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
-                  <Table>
-                    <TableHead>
-                      <TableRow>
-                        <TableHeaderCell>Deployment</TableHeaderCell>
-                        <TableHeaderCell>Success Responses</TableHeaderCell>
-                        <TableHeaderCell>
-                          Slow Responses <p>Success Responses taking 600+s</p>
-                        </TableHeaderCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {slowResponsesData.map((metric, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell>{metric.api_base}</TableCell>
-                          <TableCell>{metric.total_count}</TableCell>
-                          <TableCell>{metric.slow_count}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
-              </Col>
-            </Grid>
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-            <Card>
-
-            <Title>All Exceptions for {selectedModelGroup}</Title>
-             
-            <BarChart
-                    className="h-60"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    
-                    yAxisWidth={30}
-              /> 
-                          </Card>
-      
-            </Grid>
-
-
-            <Grid numItems={1} className="gap-2 w-full mt-2">
-                <Card>
-                <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
-                <Grid numItems={1}>
-                <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
-                <BarChart
-                    className="h-40"
-                    data={globalExceptionData.daily_data}
-                    index="date"
-                    colors={['rose']}
-                    categories={['num_rate_limit_exceptions']}
-                    onValueChange={(v) => console.log(v)}
-                  />
-                  </Col>
-                  <Col>
-
-               
-
-                </Col>
-
-                </Grid>
-                
-
-                </Card>
-
-                {
-                  premiumUser ? ( 
-                    <>
-                    {globalExceptionPerDeployment.map((globalActivity, index) => (
-                <Card key={index}>
-                  <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
-                  <Grid numItems={1}>
-                    <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
-                      <BarChart
-                        className="h-40"
-                        data={globalActivity.daily_data}
-                        index="date"
-                        colors={['rose']}
-                        categories={['num_rate_limit_exceptions']}
-          
-                        onValueChange={(v) => console.log(v)}
-                      />
-                      
-                    </Col>
-                  </Grid>
-                </Card>
-              ))}
-                    </>
-                  ) : 
-                  <>
-                  {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
-                    globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
-                      <Card key={index}>
-                        <Title>✨ Rate Limit Errors by Deployment</Title>
-                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
-                        <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                        <Card>
-                        <Title>{globalActivity.api_base}</Title>
-                        <Grid numItems={1}>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
-                            </Subtitle>
-                            <BarChart
-                                className="h-40"
-                                data={globalActivity.daily_data}
-                                index="date"
-                                colors={['rose']}
-                                categories={['num_rate_limit_exceptions']}
-                  
-                                onValueChange={(v) => console.log(v)}
+                        return (
+                          <tr
+                            key={idx}
+                            className="flex justify-between items-center mt-2"
+                          >
+                            <td>
+                              <Text>{exceptionType}</Text>
+                            </td>
+                            <td>
+                              <InputNumber
+                                className="ml-5"
+                                value={retryCount}
+                                min={0}
+                                step={1}
+                                onChange={(value) => {
+                                  setModelGroupRetryPolicy(
+                                    (prevModelGroupRetryPolicy) => {
+                                      const prevRetryPolicy =
+                                        prevModelGroupRetryPolicy?.[
+                                          selectedModelGroup!
+                                        ] ?? {};
+                                      return {
+                                        ...(prevModelGroupRetryPolicy ?? {}),
+                                        [selectedModelGroup!]: {
+                                          ...prevRetryPolicy,
+                                          [retryPolicyKey!]: value,
+                                        },
+                                      } as RetryPolicyObject;
+                                    }
+                                  );
+                                }}
                               />
-                          </Col>
-                          
-                          
-                        </Grid>
-                        </Card>
-                      </Card>
-                    ))}
-                </>
-                }              
-              </Grid>
-              
-          </TabPanel>
-          <TabPanel>
-            <div className="flex items-center">
-              <Text>Filter by Public Model Name</Text>
-
-              <Select
-                className="mb-4 mt-2 ml-2 w-50"
-                defaultValue={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                value={
-                  selectedModelGroup
-                    ? selectedModelGroup
-                    : availableModelGroups[0]
-                }
-                onValueChange={(value) => setSelectedModelGroup(value)}
-              >
-                {availableModelGroups.map((group, idx) => (
-                  <SelectItem
-                    key={idx}
-                    value={group}
-                    onClick={() => setSelectedModelGroup(group)}
-                  >
-                    {group}
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-
-            <Title>Retry Policy for {selectedModelGroup}</Title>
-            <Text className="mb-6">
-              How many retries should be attempted based on the Exception
-            </Text>
-            {retry_policy_map && (
-              <table>
-                <tbody>
-                  {Object.entries(retry_policy_map).map(
-                    ([exceptionType, retryPolicyKey], idx) => {
-                      let retryCount =
-                        modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                          retryPolicyKey
-                        ];
-                      if (retryCount == null) {
-                        retryCount = defaultRetry;
+                            </td>
+                          </tr>
+                        );
                       }
-
-                      return (
-                        <tr
-                          key={idx}
-                          className="flex justify-between items-center mt-2"
-                        >
-                          <td>
-                            <Text>{exceptionType}</Text>
-                          </td>
-                          <td>
-                            <InputNumber
-                              className="ml-5"
-                              value={retryCount}
-                              min={0}
-                              step={1}
-                              onChange={(value) => {
-                                setModelGroupRetryPolicy(
-                                  (prevModelGroupRetryPolicy) => {
-                                    const prevRetryPolicy =
-                                      prevModelGroupRetryPolicy?.[
-                                        selectedModelGroup!
-                                      ] ?? {};
-                                    return {
-                                      ...(prevModelGroupRetryPolicy ?? {}),
-                                      [selectedModelGroup!]: {
-                                        ...prevRetryPolicy,
-                                        [retryPolicyKey!]: value,
-                                      },
-                                    } as RetryPolicyObject;
-                                  }
-                                );
-                              }}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    }
-                  )}
-                </tbody>
-              </table>
-            )}
-            <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-              Save
-            </Button>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                    )}
+                  </tbody>
+                </table>
+              )}
+              <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+                Save
+              </Button>
+            </TabPanel>
+            
+          </TabPanels>
+        </TabGroup>
+      )}
     </div>  
   );
 };

@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -80,6 +80,7 @@ class MistralConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "seed",
@@ -104,6 +105,10 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if (
+                param == "max_completion_tokens"
+            ):  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
@@ -147,9 +152,24 @@ class MistralConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
@@ -164,7 +184,10 @@ class MistralConfig(OpenAIGPTConfig):
             if _content_block and isinstance(_content_block, list):
                 for c in _content_block:
                     if c.get("type") == "image_url":
-                        return messages
+                        if is_async:
+                            return super()._transform_messages(messages, model, True)
+                        else:
+                            return super()._transform_messages(messages, model, False)
 
         ## 2. If content is list, then convert to string
         messages = handle_messages_with_content_list_to_str_conversion(messages)
@@ -177,7 +200,10 @@ class MistralConfig(OpenAIGPTConfig):
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
-        return new_messages
+        if is_async:
+            return super()._transform_messages(new_messages, model, True)
+        else:
+            return super()._transform_messages(new_messages, model, False)
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

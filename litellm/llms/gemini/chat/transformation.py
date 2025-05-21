@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType, PartType
+from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -57,7 +58,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -67,7 +68,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -81,7 +82,12 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "modalities",
         ]
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        return supported_params
 
     def map_openai_params(
         self,
@@ -90,7 +96,6 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
-
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(
@@ -114,12 +119,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                     if element.get("type") == "image_url":
                         img_element = element
                         _image_url: Optional[str] = None
+                        format: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
+                            format = img_element["image_url"].get("format")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(_image_url)
+                            image_obj = convert_to_anthropic_image_obj(
+                                _image_url, format=format
+                            )
                             img_element["image_url"] = (  # type: ignore
                                 convert_generic_image_chunk_to_openai_image_obj(
                                     image_obj
