@@ -1,7 +1,9 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Literal, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
+
+import httpx
 
 import litellm
 from litellm import Logging, client, exception_type, get_litellm_params
@@ -548,9 +550,108 @@ def image_variation(
     return response
 
 
-def image_edit():
-    pass
+@client
+def image_edit(
+    image: FileTypes,
+    model: str,
+    prompt: str,
+    mask: Optional[str] = None,
+    n: Optional[int] = None,
+    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    response_format: Optional[str] = None,
+    size: Optional[str] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> ImageResponse:
+    """
+    Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
+    """
+    # Placeholder implementation that returns an empty ImageResponse
+    # TODO: Implement actual image edit functionality
+    return ImageResponse()
 
 
-async def aimage_edit():
-    pass
+@client
+async def aimage_edit(
+    image: FileTypes,
+    model: str,
+    prompt: str,
+    mask: Optional[str] = None,
+    n: Optional[int] = None,
+    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    response_format: Optional[str] = None,
+    size: Optional[str] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> ImageResponse:
+    """
+    Asynchronously calls the `image_edit` function with the given arguments and keyword arguments.
+
+    Parameters:
+    - `args` (tuple): Positional arguments to be passed to the `image_edit` function.
+    - `kwargs` (dict): Keyword arguments to be passed to the `image_edit` function.
+
+    Returns:
+    - `response` (Any): The response returned by the `image_edit` function.
+    """
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["async_call"] = True
+
+        # get custom llm provider so we can use this for mapping exceptions
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, api_base=local_vars.get("base_url", None)
+            )
+
+        func = partial(
+            image_edit,
+            image=image,
+            prompt=prompt,
+            mask=mask,
+            model=model,
+            n=n,
+            quality=quality,
+            response_format=response_format,
+            size=size,
+            user=user,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
