@@ -485,7 +485,7 @@ async def cancel_fine_tuning_job(
 
         ## CHECK IF MANAGED FILE ID
         unified_finetuning_job_id: Union[str, Literal[False]] = False
-        response: Optional[Union[LiteLLMFineTuningJob, FineTuningJob]] = None
+        response: Optional[LiteLLMFineTuningJob] = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(
                 fine_tuning_job_id

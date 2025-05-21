@@ -115,11 +115,11 @@ class OpenAIFineTuningAPI:
         self,
         fine_tuning_job_id: str,
         openai_client: Union[AsyncOpenAI, AsyncAzureOpenAI],
-    ) -> FineTuningJob:
+    ) -> LiteLLMFineTuningJob:
         response = await openai_client.fine_tuning.jobs.cancel(
             fine_tuning_job_id=fine_tuning_job_id
         )
-        return response
+        return LiteLLMFineTuningJob(**response.model_dump())
 
     def cancel_fine_tuning_job(
         self,
@@ -134,7 +134,7 @@ class OpenAIFineTuningAPI:
         client: Optional[
             Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]
         ] = None,
-    ):
+    ) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
         openai_client: Optional[
             Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]
         ] = self.get_openai_client(
@@ -162,10 +162,10 @@ class OpenAIFineTuningAPI:
                 openai_client=openai_client,
             )
         verbose_logger.debug("canceling fine tuning job, args= %s", fine_tuning_job_id)
-        response = openai_client.fine_tuning.jobs.cancel(
+        response = cast(OpenAI, openai_client).fine_tuning.jobs.cancel(
             fine_tuning_job_id=fine_tuning_job_id
         )
-        return response
+        return LiteLLMFineTuningJob(**response.model_dump())
 
     async def alist_fine_tuning_jobs(
         self,

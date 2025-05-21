@@ -295,7 +295,7 @@ async def acancel_fine_tuning_job(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> FineTuningJob:
+) -> LiteLLMFineTuningJob:
     """
     Async: Immediately cancel a fine-tune job.
     """
@@ -332,7 +332,7 @@ def cancel_fine_tuning_job(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[FineTuningJob, Coroutine[Any, Any, FineTuningJob]]:
+) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
     """
     Immediately cancel a fine-tune job.
 
