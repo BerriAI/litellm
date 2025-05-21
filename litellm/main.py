@@ -431,6 +431,7 @@ async def acompletion(
             prompt_id=kwargs.get("prompt_id", None),
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     #########################################################
@@ -1004,6 +1005,7 @@ def completion(  # type: ignore # noqa: PLR0915
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     try:

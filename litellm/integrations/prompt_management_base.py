@@ -33,6 +33,7 @@ class PromptManagementBase(ABC):
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> PromptManagementClient:
         pass
 
@@ -49,11 +50,13 @@ class PromptManagementBase(ABC):
         prompt_variables: Optional[dict],
         client_messages: List[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> PromptManagementClient:
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
         )
 
         try:
