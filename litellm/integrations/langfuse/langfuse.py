@@ -659,7 +659,7 @@ class LangFuseLogger:
                         "completion_tokens": _usage_obj.completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
-                    usage_details : Optional[LangfuseUsageDetails] = {
+                    usage_details = {
                         "input": _usage_obj.prompt_tokens,
                         "output": _usage_obj.completion_tokens,
                         "cache_creation_input_tokens": _usage_obj.get('cache_creation_input_tokens', 0),
