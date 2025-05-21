@@ -87,7 +87,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         for _image in _images:
             if isinstance(_image, BufferedReader):
                 files_list.append(("image[]", (_image.name, _image, "image/png")))
-
+            else:
+                files_list.append(("image[]", (_image, "image/png")))
         return data_without_images, files_list
 
     def transform_image_edit_response(

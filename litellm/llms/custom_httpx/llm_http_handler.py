@@ -2196,7 +2196,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                timeout=600,
+                timeout=timeout,
             )
 
         except Exception as e:
@@ -2280,7 +2280,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                timeout=timeout or image_edit_optional_request_params.get("timeout"),
+                timeout=timeout,
             )
 
         except Exception as e:
