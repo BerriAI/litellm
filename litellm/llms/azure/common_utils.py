@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, Optional, Union, Tuple
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -36,6 +37,21 @@ class AzureOpenAIError(BaseLLMException):
             headers=headers,
             body=body,
         )
+
+
+class AzureAuthResponse(BaseModel):
+    """
+    Pydantic model representing the authentication response for Azure OpenAI.
+    
+    Attributes:
+        api_key: The API key for Azure OpenAI, if provided. Can be None.
+        azure_ad_token_provider: A callable that provides an Azure AD token. Can be None.
+        azure_ad_token: The Azure AD token, if available. Can be None, a string token,
+                       or a callable that returns a token.
+    """
+    api_key: Optional[str] = None
+    azure_ad_token_provider: Optional[Callable[[], str]] = None
+    azure_ad_token: Union[None, str, Callable[[], str]] = None
 
 
 def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
@@ -262,7 +278,18 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
 def get_azure_api_key_or_token(
     litellm_params: dict,
     api_key: Optional[str],
-) -> Tuple[Optional[str], Optional[Callable[[], str]], Union[Optional[str], Callable[[], str]]]:
+) -> AzureAuthResponse:
+    """
+    Get Azure API key or token for authentication.
+    
+    Args:
+        litellm_params: Dictionary containing parameters for LiteLLM.
+        api_key: Optional API key for Azure OpenAI.
+        
+    Returns:
+        AzureAuthResponse: A Pydantic object containing the API key, Azure AD token provider,
+                          and Azure AD token.
+    """
     azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
     # If we have api_key, then we have higher priority
     azure_ad_token = litellm_params.get("azure_ad_token")
@@ -316,7 +343,12 @@ def get_azure_api_key_or_token(
             azure_ad_token = get_azure_ad_token_provider()
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
-    return api_key, azure_ad_token_provider, azure_ad_token
+    
+    return AzureAuthResponse(
+        api_key=api_key,
+        azure_ad_token_provider=azure_ad_token_provider,
+        azure_ad_token=azure_ad_token
+    )
 
     
 
@@ -390,10 +422,13 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
             )
 
-        _api_key, azure_ad_token_provider, azure_ad_token = get_azure_api_key_or_token(
+        auth_response = get_azure_api_key_or_token(
             litellm_params=litellm_params,
             api_key=api_key,
         )
+        _api_key = auth_response.api_key
+        azure_ad_token_provider = auth_response.azure_ad_token_provider
+        azure_ad_token = auth_response.azure_ad_token
         if _api_key is not None and isinstance(_api_key, str):
             # only show first 5 chars of api_key
             _api_key = _api_key[:8] + "*" * 15
@@ -463,7 +498,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
-                if azure_ad_token.startswith("oidc/"):
+                if isinstance(azure_ad_token, str) and azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(
                         azure_ad_token=azure_ad_token,
                         azure_client_id=client_id,

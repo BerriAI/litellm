@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from pydantic import ValidationError
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure.common_utils import BaseAzureLLM, AzureAuthResponse
 from litellm.types.utils import CallTypes
 
 
@@ -869,3 +870,66 @@ async def test_azure_client_cache_separates_sync_and_async():
         assert (
             mock_init_azure.call_count == 2
         ), "initialize_azure_sdk_client should be called twice"
+
+def test_AzureAuthResponse_default():
+    response = AzureAuthResponse()
+    assert response.api_key is None
+    assert response.azure_ad_token_provider is None
+    assert response.azure_ad_token is None
+
+def test_AzureAuthResponse_with_correct_value():
+    
+    api_key = "test-api-key"
+    fake_token = "fake_token"
+
+    response = AzureAuthResponse(
+        api_key=api_key,
+    )
+
+    assert response.api_key == api_key
+    assert response.azure_ad_token_provider is None
+    assert response.azure_ad_token is None
+
+    azure_ad_token_provider = lambda: fake_token
+    response = AzureAuthResponse(
+        azure_ad_token_provider=azure_ad_token_provider
+    )
+
+    assert response.api_key is None
+    assert isinstance(response.azure_ad_token_provider, Callable)
+    assert response.azure_ad_token_provider() == fake_token
+    assert response.azure_ad_token is None
+
+    response = AzureAuthResponse(
+        azure_ad_token=fake_token
+    )
+
+    assert response.api_key is None
+    assert response.azure_ad_token_provider is None
+    assert response.azure_ad_token == fake_token
+
+    azure_ad_token = lambda: fake_token
+    response = AzureAuthResponse(
+        azure_ad_token=azure_ad_token
+    )
+
+    assert response.api_key is None
+    assert response.azure_ad_token_provider is None
+    assert isinstance(response.azure_ad_token, Callable)
+    assert response.azure_ad_token() == fake_token
+
+def test_AzureAuthResponse_with_incorrect_value():
+    with pytest.raises(ValidationError):
+        response = AzureAuthResponse(
+            api_key=123
+        )
+    
+    with pytest.raises(ValidationError):
+        response = AzureAuthResponse(
+            azure_ad_token=[]
+        )
+
+    with pytest.raises(ValidationError):
+        response = AzureAuthResponse(
+            azure_ad_token_provider=[]
+        )
