@@ -742,7 +742,7 @@ const Teams: React.FC<TeamProps> = ({
                                           </Badge>
                                         )}
                                         {expandedAccordions[team.team_id] && (
-                                      <div className="flex flex-wrap gap-1 mt-1">
+                                      <div className="flex flex-wrap gap-1">
                                         {team.models.slice(3).map((model: string, index: number) => (
                                           model === "all-proxy-models" ? (
                                             <Badge
