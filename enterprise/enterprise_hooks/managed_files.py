@@ -23,7 +23,12 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.utils import LiteLLMBatch, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -409,6 +414,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return response
 
+    def get_unified_generic_response_id(
+        self, model_id: str, generic_response_id: str
+    ) -> str:
+        unified_generic_response_id = (
+            SpecialEnums.LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR.value.format(
+                model_id, generic_response_id
+            )
+        )
+        return (
+            base64.urlsafe_b64encode(unified_generic_response_id.encode())
+            .decode()
+            .rstrip("=")
+        )
+
     def get_unified_batch_id(self, batch_id: str, model_id: str) -> str:
         unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
             model_id, batch_id
@@ -458,6 +477,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
+        print(
+            "CALLS ASYNC POST CALL SUCCESS HOOK - DATA={}, USER_API_KEY_DICT={}, RESPONSE={}".format(
+                data, user_api_key_dict, response
+            )
+        )
         if isinstance(response, LiteLLMBatch):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -481,7 +505,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_name,
                     )
-
+            return response
+        elif isinstance(response, LiteLLMFineTuningJob):
+            ## Check if unified_file_id is in the response
+            unified_file_id = response._hidden_params.get(
+                "unified_file_id"
+            )  # managed file id
+            model_id = cast(Optional[str], response._hidden_params.get("model_id"))
+            print("MODEL_ID={}".format(model_id))
+            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            if unified_file_id and model_id:
+                response.id = self.get_unified_generic_response_id(
+                    model_id=model_id, generic_response_id=response.id
+                )
+            return response
         return await super().async_post_call_success_hook(
             data, user_api_key_dict, response
         )

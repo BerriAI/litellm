@@ -170,6 +170,7 @@ async def create_fine_tuning_job(
                 data.update(llm_provider_config)
 
             response = await litellm.acreate_fine_tuning_job(**data)
+            response._hidden_params["unified_file_id"] = unified_file_id
         if response is None:
             raise ValueError(
                 "Invalid request, No litellm managed file id or custom_llm_provider provided."
