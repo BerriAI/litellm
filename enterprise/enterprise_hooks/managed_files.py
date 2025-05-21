@@ -144,6 +144,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "aretrieve_batch",
             "afile_content",
             "acreate_fine_tuning_job",
+            "aretrieve_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "acancel_fine_tuning_job",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """
@@ -185,12 +188,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         elif (
             call_type == CallTypes.aretrieve_batch.value
             or call_type == CallTypes.acancel_fine_tuning_job.value
+            or call_type == CallTypes.aretrieve_fine_tuning_job.value
         ):
             accessor_key: Optional[str] = None
             retrieve_object_id: Optional[str] = None
             if call_type == CallTypes.aretrieve_batch.value:
                 accessor_key = "batch_id"
-            elif call_type == CallTypes.acancel_fine_tuning_job.value:
+            elif (
+                call_type == CallTypes.acancel_fine_tuning_job.value
+                or call_type == CallTypes.aretrieve_fine_tuning_job.value
+            ):
                 accessor_key = "fine_tuning_job_id"
 
             if accessor_key:
@@ -511,9 +518,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             unified_file_id = response._hidden_params.get(
                 "unified_file_id"
             )  # managed file id
+            unified_finetuning_job_id = response._hidden_params.get(
+                "unified_finetuning_job_id"
+            )  # managed finetuning job id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
-            if unified_file_id and model_id:
+            if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(
                     model_id=model_id, generic_response_id=response.id
                 )
