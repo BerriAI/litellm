@@ -295,3 +295,6 @@ class UserAPIKeyLabelValues(BaseModel):
     fallback_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
     ] = None
+    route: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
+    ] = None
