@@ -150,9 +150,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
-        print(
-            "CALLS ASYNC PRE CALL HOOK - DATA={}, CALL_TYPE={}".format(data, call_type)
-        )
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
@@ -224,7 +221,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
                 data["model_file_id_mapping"] = model_file_id_mapping
 
-        print("DATA={}".format(data))
         return data
 
     async def async_pre_call_deployment_hook(
@@ -233,11 +229,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
-        print(
-            "CALLS ASYNC PRE CALL DEPLOYMENT HOOK - KWARGS={}, CALL_TYPE={}".format(
-                kwargs, call_type
-            )
-        )
         accessor_key: Optional[str] = None
         if call_type and call_type == CallTypes.acreate_batch:
             accessor_key = "input_file_id"
@@ -517,12 +508,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return response
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
-            print(f"hidden params={response._hidden_params}")
             unified_file_id = response._hidden_params.get(
                 "unified_file_id"
             )  # managed file id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            print("MODEL_ID={}".format(model_id))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
             if unified_file_id and model_id:
                 response.id = self.get_unified_generic_response_id(

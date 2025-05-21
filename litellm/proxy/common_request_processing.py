@@ -119,6 +119,7 @@ class ProxyBaseLLMRequestProcessing:
             "afile_content",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
