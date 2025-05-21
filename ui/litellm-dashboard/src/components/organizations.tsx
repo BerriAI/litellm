@@ -218,20 +218,22 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                 {Array.isArray(org.models) && (
                                   <div className="flex flex-col">
                                     {org.models.length === 0 ? (
-                                      <Badge size="xs" className="mb-1" color="red">
-                                        All Proxy Models
+                                      <Badge size={"xs"} className="mb-1" color="red">
+                                        <Text>All Proxy Models</Text>
                                       </Badge>
                                     ) : (
                                       org.models.map((model, index) =>
                                         model === "all-proxy-models" ? (
-                                          <Badge key={index} size="xs" className="mb-1" color="red">
-                                            All Proxy Models
+                                          <Badge key={index} size={"xs"} className="mb-1" color="red">
+                                            <Text>All Proxy Models</Text>
                                           </Badge>
                                         ) : (
-                                          <Badge key={index} size="xs" className="mb-1" color="blue">
-                                            {model.length > 30
-                                              ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                              : getModelDisplayName(model)}
+                                          <Badge key={index} size={"xs"} className="mb-1" color="blue">
+                                            <Text>
+                                              {model.length > 30
+                                                ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                : getModelDisplayName(model)}
+                                            </Text>
                                           </Badge>
                                         )
                                       )
