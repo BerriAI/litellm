@@ -120,3 +120,29 @@ class ChatConfig(BaseConfig):
     ) -> Any:
         # For streaming, pass through the parsed chunk
         return parsed_chunk
+    
+    def map_openai_params(
+        self,
+        non_default_params: Dict[str, Any],
+        optional_params: Dict[str, Any],
+        model: str,
+        drop_params: bool,
+    ) -> Dict[str, Any]:
+        # Pass through all non-default parameters into optional params
+        for key, value in non_default_params.items():
+            optional_params[key] = value
+        return optional_params
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: Union[dict, "httpx.Headers"],  # noqa: F821
+    ):
+        # Return a BaseLLMException for chat errors
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+        return BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
