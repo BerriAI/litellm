@@ -103,3 +103,14 @@ class BaseImageEditConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         pass
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        from ..chat.transformation import BaseLLMException
+
+        raise BaseLLMException(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )

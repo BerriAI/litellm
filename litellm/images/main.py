@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 
@@ -19,12 +19,14 @@ from litellm.llms.custom_llm import CustomLLM
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
+    base_llm_http_handler,
     bedrock_image_generation,
     openai_chat_completions,
     openai_image_variations,
     vertex_image_generation,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
@@ -40,6 +42,7 @@ from litellm.utils import (
 )
 
 from .types.llms.openai import ImageGenerationRequestQuality
+from .utils import ImageEditRequestUtils
 
 
 ##### Image Generation #######################
@@ -572,7 +575,7 @@ def image_edit(
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> ImageResponse:
+) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse]]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -589,9 +592,6 @@ def image_edit(
             custom_llm_provider=custom_llm_provider,
         )
 
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required but passed as None")
-
         # get provider config
         image_edit_provider_config: Optional[
             BaseImageEditConfig
@@ -604,33 +604,49 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        # Get ImageEditOptionalRequestParams with only valid parameters
+        image_edit_optional_params: ImageEditOptionalRequestParams = (
+            ImageEditRequestUtils.get_requested_image_edit_optional_param(local_vars)
+        )
+
+        # Get optional parameters for the responses API
+        image_edit_request_params: Dict = (
+            ImageEditRequestUtils.get_optional_params_image_edit(
+                model=model,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_params=image_edit_optional_params,
+            )
+        )
 
         # Pre Call logging
-        # litellm_logging_obj.update_environment_variables(
-        #     model=None,
-        #     optional_params={
-        #         "response_id": response_id,
-        #     },
-        #     litellm_params={
-        #         "litellm_call_id": litellm_call_id,
-        #     },
-        #     custom_llm_provider=custom_llm_provider,
-        # )
+        litellm_logging_obj.update_environment_variables(
+            model=model,
+            user=user,
+            optional_params=dict(image_edit_request_params),
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+                **image_edit_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
 
-        # # Call the handler with _is_async flag instead of directly calling the async handler
-        # response = base_llm_http_handler.delete_response_api_handler(
-        #     response_id=response_id,
-        #     custom_llm_provider=custom_llm_provider,
-        #     responses_api_provider_config=responses_api_provider_config,
-        #     litellm_params=litellm_params,
-        #     logging_obj=litellm_logging_obj,
-        #     extra_headers=extra_headers,
-        #     extra_body=extra_body,
-        #     timeout=timeout or request_timeout,
-        #     _is_async=_is_async,
-        #     client=kwargs.get("client"),
-        # )
-        return ImageResponse()
+        # Call the handler with _is_async flag instead of directly calling the async handler
+        return base_llm_http_handler.image_edit_handler(
+            model=model,
+            image=image,
+            prompt=prompt,
+            image_edit_provider_config=image_edit_provider_config,
+            image_edit_optional_request_params=image_edit_request_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
+
     except Exception as e:
         raise litellm.exception_type(
             model=None,
