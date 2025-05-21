@@ -185,25 +185,36 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
 
                 data["model_file_id_mapping"] = model_file_id_mapping
-        elif call_type == CallTypes.aretrieve_batch.value:
-            retrieve_batch_id = cast(Optional[str], data.get("batch_id"))
-            potential_batch_id = (
-                _is_base64_encoded_unified_file_id(retrieve_batch_id)
-                if retrieve_batch_id
+        elif (
+            call_type == CallTypes.aretrieve_batch.value
+            or call_type == CallTypes.acancel_fine_tuning_job.value
+        ):
+            accessor_key: Optional[str] = None
+            retrieve_object_id: Optional[str] = None
+            if call_type == CallTypes.aretrieve_batch.value:
+                accessor_key = "batch_id"
+            elif call_type == CallTypes.acancel_fine_tuning_job.value:
+                accessor_key = "fine_tuning_job_id"
+
+            if accessor_key:
+                retrieve_object_id = cast(Optional[str], data.get(accessor_key))
+            potential_llm_object_id = (
+                _is_base64_encoded_unified_file_id(retrieve_object_id)
+                if retrieve_object_id
                 else False
             )
-            if potential_batch_id:
+            if potential_llm_object_id:
                 ## for managed batch id - get the model id
                 potential_model_id = self.get_model_id_from_unified_batch_id(
-                    potential_batch_id
+                    potential_llm_object_id
                 )
                 if potential_model_id is None:
                     raise Exception(
-                        f"LiteLLM Managed Batch ID with id={retrieve_batch_id} is invalid - does not contain encoded model_id."
+                        f"LiteLLM Managed {accessor_key} with id={retrieve_object_id} is invalid - does not contain encoded model_id."
                     )
                 data["model"] = potential_model_id
-                data["batch_id"] = self.get_batch_id_from_unified_batch_id(
-                    potential_batch_id
+                data[accessor_key] = self.get_batch_id_from_unified_batch_id(
+                    potential_llm_object_id
                 )
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             input_file_id = cast(Optional[str], data.get("training_file"))
@@ -472,7 +483,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     def get_batch_id_from_unified_batch_id(self, file_id: str) -> str:
         ## use regex to get the batch_id from the file_id
-        return file_id.split("llm_batch_id:")[1].split(",")[0]
+        if "llm_batch_id" in file_id:
+            return file_id.split("llm_batch_id:")[1].split(",")[0]
+        else:
+            return file_id.split("generic_response_id:")[1].split(",")[0]
 
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes

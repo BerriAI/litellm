@@ -206,3 +206,20 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
 
     assert isinstance(response, LiteLLMFineTuningJob)
     assert _is_base64_encoded_unified_file_id(response.id)
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_for_unified_finetuning_job():
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    data = {
+        "user_api_key_dict": {"parent_otel_span": MagicMock()},
+        "data": {
+            "fine_tuning_job_id": "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDo0OTIxODU4MWY3OGViZTllZjE4NDE0ZmE0ZjdmYjlmYTc0YzA5NWVkMTEyY2E4NDBkZDU2ZGZmZTliZDMwZGQxO2dlbmVyaWNfcmVzcG9uc2VfaWQ6ZnRqb2ItalRCeXM3YlZzYnlaRE93TDlHbHBZcVhS",
+        },
+        "call_type": "acancel_fine_tuning_job",
+        "cache": MagicMock(),
+    }
+    response = await proxy_managed_files.async_pre_call_hook(**data)
+    assert response["fine_tuning_job_id"] == "ftjob-jTBys7bVsbyZDOwL9GlpYqXR"
