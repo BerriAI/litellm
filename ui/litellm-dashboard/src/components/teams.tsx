@@ -738,7 +738,7 @@ const Teams: React.FC<TeamProps> = ({
                                         ))}
                                         {team.models.length > 3 && !expandedAccordions[team.team_id] && (
                                           <Badge size={"xs"} color="gray" className="cursor-pointer">
-                                            <Text>+{team.models.length - 3} more models</Text>
+                                            <Text>+{team.models.length - 3} {team.models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
                                           </Badge>
                                         )}
                                         {expandedAccordions[team.team_id] && (

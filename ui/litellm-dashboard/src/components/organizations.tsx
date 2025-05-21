@@ -274,7 +274,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                               ))}
                                               {org.models.length > 3 && !expandedAccordions[org.organization_id || ''] && (
                                                 <Badge size={"xs"} color="gray" className="cursor-pointer">
-                                                  <Text>+{org.models.length - 3} more models</Text>
+                                                  <Text>+{org.models.length - 3} {org.models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
                                                 </Badge>
                                               )}
                                               {expandedAccordions[org.organization_id || ''] && (
