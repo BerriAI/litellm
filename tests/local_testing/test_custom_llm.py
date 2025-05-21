@@ -281,6 +281,29 @@ class MyCustomLLM(CustomLLM):
 
         return model_response
 
+    async def aembedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
+    ) -> EmbeddingResponse:
+        model_response.model = model
+
+        model_response.data = [
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2, 0.3],
+                "index": i,
+            }
+            for i, _ in enumerate(input)
+        ]
+
+        return model_response
+
 
 def test_get_llm_provider():
     """"""
@@ -483,6 +506,23 @@ def test_simple_embedding():
         {"provider": "custom_llm", "custom_handler": my_custom_llm}
     ]
     resp = litellm.embedding(
+        model="custom_llm/my-fake-model",
+        input=["good morning from litellm", "good night from litellm"]
+    )
+
+    assert resp.data[1] == {
+        "object": "embedding",
+        "embedding": [0.1, 0.2, 0.3],
+        "index": 1,
+    }
+
+@pytest.mark.asyncio
+async def test_simple_aembedding():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.aembedding(
         model="custom_llm/my-fake-model",
         input=["good morning from litellm", "good night from litellm"]
     )

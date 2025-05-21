@@ -4036,14 +4036,15 @@ def embedding(  # noqa: PLR0915
                     model=model, custom_llm_provider=custom_llm_provider
                 )
 
-            response = custom_handler.embedding(
+            handler_fn = custom_handler.embedding if not aembedding else custom_handler.aembedding
+
+            response = handler_fn(
                 model=model,
                 input=input,
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
                 print_verbose=print_verbose,
-                aembedding=aembedding,
                 litellm_params=litellm_params
             )
         else:

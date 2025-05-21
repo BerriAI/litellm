@@ -161,7 +161,18 @@ class CustomLLM(BaseLLM):
         logging_obj: Any,
         optional_params: dict,
         litellm_params=None,
-        aembedding=None,
+    ) -> EmbeddingResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aembedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
