@@ -1967,6 +1967,7 @@ def supports_prompt_caching(
         key="supports_prompt_caching",
     )
 
+
 def supports_computer_use(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -6814,6 +6815,14 @@ def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
 
     # Re-add the original query parameters
     return str(modified_url.copy_with(params=original_url.params))
+
+
+def get_standard_openai_params(params: dict) -> dict:
+    return {
+        k: v
+        for k, v in params.items()
+        if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS and v is not None
+    }
 
 
 def get_non_default_completion_params(kwargs: dict) -> dict:
