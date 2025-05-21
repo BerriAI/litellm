@@ -186,10 +186,11 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
         hyperparameters={"n_epochs": 8},
         trained_tokens=None,
         seed=0,
-        _hidden_params={
-            "unified_file_id": unified_file_id,
-        },
     )
+    provider_ft_job._hidden_params = {
+        "unified_file_id": unified_file_id,
+        "model_id": "gpt-3.5-turbo-0613",
+    }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )

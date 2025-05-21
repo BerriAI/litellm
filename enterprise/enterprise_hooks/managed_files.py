@@ -479,7 +479,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> Any:
         print(
             "CALLS ASYNC POST CALL SUCCESS HOOK - DATA={}, USER_API_KEY_DICT={}, RESPONSE={}".format(
-                data, user_api_key_dict, response
+                data, user_api_key_dict, response._hidden_params
             )
         )
         if isinstance(response, LiteLLMBatch):
@@ -508,6 +508,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return response
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
+            print(f"hidden params={response._hidden_params}")
             unified_file_id = response._hidden_params.get(
                 "unified_file_id"
             )  # managed file id
