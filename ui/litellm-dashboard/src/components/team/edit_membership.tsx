@@ -46,8 +46,6 @@ const MemberModal = <T extends BaseMember>({
 }: MemberModalProps<T>) => {
   const [form] = Form.useForm();
 
-  console.log("Initial Data:", initialData);
-
   // Reset form and set initial values when modal becomes visible or initialData changes
   useEffect(() => {
     if (visible) {
@@ -81,7 +79,6 @@ const MemberModal = <T extends BaseMember>({
       message.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
       message.error('Failed to submit form');
-      console.error('Form submission error:', error);
     }
   };
 
@@ -152,6 +149,7 @@ const MemberModal = <T extends BaseMember>({
               onChange={(e) => {
                 e.target.value = e.target.value.trim();
               }}
+              disabled={mode === 'edit'}
             />
           </Form.Item>
         )}
@@ -174,6 +172,7 @@ const MemberModal = <T extends BaseMember>({
               onChange={(e) => {
                 e.target.value = e.target.value.trim();
               }}
+              disabled={mode === 'edit'}
             />
           </Form.Item>
         )}
