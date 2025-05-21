@@ -157,7 +157,7 @@ async def create_fine_tuning_job(
                 LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data)
             )
             response.training_file = unified_file_id
-
+            response._hidden_params["unified_file_id"] = unified_file_id
         ## ELSE, Route based on custom_llm_provider
         elif fine_tuning_request.custom_llm_provider:
             # get configs for custom_llm_provider
@@ -170,11 +170,20 @@ async def create_fine_tuning_job(
                 data.update(llm_provider_config)
 
             response = await litellm.acreate_fine_tuning_job(**data)
-            response._hidden_params["unified_file_id"] = unified_file_id
+
         if response is None:
             raise ValueError(
                 "Invalid request, No litellm managed file id or custom_llm_provider provided."
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if _response is not None and isinstance(_response, LiteLLMFineTuningJob):
+            response = _response
 
         ### ALERTING ###
         asyncio.create_task(

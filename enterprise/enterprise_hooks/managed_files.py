@@ -477,11 +477,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
-        print(
-            "CALLS ASYNC POST CALL SUCCESS HOOK - DATA={}, USER_API_KEY_DICT={}, RESPONSE={}".format(
-                data, user_api_key_dict, response._hidden_params
-            )
-        )
         if isinstance(response, LiteLLMBatch):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(

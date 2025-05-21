@@ -60,6 +60,7 @@ class OpenAIFineTuningAPI:
         response = await openai_client.fine_tuning.jobs.create(
             **create_fine_tuning_job_data
         )
+
         return LiteLLMFineTuningJob(**response.model_dump())
 
     def create_fine_tuning_job(
