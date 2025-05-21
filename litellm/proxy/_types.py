@@ -702,7 +702,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
-    expires: Optional[datetime]
+    expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None

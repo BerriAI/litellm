@@ -201,6 +201,27 @@ const Teams: React.FC<TeamProps> = ({
     fetchGuardrails();
   }, [accessToken]);
 
+  useEffect(() => {
+    const fetchTeamInfo = async () => {
+      if (!teams || !accessToken) return;
+      
+      const teamInfoPromises = teams.map(async (team) => {
+        try {
+          const info = await teamInfoCall(accessToken, team.team_id);
+          return { [team.team_id]: info };
+        } catch (error) {
+          console.error(`Error fetching info for team ${team.team_id}:`, error);
+          return { [team.team_id]: null };
+        }
+      });
+
+      const results = await Promise.all(teamInfoPromises);
+      const newPerTeamInfo = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      setPerTeamInfo(newPerTeamInfo);
+    };
+
+    fetchTeamInfo();
+  }, [teams, accessToken]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -627,147 +648,148 @@ const Teams: React.FC<TeamProps> = ({
                                       variant="light"
                                       className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
 
-                                      onClick={() => {
-                                        // Add click handler
-                                        setSelectedTeamId(team.team_id);
-                                      }}
-                                    >
-                                      {team.team_id.slice(0, 7)}...
-                                    </Button>
-                                  </Tooltip>
-                                </div>
-                              </TableCell>
-                              <TableCell
-                                style={{
-                                  maxWidth: "4px",
-                                  whiteSpace: "pre-wrap",
-                                  overflow: "hidden",
+                                onClick={() => {
+                                  // Add click handler
+                                  setSelectedTeamId(team.team_id);
                                 }}
                               >
-                                {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
-                              </TableCell>
-                              <TableCell
-                                style={{
-                                  maxWidth: "4px",
-                                  whiteSpace: "pre-wrap",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                {team["spend"]}
-                              </TableCell>
-                              <TableCell
-                                style={{
-                                  maxWidth: "4px",
-                                  whiteSpace: "pre-wrap",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                {team["max_budget"] !== null && team["max_budget"] !== undefined ? team["max_budget"] : "No limit"}
-                              </TableCell>
-                              <TableCell
-                                style={{
-                                  maxWidth: "8-x",
-                                  whiteSpace: "pre-wrap",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                {Array.isArray(team.models) ? (
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      flexDirection: "column",
-                                    }}
-                                  >
-                                    {team.models.length === 0 ? (
-                                      <Badge size={"xs"} className="mb-1" color="red">
+                                {team.team_id.slice(0, 7)}...
+                              </Button>
+                            </Tooltip>
+                          </div>
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {Number(team["spend"]).toFixed(4)}
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {team["max_budget"] !== null && team["max_budget"] !== undefined ? team["max_budget"] : "No limit"}
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "8-x",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {Array.isArray(team.models) ? (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                              }}
+                            >
+                              {team.models.length === 0 ? (
+                                <Badge size={"xs"} className="mb-1" color="red">
+                                  <Text>All Proxy Models</Text>
+                                </Badge>
+                              ) : (
+                                team.models.map(
+                                  (model: string, index: number) =>
+                                    model === "all-proxy-models" ? (
+                                      <Badge
+                                        key={index}
+                                        size={"xs"}
+                                        className="mb-1"
+                                        color="red"
+                                      >
                                         <Text>All Proxy Models</Text>
                                       </Badge>
                                     ) : (
-                                      team.models.map(
-                                        (model: string, index: number) =>
-                                          model === "all-proxy-models" ? (
-                                            <Badge
-                                              key={index}
-                                              size={"xs"}
-                                              className="mb-1"
-                                              color="red"
-                                            >
-                                              <Text>All Proxy Models</Text>
-                                            </Badge>
-                                          ) : (
-                                            <Badge
-                                              key={index}
-                                              size={"xs"}
-                                              className="mb-1"
-                                              color="blue"
-                                            >
-                                              <Text>
-                                                {model.length > 30
-                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                  : getModelDisplayName(model)}
-                                              </Text>
-                                            </Badge>
-                                          )
-                                      )
-                                    )}
-                                  </div>
-                                ) : null}
-                              </TableCell>
+                                      <Badge
+                                        key={index}
+                                        size={"xs"}
+                                        className="mb-1"
+                                        color="blue"
+                                      >
+                                        <Text>
+                                          {model.length > 30
+                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                            : getModelDisplayName(model)}
+                                        </Text>
+                                      </Badge>
+                                    )
+                                )
+                              )}
+                            </div>
+                          ) : null}
+                        </TableCell>
 
-                              <TableCell>
-                                {team.organization_id}
-                              </TableCell>
-                              <TableCell>
-                                <Text>
-                                  {perTeamInfo &&
-                                    team.team_id &&
-                                    perTeamInfo[team.team_id] &&
-                                    perTeamInfo[team.team_id].keys &&
-                                    perTeamInfo[team.team_id].keys.length}{" "}
-                                  Keys
-                                </Text>
-                                <Text>
-                                  {perTeamInfo &&
-                                    team.team_id &&
-                                    perTeamInfo[team.team_id] &&
-                                    perTeamInfo[team.team_id].members_with_roles &&
-                                    perTeamInfo[team.team_id].members_with_roles.length}{" "}
-                                  Members
-                                </Text>
-                              </TableCell>
-                              <TableCell>
-                                {userRole == "Admin" ? (
-                                  <>
-                                  <Icon
-                                    icon={PencilAltIcon}
-                                    size="sm"
-                                    onClick={() => {
-                                      setSelectedTeamId(team.team_id);
-                                      setEditTeam(true);
-                                    }}
-                                  />
-                                  <Icon
-                                    onClick={() => handleDelete(team.team_id)}
-                                    icon={TrashIcon}
-                                    size="sm"
-                                  />
-                                  </>
-                                ) : null}
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        : null}
-                    </TableBody>
-                  </Table>
-                  {isDeleteModalOpen && (
-                    <div className="fixed z-10 inset-0 overflow-y-auto">
-                      <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                        <div
-                          className="fixed inset-0 transition-opacity"
-                          aria-hidden="true"
-                        >
-                          <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-                        </div>
+                        <TableCell>
+                          {team.organization_id}
+                        </TableCell>
+                        <TableCell>
+                          <Text>
+                            {perTeamInfo &&
+                              team.team_id &&
+                              perTeamInfo[team.team_id] &&
+                              perTeamInfo[team.team_id].keys &&
+                              perTeamInfo[team.team_id].keys.length}{" "}
+                            Keys
+                          </Text>
+                          <Text>
+                            {perTeamInfo &&
+                              team.team_id &&
+                              perTeamInfo[team.team_id] &&
+                              perTeamInfo[team.team_id].team_info &&
+                              perTeamInfo[team.team_id].team_info.members_with_roles &&
+                              perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
+                            Members
+                          </Text>
+                        </TableCell>
+                        <TableCell>
+                          {userRole == "Admin" ? (
+                            <>
+                            <Icon
+                              icon={PencilAltIcon}
+                              size="sm"
+                              onClick={() => {
+                                setSelectedTeamId(team.team_id);
+                                setEditTeam(true);
+                              }}
+                            />
+                            <Icon
+                              onClick={() => handleDelete(team.team_id)}
+                              icon={TrashIcon}
+                              size="sm"
+                            />
+                            </>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  : null}
+              </TableBody>
+            </Table>
+            {isDeleteModalOpen && (
+              <div className="fixed z-10 inset-0 overflow-y-auto">
+                <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                  <div
+                    className="fixed inset-0 transition-opacity"
+                    aria-hidden="true"
+                  >
+                    <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+                  </div>
 
                         {/* Modal Panel */}
                         <span

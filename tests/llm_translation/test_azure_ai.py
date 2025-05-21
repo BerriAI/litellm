@@ -184,7 +184,7 @@ def test_azure_ai_services_with_api_version():
             == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
         )
 
-
+@pytest.mark.skip(reason="Skipping due to cohere ssl issues")
 def test_completion_azure_ai_command_r():
     try:
         import os

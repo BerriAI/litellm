@@ -11,7 +11,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.utils import get_optional_params_image_gen
+from litellm.types.utils import LlmProviders
+from litellm.utils import (
+    ProviderConfigManager,
+    get_llm_provider,
+    get_optional_params_image_gen,
+)
 
 # Adds the parent directory to the system path
 
@@ -334,6 +339,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "additionalProperties": {
             "type": "object",
             "properties": {
+                "supports_computer_use": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
@@ -474,6 +480,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     }
 
     prod_json = "./model_prices_and_context_window.json"
+    # prod_json = "../../model_prices_and_context_window.json"
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -518,3 +525,233 @@ def test_openai_models_in_model_info():
     assert (
         len(violated_models) == 0
     ), f"The following models should support pdf input: {violated_models}"
+
+
+def test_supports_tool_choice_simple_tests():
+    """
+    simple sanity checks
+    """
+    assert litellm.utils.supports_tool_choice(model="gpt-4o") == True
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+        == True
+    )
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+        is True
+    )
+
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock_converse",
+        )
+        is True
+    )
+
+    assert (
+        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
+    )
+    assert (
+        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
+        is False
+    )
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
+        )
+        is False
+    )
+
+    assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
+
+
+def test_check_provider_match():
+    """
+    Test the _check_provider_match function for various provider scenarios
+    """
+    # Test bedrock and bedrock_converse cases
+    model_info = {"litellm_provider": "bedrock"}
+    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
+    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
+
+    # Test bedrock_converse provider
+    model_info = {"litellm_provider": "bedrock_converse"}
+    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
+    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
+
+    # Test non-matching provider
+    model_info = {"litellm_provider": "bedrock"}
+    assert litellm.utils._check_provider_match(model_info, "openai") is False
+
+
+# Models that should be skipped during testing
+OLD_PROVIDERS = ["aleph_alpha", "palm"]
+SKIP_MODELS = [
+    "azure/mistral",
+    "azure/command-r",
+    "jamba",
+    "deepinfra",
+    "mistral.",
+    "groq/llama-guard-3-8b",
+    "groq/gemma2-9b-it",
+]
+
+# Bedrock models to block - organized by type
+BEDROCK_REGIONS = ["ap-northeast-1", "eu-central-1", "us-east-1", "us-west-2"]
+BEDROCK_COMMITMENTS = ["1-month-commitment", "6-month-commitment"]
+BEDROCK_MODELS = {
+    "anthropic.claude-v1",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-instant-v1",
+}
+
+# Generate block_list dynamically
+block_list = set()
+for region in BEDROCK_REGIONS:
+    for commitment in BEDROCK_COMMITMENTS:
+        for model in BEDROCK_MODELS:
+            block_list.add(f"bedrock/{region}/{commitment}/{model}")
+            block_list.add(f"bedrock/{region}/{model}")
+
+# Add Cohere models
+for commitment in BEDROCK_COMMITMENTS:
+    block_list.add(f"bedrock/*/{commitment}/cohere.command-text-v14")
+    block_list.add(f"bedrock/*/{commitment}/cohere.command-light-text-v14")
+
+print("block_list", block_list)
+
+
+@pytest.mark.asyncio
+async def test_supports_tool_choice():
+    """
+    Test that litellm.utils.supports_tool_choice() returns the correct value
+    for all models in model_prices_and_context_window.json.
+
+    The test:
+    1. Loads model pricing data
+    2. Iterates through each model
+    3. Checks if tool_choice support matches the model's supported parameters
+    """
+    # Load model prices
+    litellm._turn_on_debug()
+    # path = "../../model_prices_and_context_window.json"
+    path = "./model_prices_and_context_window.json"
+    with open(path, "r") as f:
+        model_prices = json.load(f)
+    litellm.model_cost = model_prices
+    config_manager = ProviderConfigManager()
+
+    for model_name, model_info in model_prices.items():
+        print(f"testing model: {model_name}")
+
+        # Skip certain models
+        if (
+            model_name == "sample_spec"
+            or model_info.get("mode") != "chat"
+            or any(skip in model_name for skip in SKIP_MODELS)
+            or any(provider in model_name for provider in OLD_PROVIDERS)
+            or model_info["litellm_provider"] in OLD_PROVIDERS
+            or model_name in block_list
+            or "azure/eu" in model_name
+            or "azure/us" in model_name
+            or "codestral" in model_name
+            or "o1" in model_name
+            or "o3" in model_name
+            or "mistral" in model_name
+        ):
+            continue
+
+        try:
+            model, provider, _, _ = get_llm_provider(model=model_name)
+        except Exception as e:
+            print(f"\033[91mERROR for {model_name}: {e}\033[0m")
+            continue
+
+        # Get provider config and supported params
+        print("LLM provider", provider)
+        provider_enum = LlmProviders(provider)
+        config = config_manager.get_provider_chat_config(model, provider_enum)
+        print("config", config)
+
+        if config:
+            supported_params = config.get_supported_openai_params(model)
+            print("supported_params", supported_params)
+        else:
+            raise Exception(f"No config found for {model_name}, provider: {provider}")
+
+        # Check tool_choice support
+        supports_tool_choice_result = litellm.utils.supports_tool_choice(
+            model=model_name, custom_llm_provider=provider
+        )
+        tool_choice_in_params = "tool_choice" in supported_params
+
+        assert (
+            supports_tool_choice_result == tool_choice_in_params
+        ), f"Tool choice support mismatch for {model_name}. supports_tool_choice() returned: {supports_tool_choice_result}, tool_choice in supported params: {tool_choice_in_params}\nConfig: {config}"
+
+
+def test_supports_computer_use_utility():
+    """
+    Tests the litellm.utils.supports_computer_use utility function.
+    """
+    from litellm.utils import supports_computer_use
+    # Ensure LITELLM_LOCAL_MODEL_COST_MAP is set for consistent test behavior,
+    # as supports_computer_use relies on get_model_info.
+    # This also requires litellm.model_cost to be populated.
+    original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
+    original_model_cost = getattr(litellm, "model_cost", None)
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="") # Load with local/backup
+    
+    try:
+        # Test a model known to support computer_use from backup JSON
+        supports_cu_anthropic = supports_computer_use(model="anthropic/claude-3-7-sonnet-20250219")
+        assert supports_cu_anthropic is True
+
+        # Test a model known not to have the flag or set to false (defaults to False via get_model_info)
+        supports_cu_gpt = supports_computer_use(model="gpt-3.5-turbo")
+        assert supports_cu_gpt is False
+    finally:
+        # Restore original environment and model_cost to avoid side effects
+        if original_env_var is None:
+            del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+        
+        if original_model_cost is not None:
+            litellm.model_cost = original_model_cost
+        elif hasattr(litellm, "model_cost"):
+            delattr(litellm, "model_cost")
+
+def test_get_model_info_shows_supports_computer_use():
+    """
+    Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
+    We'll use 'claude-3-7-sonnet-20250219' as it's configured
+    in the backup JSON to have supports_computer_use: True.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
+    # as per previous debugging.
+    litellm.model_cost = litellm.get_model_cost_map(url="") 
+    
+    # This model should have 'supports_computer_use': True in the backup JSON
+    model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
+    info = litellm.get_model_info(model_known_to_support_computer_use)
+    print(f"Info for {model_known_to_support_computer_use}: {info}")
+    
+    # After the fix in utils.py, this should now be present and True
+    assert info.get("supports_computer_use") is True
+
+    # Optionally, test a model known NOT to support it, or where it's undefined (should default to False)
+    # For example, if "gpt-3.5-turbo" doesn't have it defined, it should be False.
+    model_known_not_to_support_computer_use = "gpt-3.5-turbo"
+    info_gpt = litellm.get_model_info(model_known_not_to_support_computer_use)
+    print(f"Info for {model_known_not_to_support_computer_use}: {info_gpt}")
+    assert info_gpt.get("supports_computer_use") is False # Expecting False due to the default in ModelInfoBase

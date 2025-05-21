@@ -30,6 +30,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
+    can_team_access_model,
     get_key_object,
     get_team_object,
 )
@@ -683,6 +684,16 @@ def prepare_key_update_data(
     return non_default_values
 
 
+def is_different_team(
+    data: UpdateKeyRequest, existing_key_row: LiteLLM_VerificationToken
+) -> bool:
+    if data.team_id is None:
+        return False
+    if existing_key_row.team_id is None:
+        return True
+    return data.team_id != existing_key_row.team_id
+
+
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -788,6 +799,27 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        # if team change - check if this is possible
+        if is_different_team(data=data, existing_key_row=existing_key_row):
+            team_obj = await get_team_object(
+                team_id=cast(str, data.team_id),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                    },
+                )
+            validate_key_team_change(
+                key=existing_key_row,
+                team=team_obj,
+                change_initiated_by=user_api_key_dict,
+                llm_router=llm_router,
+            )
         non_default_values = prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -844,6 +876,70 @@ async def update_key_fn(
             type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def validate_key_team_change(
+    key: LiteLLM_VerificationToken,
+    team: LiteLLM_TeamTable,
+    change_initiated_by: UserAPIKeyAuth,
+    llm_router: Router,
+):
+    """
+    Validate that a key can be moved to a new team.
+
+    - The team must have access to the key's models
+    - The key's user_id must be a member of the team
+    - The key's tpm/rpm limit must be less than the team's tpm/rpm limit
+    - The person initiating the change must be either Proxy Admin or Team Admin
+    """
+    # Check if the team has access to the key's models
+    if len(key.models) > 0:
+        for model in key.models:
+            can_team_access_model(
+                model=model,
+                team_object=team,
+                llm_router=llm_router,
+            )
+
+    # Check if the key's user_id is a member of the team
+    if key.user_id is not None:
+        is_member = False
+        for member in team.members_with_roles:
+            if member.user_id == key.user_id:
+                is_member = True
+                break
+        if not is_member:
+            raise HTTPException(
+                status_code=403,
+                detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
+            )
+
+    # Check if the key's tpm/rpm limit is less than the team's tpm/rpm limit
+    if key.tpm_limit is not None:
+        if team.tpm_limit and key.tpm_limit > team.tpm_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Key={key.token} has a tpm_limit={key.tpm_limit} which is greater than the team's tpm_limit={team.tpm_limit}.",
+            )
+        if team.rpm_limit and key.rpm_limit and key.rpm_limit > team.rpm_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Key={key.token} has a rpm_limit={key.rpm_limit} which is greater than the team's rpm_limit={team.rpm_limit}.",
+            )
+
+    # Check if the person initiating the change is a Proxy Admin or Team Admin
+    if change_initiated_by.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    elif _is_user_team_admin(
+        user_api_key_dict=change_initiated_by,
+        team_obj=team,
+    ):
+        return
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
         )
 
 

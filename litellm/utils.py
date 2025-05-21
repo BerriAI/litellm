@@ -1967,6 +1967,28 @@ def supports_prompt_caching(
         key="supports_prompt_caching",
     )
 
+def supports_computer_use(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports computer use and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports computer use, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found or there's an error in retrieval.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_computer_use",
+    )
+
 
 def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
@@ -4271,6 +4293,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_tool_choice=None,
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
+                supports_computer_use=None,
                 supports_pdf_input=None,
             )
         elif (
@@ -4444,6 +4467,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_web_search=_model_info.get("supports_web_search", False),
                 supports_reasoning=_model_info.get("supports_reasoning", False),
+                supports_computer_use=_model_info.get("supports_computer_use", False),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
                 ),
@@ -5827,7 +5851,7 @@ def _get_valid_models_from_provider_api(
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []
 
 
@@ -5892,7 +5916,7 @@ def get_valid_models(
 
         return valid_models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []  # NON-Blocking
 
 
@@ -6575,6 +6599,10 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
+            # Dynamic model listing for Ollama server
+            from litellm.llms.ollama.common_utils import OllamaModelInfo
+            return OllamaModelInfo()
         elif LlmProviders.VLLM == provider:
             from litellm.llms.vllm.common_utils import (
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
