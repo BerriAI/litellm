@@ -239,7 +239,7 @@ async def new_user(
                 else:
                     raise e
 
-        special_keys = ["token"]
+        special_keys = ["token", "token_id"]
         response_dict = {}
         for key, value in response.items():
             if key in NewUserResponse.model_fields.keys() and key not in special_keys:
