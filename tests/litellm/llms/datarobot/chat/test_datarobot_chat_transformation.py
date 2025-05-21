@@ -26,6 +26,7 @@ class TestDataRobotConfig:
         ]
     )
     def test_resolve_api_base(self, api_base, expected_url, handler):
+        """Test that URLs properly resolve to the expected format."""
         assert handler._resolve_api_base(api_base) == expected_url
 
         # Check that the complete url with the resolution is expected
