@@ -642,7 +642,7 @@ class LangFuseLogger:
 
             generation_id = None
             usage = None
-            usage_details = None
+            usage_details : Optional[LangfuseUsageDetails] = None
             if response_obj is not None:
                 if (
                     hasattr(response_obj, "id")
