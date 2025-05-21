@@ -120,7 +120,7 @@ def test_generic_cost_per_token_above_200k_tokens():
 
     model_cost_map = litellm.model_cost[model]
     prompt_tokens = 220 * 1e6
-    completion_tokens = 150
+    completion_tokens = 250000  # Above 200k
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -138,5 +138,162 @@ def test_generic_cost_per_token_above_200k_tokens():
     assert round(completion_cost, 10) == round(
         model_cost_map["output_cost_per_token_above_200k_tokens"]
         * usage.completion_tokens,
+        10,
+    )
+
+    # Now test with prompt tokens above 200k but completion tokens below 200k
+    prompt_tokens = 220 * 1e6
+    completion_tokens = 150  # Below 200k
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    print(f"Prompt cost (completion < 200k): {prompt_cost}, Completion cost (completion < 200k): {completion_cost}")
+
+    # Prompt cost should use above-200k pricing
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_200k_tokens"] * usage.prompt_tokens,
+        10,
+    )
+
+    # Completion cost should use regular pricing
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * usage.completion_tokens,
+        10,
+    )
+
+
+def test_generic_cost_per_token_mixed_thresholds():
+    """Test that different pricing is applied correctly when prompt and completion tokens are in different threshold ranges"""
+    model = "gemini-2.5-pro-exp-03-25"
+    custom_llm_provider = "vertex_ai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+
+    # Prompt tokens below 200k, completion tokens above 200k
+    prompt_tokens = 150000
+    completion_tokens = 250000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    print(f"Model cost map: {model_cost_map}")
+    print(f"output_cost_per_token_above_200k_tokens: {model_cost_map.get('output_cost_per_token_above_200k_tokens')}")
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    print(f"Prompt cost: {prompt_cost}, Completion cost: {completion_cost}")
+
+    # Prompt cost should use regular pricing
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
+        10,
+    )
+
+    # Completion cost should use above-200k pricing
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_200k_tokens"] * usage.completion_tokens,
+        10,
+    )
+
+    # Now test the opposite: prompt tokens above 200k, completion tokens below 200k
+    prompt_tokens = 250000
+    completion_tokens = 150000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    # Prompt cost should use above-200k pricing
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_200k_tokens"] * usage.prompt_tokens,
+        10,
+    )
+
+    # Completion cost should use regular pricing
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * usage.completion_tokens,
+        10,
+    )
+
+
+def test_gemini_200k_pricing():
+    """Test that 200k token threshold pricing is applied correctly for Gemini models"""
+    model = "gemini-2.5-pro-preview-03-25"
+    custom_llm_provider = "gemini"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    print(f"Gemini model cost map: {model_cost_map}")
+
+    # Test with prompt tokens above 200k and completion tokens above 200k
+    prompt_tokens = 220000
+    completion_tokens = 250000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+    prompt_cost, completion_cost = litellm.llms.gemini.cost_calculator.cost_per_token(
+        model=model,
+        usage=usage,
+    )
+
+    print(f"Gemini prompt cost: {prompt_cost}, completion cost: {completion_cost}")
+
+    # Prompt cost should use above-200k pricing
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_200k_tokens"] * usage.prompt_tokens,
+        10,
+    )
+
+    # Completion cost should use above-200k pricing
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_200k_tokens"] * usage.completion_tokens,
+        10,
+    )
+
+    # Now test with prompt tokens above 200k but completion tokens below 200k
+    prompt_tokens = 220000
+    completion_tokens = 150000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+    prompt_cost, completion_cost = litellm.llms.gemini.cost_calculator.cost_per_token(
+        model=model,
+        usage=usage,
+    )
+
+    # Prompt cost should use above-200k pricing
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token_above_200k_tokens"] * usage.prompt_tokens,
+        10,
+    )
+
+    # Completion cost should use regular pricing
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token"] * usage.completion_tokens,
         10,
     )

@@ -15,6 +15,12 @@ def _is_above_128k(tokens: float) -> bool:
     return False
 
 
+def _is_above_200k(tokens: float) -> bool:
+    if tokens > 200000:
+        return True
+    return False
+
+
 def select_cost_metric_for_model(
     model_info: ModelInfo,
 ) -> Literal["cost_per_character", "cost_per_token"]:
@@ -107,43 +113,70 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
-def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, float]:
+def _check_tokens_above_threshold(
+        model_info: ModelInfo,
+        prefix: str,
+        token_count: int,
+        default_cost: float
+) -> float:
     """
-    Return prompt cost for a given model and usage.
+    Check if the number of tokens is above a threshold specified in model_info.
+    Return the appropriate cost per token based on thresholds.
 
-    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
-    then we use the corresponding threshold cost.
+    Args:
+        model_info: Dictionary containing model pricing information
+        prefix: Prefix for the cost keys to check (e.g., "input_cost_per_token_above_")
+        token_count: Number of tokens to check against thresholds
+        default_cost: Default cost to use if no threshold is exceeded
+
+    Returns:
+        The appropriate cost per token based on whether thresholds are exceeded
     """
-    prompt_base_cost = model_info["input_cost_per_token"]
-    completion_base_cost = model_info["output_cost_per_token"]
-
-    ## CHECK IF ABOVE THRESHOLD
-    threshold: Optional[float] = None
     for key, value in sorted(model_info.items(), reverse=True):
-        if key.startswith("input_cost_per_token_above_") and value is not None:
+        if key.startswith(prefix) and value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
                 threshold = float(threshold_str.replace("k", "")) * (
                     1000 if "k" in threshold_str else 1
                 )
-                if usage.prompt_tokens > threshold:
-                    prompt_base_cost = cast(
-                        float,
-                        model_info.get(key, prompt_base_cost),
-                    )
-                    completion_base_cost = cast(
-                        float,
-                        model_info.get(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            completion_base_cost,
-                        ),
-                    )
-                    break
+                if token_count > threshold:
+                    return cast(float, model_info.get(key, default_cost))
             except (IndexError, ValueError):
                 continue
             except Exception:
                 continue
+
+    return default_cost
+
+
+def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, float]:
+    """
+    Return prompt and completion costs for a given model and usage.
+
+    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
+    then we use the corresponding threshold cost.
+
+    Similarly, if completion_tokens > threshold, we use the corresponding threshold cost for completion.
+    """
+    prompt_base_cost = model_info["input_cost_per_token"]
+    completion_base_cost = model_info["output_cost_per_token"]
+
+    ## CHECK IF PROMPT TOKENS ABOVE THRESHOLD
+    prompt_base_cost = _check_tokens_above_threshold(
+        model_info=model_info,
+        prefix="input_cost_per_token_above_",
+        token_count=usage.prompt_tokens,
+        default_cost=prompt_base_cost
+    )
+
+    ## CHECK IF COMPLETION TOKENS ABOVE THRESHOLD
+    completion_base_cost = _check_tokens_above_threshold(
+        model_info=model_info,
+        prefix="output_cost_per_token_above_",
+        token_count=usage.completion_tokens,
+        default_cost=completion_base_cost
+    )
 
     return prompt_base_cost, completion_base_cost
 

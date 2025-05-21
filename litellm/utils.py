@@ -4502,6 +4502,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             input_cost_per_token: Required[float]
             input_cost_per_character: Optional[float]  # only for vertex ai models
             input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
+            input_cost_per_token_above_200k_tokens: Optional[float]  # only for vertex ai gemini-2.5-pro models
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
@@ -4516,6 +4517,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             output_cost_per_token_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
+            output_cost_per_token_above_200k_tokens: Optional[
+                float
+            ]  # only for vertex ai gemini-2.5-pro models
             output_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
