@@ -44,7 +44,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.proxy.utils import (
+    InternalUsageCache,
+    PrismaClient,
+    ProxyLogging,
+    log_db_metrics,
+)
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
@@ -641,6 +646,62 @@ async def _get_fuzzy_user_object(
     return response
 
 
+class UserObjectCache:
+    def __init__(
+        self,
+        user_api_key_cache: DualCache,
+        internal_usage_cache: Optional[InternalUsageCache] = None,
+    ):
+        """
+        - user_api_key_cache: cache for user api keys
+        - internal_usage_cache: cache for internal usage (connected to Redis)
+        """
+        self.user_api_key_cache = user_api_key_cache
+        self.internal_usage_cache = internal_usage_cache
+
+    async def update_user_object(
+        self,
+        user_id: str,
+        user_object: Union[dict, LiteLLM_UserTable],
+        litellm_parent_otel_span: Optional[Span] = None,
+    ):
+        """
+        - update user object in cache
+        """
+        await self.user_api_key_cache.async_set_cache(key=user_id, value=user_object)
+        if self.internal_usage_cache is not None:
+            await self.internal_usage_cache.async_set_cache(
+                key=user_id,
+                value=user_object,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
+
+    async def get_user_object(
+        self, user_id: str, litellm_parent_otel_span: Optional[Span] = None
+    ) -> Optional[LiteLLM_UserTable]:
+        """
+        - get user object from cache
+        """
+        cached_obj: Optional[Union[dict, LiteLLM_UserTable]] = None
+
+        ## CHECK REDIS CACHE ##
+        if self.internal_usage_cache is not None:
+            cached_obj = await self.internal_usage_cache.async_get_cache(
+                key=user_id, litellm_parent_otel_span=litellm_parent_otel_span
+            )
+
+        if cached_obj is None:
+            cached_obj = await self.user_api_key_cache.async_get_cache(key=user_id)
+
+        if cached_obj is not None:
+            if isinstance(cached_obj, dict):
+                return LiteLLM_UserTable(**cached_obj)
+            elif isinstance(cached_obj, LiteLLM_UserTable):
+                return cached_obj
+
+        return None
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],
@@ -658,18 +719,23 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
+    user_object_cache = UserObjectCache(
+        user_api_key_cache=user_api_key_cache,
+        internal_usage_cache=proxy_logging_obj.internal_usage_cache
+        if proxy_logging_obj is not None
+        else None,
+    )
 
     if user_id is None:
         return None
 
     # check if in cache
     if not check_db_only:
-        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        cached_user_obj = await user_object_cache.get_user_object(
+            user_id=user_id, litellm_parent_otel_span=parent_otel_span
+        )
         if cached_user_obj is not None:
-            if isinstance(cached_user_obj, dict):
-                return LiteLLM_UserTable(**cached_user_obj)
-            elif isinstance(cached_user_obj, LiteLLM_UserTable):
-                return cached_user_obj
+            return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -721,7 +787,9 @@ async def get_user_object(
         response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+        await user_object_cache.update_user_object(
+            user_id=user_id, user_object=response_dict
+        )
 
         # save to db access time
         _update_last_db_access_time(
