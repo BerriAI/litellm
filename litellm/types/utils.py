@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
@@ -1541,19 +1542,41 @@ class ImageObject(OpenAIImage):
             return self.dict()
 
 
+class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    image_tokens: int
+    """The number of image tokens in the input prompt."""
+
+    text_tokens: int
+    """The number of text tokens in the input prompt."""
+
+
+class ImageUsage(BaseLiteLLMOpenAIResponseObject):
+    input_tokens: int
+    """The number of tokens (images and text) in the input prompt."""
+
+    input_tokens_details: ImageUsageInputTokensDetails
+    """The input tokens detailed information for the image generation."""
+
+    output_tokens: int
+    """The number of image tokens in the output image."""
+
+    total_tokens: int
+    """The total number of tokens (images and text) used for the image generation."""
+
+
 from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 
-class ImageResponse(OpenAIImageResponse):
+class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
-    usage: Usage
+    usage: ImageUsage
 
     def __init__(
         self,
         created: Optional[int] = None,
         data: Optional[List[ImageObject]] = None,
         response_ms=None,
-        usage: Optional[Usage] = None,
+        usage: Optional[ImageUsage] = None,
         hidden_params: Optional[dict] = None,
     ):
         if response_ms:
@@ -1576,9 +1599,14 @@ class ImageResponse(OpenAIImageResponse):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
-        _usage = usage or Usage(
-            prompt_tokens=0,
-            completion_tokens=0,
+
+        _usage = usage or ImageUsage(
+            input_tokens=0,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                image_tokens=0,
+                text_tokens=0,
+            ),
+            output_tokens=0,
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
