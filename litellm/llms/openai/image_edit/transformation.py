@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from io import BufferedReader
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import httpx
+from httpx._types import RequestFiles
 
 import litellm
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -62,15 +64,31 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
-        """No transform applied since inputs are in OpenAI spec already"""
+    ) -> Tuple[Dict, RequestFiles]:
+        """
+        No transform applied since inputs are in OpenAI spec already
+
+        This handles buffered readers as images to be sent as multipart/form-data for OpenAI
+        """
         request = ImageEditRequestParams(
             model=model,
             image=image,
             prompt=prompt,
             **image_edit_optional_request_params,
         )
-        return cast(Dict, request)
+        request_dict = cast(Dict, request)
+
+        #########################################################
+        # Separate images as `files` and send other parameters as `data`
+        #########################################################
+        _images = request_dict.get("image") or []
+        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
+        files_list = []
+        for _image in _images:
+            if isinstance(_image, BufferedReader):
+                files_list.append(("image[]", (_image.name, _image, "image/png")))
+
+        return data_without_images, files_list
 
     def transform_image_edit_response(
         self,

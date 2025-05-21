@@ -1,8 +1,9 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.responses.main import *
@@ -95,7 +96,7 @@ class BaseImageEditConfig(ABC):
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> Tuple[Dict, RequestFiles]:
         pass
 
     @abstractmethod

@@ -2171,7 +2171,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = image_edit_provider_config.transform_image_edit_request(
+        data, files = image_edit_provider_config.transform_image_edit_request(
             model=model,
             image=image,
             prompt=prompt,
@@ -2192,13 +2192,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # For non-streaming requests
             response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(data),
-                timeout=timeout or image_edit_optional_request_params.get("timeout"),
+                data=data,
+                files=files,
+                timeout=600,
             )
+
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2214,7 +2215,7 @@ class BaseLLMHTTPHandler:
     async def async_image_edit_handler(
         self,
         model: str,
-        image: str,
+        image: FileTypes,
         prompt: str,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_request_params: Dict,
@@ -2254,7 +2255,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = image_edit_provider_config.transform_image_edit_request(
+        data, files = image_edit_provider_config.transform_image_edit_request(
             model=model,
             image=image,
             prompt=prompt,
@@ -2278,7 +2279,8 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=data,
+                files=files,
                 timeout=timeout or image_edit_optional_request_params.get("timeout"),
             )
 
