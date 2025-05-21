@@ -1,5 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
+from litellm.types.utils import FileTypes
+
 
 class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
@@ -10,7 +12,6 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
 
     background: Optional[Literal["transparent", "opaque", "auto"]]
     mask: Optional[str]
-    model: Optional[str]
     n: Optional[int]
     quality: Optional[Literal["high", "medium", "low", "standard", "auto"]]
     response_format: Optional[Literal["url", "b64_json"]]
@@ -25,5 +26,6 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     Params here: https://platform.openai.com/docs/api-reference/images/createEdit
     """
 
-    image: Union[str, List[str]]
+    image: FileTypes
     prompt: str
+    model: Optional[str]

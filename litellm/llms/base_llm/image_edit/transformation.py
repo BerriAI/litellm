@@ -7,6 +7,7 @@ import httpx
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import FileTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -89,8 +90,8 @@ class BaseImageEditConfig(ABC):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Any,
+        prompt: str,
+        image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
