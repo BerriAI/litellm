@@ -48,6 +48,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
+from litellm.llms.chat.transformation import ChatConfig
 from pydantic import BaseModel
 from tiktoken import Encoding
 from tokenizers import Tokenizer
@@ -6295,6 +6296,9 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
+        # Use responses-based chat provider
+        if provider == LlmProviders.CHAT:
+            return ChatConfig()
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
