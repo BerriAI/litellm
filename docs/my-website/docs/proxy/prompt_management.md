@@ -2,19 +2,14 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] Prompt Management
-
-:::info
-
-This feature is currently in beta, and might change unexpectedly. We expect this to be more stable by next month (February 2025).
- 
-:::
+# Prompt Management
 
 Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini finetune) from your prompt management tool (e.g. Langfuse) instead of making changes in the application. 
 
-Supported Integrations:
-- [Langfuse](https://langfuse.com/docs/prompts/get-started)
-- [Humanloop](../observability/humanloop)
+| Supported Integrations | Link |
+|------------------------|------|
+| Langfuse               | [Get Started](https://langfuse.com/docs/prompts/get-started) |
+| Humanloop              | [Get Started](../observability/humanloop) |
 
 ## Quick Start
 

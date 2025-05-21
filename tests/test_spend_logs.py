@@ -1,18 +1,20 @@
 # What this tests?
 ## Tests /spend endpoints.
 
-import pytest, time, uuid
+import pytest, time, uuid, json
 import asyncio
 import aiohttp
 
 
-async def generate_key(session, models=[]):
+async def generate_key(session, models=[], team_id=None):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,
     }
+    if team_id is not None:
+        data["team_id"] = team_id
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -111,6 +113,81 @@ async def test_spend_logs():
         response = await chat_completion(session=session, key=key)
         await asyncio.sleep(20)
         await get_spend_logs(session=session, request_id=response["id"])
+
+
+async def generate_org(session: aiohttp.ClientSession) -> dict:
+    """
+    Generate a new organization using the API.
+
+    Args:
+        session: aiohttp client session
+
+    Returns:
+        dict: Response containing org_id
+    """
+    url = "http://0.0.0.0:4000/organization/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    request_body = {
+        "organization_alias": f"test-org-{uuid.uuid4()}",
+    }
+
+    async with session.post(url, headers=headers, json=request_body) as response:
+        return await response.json()
+
+
+async def generate_team(session: aiohttp.ClientSession, org_id: str) -> dict:
+    """
+    Generate a new team within an organization using the API.
+
+    Args:
+        session: aiohttp client session
+        org_id: Organization ID to create the team in
+
+    Returns:
+        dict: Response containing team_id
+    """
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {"organization_id": org_id}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        return await response.json()
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_with_org_id():
+    """
+    - Create Organization
+    - Create Team in organization
+    - Create Key in organization
+    - Make call (makes sure it's in spend logs)
+    - Get request id from logs
+    - Assert spend logs have correct org_id and team_id
+    """
+    async with aiohttp.ClientSession() as session:
+        org_gen = await generate_org(session=session)
+        print("org_gen: ", json.dumps(org_gen, indent=4, default=str))
+        org_id = org_gen["organization_id"]
+        team_gen = await generate_team(session=session, org_id=org_id)
+        print("team_gen: ", json.dumps(team_gen, indent=4, default=str))
+        team_id = team_gen["team_id"]
+        key_gen = await generate_key(session=session, team_id=team_id)
+        print("key_gen: ", json.dumps(key_gen, indent=4, default=str))
+        key = key_gen["key"]
+        response = await chat_completion(session=session, key=key)
+        await asyncio.sleep(20)
+        spend_logs_response = await get_spend_logs(
+            session=session, request_id=response["id"]
+        )
+        print(
+            "spend_logs_response: ",
+            json.dumps(spend_logs_response, indent=4, default=str),
+        )
+        spend_logs_response = spend_logs_response[0]
+        assert spend_logs_response["metadata"]["user_api_key_org_id"] == org_id
+        assert spend_logs_response["metadata"]["user_api_key_team_id"] == team_id
+        assert spend_logs_response["team_id"] == team_id
 
 
 async def get_predict_spend_logs(session):

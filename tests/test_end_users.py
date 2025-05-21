@@ -160,7 +160,7 @@ async def test_end_user_new():
 
 
 @pytest.mark.asyncio
-async def test_end_user_specific_region():
+async def test_aaaend_user_specific_region():
     """
     - Specify region user can make calls in
     - Make a generic call

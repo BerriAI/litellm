@@ -77,3 +77,22 @@ def test_get_end_user_id_from_request_body_always_returns_str():
     end_user_id = get_end_user_id_from_request_body(request_body)
     assert end_user_id == "123"
     assert isinstance(end_user_id, str)
+
+@pytest.mark.parametrize(
+    "request_data, expected_model",
+    [
+        ({"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}, ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]),
+        ({"target_model_names": "gpt-3.5-turbo"}, ["gpt-3.5-turbo"]),
+        ({"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}, ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]),
+        ({"model": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
+        ({"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}, ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]),
+    ],
+)
+def test_get_model_from_request(request_data, expected_model):
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    request_data = {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"}
+    route = "/openai/deployments/gpt-3.5-turbo"
+    model = get_model_from_request(request_data, "/v1/files")
+    assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
+

@@ -24,7 +24,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import asyncio
 import logging
-
+from unittest.mock import MagicMock
 import pytest
 
 import litellm
@@ -141,6 +141,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -151,6 +152,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
             organization_alias=f"new-org-{uuid.uuid4()}",
         ),
         user_api_key_dict=UserAPIKeyAuth(
+            user_id=created_user_id,
             user_role=LitellmUserRoles.PROXY_ADMIN,
         ),
     )
@@ -203,6 +205,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -274,6 +277,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -345,6 +349,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    setattr(litellm.proxy.proxy_server, "llm_router", MagicMock())
 
     await litellm.proxy.proxy_server.prisma_client.connect()
     created_user_id = f"new-user-{uuid.uuid4()}"

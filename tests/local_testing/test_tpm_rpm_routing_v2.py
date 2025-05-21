@@ -20,7 +20,7 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.types.utils import StandardLoggingPayload
 import pytest
-
+from litellm.types.router import DeploymentTypedDict
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
@@ -45,14 +45,16 @@ def test_tpm_rpm_updated():
     )
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-2"
+    deployment = "azure/chatgpt-v-3"
     total_tokens = 50
-    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
     standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
     kwargs = {
         "litellm_params": {
+            "model": deployment,
             "metadata": {
                 "model_group": model_group,
                 "deployment": deployment,
@@ -62,10 +64,16 @@ def test_tpm_rpm_updated():
         "standard_logging_object": standard_logging_payload,
     }
 
+    litellm_deployment_dict: DeploymentTypedDict = {
+        "model_name": model_group,
+        "litellm_params": {"model": deployment},
+        "model_info": {"id": deployment_id},
+    }
+
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    lowest_tpm_logger.pre_call_check(deployment=kwargs["litellm_params"])
+    lowest_tpm_logger.pre_call_check(deployment=litellm_deployment_dict)
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -74,8 +82,8 @@ def test_tpm_rpm_updated():
     )
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:rpm:{current_minute}"
+    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
+    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
 
     print(f"tpm_count_api_key={tpm_count_api_key}")
     assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(
@@ -92,12 +100,12 @@ def test_get_available_deployments():
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "1234"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "5678"},
         },
     ]
@@ -108,11 +116,12 @@ def test_get_available_deployments():
     ## DEPLOYMENT 1 ##
     total_tokens = 50
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-2"
+    deployment = "azure/chatgpt-v-3"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
     standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -135,10 +144,11 @@ def test_get_available_deployments():
     ## DEPLOYMENT 2 ##
     total_tokens = 20
     deployment_id = "5678"
-    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
     standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -209,11 +219,12 @@ def test_router_get_available_deployments():
     print(f"router id's: {router.get_model_ids()}")
     ## DEPLOYMENT 1 ##
     deployment_id = 1
-    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
     total_tokens = 50
     standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-turbo"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -237,6 +248,9 @@ def test_router_get_available_deployments():
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
+    standard_logging_payload["hidden_params"][
+        "litellm_model_name"
+    ] = "azure/gpt-35-turbo"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -293,10 +307,11 @@ def test_router_skip_rate_limited_deployments():
     ## DEPLOYMENT 1 ##
     deployment_id = 1
     total_tokens = 1439
-    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
     standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-turbo"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -377,6 +392,7 @@ async def test_multiple_potential_deployments(sync_mode):
             deployment = await router.async_get_available_deployment(
                 model="azure-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                request_kwargs={},
             )
 
         ## get id ##
@@ -698,3 +714,54 @@ def test_return_potential_deployments():
     )
 
     assert len(potential_deployments) == 1
+
+
+@pytest.mark.asyncio
+async def test_tpm_rpm_routing_model_name_checks():
+    deployment = {
+        "model_name": "gpt-3.5-turbo",
+        "litellm_params": {
+            "model": "azure/chatgpt-v-3",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "mock_response": "Hey, how's it going?",
+        },
+    }
+    router = Router(model_list=[deployment], routing_strategy="usage-based-routing-v2")
+
+    async def side_effect_pre_call_check(*args, **kwargs):
+        return args[0]
+
+    with patch.object(
+        router.lowesttpm_logger_v2,
+        "async_pre_call_check",
+        side_effect=side_effect_pre_call_check,
+    ) as mock_object, patch.object(
+        router.lowesttpm_logger_v2, "async_log_success_event"
+    ) as mock_logging_event:
+        response = await router.acompletion(
+            model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
+        )
+
+        mock_object.assert_called()
+        print(f"mock_object.call_args: {mock_object.call_args[0][0]}")
+        assert (
+            mock_object.call_args[0][0]["litellm_params"]["model"]
+            == deployment["litellm_params"]["model"]
+        )
+
+        await asyncio.sleep(1)
+
+        mock_logging_event.assert_called()
+
+        print(f"mock_logging_event: {mock_logging_event.call_args.kwargs}")
+        standard_logging_payload: StandardLoggingPayload = (
+            mock_logging_event.call_args.kwargs.get("kwargs", {}).get(
+                "standard_logging_object"
+            )
+        )
+
+        assert (
+            standard_logging_payload["hidden_params"]["litellm_model_name"]
+            == "azure/chatgpt-v-3"
+        )

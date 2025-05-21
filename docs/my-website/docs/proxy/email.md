@@ -1,35 +1,130 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Email Notifications 
 
-Send an Email to your users when:
-- A Proxy API Key is created for them 
-- Their API Key crosses it's Budget 
-- All Team members of a LiteLLM Team -> when the team crosses it's budget
+<Image 
+  img={require('../../img/email_2_0.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  LiteLLM Email Notifications
+</p>
 
-<Image img={require('../../img/email_notifs.png')} style={{ width: '500px' }}/>
+## Overview
 
-## Quick Start 
+Send LiteLLM Proxy users emails for specific events.
+
+| Category | Details |
+|----------|---------|
+| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user |
+| Supported Email Integrations | • Resend API<br/>• SMTP |
+
+## Usage
+
+:::info
+
+LiteLLM Cloud: This feature is enabled for all LiteLLM Cloud users, there's no need to configure anything.
+
+:::
+
+### 1. Configure email integration
+
+<Tabs>
+  <TabItem value="smtp" label="SMTP">
 
 Get SMTP credentials to set this up
+
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+    callbacks: ["smtp_email"]
+```
+
 Add the following to your proxy env
 
-```shell
+```shell showLineNumbers
 SMTP_HOST="smtp.resend.com"
+SMTP_TLS="True"
+SMTP_PORT="587"
 SMTP_USERNAME="resend"
-SMTP_PASSWORD="*******"
-SMTP_SENDER_EMAIL="support@alerts.litellm.ai"  # email to send alerts from: `support@alerts.litellm.ai`
+SMTP_SENDER_EMAIL="notifications@alerts.litellm.ai"
+SMTP_PASSWORD="xxxxx"
 ```
 
-Add `email` to your proxy config.yaml under `general_settings`
+  </TabItem>
+  <TabItem value="resend" label="Resend API">
 
-```yaml
-general_settings:
-  master_key: sk-1234
-  alerting: ["email"]
+Add `resend_email` to your proxy config.yaml under `litellm_settings`
+
+set the following env variables
+
+```shell showLineNumbers
+RESEND_API_KEY="re_1234"
 ```
 
-That's it ! start your proxy
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+    callbacks: ["resend_email"]
+```
+
+  </TabItem>
+</Tabs>
+
+### 2. Create a new user
+
+On the LiteLLM Proxy UI, go to users > create a new user. 
+
+After creating a new user, they will receive an email invite a the email you specified when creating the user. 
+
+## Email Templates 
+
+
+### 1. User added as a user on LiteLLM Proxy
+
+This email is send when you create a new user on LiteLLM Proxy.
+
+<Image 
+  img={require('../../img/email_event_1.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Users > Create User > Enter the user's email address > Create User.
+
+<Image 
+  img={require('../../img/new_user_email.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+### 2. Proxy API Key created for user
+
+This email is sent when you create a new API key for a user on LiteLLM Proxy.
+
+<Image 
+  img={require('../../img/email_event_2.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Virtual Keys > Create API Key > Select User ID
+
+<Image 
+  img={require('../../img/key_email.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+On the Create Key Modal, Select Advanced Settings > Set Send Email to True.
+
+<Image 
+  img={require('../../img/key_email_2.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+
+
 
 ## Customizing Email Branding
 

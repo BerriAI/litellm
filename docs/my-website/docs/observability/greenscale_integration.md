@@ -53,7 +53,7 @@ response = completion(
 
 ## Additional information in metadata
 
-You can send any additional information to Greenscale by using the `metadata` field in completion and `greenscale_` prefix. This can be useful for sending metadata about the request, such as the project and application name, customer_id, enviornment, or any other information you want to track usage. `greenscale_project` and `greenscale_application` are required fields.
+You can send any additional information to Greenscale by using the `metadata` field in completion and `greenscale_` prefix. This can be useful for sending metadata about the request, such as the project and application name, customer_id, environment, or any other information you want to track usage. `greenscale_project` and `greenscale_application` are required fields.
 
 ```python
 #openai call with additional metadata

@@ -47,7 +47,6 @@ class GoogleBatchEmbeddings(VertexLLM):
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,

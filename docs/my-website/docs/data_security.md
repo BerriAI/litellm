@@ -46,7 +46,7 @@ For security inquiries, please contact us at support@berri.ai
 |-------------------|-------------------------------------------------------------------------------------------------|
 | SOC 2 Type I      | Certified. Report available upon request on Enterprise plan.                                                           |
 | SOC 2 Type II     | In progress. Certificate available by April 15th, 2025                   |
-| ISO27001          | In progress. Certificate available by February 7th, 2025                                           |
+| ISO 27001          | Certified. Report available upon request on Enterprise                              |
 
 
 ## Supported Data Regions for LiteLLM Cloud
@@ -137,7 +137,7 @@ Point of contact email address for general security-related questions: krrish@be
 Has the Vendor been audited / certified? 
 - SOC 2 Type I. Certified. Report available upon request on Enterprise plan.
 - SOC 2 Type II. In progress. Certificate available by April 15th, 2025.
-- ISO27001. In progress. Certificate available by February 7th, 2025.
+- ISO 27001. Certified. Report available upon request on Enterprise plan.
 
 Has an information security management system been implemented? 
 - Yes - [CodeQL](https://codeql.github.com/) and a comprehensive ISMS covering multiple security domains.

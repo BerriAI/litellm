@@ -2,7 +2,8 @@
 import collections
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, List, Optional
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -285,7 +286,6 @@ async def get_global_activity(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 date_trunc('day', "startTime") AS date,
@@ -452,7 +452,6 @@ async def get_global_activity_model(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-
             sql_query = """
             SELECT
                 model_group,
@@ -1095,7 +1094,6 @@ async def get_global_spend_report(
                 start_date_obj, end_date_obj, team_id, customer_id, prisma_client
             )
         if group_by == "team":
-
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1656,6 +1654,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=50, description="Number of items per page", ge=1, le=100
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by model"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1688,7 +1694,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-
         # Convert the date strings to datetime objects
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
@@ -1709,6 +1714,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if team_id is not None:
             where_conditions["team_id"] = team_id
 
+        status_condition = _build_status_filter_condition(status_filter)
+        if status_condition:
+            where_conditions.update(status_condition)
+
         if api_key is not None:
             where_conditions["api_key"] = api_key
 
@@ -1717,6 +1726,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if request_id is not None:
             where_conditions["request_id"] = request_id
+
+        if model is not None:
+            where_conditions["model"] = model
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
@@ -1757,6 +1769,56 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)
+
+
+@lru_cache(maxsize=128)
+@router.get(
+    "/spend/logs/ui/{request_id}",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def ui_view_request_response_for_request_id(
+    request_id: str,
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    View request / response for a specific request_id
+
+    - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
+    - if so, it will return the request and response payload
+    """
+    custom_loggers = (
+        litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
+    )
+    start_date_obj: Optional[datetime] = None
+    end_date_obj: Optional[datetime] = None
+    if start_date is not None:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    if end_date is not None:
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+
+    for custom_logger in custom_loggers:
+        payload = await custom_logger.get_request_response_payload(
+            request_id=request_id,
+            start_time_utc=start_date_obj,
+            end_time_utc=end_date_obj,
+        )
+        if payload is not None:
+            return payload
+
+    return None
 
 
 @router.get(
@@ -1872,9 +1934,7 @@ async def view_spend_logs(  # noqa: PLR0915
             ):
                 result: dict = {}
                 for record in response:
-                    dt_object = datetime.strptime(
-                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"  # type: ignore
-                    )  # type: ignore
+                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}
@@ -2050,8 +2110,7 @@ async def global_spend_refresh():
         try:
             resp = await prisma_client.db.query_raw(sql_query)
 
-            assert resp[0]["relkind"] == "m"
-            return True
+            return resp[0]["relkind"] == "m"
         except Exception:
             return False
 
@@ -2109,7 +2168,6 @@ async def global_spend_for_internal_user(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
-
         user_id = user_api_key_dict.user_id
         if user_id is None:
             raise ValueError("/global/spend/logs Error: User ID is None")
@@ -2242,7 +2300,6 @@ async def global_spend():
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-
         total_spend = 0.0
 
         if prisma_client is None:
@@ -2351,9 +2408,21 @@ async def global_spend_keys(
         return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dKeysBySpend";"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    if limit is None:
+        response = await prisma_client.db.query_raw(sql_query)
+        return response
+    try:
+        limit = int(limit)
+        if limit < 1:
+            raise ValueError("Limit must be greater than 0")
+        sql_query = """SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;"""
+        response = await prisma_client.db.query_raw(sql_query, limit)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422, detail={"error": f"Invalid limit: {limit}, error: {e}"}
+        ) from e
 
     return response
 
@@ -2601,9 +2670,9 @@ async def global_spend_models(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    sql_query = f"""SELECT * FROM "Last30dModelsBySpend" LIMIT {limit};"""
+    sql_query = """SELECT * FROM "Last30dModelsBySpend" LIMIT $1 ;"""
 
-    response = await prisma_client.db.query_raw(query=sql_query)
+    response = await prisma_client.db.query_raw(sql_query, int(limit))
 
     return response
 
@@ -2747,7 +2816,7 @@ async def ui_get_spend_by_tags(
             spend_date,
             log_count,
             total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
         ORDER BY total_spend DESC;
         """
@@ -2763,7 +2832,7 @@ async def ui_get_spend_by_tags(
             individual_request_tag,
             SUM(log_count) AS log_count,
             SUM(total_spend) AS total_spend
-        FROM DailyTagSpend
+        FROM "DailyTagSpend"
         WHERE spend_date >= $1::date AND spend_date <= $2::date
           AND individual_request_tag = ANY($3::text[])
         GROUP BY individual_request_tag
@@ -2804,3 +2873,71 @@ async def ui_get_spend_by_tags(
         )
 
     return {"spend_per_tag": ui_tags}
+
+
+@router.get(
+    "/spend/logs/session/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_session_spend_logs(
+    session_id: str = fastapi.Query(
+        description="Get all spend logs for a particular session",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all spend logs for a particular session
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database not connected",
+            )
+
+        # Build query conditions
+        where_conditions = {"session_id": session_id}
+        # Query the database
+        result = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions, order={"startTime": "asc"}
+        )
+        return result
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
+
+
+def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
+    """
+    Helper function to build the status filter condition for database queries.
+    
+    Args:
+        status_filter (Optional[str]): The status to filter by. Can be "success" or "failure".
+        
+    Returns:
+        Dict[str, Any]: A dictionary containing the status filter condition.
+    """
+    if status_filter is None:
+        return {}
+        
+    if status_filter == "success":
+        return {
+            "OR": [
+                {"status": {"equals": "success"}},
+                {"status": None}
+            ]
+        }
+    else:
+        return {"status": {"equals": status_filter}}

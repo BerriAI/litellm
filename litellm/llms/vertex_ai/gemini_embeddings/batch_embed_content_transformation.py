@@ -52,7 +52,6 @@ def process_response(
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
 ) -> EmbeddingResponse:
-
     openai_embeddings: List[Embedding] = []
     for embedding in _predictions["embeddings"]:
         openai_embedding = Embedding(

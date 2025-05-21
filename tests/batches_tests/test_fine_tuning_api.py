@@ -47,64 +47,6 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-def test_create_fine_tune_job():
-    try:
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "openai_batch_completions.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_obj = litellm.create_file(
-            file=open(file_path, "rb"),
-            purpose="fine-tune",
-            custom_llm_provider="openai",
-        )
-        print("Response from creating file=", file_obj)
-
-        create_fine_tuning_response = litellm.create_fine_tuning_job(
-            model="gpt-3.5-turbo-0125",
-            training_file=file_obj.id,
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = litellm.list_fine_tuning_jobs(limit=2)
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-
-        assert len(list(ft_jobs)) > 0
-
-        # delete file
-
-        litellm.file_delete(
-            file_id=file_obj.id,
-        )
-
-        # cancel ft job
-        response = litellm.cancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-        pass
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            return
-        else:
-            pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.asyncio
 async def test_create_fine_tune_jobs_async():
     try:
@@ -500,3 +442,109 @@ async def test_create_vertex_fine_tune_jobs():
     assert create_fine_tuning_response.id is not None
     assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
     assert create_fine_tuning_response.object == "fine_tuning.job"
+
+
+@pytest.mark.asyncio
+async def test_mock_openai_create_fine_tune_job():
+    """Test that create_fine_tuning_job sends correct parameters to OpenAI"""
+    from openai import AsyncOpenAI
+    from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(client.fine_tuning.jobs, "create") as mock_create:
+        mock_create.return_value = FineTuningJob(
+            id="ft-123",
+            model="gpt-3.5-turbo-0125",
+            created_at=1677610602,
+            status="validating_files",
+            fine_tuned_model="ft:gpt-3.5-turbo-0125:org:custom_suffix:id",
+            object="fine_tuning.job",
+            hyperparameters=Hyperparameters(
+                n_epochs=3,
+            ),
+            organization_id="org-123",
+            seed=42,
+            training_file="file-123",
+            result_files=[],
+        )
+
+        response = await litellm.acreate_fine_tuning_job(
+            model="gpt-3.5-turbo-0125",
+            training_file="file-123",
+            hyperparameters={"n_epochs": 3},
+            suffix="custom_suffix",
+            client=client,
+        )
+
+        # Verify the request
+        mock_create.assert_called_once()
+        request_params = mock_create.call_args.kwargs
+
+        assert request_params["model"] == "gpt-3.5-turbo-0125"
+        assert request_params["training_file"] == "file-123"
+        assert request_params["hyperparameters"] == {"n_epochs": 3}
+        assert request_params["suffix"] == "custom_suffix"
+
+        # Verify the response
+        assert response.id == "ft-123"
+        assert response.model == "gpt-3.5-turbo-0125"
+        assert response.status == "validating_files"
+        assert response.fine_tuned_model == "ft:gpt-3.5-turbo-0125:org:custom_suffix:id"
+
+
+@pytest.mark.asyncio
+async def test_mock_openai_list_fine_tune_jobs():
+    """Test that list_fine_tuning_jobs sends correct parameters to OpenAI"""
+    from openai import AsyncOpenAI
+    from unittest.mock import AsyncMock
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.fine_tuning.jobs, "list", new_callable=AsyncMock
+    ) as mock_list:
+        # Simple mock return value - actual structure doesn't matter for this test
+        mock_list.return_value = []
+
+        await litellm.alist_fine_tuning_jobs(limit=2, after="ft-000", client=client)
+
+        # Only verify that the client was called with correct parameters
+        mock_list.assert_called_once()
+        request_params = mock_list.call_args.kwargs
+
+        assert request_params["limit"] == 2
+        assert request_params["after"] == "ft-000"
+
+
+@pytest.mark.asyncio
+async def test_mock_openai_cancel_fine_tune_job():
+    """Test that cancel_fine_tuning_job sends correct parameters to OpenAI"""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(client.fine_tuning.jobs, "cancel") as mock_cancel:
+        await litellm.acancel_fine_tuning_job(
+            fine_tuning_job_id="ft-123", client=client
+        )
+
+        # Only verify that the client was called with correct parameters
+        mock_cancel.assert_called_once_with(fine_tuning_job_id="ft-123")
+
+
+@pytest.mark.asyncio
+async def test_mock_openai_retrieve_fine_tune_job():
+    """Test that retrieve_fine_tuning_job sends correct parameters to OpenAI"""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(client.fine_tuning.jobs, "retrieve") as mock_retrieve:
+
+        response = await litellm.aretrieve_fine_tuning_job(
+            fine_tuning_job_id="ft-123", client=client
+        )
+
+        # Verify the request
+        mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")

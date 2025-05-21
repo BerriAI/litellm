@@ -10,9 +10,11 @@ LiteLLM supports all the text / chat / vision models from [OpenRouter](https://o
 import os
 from litellm import completion
 os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["OPENROUTER_API_BASE"] = "" # [OPTIONAL] defaults to https://openrouter.ai/api/v1
 
-os.environ["OR_SITE_URL"] = "" # optional
-os.environ["OR_APP_NAME"] = "" # optional
+
+os.environ["OR_SITE_URL"] = "" # [OPTIONAL]
+os.environ["OR_APP_NAME"] = "" # [OPTIONAL]
 
 response = completion(
             model="openrouter/google/palm-2-chat-bison",

@@ -4,7 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 from typing_extensions import TypeAlias
@@ -26,13 +26,15 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
     LangfuseClass: TypeAlias = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
-
+    LiteLLMLoggingObj = Any
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
@@ -40,6 +42,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 def langfuse_client_init(
     langfuse_public_key=None,
     langfuse_secret=None,
+    langfuse_secret_key=None,
     langfuse_host=None,
     flush_interval=1,
 ) -> LangfuseClass:
@@ -67,7 +70,10 @@ def langfuse_client_init(
         )
 
     # Instance variables
-    secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
+
+    secret_key = (
+        langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
+    )
     public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
     langfuse_host = langfuse_host or os.getenv(
         "LANGFUSE_HOST", "https://cloud.langfuse.com"
@@ -165,9 +171,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[
         str,
         List[AllMessageValues],
@@ -190,6 +198,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
@@ -206,6 +215,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_client = langfuse_client_init(
             langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
@@ -247,13 +257,12 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             standard_callback_dynamic_params=standard_callback_dynamic_params,
             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
         )
-        langfuse_logger_to_use._old_log_event(
+        langfuse_logger_to_use.log_event_on_langfuse(
             kwargs=kwargs,
             response_obj=response_obj,
             start_time=start_time,
             end_time=end_time,
             user_id=kwargs.get("user", None),
-            print_verbose=None,
         )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -271,12 +280,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         )
         if standard_logging_object is None:
             return
-        langfuse_logger_to_use._old_log_event(
+        langfuse_logger_to_use.log_event_on_langfuse(
             start_time=start_time,
             end_time=end_time,
             response_obj=None,
             user_id=kwargs.get("user", None),
-            print_verbose=None,
             status_message=standard_logging_object["error_str"],
             level="ERROR",
             kwargs=kwargs,

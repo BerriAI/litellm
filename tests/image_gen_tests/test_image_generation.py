@@ -130,17 +130,49 @@ class TestBedrockSd1(BaseImageGenTest):
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
+class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+            "model": "bedrock/amazon.nova-canvas-v1:0",
+            "n": 1,
+            "size": "320x320",
+            "imageGenerationConfig": {"cfgScale": 6.5, "seed": 12},
+            "taskType": "TEXT_IMAGE",
+            "aws_region_name": "us-east-1",
+        }
+
+
+class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+                "model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "COLOR_GUIDED_GENERATION",
+                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]},
+                "aws_region_name": "us-east-1",
+        }
+
+
 class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
 
+class TestOpenAIGPTImage1(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "gpt-image-1"}
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.set_verbose = True
         return {
             "model": "azure/dall-e-3-test",
-            "api_version": "2023-09-01-preview",
+            "api_version": "2023-12-01-preview",
+            "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+            "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
@@ -175,6 +207,8 @@ def test_image_generation_azure_dall_e_3():
         pass  # OpenAI randomly raises these errors - skip when they occur
     except litellm.InternalServerError:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass
@@ -187,6 +221,7 @@ def test_image_generation_azure_dall_e_3():
 # asyncio.run(test_async_image_generation_openai())
 
 
+@pytest.mark.skip(reason="model EOL")
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:
@@ -206,3 +241,4 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+

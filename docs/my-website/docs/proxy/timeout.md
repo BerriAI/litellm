@@ -166,7 +166,7 @@ response = client.chat.completions.create(
         {"role": "user", "content": "what color is red"}
     ],
     logit_bias={12481: 100},
-    timeout=1
+    extra_body={"timeout": 1} # 👈 KEY CHANGE
 )
 
 print(response)

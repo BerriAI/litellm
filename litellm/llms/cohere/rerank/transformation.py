@@ -52,6 +52,7 @@ class CohereRerankConfig(BaseRerankConfig):
         rank_fields: Optional[List[str]] = None,
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
+        max_tokens_per_doc: Optional[int] = None,
     ) -> OptionalRerankParams:
         """
         Map Cohere rerank params

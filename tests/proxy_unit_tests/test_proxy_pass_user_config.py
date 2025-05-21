@@ -64,7 +64,7 @@ def test_chat_completion(client_no_auth):
             ModelConfig(
                 model_name="user-azure-instance",
                 litellm_params=CompletionRequest(
-                    model="azure/chatgpt-v-2",
+                    model="azure/chatgpt-v-3",
                     api_key=os.getenv("AZURE_API_KEY"),
                     api_version=os.getenv("AZURE_API_VERSION"),
                     api_base=os.getenv("AZURE_API_BASE"),

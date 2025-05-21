@@ -12,7 +12,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _get_image_mime_type_from_url,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
@@ -27,6 +31,8 @@ from litellm.types.files import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAudioObject,
+    ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
 )
@@ -40,6 +46,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
+from litellm.types.utils import GenericImageParsingChunk
 
 from ..common_utils import (
     _check_text_in_content,
@@ -55,10 +62,11 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str) -> PartType:
+def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
     """
+
     try:
         # GCS URIs
         if "gs://" in image_url:
@@ -66,57 +74,34 @@ def _process_gemini_image(image_url: str) -> PartType:
             extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
-            file_type = get_file_type_from_extension(extension)
+            if not format:
+                file_type = get_file_type_from_extension(extension)
 
-            # Validate the file type is supported by Gemini
-            if not is_gemini_1_5_accepted_file_type(file_type):
-                raise Exception(f"File type not supported by gemini - {file_type}")
+                # Validate the file type is supported by Gemini
+                if not is_gemini_1_5_accepted_file_type(file_type):
+                    raise Exception(f"File type not supported by gemini - {file_type}")
 
-            mime_type = get_file_mime_type_for_file_type(file_type)
+                mime_type = get_file_mime_type_for_file_type(file_type)
+            else:
+                mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
         elif (
             "https://" in image_url
-            and (image_type := _get_image_mime_type_from_url(image_url)) is not None
+            and (image_type := format or _get_image_mime_type_from_url(image_url))
+            is not None
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             # https links for unsupported mime types and base64 images
-            image = convert_to_anthropic_image_obj(image_url)
+            image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob = BlobType(data=image["data"], mime_type=image["media_type"])
             return PartType(inline_data=_blob)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
-
-
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
-    """
-    Get mime type for common image URLs
-    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
-
-    Supported by Gemini:
-     - PNG (`image/png`)
-     - JPEG (`image/jpeg`)
-     - WebP (`image/webp`)
-    Example:
-        url = https://example.com/image.jpg
-        Returns: image/jpeg
-    """
-    url = url.lower()
-    if url.endswith((".jpg", ".jpeg")):
-        return "image/jpeg"
-    elif url.endswith(".png"):
-        return "image/png"
-    elif url.endswith(".webp"):
-        return "image/webp"
-    elif url.endswith(".mp4"):
-        return "video/mp4"
-    elif url.endswith(".pdf"):
-        return "application/pdf"
-    return None
 
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
@@ -147,7 +132,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 _message_content = messages[msg_i].get("content")
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
-                    for element in _message_content:
+                    for element_idx, element in enumerate(_message_content):
                         if (
                             element["type"] == "text"
                             and "text" in element
@@ -159,12 +144,61 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "image_url":
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
+                            format: Optional[str] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
+                                format = img_element["image_url"].get("format")
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(image_url=image_url)
+                            _part = _process_gemini_image(
+                                image_url=image_url, format=format
+                            )
                             _parts.append(_part)
+                        elif element["type"] == "input_audio":
+                            audio_element = cast(ChatCompletionAudioObject, element)
+                            audio_data = audio_element["input_audio"].get("data")
+                            audio_format = audio_element["input_audio"].get("format")
+                            if audio_data is not None and audio_format is not None:
+                                audio_format_modified = (
+                                    "audio/" + audio_format
+                                    if audio_format.startswith("audio/") is False
+                                    else audio_format
+                                )  # Gemini expects audio/wav, audio/mp3, etc.
+                                openai_image_str = (
+                                    convert_generic_image_chunk_to_openai_image_obj(
+                                        image_chunk=GenericImageParsingChunk(
+                                            type="base64",
+                                            media_type=audio_format_modified,
+                                            data=audio_data,
+                                        )
+                                    )
+                                )
+                                _part = _process_gemini_image(
+                                    image_url=openai_image_str,
+                                    format=audio_format_modified,
+                                )
+                                _parts.append(_part)
+                        elif element["type"] == "file":
+                            file_element = cast(ChatCompletionFileObject, element)
+                            file_id = file_element["file"].get("file_id")
+                            format = file_element["file"].get("format")
+                            file_data = file_element["file"].get("file_data")
+                            passed_file = file_id or file_data
+                            if passed_file is None:
+                                raise Exception(
+                                    "Unknown file type. Please pass in a file_id or file_data"
+                                )
+                            try:
+                                _part = _process_gemini_image(
+                                    image_url=passed_file, format=format
+                                )
+                                _parts.append(_part)
+                            except Exception:
+                                raise Exception(
+                                    "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
+                                        file_id, msg_i, element_idx
+                                    )
+                                )
                     user_content.extend(_parts)
                 elif (
                     _message_content is not None
@@ -200,6 +234,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 _message_content = assistant_msg.get("content", None)
+                reasoning_content = assistant_msg.get("reasoning_content", None)
+                if reasoning_content is not None:
+                    assistant_content.append(
+                        PartType(thought=True, text=reasoning_content)
+                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -207,6 +246,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+
                     assistant_content.extend(_parts)
                 elif (
                     _message_content is not None
@@ -404,18 +444,19 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     if gemini_api_key is not None:
-        messages, cached_content = (
-            await context_caching_endpoints.async_check_and_create_cache(
-                messages=messages,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
+        (
+            messages,
+            cached_content,
+        ) = await context_caching_endpoints.async_check_and_create_cache(
+            messages=messages,
+            api_key=gemini_api_key,
+            api_base=api_base,
+            model=model,
+            client=client,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            cached_content=optional_params.pop("cached_content", None),
+            logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
         cached_content = optional_params.pop("cached_content", None)

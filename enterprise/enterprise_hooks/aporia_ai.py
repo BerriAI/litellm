@@ -163,7 +163,7 @@ class AporiaGuardrail(CustomGuardrail):
 
         pass
 
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -173,6 +173,7 @@ class AporiaGuardrail(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

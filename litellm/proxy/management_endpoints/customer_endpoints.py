@@ -230,7 +230,6 @@ async def new_end_user(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
     try:
-
         ## VALIDATION ##
         if data.default_model is not None:
             if llm_router is None:

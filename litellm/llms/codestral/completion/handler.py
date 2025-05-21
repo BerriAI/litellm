@@ -314,7 +314,6 @@ class CodestralTextCompletion:
             return _response
         ### SYNC COMPLETION
         else:
-
             response = litellm.module_level_client.post(
                 url=completion_url,
                 headers=headers,
@@ -352,13 +351,11 @@ class CodestralTextCompletion:
         logger_fn=None,
         headers={},
     ) -> TextCompletionResponse:
-
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL,
             params={"timeout": timeout},
         )
         try:
-
             response = await async_handler.post(
                 api_base, headers=headers, data=json.dumps(data)
             )

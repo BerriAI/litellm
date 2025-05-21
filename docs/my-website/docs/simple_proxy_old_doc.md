@@ -994,16 +994,16 @@ litellm --health
 
 ## Logging Proxy Input/Output - OpenTelemetry
 
-### Step 1 Start OpenTelemetry Collecter Docker Container
+### Step 1 Start OpenTelemetry Collector Docker Container
 This container sends logs to your selected destination 
 
-#### Install OpenTelemetry Collecter Docker Image
+#### Install OpenTelemetry Collector Docker Image
 ```shell
 docker pull otel/opentelemetry-collector:0.90.0
 docker run -p 127.0.0.1:4317:4317 -p 127.0.0.1:55679:55679 otel/opentelemetry-collector:0.90.0
 ```
 
-#### Set Destination paths on OpenTelemetry Collecter
+#### Set Destination paths on OpenTelemetry Collector
 
 Here's the OpenTelemetry yaml config to use with Elastic Search
 ```yaml
@@ -1077,7 +1077,7 @@ general_settings:
 LiteLLM will read the `OTEL_ENDPOINT` environment variable to send data to your OTEL collector 
 
 ```python
-os.environ['OTEL_ENDPOINT'] # defauls to 127.0.0.1:4317 if not provided
+os.environ['OTEL_ENDPOINT'] # defaults to 127.0.0.1:4317 if not provided
 ```
 
 #### Start LiteLLM Proxy
@@ -1101,8 +1101,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 
-#### Test & View Logs on OpenTelemetry Collecter
-On successfull logging you should be able to see this log on your `OpenTelemetry Collecter` Docker Container
+#### Test & View Logs on OpenTelemetry Collector
+On successful logging you should be able to see this log on your `OpenTelemetry Collector` Docker Container
 ```shell
 Events:
 SpanEvent #0
@@ -1149,7 +1149,7 @@ Here's the log view on Elastic Search. You can see the request `input`, `output`
 <Image img={require('../img/elastic_otel.png')} />
 
 ## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successful LLM calls to langfuse
 
 **Step 1** Install langfuse
 

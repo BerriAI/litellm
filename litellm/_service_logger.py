@@ -15,7 +15,7 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
     OTELClass = OpenTelemetry
 else:
     Span = Any
@@ -124,6 +124,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -229,6 +230,7 @@ class ServiceLogging(CustomLogger):
             service=service,
             duration=duration,
             call_type=call_type,
+            event_metadata=event_metadata,
         )
 
         for callback in litellm.service_callback:
@@ -274,6 +276,7 @@ class ServiceLogging(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         """
         Hook to track failed litellm-service calls

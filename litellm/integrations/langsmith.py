@@ -41,6 +41,8 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_base_url: Optional[str] = None,
         **kwargs,
     ):
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
         self.default_credentials = self.get_credentials_from_env(
             langsmith_api_key=langsmith_api_key,
             langsmith_project=langsmith_project,
@@ -61,13 +63,11 @@ class LangsmithLogger(CustomBatchLogger):
         _batch_size = (
             os.getenv("LANGSMITH_BATCH_SIZE", None) or litellm.langsmith_batch_size
         )
+
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
         asyncio.create_task(self.periodic_flush())
-        self.flush_lock = asyncio.Lock()
-
-        super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def get_credentials_from_env(
         self,
@@ -75,7 +75,6 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
-
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
         if _credentials_api_key is None:
             raise Exception(
@@ -443,9 +442,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
@@ -481,7 +480,6 @@ class LangsmithLogger(CustomBatchLogger):
             asyncio.run(self.async_send_batch())
 
     def get_run_by_id(self, run_id):
-
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
 
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]

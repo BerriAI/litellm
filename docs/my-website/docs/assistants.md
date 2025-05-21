@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Assistants API 
+# /assistants
 
 Covers Threads, Messages, Assistants. 
 

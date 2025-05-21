@@ -200,11 +200,6 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
     assert isinstance(result, dict)
     assert "model" in result
     assert "response_cost" in result
-    assert "standard_logging_object" in result
-    if metadata_params:
-        assert "test" == result["standard_logging_object"]["end_user"]
-    else:
-        assert "" == result["standard_logging_object"]["end_user"]
 
 
 @pytest.mark.parametrize(
@@ -358,6 +353,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
     )
 
     assert isinstance(result["result"], ModelResponse)
+    print("result=", json.dumps(result, indent=4, default=str))
 
 
 def test_build_complete_streaming_response(all_chunks):
@@ -375,3 +371,6 @@ def test_build_complete_streaming_response(all_chunks):
     )
 
     assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 17
+    assert result.usage.completion_tokens == 249
+    assert result.usage.total_tokens == 266

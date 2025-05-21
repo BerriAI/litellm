@@ -20,14 +20,7 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
-
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
-}
+import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
@@ -91,8 +84,7 @@ export default function Onboarding() {
       formValues.password
     ).then((data) => {
       let litellm_dashboard_ui = "/ui/";
-      const user_id = data.data?.user_id || data.user_id;
-      litellm_dashboard_ui += "?userID=" + user_id;
+      litellm_dashboard_ui += "?login=success";
 
       // set cookie "token" to jwtToken
       document.cookie = "token=" + jwtToken;
@@ -117,7 +109,7 @@ export default function Onboarding() {
           color="sky"
         >
           <Grid numItems={2} className="flex justify-between items-center">
-            <Col>SSO is under the Enterprise Tirer.</Col>
+            <Col>SSO is under the Enterprise Tier.</Col>
 
             <Col>
               <Button variant="primary" className="mb-2">

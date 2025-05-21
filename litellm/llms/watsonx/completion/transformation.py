@@ -108,7 +108,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         stream: Optional[bool] = None,
         **kwargs,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -315,9 +315,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: str,
+        api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)

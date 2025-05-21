@@ -1,7 +1,10 @@
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_router_logger
-from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments_with_debug_info,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterRateLimitError
 
@@ -11,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     LitellmRouter = Any
     Span = Any
@@ -52,7 +55,7 @@ async def send_llm_exception_alert(
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info
-    exception_str += f"\n\n{error_traceback_str[:2000]}"
+    exception_str += f"\n\n{error_traceback_str[:MAX_EXCEPTION_MESSAGE_LENGTH]}"
 
     await litellm_router_instance.slack_alerting_logger.send_alert(
         message=f"LLM API call failed: `{exception_str}`",
@@ -75,7 +78,7 @@ async def async_raise_no_deployment_exception(
     _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
-    _cooldown_list = await _async_get_cooldown_deployments(
+    _cooldown_list = await _async_get_cooldown_deployments_with_debug_info(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
     )

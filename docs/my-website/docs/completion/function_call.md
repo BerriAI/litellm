@@ -8,6 +8,7 @@ Use `litellm.supports_function_calling(model="")` -> returns `True` if model sup
 assert litellm.supports_function_calling(model="gpt-3.5-turbo") == True
 assert litellm.supports_function_calling(model="azure/gpt-4-1106-preview") == True
 assert litellm.supports_function_calling(model="palm/chat-bison") == False
+assert litellm.supports_function_calling(model="xai/grok-2-latest") == True
 assert litellm.supports_function_calling(model="ollama/llama2") == False
 ```
 

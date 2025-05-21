@@ -11,6 +11,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ImageResponse
 
 
@@ -42,22 +43,23 @@ class VertexImageGeneration(VertexLLM):
     def image_generation(
         self,
         prompt: str,
+        api_base: Optional[str],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         model_response: ImageResponse,
         logging_obj: Any,
-        model: Optional[
-            str
-        ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
+        model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[Any] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
         aimg_generation=False,
+        extra_headers: Optional[dict] = None,
     ) -> ImageResponse:
         if aimg_generation is True:
             return self.aimage_generation(  # type: ignore
                 prompt=prompt,
+                api_base=api_base,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
@@ -82,12 +84,26 @@ class VertexImageGeneration(VertexLLM):
         else:
             sync_handler = client  # type: ignore
 
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
+        # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
+        )
+        auth_header, api_base = self._get_token_and_url(
+            model=model,
+            gemini_api_key=None,
+            auth_header=auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=False,
+            custom_llm_provider="vertex_ai",
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode="image_generation",
         )
         optional_params = optional_params or {
             "sampleCount": 1
@@ -98,31 +114,21 @@ class VertexImageGeneration(VertexLLM):
             "parameters": optional_params,
         }
 
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=prompt,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
+        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
         logging_obj.pre_call(
             input=prompt,
-            api_key=None,
+            api_key="",
             additional_args={
                 "complete_input_dict": optional_params,
-                "request_str": request_str,
+                "api_base": api_base,
+                "headers": headers,
             },
         )
 
         response = sync_handler.post(
-            url=url,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Authorization": f"Bearer {auth_header}",
-            },
+            url=api_base,
+            headers=headers,
             data=json.dumps(request_data),
         )
 
@@ -137,17 +143,17 @@ class VertexImageGeneration(VertexLLM):
     async def aimage_generation(
         self,
         prompt: str,
+        api_base: Optional[str],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         model_response: litellm.ImageResponse,
         logging_obj: Any,
-        model: Optional[
-            str
-        ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
+        model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
+        extra_headers: Optional[dict] = None,
     ):
         response = None
         if client is None:
@@ -168,7 +174,6 @@ class VertexImageGeneration(VertexLLM):
 
         # make POST request to
         # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
         """
         Docs link: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
@@ -187,10 +192,24 @@ class VertexImageGeneration(VertexLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
+        auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
+        )
+        auth_header, api_base = self._get_token_and_url(
+            model=model,
+            gemini_api_key=None,
+            auth_header=auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=False,
+            custom_llm_provider="vertex_ai",
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode="image_generation",
         )
         optional_params = optional_params or {
             "sampleCount": 1
@@ -201,22 +220,21 @@ class VertexImageGeneration(VertexLLM):
             "parameters": optional_params,
         }
 
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
+        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
+
         logging_obj.pre_call(
             input=prompt,
-            api_key=None,
+            api_key="",
             additional_args={
                 "complete_input_dict": optional_params,
-                "request_str": request_str,
+                "api_base": api_base,
+                "headers": headers,
             },
         )
 
         response = await self.async_handler.post(
-            url=url,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Authorization": f"Bearer {auth_header}",
-            },
+            url=api_base,
+            headers=headers,
             data=json.dumps(request_data),
         )
 

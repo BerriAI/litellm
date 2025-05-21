@@ -165,19 +165,26 @@ async def test_hashicorp_secret_manager_delete_secret():
         )
 
 
-def test_hashicorp_secret_manager_tls_cert_auth():
-    with patch("httpx.post") as mock_post:
-        # Configure the mock response for TLS auth
-        mock_auth_response = MagicMock()
-        mock_auth_response.json.return_value = {
+def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-client-token-12345")
+    print("HCP_VAULT_TOKEN=", os.getenv("HCP_VAULT_TOKEN"))
+    # Mock both httpx.post and httpx.Client
+    with patch("httpx.Client") as mock_client:
+        # Configure the mock client and response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
             "auth": {
                 "client_token": "test-client-token-12345",
                 "lease_duration": 3600,
                 "renewable": True,
             }
         }
-        mock_auth_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_auth_response
+        mock_response.raise_for_status.return_value = None
+        
+        # Configure the mock client's post method
+        mock_client_instance = MagicMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_client.return_value = mock_client_instance
 
         # Create a new instance with TLS cert config
         test_manager = HashicorpSecretManager()
@@ -185,19 +192,22 @@ def test_hashicorp_secret_manager_tls_cert_auth():
         test_manager.tls_key_path = "key.pem"
         test_manager.vault_cert_role = "test-role"
         test_manager.vault_namespace = "test-namespace"
+        
         # Test the TLS auth method
         token = test_manager._auth_via_tls_cert()
 
-        # Verify the token and request parameters
+        # Verify the token
         assert token == "test-client-token-12345"
-        mock_post.assert_called_once_with(
+        
+        # Verify Client was created with correct cert tuple
+        mock_client.assert_called_once_with(cert=("cert.pem", "key.pem"))
+        
+        # Verify post was called with correct parameters
+        mock_client_instance.post.assert_called_once_with(
             f"{test_manager.vault_addr}/v1/auth/cert/login",
-            cert=("cert.pem", "key.pem"),
             headers={"X-Vault-Namespace": "test-namespace"},
             json={"name": "test-role"},
         )
 
         # Verify the token was cached
-        assert (
-            test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
-        )
+        assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"

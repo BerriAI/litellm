@@ -147,11 +147,16 @@ Some SSO providers require a specific redirect url for login and logout. You can
 - Login: `<your-proxy-base-url>/sso/key/generate`
 - Logout: `<your-proxy-base-url>`
 
+Here's the env var to set the logout url on the proxy
+```bash
+PROXY_LOGOUT_URL="https://www.google.com"
+```
+
 #### Step 3. Set `PROXY_BASE_URL` in your .env
 
 Set this in your .env (so the proxy can set the correct redirect url)
 ```shell
-PROXY_BASE_URL=https://litellm-api.up.railway.app/
+PROXY_BASE_URL=https://litellm-api.up.railway.app
 ```
 
 #### Step 4. Test flow
@@ -238,12 +243,12 @@ We allow you to pass a local image or a an http/https url of your image
 
 Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
 
-Exaple setting Hosted image
+Example setting Hosted image
 ```shell
 UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
 ```
 
-Exaple setting a local image (on your container)
+Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```

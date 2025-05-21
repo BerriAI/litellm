@@ -31,10 +31,10 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         kv_pair_dict = OpenTelemetry._tool_calls_kv_pair(tool_calls)
 
         assert kv_pair_dict == {
-            f"{SpanAttributes.LLM_COMPLETIONS}.0.function_call.arguments": '{"city": "New York"}',
-            f"{SpanAttributes.LLM_COMPLETIONS}.0.function_call.name": "get_weather",
-            f"{SpanAttributes.LLM_COMPLETIONS}.1.function_call.arguments": '{"city": "New York"}',
-            f"{SpanAttributes.LLM_COMPLETIONS}.1.function_call.name": "get_news",
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.name": "get_weather",
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.arguments": '{"city": "New York"}',
+            f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.name": "get_news",
         }
 
     @pytest.mark.asyncio

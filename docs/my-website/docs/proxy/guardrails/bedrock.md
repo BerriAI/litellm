@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Bedrock
+# Bedrock Guardrails
 
 LiteLLM supports Bedrock guardrails via the [Bedrock ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html). 
 
@@ -134,4 +134,49 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 </Tabs>
+
+## PII Masking with Bedrock Guardrails
+
+Bedrock guardrails support PII detection and masking capabilities. To enable this feature, you need to:
+
+1. Set `mode` to `pre_call` to run the guardrail check before the LLM call
+2. Enable masking by setting `mask_request_content` and/or `mask_response_content` to `true`
+
+Here's how to configure it in your config.yaml:
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+  
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"  # Important: must use pre_call mode for masking
+      guardrailIdentifier: wf0hkdb5x07f
+      guardrailVersion: "DRAFT"
+      mask_request_content: true    # Enable masking in user requests
+      mask_response_content: true   # Enable masking in model responses
+```
+
+With this configuration, when the bedrock guardrail intervenes, litellm will read the masked output from the guardrail and send it to the model.
+
+### Example Usage
+
+When enabled, PII will be automatically masked in the text. For example, if a user sends:
+
+```
+My email is john.doe@example.com and my phone number is 555-123-4567
+```
+
+The text sent to the model might be masked as:
+
+```
+My email is [EMAIL] and my phone number is [PHONE_NUMBER]
+```
+
+This helps protect sensitive information while still allowing the model to understand the context of the request.
 

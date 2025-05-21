@@ -3,10 +3,11 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
+from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
@@ -47,6 +48,7 @@ class TritonConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
@@ -66,6 +68,22 @@ class TritonConfig(BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params[param] = value
         return optional_params
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required")
+        llm_type = self._get_triton_llm_type(api_base)
+        if llm_type == "generate" and stream:
+            return api_base + "_stream"
+        return api_base
 
     def transform_response(
         self,
@@ -149,6 +167,18 @@ class TritonConfig(BaseConfig):
         else:
             raise ValueError(f"Invalid Triton API base: {api_base}")
 
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return TritonResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
 
 class TritonGenerateConfig(TritonConfig):
     """
@@ -168,9 +198,9 @@ class TritonGenerateConfig(TritonConfig):
         data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
-                "max_tokens": int(optional_params.get("max_tokens", 2000)),
-                "bad_words": [""],
-                "stop_words": [""],
+                "max_tokens": int(
+                    optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)
+                ),
             },
             "stream": bool(stream),
         }
@@ -204,7 +234,7 @@ class TritonGenerateConfig(TritonConfig):
         return model_response
 
 
-class TritonInferConfig(TritonGenerateConfig):
+class TritonInferConfig(TritonConfig):
     """
     Transformations for triton /infer endpoint (his is an infer model with a custom model on triton)
     """
@@ -217,7 +247,6 @@ class TritonInferConfig(TritonGenerateConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-
         text_input = messages[0].get("content", "")
         data_for_triton = {
             "inputs": [

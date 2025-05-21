@@ -37,8 +37,7 @@ def get_api_base(
             _optional_params = LiteLLM_Params(
                 model=model, **optional_params
             )  # convert to pydantic object
-    except Exception as e:
-        verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
+    except Exception:
         return None
     # get llm provider
 

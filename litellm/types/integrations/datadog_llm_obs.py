@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class InputMeta(TypedDict):
-    messages: List[Any]
+    messages: List[
+        Dict[str, str]
+    ]  # Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
 
 
 class OutputMeta(TypedDict):

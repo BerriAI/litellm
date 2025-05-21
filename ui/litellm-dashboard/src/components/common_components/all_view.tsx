@@ -35,6 +35,7 @@ interface DeleteModalProps {
   onCancel: () => void;
   title: string;
   message: string;
+
 }
 
 interface DataTableProps {
@@ -43,6 +44,7 @@ interface DataTableProps {
   actions?: Action[];
   emptyMessage?: string;
   deleteModal?: DeleteModalProps;
+  onItemClick?: (item: any) => void;
 }
 
 const DataTable: React.FC<DataTableProps> = ({
@@ -50,7 +52,8 @@ const DataTable: React.FC<DataTableProps> = ({
   columns,
   actions,
   emptyMessage = "No data available",
-  deleteModal
+  deleteModal,
+  onItemClick
 }) => {
   const renderCell = (column: Column, row: any) => {
     const value = row[column.accessor];

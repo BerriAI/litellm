@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import traceback
@@ -74,6 +75,45 @@ def test_ollama_json_mode():
 
 
 # test_ollama_json_mode()
+
+
+def test_ollama_vision_model():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    from unittest.mock import patch
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.completion(
+                model="ollama/llama3.2-vision:11b",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://dummyimage.com/100/100/fff&text=Test+image"
+                                },
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called()
+
+        print(mock_post.call_args.kwargs)
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["model"] == "llama3.2-vision:11b"
+        assert "images" in json_data
+        assert "prompt" in json_data
+        assert json_data["prompt"].startswith("### User:\n")
 
 
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")

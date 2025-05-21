@@ -6,6 +6,8 @@ import Image from '@theme/IdealImage';
 
 Track spend for keys, users, and teams across 100+ LLMs.
 
+LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
 ### How to Track Spend with LiteLLM
 
 **Step 1**
@@ -35,10 +37,10 @@ response = client.chat.completions.create(
             "content": "this is a test request, write a short poem"
         }
     ],
-    user="palantir",
-    extra_body={
+    user="palantir", # OPTIONAL: pass user to track spend by user
+    extra_body={ 
         "metadata": {
-            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
         }
     }
 )
@@ -63,9 +65,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "what llm are you"
         }
     ],
-    "user": "palantir",
+    "user": "palantir", # OPTIONAL: pass user to track spend by user
     "metadata": {
-        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
     }
 }'
 ```
@@ -90,7 +92,7 @@ chat = ChatOpenAI(
     user="palantir",
     extra_body={
         "metadata": {
-            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
         }
     }
 )
@@ -150,8 +152,112 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 </TabItem>
 </Tabs>
 
-## ✨ (Enterprise) API Endpoints to get Spend
-### Getting Spend Reports - To Charge Other Teams, Customers, Users
+### Allowing Non-Proxy Admins to access `/spend` endpoints 
+
+Use this when you want non-proxy admins to access `/spend` endpoints
+
+:::info
+
+Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+##### Create Key 
+Create Key with with `permissions={"get_spend_routes": true}` 
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"get_spend_routes": true}
+    }'
+```
+
+##### Use generated key on `/spend` endpoints
+
+Access spend Routes with newly generate keys
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
+  -H 'Authorization: Bearer sk-H16BKvrSNConSsBYLGc_7A'
+```
+
+
+
+#### Reset Team, API Key Spend - MASTER KEY ONLY
+
+Use `/global/spend/reset` if you want to:
+- Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
+
+- LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
+
+##### Request 
+Only the `LITELLM_MASTER_KEY` you set can access this route
+```shell
+curl -X POST \
+  'http://localhost:4000/global/spend/reset' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json'
+```
+
+##### Expected Responses
+
+```shell
+{"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
+```
+
+## Daily Spend Breakdown API
+
+Retrieve granular daily usage data for a user (by model, provider, and API key) with a single endpoint.
+
+Example Request:
+
+```shell title="Daily Spend Breakdown API" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+-H 'Authorization: Bearer sk-...'
+```
+
+```json title="Daily Spend Breakdown API Response" showLineNumbers
+{
+    "results": [
+        {
+            "date": "2025-03-27",
+            "metrics": {
+                "spend": 0.0177072,
+                "prompt_tokens": 111,
+                "completion_tokens": 1711,
+                "total_tokens": 1822,
+                "api_requests": 11
+            },
+            "breakdown": {
+                "models": {
+                    "gpt-4o-mini": {
+                        "spend": 1.095e-05,
+                        "prompt_tokens": 37,
+                        "completion_tokens": 9,
+                        "total_tokens": 46,
+                        "api_requests": 1
+                },
+                "providers": { "openai": { ... }, "azure_ai": { ... } },
+                "api_keys": { "3126b6eaf1...": { ... } }
+            }
+        }
+    ],
+    "metadata": {
+        "total_spend": 0.7274667,
+        "total_prompt_tokens": 280990,
+        "total_completion_tokens": 376674,
+        "total_api_requests": 14
+    }
+}
+```
+
+### API Reference
+
+See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
+
+## ✨ (Enterprise) Generate Spend Reports 
+
+Use this to charge other teams, customers, users
 
 Use the `/global/spend/report` endpoint to get spend reports
 
@@ -470,105 +576,6 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 
 </Tabs>
 
-### Allowing Non-Proxy Admins to access `/spend` endpoints 
-
-Use this when you want non-proxy admins to access `/spend` endpoints
-
-:::info
-
-Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
-##### Create Key 
-Create Key with with `permissions={"get_spend_routes": true}` 
-```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
-        --header 'Content-Type: application/json' \
-        --data '{
-            "permissions": {"get_spend_routes": true}
-    }'
-```
-
-##### Use generated key on `/spend` endpoints
-
-Access spend Routes with newly generate keys
-```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
-  -H 'Authorization: Bearer sk-H16BKvrSNConSsBYLGc_7A'
-```
-
-
-
-#### Reset Team, API Key Spend - MASTER KEY ONLY
-
-Use `/global/spend/reset` if you want to:
-- Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
-
-- LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
-
-##### Request 
-Only the `LITELLM_MASTER_KEY` you set can access this route
-```shell
-curl -X POST \
-  'http://localhost:4000/global/spend/reset' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json'
-```
-
-##### Expected Responses
-
-```shell
-{"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
-```
-
-
-
-
-## Spend Tracking for Azure OpenAI Models
-
-Set base model for cost tracking azure image-gen call
-
-#### Image Generation 
-
-```yaml
-model_list: 
-  - model_name: dall-e-3
-    litellm_params:
-        model: azure/dall-e-3-test
-        api_version: 2023-06-01-preview
-        api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-        api_key: os.environ/AZURE_API_KEY
-        base_model: dall-e-3 # 👈 set dall-e-3 as base model
-    model_info:
-        mode: image_generation
-```
-
-#### Chat Completions / Embeddings
-
-**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
-
-**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
-
-Get the base model name from [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
-
-Example config with `base_model`
-```yaml
-model_list:
-  - model_name: azure-gpt-3.5
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2023-07-01-preview"
-    model_info:
-      base_model: azure/gpt-4-1106-preview
-```
-
-## Custom Input/Output Pricing
-
-👉 Head to [Custom Input/Output Pricing](https://docs.litellm.ai/docs/proxy/custom_pricing) to setup custom pricing or your models
 
 ## ✨ Custom Spend Log metadata
 
@@ -588,3 +595,4 @@ Logging specific key,value pairs in spend logs metadata is an enterprise feature
 Tracking spend with Custom tags is an enterprise feature. [See here](./enterprise.md#tracking-spend-for-custom-tags)
 
 :::
+

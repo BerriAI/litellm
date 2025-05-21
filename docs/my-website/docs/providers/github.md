@@ -7,6 +7,7 @@ https://github.com/marketplace/models
 :::tip
 
 **We support ALL Github models, just set `model=github/<any-model-on-github>` as a prefix when sending litellm requests**
+Ignore company prefix: meta/Llama-3.2-11B-Vision-Instruct becomes model=github/Llama-3.2-11B-Vision-Instruct
 
 :::
 
@@ -23,7 +24,7 @@ import os
 
 os.environ['GITHUB_API_KEY'] = ""
 response = completion(
-    model="github/llama3-8b-8192", 
+    model="github/Llama-3.2-11B-Vision-Instruct", 
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -38,7 +39,7 @@ import os
 
 os.environ['GITHUB_API_KEY'] = ""
 response = completion(
-    model="github/llama3-8b-8192", 
+    model="github/Llama-3.2-11B-Vision-Instruct", 
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -57,9 +58,9 @@ for chunk in response:
 
 ```yaml
 model_list:
-  - model_name: github-llama3-8b-8192 # Model Alias to use for requests
+  - model_name: github-Llama-3.2-11B-Vision-Instruct # Model Alias to use for requests
     litellm_params:
-      model: github/llama3-8b-8192
+      model: github/Llama-3.2-11B-Vision-Instruct
       api_key: "os.environ/GITHUB_API_KEY" # ensure you have `GITHUB_API_KEY` in your .env
 ```
 
@@ -80,7 +81,7 @@ Make request to litellm proxy
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "github-llama3-8b-8192",
+      "model": "github-Llama-3.2-11B-Vision-Instruct",
       "messages": [
         {
           "role": "user",
@@ -100,7 +101,7 @@ client = openai.OpenAI(
     base_url="http://0.0.0.0:4000"
 )
 
-response = client.chat.completions.create(model="github-llama3-8b-8192", messages = [
+response = client.chat.completions.create(model="github-Llama-3.2-11B-Vision-Instruct", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -124,7 +125,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "github-llama3-8b-8192",
+    model = "github-Llama-3.2-11B-Vision-Instruct",
     temperature=0.1
 )
 
@@ -152,7 +153,7 @@ We support ALL Github models, just set `github/` as a prefix when sending comple
 |--------------------|---------------------------------------------------------|
 | llama-3.1-8b-instant     | `completion(model="github/llama-3.1-8b-instant", messages)`     | 
 | llama-3.1-70b-versatile    | `completion(model="github/llama-3.1-70b-versatile", messages)`    | 
-| llama3-8b-8192     | `completion(model="github/llama3-8b-8192", messages)`     | 
+| Llama-3.2-11B-Vision-Instruct     | `completion(model="github/Llama-3.2-11B-Vision-Instruct", messages)`     | 
 | llama3-70b-8192    | `completion(model="github/llama3-70b-8192", messages)`    | 
 | llama2-70b-4096    | `completion(model="github/llama2-70b-4096", messages)`    | 
 | mixtral-8x7b-32768 | `completion(model="github/mixtral-8x7b-32768", messages)` |
@@ -214,7 +215,7 @@ tools = [
     }
 ]
 response = litellm.completion(
-    model="github/llama3-8b-8192",
+    model="github/Llama-3.2-11B-Vision-Instruct",
     messages=messages,
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
@@ -254,7 +255,7 @@ if tool_calls:
         )  # extend conversation with function response
     print(f"messages: {messages}")
     second_response = litellm.completion(
-        model="github/llama3-8b-8192", messages=messages
+        model="github/Llama-3.2-11B-Vision-Instruct", messages=messages
     )  # get a new response from the model where it can see the function response
     print("second response\n", second_response)
 ```

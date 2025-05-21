@@ -160,6 +160,39 @@ def test_async_callbacks():
     assert async_failure in litellm._async_failure_callback
 
 
+def test_remove_callback_from_list_by_object():
+    manager = LoggingCallbackManager()
+    # Reset all callbacks
+    manager._reset_all_callbacks()
+
+    def TestObject():
+        def __init__(self):
+            manager.add_litellm_callback(self.callback)
+            manager.add_litellm_success_callback(self.callback)
+            manager.add_litellm_failure_callback(self.callback)
+            manager.add_litellm_async_success_callback(self.callback)
+            manager.add_litellm_async_failure_callback(self.callback)
+
+        def callback(self):
+            pass    
+
+    obj = TestObject()
+
+    manager.remove_callback_from_list_by_object(litellm.callbacks, obj)
+    manager.remove_callback_from_list_by_object(litellm.success_callback, obj)
+    manager.remove_callback_from_list_by_object(litellm.failure_callback, obj)
+    manager.remove_callback_from_list_by_object(litellm._async_success_callback, obj)
+    manager.remove_callback_from_list_by_object(litellm._async_failure_callback, obj)
+
+    # Verify all callback lists are empty
+    assert len(litellm.callbacks) == 0
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+    assert len(litellm._async_success_callback) == 0
+    assert len(litellm._async_failure_callback) == 0
+
+
+
 def test_reset_callbacks(callback_manager):
     # Add various callbacks
     callback_manager.add_litellm_callback("test")

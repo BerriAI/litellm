@@ -48,7 +48,7 @@ async def test_latency_memory_leak(sync_mode):
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -130,7 +130,7 @@ def test_latency_updated():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -173,7 +173,7 @@ def test_latency_updated_custom_ttl():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -200,12 +200,12 @@ def test_get_available_deployments():
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "1234"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "5678"},
         },
     ]
@@ -219,7 +219,7 @@ def test_get_available_deployments():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -240,7 +240,7 @@ def test_get_available_deployments():
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -275,7 +275,7 @@ async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -317,12 +317,12 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "1234", "rpm": ans_rpm},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
@@ -366,12 +366,12 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "1234", "rpm": ans_rpm},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "litellm_params": {"model": "azure/chatgpt-v-3"},
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
@@ -385,7 +385,7 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }
@@ -407,7 +407,7 @@ def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "deployment": "azure/chatgpt-v-3",
             },
             "model_info": {"id": deployment_id},
         }

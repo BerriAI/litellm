@@ -1,4 +1,4 @@
-litellm[proxy] # Specify the litellm version you want to use
+litellm[proxy]==1.67.4.dev1 # Specify the litellm version you want to use
 prometheus_client
 langfuse
 prisma

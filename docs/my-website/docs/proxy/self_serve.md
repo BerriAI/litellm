@@ -161,6 +161,83 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
+## Auto-add SSO users to teams
+
+This walks through setting up sso auto-add for **Okta, Google SSO**
+
+### Okta, Google SSO 
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+```
+
+This is assuming your SSO token looks like this. **If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions [here](#debugging-sso-jwt-fields)**
+
+```
+{
+  ...,
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the SSO flow
+
+Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+### Microsoft Entra ID SSO group assignment
+
+Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID](https://docs.litellm.ai/docs/tutorials/msft_sso)
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+
+
 ## Advanced
 ### Setting custom logout URLs
 
@@ -196,40 +273,26 @@ This budget does not apply to keys created under non-default teams.
 
 [**Go Here**](./team_budgets.md)
 
-### Auto-add SSO users to teams
+### Set default params for new teams
 
-1. Specify the JWT field that contains the team ids, that the user belongs to. 
+When you connect litellm to your SSO provider, litellm can auto-create teams. Use this to set the default `models`, `max_budget`, `budget_duration` for these auto-created teams. 
 
-```yaml
-general_settings:
-  master_key: sk-1234
-  litellm_jwtauth:
-    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+**How it works**
+
+1. When litellm fetches `groups` from your SSO provider, it will check if the corresponding group_id exists as a `team_id` in litellm. 
+2. If the team_id does not exist, litellm will auto-create a team with the default params you've set. 
+3. If the team_id already exist, litellm will not apply any settings on the team. 
+
+**Usage**
+
+```yaml showLineNumbers title="Default Params for new teams"
+litellm_settings:
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
 ```
 
-This is assuming your SSO token looks like this:
-```
-{
-  ...,
-  "groups": ["team_id_1", "team_id_2"]
-}
-```
-
-2. Create the teams on LiteLLM 
-
-```bash
-curl -X POST '<PROXY_BASE_URL>/team/new' \
--H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
--H 'Content-Type: application/json' \
--D '{
-    "team_alias": "team_1",
-    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
-}'
-```
-
-3. Test the SSO flow
-
-Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
 
 ### Restrict Users from creating personal keys 
 
@@ -241,7 +304,7 @@ This will also prevent users from using their session tokens on the test keys ch
 
 ## **All Settings for Self Serve / SSO Flow**
 
-```yaml
+```yaml showLineNumbers title="All Settings for Self Serve / SSO Flow"
 litellm_settings:
   max_internal_user_budget: 10        # max budget for internal users
   internal_user_budget_duration: "1mo" # reset every month
@@ -251,6 +314,11 @@ litellm_settings:
     max_budget: 100                # Optional[float], optional): $100 budget for a new SSO sign in user
     budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for a new SSO sign in user
     models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by a new SSO sign in user
+  
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
 
 
   upperbound_key_generate_params:    # Upperbound for /key/generate requests when self-serve flow is on
