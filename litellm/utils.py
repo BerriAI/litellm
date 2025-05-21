@@ -6684,7 +6684,13 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseImageEditConfig]:
-        pass
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit.transformation import (
+                OpenAIImageEditConfig,
+            )
+
+            return OpenAIImageEditConfig()
+        return None
 
 
 def get_end_user_id_for_cost_tracking(
