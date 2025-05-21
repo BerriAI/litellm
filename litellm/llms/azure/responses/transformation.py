@@ -29,10 +29,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_key: Optional[str] = None,
     ) -> dict:
         
-        api_key, azure_ad_token_provider, azure_ad_token = get_azure_api_key_or_token(
+        auth_response = get_azure_api_key_or_token(
             litellm_params=litellm_params,
             api_key=api_key,
         )
+        api_key = auth_response.api_key
+        azure_ad_token_provider = auth_response.azure_ad_token_provider
+        azure_ad_token = auth_response.azure_ad_token
 
         if azure_ad_token_provider:
             azure_ad_token = azure_ad_token_provider()
