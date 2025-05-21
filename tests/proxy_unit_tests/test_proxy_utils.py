@@ -217,7 +217,7 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
     "callback_vars",
     [
         {
-            "langfuse_host": "https://us.cloud.langfuse.com",
+            "langfuse_host": "https://cloud.langfuse.com",
             "langfuse_public_key": "pk-lf-9636b7a6-c066",
             "langfuse_secret_key": "sk-lf-7cc8b620",
         },
@@ -231,7 +231,7 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
     os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
     os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
-    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
+    os.environ["LANGFUSE_HOST_TEMP"] = "https://cloud.langfuse.com"
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
