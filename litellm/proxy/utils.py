@@ -146,12 +146,14 @@ class InternalUsageCache:
         key,
         litellm_parent_otel_span: Union[Span, None],
         local_only: bool = False,
+        redis_only: bool = False,
         **kwargs,
     ) -> Any:
         return await self.dual_cache.async_get_cache(
             key=key,
             local_only=local_only,
             parent_otel_span=litellm_parent_otel_span,
+            redis_only=redis_only,
             **kwargs,
         )
 
