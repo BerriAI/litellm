@@ -699,7 +699,6 @@ class CustomStreamWrapper:
         """
         if self.response_id is None:
             self.response_id = id
-
         if self.response_id is not None and isinstance(self.response_id, str):
             model_response.id = self.response_id
         return model_response
