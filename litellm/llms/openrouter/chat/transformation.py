@@ -120,7 +120,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
-                usage=chunk.get("usage"),  # Usage is only included in the last SSE message
+                usage=chunk.get("usage"),
                 model=chunk["model"],
                 choices=new_choices,
             )
