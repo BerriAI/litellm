@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm import Logging, client, exception_type, get_litellm_params
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
+from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
@@ -642,7 +643,7 @@ def image_edit(
             logging_obj=litellm_logging_obj,
             extra_headers=extra_headers,
             extra_body=extra_body,
-            timeout=timeout,
+            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
             client=kwargs.get("client"),
         )
