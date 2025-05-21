@@ -665,7 +665,7 @@ const Teams: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {team["spend"]}
+                          {Number(team["spend"]).toFixed(4)}
                         </TableCell>
                         <TableCell
                           style={{
