@@ -3916,6 +3916,23 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "nebius":
+            from litellm.llms.nebius.embed.handler import nebius_embeddings
+
+            api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
+            api_base = api_base or litellm.api_base or get_secret_str("NEBIUS_API_BASE")
+            
+            response = nebius_embeddings(
+                model=model,
+                input=input,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logger_fn=logger_fn,
+            )
         elif custom_llm_provider == "voyage":
             response = base_llm_http_handler.embedding(
                 model=model,

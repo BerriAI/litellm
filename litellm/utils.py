@@ -6424,6 +6424,8 @@ class ProviderConfigManager:
             return litellm.CodestralTextCompletionConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambanovaConfig()
+        elif litellm.LlmProviders.NEBIUS == provider:
+            return litellm.NebiusConfig()
         elif litellm.LlmProviders.MARITALK == provider:
             return litellm.MaritalkConfig()
         elif litellm.LlmProviders.CLOUDFLARE == provider:

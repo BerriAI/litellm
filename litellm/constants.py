@@ -231,6 +231,7 @@ LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
     "hosted_vllm",
+    "nebius",
 ]
 
 
@@ -295,6 +296,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.studio.nebius.ai/v1",
 ]
 
 
@@ -329,6 +331,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
