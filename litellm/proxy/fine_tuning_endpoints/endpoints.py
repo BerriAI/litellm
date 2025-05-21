@@ -16,7 +16,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+)
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.types.llms.openai import FineTuningJob
 
 router = APIRouter()
 
@@ -126,16 +130,32 @@ async def create_fine_tuning_job(
             proxy_config=proxy_config,
         )
 
-        # get configs for custom_llm_provider
-        llm_provider_config = get_fine_tuning_provider_config(
-            custom_llm_provider=fine_tuning_request.custom_llm_provider,
-        )
+        ## CHECK IF MANAGED FILE ID
+        unified_file_id: Union[str, Literal[False]] = False
+        training_file = fine_tuning_request.training_file
+        response: Optional[FineTuningJob] = None
+        if training_file:
+            unified_file_id = _is_base64_encoded_unified_file_id(training_file)
+        ## IF SO, Route based on that
+        if unified_file_id:
+            pass
+        ## ELSE, Route based on custom_llm_provider
+        elif fine_tuning_request.custom_llm_provider:
+            # get configs for custom_llm_provider
+            llm_provider_config = get_fine_tuning_provider_config(
+                custom_llm_provider=fine_tuning_request.custom_llm_provider,
+            )
 
-        # add llm_provider_config to data
-        if llm_provider_config is not None:
-            data.update(llm_provider_config)
+            # add llm_provider_config to data
+            if llm_provider_config is not None:
+                data.update(llm_provider_config)
 
-        response = await litellm.acreate_fine_tuning_job(**data)
+            response = await litellm.acreate_fine_tuning_job(**data)
+
+        if response is None:
+            raise ValueError(
+                "Invalid request, No litellm managed file id or custom_llm_provider provided."
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -166,12 +186,11 @@ async def create_fine_tuning_job(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.create_fine_tuning_job(): Exception occurred - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         raise handle_exception_on_proxy(e)
 
 
