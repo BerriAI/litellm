@@ -11,7 +11,8 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import Request, status
 from pydantic import BaseModel
@@ -33,6 +34,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LiteLLMRoutes,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -43,7 +45,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.proxy.utils import (
+    InternalUsageCache,
+    PrismaClient,
+    ProxyLogging,
+    log_db_metrics,
+)
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
@@ -640,6 +647,69 @@ async def _get_fuzzy_user_object(
     return response
 
 
+class UserObjectCache:
+    def __init__(
+        self,
+        user_api_key_cache: DualCache,
+        internal_usage_cache: Optional[InternalUsageCache] = None,
+    ):
+        """
+        - user_api_key_cache: cache for user api keys
+        - internal_usage_cache: cache for internal usage (connected to Redis)
+        """
+        self.user_api_key_cache = user_api_key_cache
+        self.internal_usage_cache = internal_usage_cache
+
+    async def update_user_object(
+        self,
+        user_id: str,
+        user_object: Union[dict, LiteLLM_UserTable],
+        litellm_parent_otel_span: Optional[Span] = None,
+    ):
+        """
+        - update user object in cache
+        """
+        if isinstance(user_object, LiteLLM_UserTable):
+            user_object = user_object.model_dump()
+            for k, v in user_object.items():
+                if isinstance(v, datetime):
+                    user_object[k] = v.isoformat()
+        await self.user_api_key_cache.async_set_cache(key=user_id, value=user_object)
+        if self.internal_usage_cache is not None:
+            await self.internal_usage_cache.async_set_cache(
+                key=user_id,
+                value=user_object,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
+
+    async def get_user_object(
+        self, user_id: str, litellm_parent_otel_span: Optional[Span] = None
+    ) -> Optional[LiteLLM_UserTable]:
+        """
+        - get user object from cache
+        """
+        cached_obj: Optional[Union[dict, LiteLLM_UserTable]] = None
+
+        ## CHECK REDIS CACHE ##
+        if self.internal_usage_cache is not None:
+            cached_obj = await self.internal_usage_cache.async_get_cache(
+                key=user_id,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                redis_only=True,
+            )
+
+        if cached_obj is None:
+            cached_obj = await self.user_api_key_cache.async_get_cache(key=user_id)
+
+        if cached_obj is not None:
+            if isinstance(cached_obj, dict):
+                return LiteLLM_UserTable(**cached_obj)
+            elif isinstance(cached_obj, LiteLLM_UserTable):
+                return cached_obj
+
+        return None
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],
@@ -657,18 +727,23 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
+    user_object_cache = UserObjectCache(
+        user_api_key_cache=user_api_key_cache,
+        internal_usage_cache=proxy_logging_obj.internal_usage_cache
+        if proxy_logging_obj is not None
+        else None,
+    )
 
     if user_id is None:
         return None
 
     # check if in cache
     if not check_db_only:
-        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        cached_user_obj = await user_object_cache.get_user_object(
+            user_id=user_id, litellm_parent_otel_span=parent_otel_span
+        )
         if cached_user_obj is not None:
-            if isinstance(cached_user_obj, dict):
-                return LiteLLM_UserTable(**cached_user_obj)
-            elif isinstance(cached_user_obj, LiteLLM_UserTable):
-                return cached_user_obj
+            return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -697,8 +772,14 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                new_user_params: Dict[str, Any] = {
+                    "user_id": user_id,
+                }
+                if litellm.default_internal_user_params is not None:
+                    new_user_params.update(litellm.default_internal_user_params)
+
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id},
+                    data=new_user_params,
                     include={"organization_memberships": True},
                 )
             else:
@@ -720,7 +801,9 @@ async def get_user_object(
         response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+        await user_object_cache.update_user_object(
+            user_id=user_id, user_object=response_dict
+        )
 
         # save to db access time
         _update_last_db_access_time(
@@ -1014,6 +1097,38 @@ class ExperimentalUIJWTToken:
             )
 
 
+async def _get_object_from_cache(
+    key: str,
+    proxy_logging_obj: Optional[ProxyLogging],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+    base_model: Type[BaseModel],
+) -> Optional[BaseModel]:
+    cached_obj: Optional[Union[dict, BaseModel]] = None
+
+    ## CHECK REDIS CACHE ##
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
+    ):
+        cached_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key, parent_otel_span=parent_otel_span
+            )
+        )
+
+    if cached_obj is None:
+        cached_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_obj is not None:
+        if isinstance(cached_obj, dict):
+            return base_model(**cached_obj)
+        elif isinstance(cached_obj, base_model):
+            return cached_obj
+
+    return None
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -1036,15 +1151,16 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
-        key=key
+    cached_key_obj = await _get_object_from_cache(
+        key=key,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        base_model=LiteLLM_VerificationToken,
     )
 
     if cached_key_obj is not None:
-        if isinstance(cached_key_obj, dict):
-            return UserAPIKeyAuth(**cached_key_obj)
-        elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+        return UserAPIKeyAuth(**cached_key_obj.model_dump(exclude_none=True))
 
     if check_cache_only:
         raise Exception(
