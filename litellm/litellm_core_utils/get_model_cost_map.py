@@ -21,11 +21,8 @@ def get_model_cost_map(url: str) -> dict:
         import importlib.resources
         import json
 
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        content = json.loads(importlib.resources.files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text())
+        return content
 
     try:
         response = httpx.get(
@@ -38,8 +35,5 @@ def get_model_cost_map(url: str) -> dict:
         import importlib.resources
         import json
 
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        content = json.loads(importlib.resources.files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text())
+        return content
