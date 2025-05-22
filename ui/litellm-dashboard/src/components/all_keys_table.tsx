@@ -33,8 +33,11 @@ import {
   TableBody,
   TableRow,
   TableCell,
+  Icon,
 } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { Badge, Text } from "@tremor/react";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -152,6 +155,7 @@ export function AllKeysTable({
       desc: true
     }];
   });
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
@@ -363,19 +367,93 @@ export function AllKeysTable({
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
-          <div className="flex flex-wrap gap-1">
-            {models && models.length > 0 ? (
-              models.map((model, index) => (
-                <span
-                  key={index}
-                  className="px-2 py-1 bg-blue-100 rounded text-xs"
-                >
-                  {model}
-                </span>
-              ))
-            ) : (
-              "-"
-            )}
+          <div className="flex flex-col py-2">
+            {Array.isArray(models) ? (
+              <div className="flex flex-col">
+                {models.length === 0 ? (
+                  <Badge size={"xs"} className="mb-1" color="red">
+                    <Text>All Proxy Models</Text>
+                  </Badge>
+                ) : (
+                  <>
+                    <div className="flex items-start">
+                      {models.length > 3 && (
+                        <div>
+                          <Icon
+                            icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
+                            className="cursor-pointer"
+                            size="xs"
+                            onClick={() => {
+                              setExpandedAccordions(prev => ({
+                                ...prev,
+                                [info.row.id]: !prev[info.row.id]
+                              }));
+                            }}
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {models.slice(0, 3).map((model, index) => (
+                          model === "all-proxy-models" ? (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="red"
+                            >
+                              <Text>All Proxy Models</Text>
+                            </Badge>
+                          ) : (
+                            <Badge
+                              key={index}
+                              size={"xs"}
+                              color="blue"
+                            >
+                              <Text>
+                                {model.length > 30
+                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                  : getModelDisplayName(model)}
+                              </Text>
+                            </Badge>
+                          )
+                        ))}
+                        {models.length > 3 && !expandedAccordions[info.row.id] && (
+                          <Badge size={"xs"} color="gray" className="cursor-pointer">
+                            <Text>+{models.length - 3} {models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                          </Badge>
+                        )}
+                        {expandedAccordions[info.row.id] && (
+                          <div className="flex flex-wrap gap-1">
+                            {models.slice(3).map((model, index) => (
+                              model === "all-proxy-models" ? (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="red"
+                                >
+                                  <Text>All Proxy Models</Text>
+                                </Badge>
+                              ) : (
+                                <Badge
+                                  key={index + 3}
+                                  size={"xs"}
+                                  color="blue"
+                                >
+                                  <Text>
+                                    {model.length > 30
+                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                      : getModelDisplayName(model)}
+                                  </Text>
+                                </Badge>
+                              )
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
         );
       },
@@ -621,11 +699,12 @@ export function AllKeysTable({
                           {row.getVisibleCells().map((cell) => (
                             <TableCell
                               key={cell.id}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                                cell.column.id === 'actions'
-                                  ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                                  : ''
-                              }`}
+                              style={{
+                                maxWidth: "8-x",
+                                whiteSpace: "pre-wrap",
+                                overflow: "hidden",
+                              }}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === 'models' && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>
