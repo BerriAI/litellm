@@ -218,10 +218,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
         </Grid>
 
          {/* Add Model Failure Rates component */}
-      <Card>
-        <Title className="text-base mb-4 ml-2">Top Models by Failure Rate</Title>
         <ModelFailureRates modelMetrics={modelMetrics} />
-      </Card>
         
       </div>
 
