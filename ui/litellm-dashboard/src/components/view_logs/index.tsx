@@ -226,7 +226,6 @@ export default function SpendLogsTable({
     filteredLogs,
     allTeams: hookAllTeams,
     allKeyAliases,
-    allModels,
     handleFilterChange,
     handleFilterReset
   } = useLogFilterLogic({
