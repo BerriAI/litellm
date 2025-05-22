@@ -802,6 +802,7 @@ class PrometheusLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         """
         Track client side failures
@@ -832,6 +833,7 @@ class PrometheusLogger(CustomLogger):
                 exception_status=str(getattr(original_exception, "status_code", None)),
                 exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
+                route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
@@ -872,6 +874,7 @@ class PrometheusLogger(CustomLogger):
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
                 status_code="200",
+                route=user_api_key_dict.request_route,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.get_labels(
@@ -1000,9 +1003,9 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[StandardLoggingPayload] = (
-                request_kwargs.get("standard_logging_object")
-            )
+            standard_logging_payload: Optional[
+                StandardLoggingPayload
+            ] = request_kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 return
@@ -1453,6 +1456,7 @@ class PrometheusLogger(CustomLogger):
                 user_id=None,
                 team_id=None,
                 key_alias=None,
+                key_hash=None,
                 exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
                 return_full_object=True,
                 organization_id=None,
@@ -1771,10 +1775,10 @@ class PrometheusLogger(CustomLogger):
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.integrations.prometheus import PrometheusLogger
 
-        prometheus_loggers: List[CustomLogger] = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=PrometheusLogger
-            )
+        prometheus_loggers: List[
+            CustomLogger
+        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=PrometheusLogger
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
         verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))

@@ -22,6 +22,7 @@ import {
   Button,
   Divider,
 } from "@tremor/react";
+import { v4 as uuidv4 } from 'uuid';
 
 import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
@@ -33,6 +34,8 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import GuardrailSelector from "./guardrails/GuardrailSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
@@ -46,7 +49,10 @@ import {
   UserOutlined,
   DeleteOutlined,
   LoadingOutlined,
-  TagsOutlined
+  TagsOutlined,
+  DatabaseOutlined,
+  InfoCircleOutlined,
+  SafetyOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -82,6 +88,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -300,6 +309,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
     
+    // Generate new trace ID for a new conversation or use existing one
+    const traceId = messageTraceId || uuidv4();
+    if (!messageTraceId) {
+      setMessageTraceId(traceId);
+    }
+    
     // Update UI with full message object
     setChatHistory([...chatHistory, newUserMessage]);
     setIsLoading(true);
@@ -319,7 +334,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             signal,
             updateReasoningContent,
             updateTimingData,
-            updateUsageData
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -344,7 +362,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             signal,
             updateReasoningContent,
             updateTimingData,
-            updateUsageData
+            updateUsageData,
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         }
       }
@@ -353,7 +374,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
-        updateTextUI("assistant", "Error fetching response");
+        updateTextUI("assistant", "Error fetching response:" + error);
       }
     } finally {
       setIsLoading(false);
@@ -365,6 +386,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const clearChatHistory = () => {
     setChatHistory([]);
+    setMessageTraceId(null);
     message.success("Chat history cleared.");
   };
 
@@ -440,11 +462,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
-                    ...modelInfo.map((option) => ({
-                      value: option.model_group,
-                      label: option.model_group
-                    })),
-                    { value: 'custom', label: 'Enter custom model' }
+                    ...Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index
+                      })),
+                    { value: 'custom', label: 'Enter custom model', key: 'custom' }
                   ]}
                   style={{ width: "100%" }}
                   showSearch={true}
@@ -486,6 +510,48 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <TagSelector
                   value={selectedTags}
                   onChange={setSelectedTags}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <DatabaseOutlined className="mr-2" /> Vector Store
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select vector store(s) to use for this LLM API call. You can set up your vector store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <VectorStoreSelector
+                  value={selectedVectorStores}
+                  onChange={setSelectedVectorStores}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SafetyOutlined className="mr-2" /> Guardrails
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select guardrail(s) to use for this LLM API call. You can set up your guardrails <a href="?page=guardrails" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <GuardrailSelector
+                  value={selectedGuardrails}
+                  onChange={setSelectedGuardrails}
                   className="mb-4"
                   accessToken={accessToken || ""}
                 />

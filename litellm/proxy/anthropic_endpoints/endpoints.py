@@ -12,6 +12,8 @@ from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import STREAM_SSE_DATA_PREFIX
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -20,6 +22,24 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.utils import ProxyLogging
 
 router = APIRouter()
+
+
+def return_anthropic_chunk(chunk: Any) -> str:
+    """
+    Helper function to format streaming chunks for Anthropic API format
+
+    Args:
+        chunk: A string or dictionary to be returned in SSE format
+
+    Returns:
+        str: A properly formatted SSE chunk string
+    """
+    if isinstance(chunk, dict):
+        # Use safe_dumps for proper JSON serialization with circular reference detection
+        chunk_str = safe_dumps(chunk)
+        return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
+    else:
+        return chunk
 
 
 async def async_data_generator_anthropic(
@@ -40,7 +60,8 @@ async def async_data_generator_anthropic(
                 user_api_key_dict=user_api_key_dict, response=chunk
             )
 
-            yield chunk
+            # Format chunk using helper function
+            yield return_anthropic_chunk(chunk)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
@@ -69,7 +90,7 @@ async def async_data_generator_anthropic(
             code=getattr(e, "status_code", 500),
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
-        yield f"data: {error_returned}\n\n"
+        yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
 
 
 @router.post(

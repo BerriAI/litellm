@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
     Hyperparameters,
 )
 from litellm.types.router import *
+from litellm.types.utils import LiteLLMFineTuningJob
 from litellm.utils import client, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -50,7 +51,7 @@ async def acreate_fine_tuning_job(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> FineTuningJob:
+) -> LiteLLMFineTuningJob:
     """
     Async: Creates and executes a batch from an uploaded file of request
 
@@ -104,7 +105,7 @@ def create_fine_tuning_job(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[FineTuningJob, Coroutine[Any, Any, FineTuningJob]]:
+) -> Union[LiteLLMFineTuningJob, Coroutine[Any, Any, LiteLLMFineTuningJob]]:
     """
     Creates a fine-tuning job which begins the process of creating a new model from a given dataset.
 
@@ -142,6 +143,7 @@ def create_fine_tuning_job(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -363,6 +365,7 @@ def cancel_fine_tuning_job(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -524,6 +527,7 @@ def list_fine_tuning_jobs(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -678,6 +682,7 @@ def retrieve_fine_tuning_job(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )

@@ -1,7 +1,8 @@
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -71,8 +72,8 @@ async def run_async_test(coro):
 
 # Tests
 def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
-    # Setup test data
-    now = datetime.utcnow()
+    # Setup test data with timezone-aware datetime
+    now = datetime.now(timezone.utc)
     test_key = type(
         "LiteLLM_VerificationToken",
         (),
@@ -97,8 +98,8 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
 
 
 def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
-    # Setup test data
-    now = datetime.utcnow()
+    # Setup test data with timezone-aware datetime
+    now = datetime.now(timezone.utc)
     test_user = type(
         "LiteLLM_UserTable",
         (),
@@ -123,8 +124,8 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
 
 
 def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
-    # Setup test data
-    now = datetime.utcnow()
+    # Setup test data with timezone-aware datetime
+    now = datetime.now(timezone.utc)
     test_team = type(
         "LiteLLM_TeamTable",
         (),
@@ -188,7 +189,7 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
 
 
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):
-    # Setup test data
+    # Setup test data with timezone-aware datetime
     now = datetime.now(timezone.utc)
 
     # Create test objects for all three types

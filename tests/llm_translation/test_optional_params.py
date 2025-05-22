@@ -597,7 +597,7 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -1459,3 +1459,11 @@ def test_azure_response_format(monkeypatch):
         response_format={"type": "json_object"},
     )
     assert optional_params["response_format"] == {"type": "json_object"}
+
+def test_cohere_embed_dimensions_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-multilingual-v3.0",
+        custom_llm_provider="cohere",
+        encoding_format="float",
+    )
+    assert optional_params["embedding_types"] == ["float"]

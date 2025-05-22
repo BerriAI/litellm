@@ -183,7 +183,6 @@ class InMemoryCache(BaseCache):
         init_value = await self.async_get_cache(key=key) or 0
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
-
         return value
 
     def flush_cache(self):
