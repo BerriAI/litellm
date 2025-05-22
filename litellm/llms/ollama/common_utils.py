@@ -1,13 +1,10 @@
-from typing import Union
+from typing import Optional, Union
+
+import httpx
+
 from litellm import verbose_logger
-
-# dynamic import to allow usage even if httpx is not installed in dev env
-try:
-    import httpx
-except ImportError:
-    httpx = None  # type: ignore
-
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
 
 class OllamaError(BaseLLMException):
     def __init__(
@@ -51,27 +48,30 @@ def _convert_image(image):
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 
+
 class OllamaModelInfo(BaseLLMModelInfo):
     """
     Dynamic model listing for Ollama server.
     Fetches /api/models and /api/tags, then for each tag also /api/models?tag=...
     Returns the union of all model names.
     """
+
     @staticmethod
     def get_api_key(api_key=None) -> None:
         return None  # Ollama does not use an API key by default
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str:
+    def get_api_base(api_base: Optional[str] = None) -> str:
         from litellm.secret_managers.main import get_secret_str
+
         # env var OLLAMA_API_BASE or default
         return api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
-    def get_models(self, api_key=None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key=None, api_base: Optional[str] = None) -> list[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """
-        import httpx
+
         base = self.get_api_base(api_base)
         names: set[str] = set()
         try:
@@ -80,15 +80,19 @@ class OllamaModelInfo(BaseLLMModelInfo):
             data = resp.json()
             # Expecting a dict with a 'models' list
             models_list = []
-            if isinstance(data, dict) and 'models' in data and isinstance(data['models'], list):
-                models_list = data['models']
+            if (
+                isinstance(data, dict)
+                and "models" in data
+                and isinstance(data["models"], list)
+            ):
+                models_list = data["models"]
             elif isinstance(data, list):
                 models_list = data
             # Extract model names
             for entry in models_list:
                 if not isinstance(entry, dict):
                     continue
-                nm = entry.get('name') or entry.get('model')
+                nm = entry.get("name") or entry.get("model")
                 if isinstance(nm, str):
                     names.add(nm)
         except Exception as e:
@@ -96,14 +100,18 @@ class OllamaModelInfo(BaseLLMModelInfo):
             # If tags endpoint fails, fall back to static list
             try:
                 from litellm import models_by_provider
+
                 static = models_by_provider.get("ollama", []) or []
                 return [f"ollama/{m}" for m in static]
             except Exception as e1:
-                verbose_logger.warning(f"Error retrieving static ollama models as fallback: {e1}")
+                verbose_logger.warning(
+                    f"Error retrieving static ollama models as fallback: {e1}"
+                )
                 return []
         # assemble full model names
         result = sorted(names)
         return result
+
     def validate_environment(
         self,
         headers: dict,
