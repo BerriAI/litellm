@@ -32,9 +32,6 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     cred: Union[AzureCredentialType, str] = AzureCredentialType(
         os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
     )
-
-    cred_cls = getattr(identity, cred)
-    # ClientSecretCredential, DefaultAzureCredential, AzureCliCredential
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],
@@ -50,6 +47,7 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
             certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
         )
     else:
+        cred_cls = getattr(identity, cred)
         credential = cred_cls()
 
     return get_bearer_token_provider(credential, azure_scope)
