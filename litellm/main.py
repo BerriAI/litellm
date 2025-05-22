@@ -97,6 +97,7 @@ from litellm.utils import (
     get_optional_params_image_gen,
     get_optional_params_transcription,
     get_secret,
+    get_standard_openai_params,
     mock_completion_streaming_obj,
     read_config_args,
     supports_httpx_timeout,
@@ -428,6 +429,7 @@ async def acompletion(
             prompt_id=kwargs.get("prompt_id", None),
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     #########################################################
@@ -983,6 +985,7 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
+    standard_openai_params = get_standard_openai_params(params=args)
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
@@ -1001,6 +1004,7 @@ def completion(  # type: ignore # noqa: PLR0915
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     try:
@@ -1234,10 +1238,13 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
         )
-        logging.update_environment_variables(
+        cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=optional_params,
+            optional_params={
+                **standard_openai_params,
+                **non_default_params,
+            },  # [IMPORTANT] - using standard_openai_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
