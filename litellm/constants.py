@@ -141,6 +141,7 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
+STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
@@ -153,12 +154,14 @@ FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 
+############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
