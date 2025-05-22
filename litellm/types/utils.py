@@ -1569,7 +1569,12 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
-    usage: ImageUsage
+
+    usage: Optional[ImageUsage] = None  # type: ignore
+    """
+    Users might use litellm with older python versions, we don't want this to break for them. 
+    Happens when their OpenAIImageResponse has the old OpenAI usage class.
+    """
 
     def __init__(
         self,
