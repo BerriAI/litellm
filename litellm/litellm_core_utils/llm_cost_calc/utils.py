@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, cast
+from typing import Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm import verbose_logger
@@ -211,6 +211,111 @@ def calculate_cost_component(
     return 0.0
 
 
+def _handle_audio_cache_threshold(
+    model_info: ModelInfo,
+    cost_key_prefix: str,
+    token_count: float,
+    base_cost: Union[float, int, str, None],
+    is_200k: bool
+) -> float:
+    """
+    Handle audio cache threshold calculations.
+
+    Args:
+        model_info: Dictionary containing model pricing information
+        cost_key_prefix: Prefix for the cache cost keys
+        token_count: Total token count
+        base_cost: Base cost value
+        is_200k: Whether this is for 200k threshold (True) or 128k threshold (False)
+
+    Returns:
+        float: Calculated cost
+    """
+    # For audio caching costs, if the threshold keys don't exist but we have the base audio cost,
+    # we need to calculate the threshold costs based on the regular token threshold multipliers
+    regular_cost_key_prefix = cost_key_prefix.replace("_audio", "")
+    regular_threshold_key = f"{regular_cost_key_prefix}_above_{'200k' if is_200k else '128k'}_tokens"
+
+    if regular_threshold_key in model_info and isinstance(base_cost, (int, float, str)) and float(base_cost) > 0:
+        # Calculate the multiplier from regular token costs
+        regular_base_cost = model_info.get(regular_cost_key_prefix, 0.0)
+        regular_base_cost_float = float(regular_base_cost) if regular_base_cost is not None and isinstance(regular_base_cost, (int, float, str)) else 0.0
+
+        if regular_base_cost_float > 0:
+            regular_threshold_value = model_info.get(regular_threshold_key, 0.0)
+            regular_threshold_float = float(regular_threshold_value) if regular_threshold_value is not None and isinstance(regular_threshold_value, (int, float, str)) else 0.0
+            multiplier = regular_threshold_float / regular_base_cost_float
+
+            # Apply the same multiplier to audio cache cost
+            # Ensure base_cost is float
+            base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
+            return float(token_count) * (base_cost_float * multiplier)
+
+    return 0.0
+
+
+def _handle_threshold_based_on_input_cost(
+    model_info: ModelInfo,
+    token_count: float,
+    base_cost: Union[float, int, str, None],
+    is_200k: bool
+) -> float:
+    """
+    Calculate cache cost based on the ratio between base cache cost and base input cost.
+
+    Args:
+        model_info: Dictionary containing model pricing information
+        token_count: Total token count
+        base_cost: Base cost value
+        is_200k: Whether this is for 200k threshold (True) or 128k threshold (False)
+
+    Returns:
+        float: Calculated cost
+    """
+    input_cost_key = "input_cost_per_token"
+    input_cost_threshold_key = f"input_cost_per_token_above_{'200k' if is_200k else '128k'}_tokens"
+
+    if input_cost_threshold_key in model_info and input_cost_key in model_info:
+        base_input_cost = model_info.get(input_cost_key)
+        threshold_input_cost = model_info.get(input_cost_threshold_key)
+
+        if (base_input_cost is not None and threshold_input_cost is not None):
+            base_input_cost_float = float(base_input_cost) if base_input_cost is not None and isinstance(base_input_cost, (int, float, str)) else 0.0
+            base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
+
+            if base_input_cost_float > 0 and base_cost_float > 0:
+                # Calculate the ratio between cache cost and input cost
+                ratio = base_cost_float / base_input_cost_float
+                # Apply the same ratio to the threshold input cost
+                threshold_input_cost_float = float(threshold_input_cost) if threshold_input_cost is not None and isinstance(threshold_input_cost, (int, float, str)) else 0.0
+                return float(token_count) * (threshold_input_cost_float * ratio)
+
+    return 0.0
+
+
+def _handle_standard_threshold(
+    model_info: ModelInfo,
+    token_count: float,
+    threshold_key: str
+) -> float:
+    """
+    Handle standard threshold-based pricing logic.
+
+    Args:
+        model_info: Dictionary containing model pricing information
+        token_count: Total token count
+        threshold_key: Key for the threshold in model_info
+
+    Returns:
+        float: Calculated cost
+    """
+    cost_value = model_info.get(threshold_key)
+    if cost_value is not None:
+        cost_value_float = float(cost_value) if cost_value is not None and isinstance(cost_value, (int, float, str)) else 0.0
+        return float(token_count) * cost_value_float
+    return 0.0
+
+
 def _get_cache_cost(
     model_info: ModelInfo, 
     cost_key_prefix: str, 
@@ -241,109 +346,77 @@ def _get_cache_cost(
         )
         base_cost = 0.0
 
+    # Ensure base_cost is of the expected type
+    if not isinstance(base_cost, (float, int, str)):
+        base_cost = 0.0
+
     # Check for threshold-based costs (e.g., above_200k_tokens, above_128k_tokens)
     above_200k_key = f"{cost_key_prefix}_above_200k_tokens"
     above_128k_key = f"{cost_key_prefix}_above_128k_tokens"
 
     # Use token_count to determine pricing tier (tokens in cache, not in prompt)
-    # This is because pricing is based on the number of tokens in the cache, not the total prompt tokens
     tokens_to_check = token_count
 
     # Special handling for audio caching costs
     is_audio_cache = "audio" in cost_key_prefix
 
-    # For audio caching costs, if the threshold keys don't exist but we have the base audio cost,
-    # we need to calculate the threshold costs based on the regular token threshold multipliers
+    # Handle audio cache thresholds
     if is_audio_cache:
-        # Check if we need to calculate threshold costs for audio
         if _is_above_200k(tokens=tokens_to_check) and above_200k_key not in model_info:
-            # For audio caching costs above 200k tokens, we need to check if we have the regular token threshold costs
-            regular_cost_key_prefix = cost_key_prefix.replace("_audio", "")
-            regular_above_200k_key = f"{regular_cost_key_prefix}_above_200k_tokens"
-
-            if regular_above_200k_key in model_info and base_cost is not None and (isinstance(base_cost, (int, float, str)) and float(base_cost) > 0):
-                # Calculate the multiplier from regular token costs
-                regular_base_cost = model_info.get(regular_cost_key_prefix, 0.0)
-                regular_base_cost_float = float(regular_base_cost) if regular_base_cost is not None and isinstance(regular_base_cost, (int, float, str)) else 0.0
-                if regular_base_cost_float > 0:
-                    regular_above_200k_value = model_info.get(regular_above_200k_key, 0.0)
-                    regular_above_200k_float = float(regular_above_200k_value) if regular_above_200k_value is not None and isinstance(regular_above_200k_value, (int, float, str)) else 0.0
-                    multiplier = regular_above_200k_float / regular_base_cost_float
-                    # Apply the same multiplier to audio cache cost
-                    # Ensure base_cost is float
-                    base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
-                    return float(token_count) * (base_cost_float * multiplier)
-
+            result = _handle_audio_cache_threshold(
+                model_info=model_info,
+                cost_key_prefix=cost_key_prefix,
+                token_count=token_count,
+                base_cost=base_cost,
+                is_200k=True
+            )
+            if result > 0:
+                return result
         elif _is_above_128k(tokens=tokens_to_check) and above_128k_key not in model_info:
-            # For audio caching costs above 128k tokens, we need to check if we have the regular token threshold costs
-            regular_cost_key_prefix = cost_key_prefix.replace("_audio", "")
-            regular_above_128k_key = f"{regular_cost_key_prefix}_above_128k_tokens"
+            result = _handle_audio_cache_threshold(
+                model_info=model_info,
+                cost_key_prefix=cost_key_prefix,
+                token_count=token_count,
+                base_cost=base_cost,
+                is_200k=False
+            )
+            if result > 0:
+                return result
 
-            if regular_above_128k_key in model_info and base_cost is not None and (isinstance(base_cost, (int, float, str)) and float(base_cost) > 0):
-                # Calculate the multiplier from regular token costs
-                regular_base_cost = model_info.get(regular_cost_key_prefix, 0.0)
-                regular_base_cost_float = float(regular_base_cost) if regular_base_cost is not None and isinstance(regular_base_cost, (int, float, str)) else 0.0
-                if regular_base_cost_float > 0:
-                    regular_above_128k_value = model_info.get(regular_above_128k_key, 0.0)
-                    regular_above_128k_float = float(regular_above_128k_value) if regular_above_128k_value is not None and isinstance(regular_above_128k_value, (int, float, str)) else 0.0
-                    multiplier = regular_above_128k_float / regular_base_cost_float
-                    # Apply the same multiplier to audio cache cost
-                    # Ensure base_cost is float
-                    base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
-                    return float(token_count) * (base_cost_float * multiplier)
-
-    # If we have input_cost_per_token_above_200k_tokens but no cache_read_input_token_cost_above_200k_tokens,
-    # calculate the cache cost based on the ratio between base cache cost and base input cost
+    # Handle threshold based on input cost
     if _is_above_200k(tokens=tokens_to_check) and above_200k_key not in model_info:
-        input_cost_key = "input_cost_per_token"
-        input_cost_above_200k_key = "input_cost_per_token_above_200k_tokens"
+        result = _handle_threshold_based_on_input_cost(
+            model_info=model_info,
+            token_count=token_count,
+            base_cost=base_cost,
+            is_200k=True
+        )
+        if result > 0:
+            return result
 
-        if input_cost_above_200k_key in model_info and input_cost_key in model_info:
-            base_input_cost = model_info.get(input_cost_key)
-            above_200k_input_cost = model_info.get(input_cost_above_200k_key)
-
-            if (base_input_cost is not None and above_200k_input_cost is not None):
-                base_input_cost_float = float(base_input_cost) if base_input_cost is not None and isinstance(base_input_cost, (int, float, str)) else 0.0
-                base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
-                if base_input_cost_float > 0 and base_cost_float > 0:
-                    # Calculate the ratio between cache cost and input cost
-                    ratio = base_cost_float / base_input_cost_float
-                    # Apply the same ratio to the above_200k input cost
-                    above_200k_input_cost_float = float(above_200k_input_cost) if above_200k_input_cost is not None and isinstance(above_200k_input_cost, (int, float, str)) else 0.0
-                    return float(token_count) * (above_200k_input_cost_float * ratio)
-
-    # Similarly for 128k threshold
     if _is_above_128k(tokens=tokens_to_check) and above_128k_key not in model_info:
-        input_cost_key = "input_cost_per_token"
-        input_cost_above_128k_key = "input_cost_per_token_above_128k_tokens"
-
-        if input_cost_above_128k_key in model_info and input_cost_key in model_info:
-            base_input_cost = model_info.get(input_cost_key)
-            above_128k_input_cost = model_info.get(input_cost_above_128k_key)
-
-            if (base_input_cost is not None and above_128k_input_cost is not None):
-                base_input_cost_float = float(base_input_cost) if base_input_cost is not None and isinstance(base_input_cost, (int, float, str)) else 0.0
-                base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
-                if base_input_cost_float > 0 and base_cost_float > 0:
-                    # Calculate the ratio between cache cost and input cost
-                    ratio = base_cost_float / base_input_cost_float
-                    # Apply the same ratio to the above_128k input cost
-                    above_128k_input_cost_float = float(above_128k_input_cost) if above_128k_input_cost is not None and isinstance(above_128k_input_cost, (int, float, str)) else 0.0
-                    return float(token_count) * (above_128k_input_cost_float * ratio)
+        result = _handle_threshold_based_on_input_cost(
+            model_info=model_info,
+            token_count=token_count,
+            base_cost=base_cost,
+            is_200k=False
+        )
+        if result > 0:
+            return result
 
     # Standard threshold-based pricing logic
     if _is_above_200k(tokens=tokens_to_check) and above_200k_key in model_info:
-        cost_value = model_info.get(above_200k_key)
-        if cost_value is not None:
-            cost_value_float = float(cost_value) if cost_value is not None and isinstance(cost_value, (int, float, str)) else 0.0
-            return float(token_count) * cost_value_float
-        return 0.0
+        return _handle_standard_threshold(
+            model_info=model_info,
+            token_count=token_count,
+            threshold_key=above_200k_key
+        )
     elif _is_above_128k(tokens=tokens_to_check) and above_128k_key in model_info:
-        cost_value = model_info.get(above_128k_key)
-        if cost_value is not None:
-            cost_value_float = float(cost_value) if cost_value is not None and isinstance(cost_value, (int, float, str)) else 0.0
-            return float(token_count) * cost_value_float
-        return 0.0
+        return _handle_standard_threshold(
+            model_info=model_info,
+            token_count=token_count,
+            threshold_key=above_128k_key
+        )
     else:
         base_cost_float = float(base_cost) if base_cost is not None and isinstance(base_cost, (int, float, str)) else 0.0
         return float(token_count) * base_cost_float
