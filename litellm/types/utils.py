@@ -1567,7 +1567,7 @@ class ImageUsage(BaseLiteLLMOpenAIResponseObject):
 from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 
-class ImageResponse(BaseLiteLLMOpenAIResponseObject):
+class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
     usage: ImageUsage
 
@@ -1609,12 +1609,7 @@ class ImageResponse(BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-
-        #######################
-        self.created = created
-        self.data = _data
-        self.usage = _usage
-        #######################
+        super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
