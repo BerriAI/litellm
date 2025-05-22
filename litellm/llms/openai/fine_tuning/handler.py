@@ -2,7 +2,6 @@ from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
-from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import LiteLLMFineTuningJob
