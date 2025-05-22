@@ -11,6 +11,19 @@ sys.path.insert(
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 
 
+@pytest.fixture
+def mock_azure_env_vars_none():
+    """Fixture to mock all Azure environment variables to None"""
+    with patch("os.getenv") as mock_getenv:
+        mock_getenv.side_effect = lambda key, default=None: {
+            "AZURE_TENANT_ID": None,
+            "AZURE_CLIENT_ID": None,
+            "AZURE_CLIENT_SECRET": None,
+            "AZURE_USERNAME": None,
+            "AZURE_PASSWORD": None
+        }.get(key, default)
+        yield mock_getenv
+
 
 class TestAzureOpenAIResponsesAPIConfig:
 
@@ -19,7 +32,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
 
-    def test_validate_environment(self):
+    def test_validate_environment(self, mock_azure_env_vars_none):
         """Test that validate_environment correctly sets the Authorization header"""
         # Test with provided API key
         headers = {}
@@ -83,7 +96,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                     assert "Authorization" in result
                     assert result["Authorization"] == "Bearer env_api_key"
     
-    def test_validate_environment_with_azure_ad_token_from_entra_id(self):
+    def test_validate_environment_with_azure_ad_token_from_entra_id(self, mock_azure_env_vars_none):
         """Test validate_environment with Azure AD Token from Entra ID"""
         headers = {}
         litellm_params = {
@@ -95,7 +108,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         mock_token_provider = MagicMock(return_value="entra_id_token")
         
         with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id",
-                  return_value=mock_token_provider) as mock_get_token:
+                return_value=mock_token_provider) as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -110,7 +123,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer entra_id_token"
     
-    def test_validate_environment_with_azure_username_password(self):
+    def test_validate_environment_with_azure_username_password(self, mock_azure_env_vars_none):
         """Test validate_environment with Azure username and password"""
         headers = {}
         litellm_params = {
@@ -122,7 +135,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         mock_token_provider = MagicMock(return_value="username_password_token")
         
         with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
-                  return_value=mock_token_provider) as mock_get_token:
+                return_value=mock_token_provider) as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -137,7 +150,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer username_password_token"
     
-    def test_validate_environment_with_oidc_token(self):
+    def test_validate_environment_with_oidc_token(self, mock_azure_env_vars_none):
         """Test validate_environment with OIDC token"""
         headers = {}
         litellm_params = {
@@ -147,7 +160,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         }
         
         with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc",
-                  return_value="processed_oidc_token") as mock_get_token:
+                return_value="processed_oidc_token") as mock_get_token:
             result = self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -162,7 +175,7 @@ class TestAzureOpenAIResponsesAPIConfig:
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer processed_oidc_token"
     
-    def test_validate_environment_with_service_principal(self):
+    def test_validate_environment_with_service_principal(self, mock_azure_env_vars_none):
         """Test validate_environment with Service Principal"""
         headers = {}
         litellm_params = {}
@@ -170,13 +183,12 @@ class TestAzureOpenAIResponsesAPIConfig:
         # Create a token provider that returns a token when called
         mock_token = "service_principal_token"
         
-        
         with patch("litellm.api_key", None):
             with patch("litellm.azure_key", None):
                 with patch("litellm.enable_azure_ad_token_refresh", True):
                     # Mock the get_azure_ad_token_provider function in the module
                     with patch("litellm.llms.azure.common_utils.get_azure_ad_token_provider",
-                              return_value=mock_token) as mock_get_provider:
+                            return_value=mock_token) as mock_get_provider:
                         # Call the method
                         result = self.config.validate_environment(
                             headers=headers,
@@ -191,7 +203,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                         assert "Authorization" in result
                         assert result["Authorization"] == f"Bearer {mock_token}"
     
-    def test_validate_environment_service_principal_error(self):
+    def test_validate_environment_service_principal_error(self, mock_azure_env_vars_none):
         """Test validate_environment when Service Principal raises ValueError"""
         headers = {}
         litellm_params = {}
@@ -200,9 +212,9 @@ class TestAzureOpenAIResponsesAPIConfig:
             with patch("litellm.azure_key", None):
                 with patch("litellm.enable_azure_ad_token_refresh", True):
                     with patch("litellm.llms.azure.common_utils.get_azure_ad_token_provider",
-                              side_effect=ValueError("Token provider error")):
+                            side_effect=ValueError("Token provider error")):
                         with patch("litellm.llms.azure.responses.transformation.get_secret_str",
-                                  return_value="fallback_api_key"):
+                                return_value="fallback_api_key"):
                             result = self.config.validate_environment(
                                 headers=headers,
                                 model=self.model,
@@ -212,7 +224,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                             assert "Authorization" in result
                             assert result["Authorization"] == "Bearer fallback_api_key"
     
-    def test_validate_environment_priority_order(self):
+    def test_validate_environment_priority_order(self, mock_azure_env_vars_none):
         """Test the priority order of token sources"""
         headers = {}
         
@@ -226,7 +238,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         with patch("litellm.api_key", "litellm_api_key"):
             with patch("litellm.azure_key", "azure_key"):
                 with patch("litellm.llms.azure.responses.transformation.get_secret_str",
-                          return_value="env_api_key"):
+                        return_value="env_api_key"):
                     result = self.config.validate_environment(
                         headers=headers,
                         model=self.model,
@@ -243,7 +255,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         with patch("litellm.api_key", "litellm_api_key"):
             with patch("litellm.azure_key", "azure_key"):
                 with patch("litellm.llms.azure.responses.transformation.get_secret_str",
-                          return_value="env_api_key"):
+                        return_value="env_api_key"):
                     result = self.config.validate_environment(
                         headers=headers,
                         model=self.model,
@@ -257,7 +269,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         with patch("litellm.api_key", "litellm_api_key"):
             with patch("litellm.azure_key", "azure_key"):
                 with patch("litellm.llms.azure.responses.transformation.get_secret_str",
-                          return_value="env_api_key"):
+                        return_value="env_api_key"):
                     result = self.config.validate_environment(
                         headers=headers,
                         model=self.model,
@@ -291,7 +303,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                 
                 assert result["Authorization"] == "Bearer azure_key"
 
-    def test_validate_environment_with_env_variables(self):
+    def test_validate_environment_with_env_variables(self, mock_azure_env_vars_none):
         """Test validate_environment with environment variables"""
         headers = {}
         litellm_params = {}
@@ -306,8 +318,8 @@ class TestAzureOpenAIResponsesAPIConfig:
             
             mock_token_provider = MagicMock(return_value="env_entra_id_token")
             
-            with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", 
-                      return_value=mock_token_provider) as mock_get_token:
+            with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id",
+                    return_value=mock_token_provider) as mock_get_token:
                 result = self.config.validate_environment(
                     headers=headers,
                     model=self.model,
@@ -333,8 +345,8 @@ class TestAzureOpenAIResponsesAPIConfig:
             
             with patch("litellm.api_key", None):
                 with patch("litellm.azure_key", None):
-                    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password", 
-                              return_value=mock_token_provider) as mock_get_token:
+                    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
+                            return_value=mock_token_provider) as mock_get_token:
                         result = self.config.validate_environment(
                             headers=headers,
                             model=self.model,
@@ -348,7 +360,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                         )
                         assert result["Authorization"] == "Bearer env_username_token"
 
-    def test_validate_environment_with_azure_api_key_env_vars(self):
+    def test_validate_environment_with_azure_api_key_env_vars(self, mock_azure_env_vars_none):
         """Test validate_environment with specific Azure API key environment variables"""
         headers = {}
         litellm_params = {}
