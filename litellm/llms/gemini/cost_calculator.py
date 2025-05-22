@@ -7,7 +7,6 @@ Handles the context caching for Gemini API.
 from typing import Tuple
 
 import litellm
-from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_above_128k,
     _is_above_200k,
