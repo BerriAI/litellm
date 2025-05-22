@@ -165,7 +165,6 @@ async def create_fine_tuning_job(
             llm_provider_config = get_fine_tuning_provider_config(
                 custom_llm_provider=fine_tuning_request.custom_llm_provider,
             )
-
             # add llm_provider_config to data
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
