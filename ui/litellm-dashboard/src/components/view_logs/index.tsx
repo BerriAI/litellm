@@ -408,17 +408,7 @@ export default function SpendLogsTable({
     {
       name: 'Model',
       label: 'Model',
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allModels || allModels.length === 0) return [];
-        const filtered = allModels.filter((model: string) => {
-          return model.toLowerCase().includes(searchText.toLowerCase());
-        });
-        return filtered.map((model: string) => ({
-          label: model,
-          value: model
-        }));
-      }
+      isSearchable: false,
     },
     {
       name: 'Key Alias',
@@ -440,7 +430,7 @@ export default function SpendLogsTable({
       name: 'Key Hash',
       label: 'Key Hash',
       isSearchable: false,
-    }
+    },
   ]
 
   // When a session is selected, render the SessionView component
