@@ -423,221 +423,230 @@ const Teams: React.FC<TeamProps> = ({
 
   return (
     <div className="w-full mx-4 h-[75vh]">
-      {selectedTeamId ? (
-        <TeamInfoView 
-        teamId={selectedTeamId} 
-        onUpdate={(data) => {
-            setTeams(teams => {
-              if (teams == null) {
-                return teams;
-              }
-            
-              return teams.map(team => {
-                if (data.team_id === team.team_id) {
-                  return updateExistingKeys(team, data)
-                }
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+          <Button
+            className="w-fit"
+            onClick={() => setIsTeamModalVisible(true)}
+          >
+            + Create New Team
+          </Button>
+          
+          {selectedTeamId ? (
+            <TeamInfoView 
+            teamId={selectedTeamId} 
+            onUpdate={(data) => {
+                setTeams(teams => {
+                  if (teams == null) {
+                    return teams;
+                  }
                 
-                return team
-              })
-            })
+                  return teams.map(team => {
+                    if (data.team_id === team.team_id) {
+                      return updateExistingKeys(team, data)
+                    }
+                    
+                    return team
+                  })
+                })
 
-        }}
-        onClose={() => {
-          setSelectedTeamId(null);
-          setEditTeam(false);
-        }} 
-        accessToken={accessToken}
-        is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
-        is_proxy_admin={userRole == "Admin"}
-        userModels={userModels}
-        editTeam={editTeam}
-      />
-    ) : (
-      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Your Teams</Tab>
-          <Tab>Available Teams</Tab>
-          {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
-          </div>
-          <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon} // Modify as necessary for correct icon name
-              variant="shadow"
-              size="xs"
-              className="self-center"
-              onClick={handleRefreshClick}
-            />
-          </div>
-      </TabList>
-      <TabPanels>
-      <TabPanel>
-      <Text>
-        Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
-      </Text>
-      <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
-            <div className="border-b px-6 py-4">
-              <div className="flex flex-col space-y-4">
-                {/* Search and Filter Controls */}
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Team Alias Search */}
-                  <div className="relative w-64">
-                    <input
-                      type="text"
-                      placeholder="Search by Team Name..."
-                      className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      value={filters.team_alias}
-                      onChange={(e) => handleFilterChange('team_alias', e.target.value)}
-                    />
-                    <svg
-                      className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
-                  </div>
-
-                  {/* Filter Button */}
-                  <button
-                    className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? 'bg-gray-100' : ''}`}
-                    onClick={() => setShowFilters(!showFilters)}
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                      />
-                    </svg>
-                    Filters
-                    {(filters.team_id || filters.team_alias || filters.organization_id) && (
-                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                    )}
-                  </button>
-
-                  {/* Reset Filters Button */}
-                  <button
-                    className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    onClick={handleFilterReset}
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                      />
-                    </svg>
-                    Reset Filters
-                  </button>
+            }}
+            onClose={() => {
+              setSelectedTeamId(null);
+              setEditTeam(false);
+            }} 
+            accessToken={accessToken}
+            is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
+            is_proxy_admin={userRole == "Admin"}
+            userModels={userModels}
+            editTeam={editTeam}
+          />
+          ) : (
+            <TabGroup className="gap-2 h-[75vh] w-full">
+            <TabList className="flex justify-between mt-2 w-full items-center">
+              <div className="flex">
+                <Tab>Your Teams</Tab>
+                <Tab>Available Teams</Tab>
+                {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
                 </div>
+                <div className="flex items-center space-x-2">
+                  {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+                  <Icon
+                    icon={RefreshIcon} // Modify as necessary for correct icon name
+                    variant="shadow"
+                    size="xs"
+                    className="self-center"
+                    onClick={handleRefreshClick}
+                  />
+                </div>
+            </TabList>
+            <TabPanels>
+            <TabPanel>
+            <Text>
+              Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
+            </Text>
+            <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+              <Col numColSpan={1}>
+                <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
+                  <div className="border-b px-6 py-4">
+                    <div className="flex flex-col space-y-4">
+                      {/* Search and Filter Controls */}
+                      <div className="flex flex-wrap items-center gap-3">
+                        {/* Team Alias Search */}
+                        <div className="relative w-64">
+                          <input
+                            type="text"
+                            placeholder="Search by Team Name..."
+                            className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            value={filters.team_alias}
+                            onChange={(e) => handleFilterChange('team_alias', e.target.value)}
+                          />
+                          <svg
+                            className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                            />
+                          </svg>
+                        </div>
 
-                {/* Additional Filters */}
-                {showFilters && (
-                  <div className="flex flex-wrap items-center gap-3 mt-3">
-                    {/* Team ID Search */}
-                    <div className="relative w-64">
-                      <input
-                        type="text"
-                        placeholder="Enter Team ID"
-                        className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        value={filters.team_id}
-                        onChange={(e) => handleFilterChange('team_id', e.target.value)}
-                      />
-                      <svg
-                        className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                    </div>
+                        {/* Filter Button */}
+                        <button
+                          className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? 'bg-gray-100' : ''}`}
+                          onClick={() => setShowFilters(!showFilters)}
+                        >
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                            />
+                          </svg>
+                          Filters
+                          {(filters.team_id || filters.team_alias || filters.organization_id) && (
+                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                          )}
+                        </button>
 
-                    {/* Organization Dropdown */}
-                    <div className="w-64">
-                      <Select
-                        value={filters.organization_id || ""}
-                        onValueChange={(value) => handleFilterChange('organization_id', value)}
-                        placeholder="Select Organization"
-                      >
-                        {organizations?.map((org) => (
-                          <SelectItem key={org.organization_id} value={org.organization_id || ""}>
-                            {org.organization_alias || org.organization_id}
-                          </SelectItem>
-                        ))}
-                      </Select>
+                        {/* Reset Filters Button */}
+                        <button
+                          className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                          onClick={handleFilterReset}
+                        >
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                            />
+                          </svg>
+                          Reset Filters
+                        </button>
+                      </div>
+
+                      {/* Additional Filters */}
+                      {showFilters && (
+                        <div className="flex flex-wrap items-center gap-3 mt-3">
+                          {/* Team ID Search */}
+                          <div className="relative w-64">
+                            <input
+                              type="text"
+                              placeholder="Enter Team ID"
+                              className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              value={filters.team_id}
+                              onChange={(e) => handleFilterChange('team_id', e.target.value)}
+                            />
+                            <svg
+                              className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            </svg>
+                          </div>
+
+                          {/* Organization Dropdown */}
+                          <div className="w-64">
+                            <Select
+                              value={filters.organization_id || ""}
+                              onValueChange={(value) => handleFilterChange('organization_id', value)}
+                              placeholder="Select Organization"
+                            >
+                              {organizations?.map((org) => (
+                                <SelectItem key={org.organization_id} value={org.organization_id || ""}>
+                                  {org.organization_alias || org.organization_id}
+                                </SelectItem>
+                              ))}
+                            </Select>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Team Name</TableHeaderCell>
-                  <TableHeaderCell>Team ID</TableHeaderCell>
-                  <TableHeaderCell>Created</TableHeaderCell>
-                  <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                  <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                  <TableHeaderCell>Models</TableHeaderCell>
-                  <TableHeaderCell>Organization</TableHeaderCell>
-                  <TableHeaderCell>Info</TableHeaderCell>
-                </TableRow>
-              </TableHead>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>Team Name</TableHeaderCell>
+                        <TableHeaderCell>Team ID</TableHeaderCell>
+                        <TableHeaderCell>Created</TableHeaderCell>
+                        <TableHeaderCell>Spend (USD)</TableHeaderCell>
+                        <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                        <TableHeaderCell>Models</TableHeaderCell>
+                        <TableHeaderCell>Organization</TableHeaderCell>
+                        <TableHeaderCell>Info</TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
 
-              <TableBody>
-                {teams && teams.length > 0
-                  ? teams
-                    .filter((team) => {
-                      if (!currentOrg) return true;
-                      return team.organization_id === currentOrg.organization_id;
-                    })            
-                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                      .map((team: any) => (
-                      <TableRow key={team.team_id}>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {team["team_alias"]}
-                        </TableCell>
-                        <TableCell>
-                          <div className="overflow-hidden">
-                            <Tooltip title={team.team_id}>
-                              <Button 
-                                size="xs"
-                                variant="light"
-                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                    <TableBody>
+                      {teams && teams.length > 0
+                        ? teams
+                          .filter((team) => {
+                            if (!currentOrg) return true;
+                            return team.organization_id === currentOrg.organization_id;
+                          })            
+                            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                            .map((team: any) => (
+                            <TableRow key={team.team_id}>
+                              <TableCell
+                                style={{
+                                  maxWidth: "4px",
+                                  whiteSpace: "pre-wrap",
+                                  overflow: "hidden",
+                                }}
+                              >
+                                {team["team_alias"]}
+                              </TableCell>
+                              <TableCell>
+                                <div className="overflow-hidden">
+                                  <Tooltip title={team.team_id}>
+                                    <Button 
+                                      size="xs"
+                                      variant="light"
+                                      className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
 
                                 onClick={() => {
                                   // Add click handler
@@ -665,7 +674,7 @@ const Teams: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {team["spend"]}
+                          {Number(team["spend"]).toFixed(4)}
                         </TableCell>
                         <TableCell
                           style={{
@@ -782,258 +791,254 @@ const Teams: React.FC<TeamProps> = ({
                     <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
                   </div>
 
-                  {/* Modal Panel */}
-                  <span
-                    className="hidden sm:inline-block sm:align-middle sm:h-screen"
-                    aria-hidden="true"
-                  >
-                    &#8203;
-                  </span>
+                        {/* Modal Panel */}
+                        <span
+                          className="hidden sm:inline-block sm:align-middle sm:h-screen"
+                          aria-hidden="true"
+                        >
+                          &#8203;
+                        </span>
 
-                  {/* Confirmation Modal Content */}
-                  <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                    <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                      <div className="sm:flex sm:items-start">
-                        <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                          <h3 className="text-lg leading-6 font-medium text-gray-900">
-                            Delete Team
-                          </h3>
-                          <div className="mt-2">
-                            <p className="text-sm text-gray-500">
-                              Are you sure you want to delete this team ?
-                            </p>
+                        {/* Confirmation Modal Content */}
+                        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                          <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                            <div className="sm:flex sm:items-start">
+                              <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                                <h3 className="text-lg leading-6 font-medium text-gray-900">
+                                  Delete Team
+                                </h3>
+                                <div className="mt-2">
+                                  <p className="text-sm text-gray-500">
+                                    Are you sure you want to delete this team ?
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                            <Button
+                              onClick={confirmDelete}
+                              color="red"
+                              className="ml-2"
+                            >
+                              Delete
+                            </Button>
+                            <Button onClick={cancelDelete}>Cancel</Button>
                           </div>
                         </div>
                       </div>
                     </div>
-                    <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                      <Button
-                        onClick={confirmDelete}
-                        color="red"
-                        className="ml-2"
+                  )}
+                </Card>
+              </Col>
+              {userRole == "Admin" || userRole == "Org Admin"? (
+                <Col numColSpan={1}>
+                <Modal
+                  title="Create Team"
+                  visible={isTeamModalVisible}
+                  width={800}
+                  footer={null}
+                  onOk={handleOk}
+                  onCancel={handleCancel}
+                >
+                  <Form
+                    form={form}
+                    onFinish={handleCreate}
+                    labelCol={{ span: 8 }}
+                    wrapperCol={{ span: 16 }}
+                    labelAlign="left"
+                  >
+                    <>
+                      <Form.Item
+                        label="Team Name"
+                        name="team_alias"
+                        rules={[
+                          { required: true, message: "Please input a team name" },
+                        ]}
                       >
-                        Delete
-                      </Button>
-                      <Button onClick={cancelDelete}>Cancel</Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-        </Col>
-        {userRole == "Admin" || userRole == "Org Admin"? (
-          <Col numColSpan={1}>
-            <Button
-              className="mx-auto"
-              onClick={() => setIsTeamModalVisible(true)}
-            >
-            + Create New Team
-          </Button>
-          <Modal
-            title="Create Team"
-            visible={isTeamModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleOk}
-            onCancel={handleCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-            >
-              <>
-                <Form.Item
-                  label="Team Name"
-                  name="team_alias"
-                  rules={[
-                    { required: true, message: "Please input a team name" },
-                  ]}
-                >
-                  <TextInput placeholder="" />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span>
-                      Organization{' '}
-                      <Tooltip title={
-                        <span>
-                          Organizations can have multiple teams. Learn more about{' '}
-                          <a 
-                            href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: '#1890ff', textDecoration: 'underline' }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            user management hierarchy
-                          </a>
-                        </span>
-                      }>
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="organization_id"
-                  initialValue={currentOrg ? currentOrg.organization_id : null}
-                  className="mt-8"
-                >
-                  <Select2
-                    showSearch
-                    allowClear
-                    placeholder="Search or select an Organization"
-                    onChange={(value) => {
-                      form.setFieldValue('organization_id', value);
-                      setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
-                    }}
-                    filterOption={(input, option) => {
-                      if (!option) return false;
-                      const optionValue = option.children?.toString() || '';
-                      return optionValue.toLowerCase().includes(input.toLowerCase());
-                    }}
-                    optionFilterProp="children"
-                  >
-                    {organizations?.map((org) => (
-                      <Select2.Option key={org.organization_id} value={org.organization_id}>
-                        <span className="font-medium">{org.organization_alias}</span>{" "}
-                        <span className="text-gray-500">({org.organization_id})</span>
-                      </Select2.Option>
-                    ))}
-                  </Select2>
-                </Form.Item>
-                <Form.Item label={
-                    <span>
-                      Models{' '}
-                      <Tooltip title="These are the models that your selected team has access to">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  } name="models">
-                  <Select2
-                    mode="multiple"
-                    placeholder="Select models"
-                    style={{ width: "100%" }}
-                  >
-                    <Select2.Option
-                      key="all-proxy-models"
-                      value="all-proxy-models"
-                    >
-                      All Proxy Models
-                    </Select2.Option>
-                    {modelsToPick.map((model) => (
-                      <Select2.Option key={model} value={model}>
-                        {getModelDisplayName(model)}
-                      </Select2.Option>
-                    ))}
-                  </Select2>
-                </Form.Item>
-
-                <Form.Item label="Max Budget (USD)" name="max_budget">
-                  <NumericalInput step={0.01} precision={2} width={200} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-8"
-                  label="Reset Budget"
-                  name="budget_duration"
-                >
-                  <Select2 defaultValue={null} placeholder="n/a">
-                    <Select2.Option value="24h">daily</Select2.Option>
-                    <Select2.Option value="7d">weekly</Select2.Option>
-                    <Select2.Option value="30d">monthly</Select2.Option>
-                  </Select2>
-                </Form.Item>
-                <Form.Item
-                  label="Tokens per minute Limit (TPM)"
-                  name="tpm_limit"
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  label="Requests per minute Limit (RPM)"
-                  name="rpm_limit"
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
-
-                <Accordion className="mt-20 mb-8">
-                  <AccordionHeader>
-                    <b>Additional Settings</b>
-                  </AccordionHeader>
-                  <AccordionBody>
-                    <Form.Item
-                      label="Team ID"
-                      name="team_id"
-                      help="ID of the team you want to create. If not provided, it will be generated automatically."
-                    >
-                      <TextInput 
-                        onChange={(e) => {
-                          e.target.value = e.target.value.trim();
-                        }} 
-                      />
-                    </Form.Item>
-                    <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
-                      <Input.TextArea rows={4} />
-                    </Form.Item>
-                    <Form.Item 
-                      label={
-                        <span>
-                          Guardrails{' '}
-                          <Tooltip title="Setup your first guardrail">
-                            <a 
-                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                            >
+                        <TextInput placeholder="" />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Organization{' '}
+                            <Tooltip title={
+                              <span>
+                                Organizations can have multiple teams. Learn more about{' '}
+                                <a 
+                                  href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#1890ff', textDecoration: 'underline' }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  user management hierarchy
+                                </a>
+                              </span>
+                            }>
                               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                            </a>
-                          </Tooltip>
-                        </span>
-                      }
-                      name="guardrails" 
-                      className="mt-8"
-                      help="Select existing guardrails or enter new ones"
-                    >
-                      <Select2
-                        mode="tags"
-                        style={{ width: '100%' }}
-                        placeholder="Select or enter guardrails"
-                        options={guardrailsList.map(name => ({ value: name, label: name }))}
-                      />
-                    </Form.Item>
-                  </AccordionBody>
-                </Accordion>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Create Team</Button2>
-              </div>
-            </Form>
-          </Modal>
-          </Col>
-        ) : null}
-      </Grid>
-      </TabPanel>
-      <TabPanel>  
-        <AvailableTeamsPanel
-          accessToken={accessToken}
-          userID={userID}
-        />
-      </TabPanel>
-      {isAdminRole(userRole || "") && (
-        <TabPanel>
-          <TeamSSOSettings
-            accessToken={accessToken}
-            userID={userID || ""}
-            userRole={userRole || ""}
-          />
-        </TabPanel>
-      )}
-      </TabPanels>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="organization_id"
+                        initialValue={currentOrg ? currentOrg.organization_id : null}
+                        className="mt-8"
+                      >
+                        <Select2
+                          showSearch
+                          allowClear
+                          placeholder="Search or select an Organization"
+                          onChange={(value) => {
+                            form.setFieldValue('organization_id', value);
+                            setCurrentOrgForCreateTeam(organizations?.find((org) => org.organization_id === value) || null);
+                          }}
+                          filterOption={(input, option) => {
+                            if (!option) return false;
+                            const optionValue = option.children?.toString() || '';
+                            return optionValue.toLowerCase().includes(input.toLowerCase());
+                          }}
+                          optionFilterProp="children"
+                        >
+                          {organizations?.map((org) => (
+                            <Select2.Option key={org.organization_id} value={org.organization_id}>
+                              <span className="font-medium">{org.organization_alias}</span>{" "}
+                              <span className="text-gray-500">({org.organization_id})</span>
+                            </Select2.Option>
+                          ))}
+                        </Select2>
+                      </Form.Item>
+                      <Form.Item label={
+                          <span>
+                            Models{' '}
+                            <Tooltip title="These are the models that your selected team has access to">
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </Tooltip>
+                          </span>
+                        } name="models">
+                        <Select2
+                          mode="multiple"
+                          placeholder="Select models"
+                          style={{ width: "100%" }}
+                        >
+                          <Select2.Option
+                            key="all-proxy-models"
+                            value="all-proxy-models"
+                          >
+                            All Proxy Models
+                          </Select2.Option>
+                          {modelsToPick.map((model) => (
+                            <Select2.Option key={model} value={model}>
+                              {getModelDisplayName(model)}
+                            </Select2.Option>
+                          ))}
+                        </Select2>
+                      </Form.Item>
 
-      </TabGroup>)}
+                      <Form.Item label="Max Budget (USD)" name="max_budget">
+                        <NumericalInput step={0.01} precision={2} width={200} />
+                      </Form.Item>
+                      <Form.Item
+                        className="mt-8"
+                        label="Reset Budget"
+                        name="budget_duration"
+                      >
+                        <Select2 defaultValue={null} placeholder="n/a">
+                          <Select2.Option value="24h">daily</Select2.Option>
+                          <Select2.Option value="7d">weekly</Select2.Option>
+                          <Select2.Option value="30d">monthly</Select2.Option>
+                        </Select2>
+                      </Form.Item>
+                      <Form.Item
+                        label="Tokens per minute Limit (TPM)"
+                        name="tpm_limit"
+                      >
+                        <NumericalInput step={1} width={400} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Requests per minute Limit (RPM)"
+                        name="rpm_limit"
+                      >
+                        <NumericalInput step={1} width={400} />
+                      </Form.Item>
+
+                      <Accordion className="mt-20 mb-8">
+                        <AccordionHeader>
+                          <b>Additional Settings</b>
+                        </AccordionHeader>
+                        <AccordionBody>
+                          <Form.Item
+                            label="Team ID"
+                            name="team_id"
+                            help="ID of the team you want to create. If not provided, it will be generated automatically."
+                          >
+                            <TextInput 
+                              onChange={(e) => {
+                                e.target.value = e.target.value.trim();
+                              }} 
+                            />
+                          </Form.Item>
+                          <Form.Item label="Metadata" name="metadata" help="Additional team metadata. Enter metadata as JSON object.">
+                            <Input.TextArea rows={4} />
+                          </Form.Item>
+                          <Form.Item 
+                            label={
+                              <span>
+                                Guardrails{' '}
+                                <Tooltip title="Setup your first guardrail">
+                                  <a 
+                                    href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                                  </a>
+                                </Tooltip>
+                              </span>
+                            }
+                            name="guardrails" 
+                            className="mt-8"
+                            help="Select existing guardrails or enter new ones"
+                          >
+                            <Select2
+                              mode="tags"
+                              style={{ width: '100%' }}
+                              placeholder="Select or enter guardrails"
+                              options={guardrailsList.map(name => ({ value: name, label: name }))}
+                            />
+                          </Form.Item>
+                        </AccordionBody>
+                      </Accordion>
+                    </>
+                    <div style={{ textAlign: "right", marginTop: "10px" }}>
+                      <Button2 htmlType="submit">Create Team</Button2>
+                    </div>
+                  </Form>
+                </Modal>
+                </Col>
+              ) : null}
+            </Grid>
+            </TabPanel>
+            <TabPanel>  
+              <AvailableTeamsPanel
+                accessToken={accessToken}
+                userID={userID}
+              />
+            </TabPanel>
+            {isAdminRole(userRole || "") && (
+              <TabPanel>
+                <TeamSSOSettings
+                  accessToken={accessToken}
+                  userID={userID || ""}
+                  userRole={userRole || ""}
+                />
+              </TabPanel>
+            )}
+            </TabPanels>
+
+            </TabGroup>)}
+        </Col>
+      </Grid>
     </div>
   );
 };
