@@ -5,6 +5,7 @@ Utils used for slack alerting
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+import litellm
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
@@ -69,7 +70,19 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    # do nothing for now
+    #########################################################
+    # Only run if langfuse prompt management is active
+    #########################################################
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    if (
+        litellm.logging_callback_manager.callback_is_active(LangfusePromptManagement)
+        is not True
+    ):
+        return None
+
     if (
         request_data is not None
         and request_data.get("litellm_logging_obj", None) is not None
