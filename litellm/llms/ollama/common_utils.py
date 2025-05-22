@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import httpx
 
@@ -67,7 +67,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         # env var OLLAMA_API_BASE or default
         return api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
-    def get_models(self, api_key=None, api_base: Optional[str] = None) -> list[str]:
+    def get_models(self, api_key=None, api_base: Optional[str] = None) -> List[str]:
         """
         List all models available on the Ollama server via /api/tags endpoint.
         """

@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Coroutine, Literal, Optional, Union
 
 import httpx
-from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 
 import litellm
 from litellm._logging import verbose_logger
