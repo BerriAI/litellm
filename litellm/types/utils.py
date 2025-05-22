@@ -2117,7 +2117,6 @@ all_litellm_params = [
     "allowed_openai_params",
     "litellm_session_id",
     "use_litellm_proxy",
-    "prompt_label",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
