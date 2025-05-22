@@ -135,6 +135,7 @@ from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
+from .llms.cloudflare.embed import handler as cloudflare_embedding
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -2735,9 +2736,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -2987,13 +2988,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key
                 or litellm.cloudflare_api_key
                 or litellm.api_key
-                or get_secret("CLOUDFLARE_API_KEY")
+                or get_secret_str("CLOUDFLARE_API_KEY")
             )
-            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
+            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
             api_base = (
                 api_base
                 or litellm.api_base
-                or get_secret("CLOUDFLARE_API_BASE")
+                or get_secret_str("CLOUDFLARE_API_BASE")
                 or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
             )
 
@@ -4027,9 +4028,39 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):
+        elif custom_llm_provider == "cloudflare":
+            api_key = (
+                api_key
+                or litellm.cloudflare_api_key
+                or litellm.api_key
+                or get_secret_str("CLOUDFLARE_API_KEY")
+            )
+            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("CLOUDFLARE_API_BASE")
+                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
+
+            cloudflare_embeddings_fn = (
+                cloudflare_embedding.aembedding
+                if aembedding is True
+                else cloudflare_embedding.embedding
+            )
+            response = cloudflare_embeddings_fn(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
@@ -4040,7 +4071,11 @@ def embedding(  # noqa: PLR0915
                     model=model, custom_llm_provider=custom_llm_provider
                 )
 
-            handler_fn = custom_handler.embedding if not aembedding else custom_handler.aembedding
+            handler_fn = (
+                custom_handler.embedding
+                if not aembedding
+                else custom_handler.aembedding
+            )
 
             response = handler_fn(
                 model=model,
@@ -4049,7 +4084,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
                 print_verbose=print_verbose,
-                litellm_params=litellm_params
+                litellm_params=litellm_params,
             )
         else:
             raise LiteLLMUnknownProvider(
@@ -4487,9 +4522,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5447,9 +5482,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5460,9 +5495,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk
