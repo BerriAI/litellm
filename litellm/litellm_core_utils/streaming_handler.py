@@ -968,8 +968,8 @@ class CustomStreamWrapper:
                     # Set a reasonable value for cached tokens (all prompt tokens are cached)
                     prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0)
 
-                    # Check if the original response had image or audio tokens
-                    # If not, default text tokens to prompt tokens (for text-only messages)
+                    # For cached responses, text tokens should be the same as prompt tokens
+                    # since we're dealing with text messages
                     text_tokens = prompt_tokens
 
                     # Try to extract audio_tokens and image_tokens from the original response
@@ -982,6 +982,8 @@ class CustomStreamWrapper:
                             audio_tokens = chunk.usage.prompt_tokens_details.audio_tokens
                         if hasattr(chunk.usage.prompt_tokens_details, "image_tokens"):
                             image_tokens = chunk.usage.prompt_tokens_details.image_tokens
+                        if hasattr(chunk.usage.prompt_tokens_details, "text_tokens") and chunk.usage.prompt_tokens_details.text_tokens is not None:
+                            text_tokens = chunk.usage.prompt_tokens_details.text_tokens
 
                     # Create prompt_tokens_details with all token types
                     prompt_tokens_details = litellm.types.utils.PromptTokensDetailsWrapper(
