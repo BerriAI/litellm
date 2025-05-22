@@ -12,6 +12,14 @@ export interface Team {
     rpm_limit: number | null;
     organization_id: string;
     created_at: string;
+    keys: KeyResponse[];
+    members_with_roles: MemberWithRoles[];
+}
+
+interface MemberWithRoles {
+    user_id: string;
+    user_email: string;
+    role: string;
 }
 
 export interface KeyResponse {

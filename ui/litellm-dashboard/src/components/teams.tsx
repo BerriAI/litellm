@@ -202,26 +202,24 @@ const Teams: React.FC<TeamProps> = ({
   }, [accessToken]);
 
   useEffect(() => {
-    const fetchTeamInfo = async () => {
-      if (!teams || !accessToken) return;
+    const fetchTeamInfo = () => {
+      if (!teams) return;
       
-      const teamInfoPromises = teams.map(async (team) => {
-        try {
-          const info = await teamInfoCall(accessToken, team.team_id);
-          return { [team.team_id]: info };
-        } catch (error) {
-          console.error(`Error fetching info for team ${team.team_id}:`, error);
-          return { [team.team_id]: null };
-        }
-      });
-
-      const results = await Promise.all(teamInfoPromises);
-      const newPerTeamInfo = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      const newPerTeamInfo = teams.reduce((acc, team) => {
+        acc[team.team_id] = {
+          keys: team.keys || [],
+          team_info: {
+            members_with_roles: team.members_with_roles || []
+          }
+        };
+        return acc;
+      }, {} as Record<string, any>);
+      
       setPerTeamInfo(newPerTeamInfo);
     };
 
     fetchTeamInfo();
-  }, [teams, accessToken]);
+  }, [teams]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
