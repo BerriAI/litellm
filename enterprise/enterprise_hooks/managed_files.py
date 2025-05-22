@@ -1,17 +1,25 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
+import asyncio
 import base64
 import json
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+
+from fastapi import HTTPException
 
 from litellm import Router, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CallTypes,
+    LiteLLM_ManagedFileTable,
+    LiteLLM_ManagedObjectTable,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     convert_b64_uid_to_unified_uid,
@@ -82,6 +90,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         )
 
+    async def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob],
+        litellm_parent_otel_span: Optional[Span],
+        model_object_id: str,
+        file_purpose: Literal["batch", "fine-tune"],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        verbose_logger.info(
+            f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache"
+        )
+        litellm_managed_object = LiteLLM_ManagedObjectTable(
+            unified_object_id=unified_object_id,
+            model_object_id=model_object_id,
+            file_purpose=file_purpose,
+            file_object=file_object,
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=unified_object_id,
+            value=litellm_managed_object.model_dump(),
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        )
+
+        await self.prisma_client.db.litellm_managedobjecttable.create(
+            data={
+                "unified_object_id": unified_object_id,
+                "file_object": file_object.model_dump_json(),
+                "model_object_id": model_object_id,
+                "file_purpose": file_purpose,
+                "created_by": user_api_key_dict.user_id,
+                "updated_by": user_api_key_dict.user_id,
+            }
+        )
+
     async def get_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> Optional[LiteLLM_ManagedFileTable]:
@@ -125,6 +168,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             where={"unified_file_id": file_id}
         )
         return initial_value.file_object
+
+    async def can_user_call_unified_object_id(
+        self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        ## check if the user has access to the unified object id
+        ## check if the user has access to the unified object id
+        user_id = user_api_key_dict.user_id
+        managed_object = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": unified_object_id}
+            )
+        )
+        if managed_object:
+            return managed_object.created_by == user_id
+        return False
 
     async def async_pre_call_hook(
         self,
@@ -205,12 +263,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
             if accessor_key:
                 retrieve_object_id = cast(Optional[str], data.get(accessor_key))
+
             potential_llm_object_id = (
                 _is_base64_encoded_unified_file_id(retrieve_object_id)
                 if retrieve_object_id
                 else False
             )
-            if potential_llm_object_id:
+            if potential_llm_object_id and retrieve_object_id:
+                ## VALIDATE USER HAS ACCESS TO THE OBJECT ##
+                if not await self.can_user_call_unified_object_id(
+                    retrieve_object_id, user_api_key_dict
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"User {user_api_key_dict.user_id} does not have access to the object {retrieve_object_id}",
+                    )
+
                 ## for managed batch id - get the model id
                 potential_model_id = self.get_model_id_from_unified_batch_id(
                     potential_llm_object_id
@@ -229,7 +297,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_file_id_mapping = await self.get_model_file_id_mapping(
                     [input_file_id], user_api_key_dict.parent_otel_span
                 )
-                data["model_file_id_mapping"] = model_file_id_mapping
 
         print("DATA={}".format(data))
         return data
@@ -503,6 +570,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            original_response_id = response.id
             if (unified_batch_id or unified_file_id) and model_id:
                 response.id = self.get_unified_batch_id(
                     batch_id=response.id, model_id=model_id
@@ -516,7 +584,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_name,
                     )
-            return response
+            asyncio.create_task(
+                self.store_unified_object_id(
+                    unified_object_id=response.id,
+                    file_object=response,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    model_object_id=original_response_id,
+                    file_purpose="batch",
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -527,14 +604,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed finetuning job id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(
                     model_id=model_id, generic_response_id=response.id
                 )
-            return response
-        return await super().async_post_call_success_hook(
-            data, user_api_key_dict, response
-        )
+            asyncio.create_task(
+                self.store_unified_object_id(
+                    unified_object_id=response.id,
+                    file_object=response,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    model_object_id=original_response_id,
+                    file_purpose="fine-tune",
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+        return response
 
     async def afile_retrieve(
         self, file_id: str, litellm_parent_otel_span: Optional[Span]
