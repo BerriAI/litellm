@@ -794,13 +794,13 @@ def run_server(  # noqa: PLR0915
                 # See https://prometheus.github.io/client_python/multiprocess/
                 if num_workers > 1 and "prometheus" in  _config.get("litellm_settings", {}).get("callbacks", []):
                     if 'PROMETHEUS_MULTIPROC_DIR' in os.environ:
-                        print(f"Using existing dir: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
+                        print(f"LITELLM: Using PROMETHEUS_MULTIPROC_DIR dir: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
                     else:
-                        # We're the first process to set this up
-                        shared_dir = tempfile.mkdtemp(prefix="prometheus_multiproc_")
+                        # Setup the temp dir for prometheus
+                        shared_dir = tempfile.mkdtemp(prefix="litellm_prometheus_")
                         os.environ['PROMETHEUS_MULTIPROC_DIR'] = shared_dir
 
-                        print(f"Created new dir: {shared_dir}")
+                        print(f"LITELLM: Using PROMETHEUS_MULTIPROC_DIR dir: {os.environ['PROMETHEUS_MULTIPROC_DIR']}")
 
                         def cleanup():
                             if os.path.exists(shared_dir):
