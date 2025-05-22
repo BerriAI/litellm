@@ -3,7 +3,7 @@ Utils used for slack alerting
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.proxy._types import AlertType
@@ -96,10 +96,16 @@ async def _add_langfuse_trace_id_to_alert(
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
 
-        _langfuse_object = litellm_logging_obj._get_callback_object(
-            service_name="langfuse"
+        langfuse_callbacks = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                LangfusePromptManagement
+            )
         )
-        if _langfuse_object is not None:
-            base_url = _langfuse_object.Langfuse.base_url
+        if len(langfuse_callbacks) > 0:
+            langfuse_logger: LangfusePromptManagement = cast(
+                LangfusePromptManagement, langfuse_callbacks[0]
+            )
+            base_url = langfuse_logger.Langfuse.base_url
             return f"{base_url}/trace/{trace_id}"
+
     return None
