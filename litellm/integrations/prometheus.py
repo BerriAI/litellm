@@ -1823,14 +1823,13 @@ class PrometheusLogger(CustomLogger):
             metrics_app = make_asgi_app()
         else:
             metrics_app = FastAPI()
-            @metrics_app.get("/", include_in_schema=False)
             def metrics_endpoint():
                 """Multiprocess-aware metrics endpoint"""
                 registry = CollectorRegistry()
                 multiprocess.MultiProcessCollector(registry)
                 data = generate_latest(registry)
                 return Response(content=data, media_type=CONTENT_TYPE_LATEST, status_code=200)
-
+            metrics_app.add_api_route("/", metrics_endpoint, methods=["GET"])
         app.mount("/metrics", metrics_app)
         verbose_proxy_logger.debug(
             "Starting Prometheus Metrics on /metrics (no authentication)"
