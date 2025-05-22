@@ -12,7 +12,7 @@ from litellm.proxy.anthropic_endpoints.endpoints import async_data_generator_ant
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
-    @patch("litellm.proxy.anthropic_endpoints.endpoints.safe_dumps")
+    @patch("litellm.litellm_core_utils.safe_json_dumps.safe_dumps")
     @pytest.mark.asyncio
     async def test_async_data_generator_anthropic_dict_handling(self, mock_safe_dumps):
         """Test async_data_generator_anthropic handles dictionary chunks properly"""
