@@ -71,7 +71,7 @@ class BaseImageGenTest(ABC):
 
             from openai.types.images_response import ImagesResponse
 
-            ImagesResponse.model_validate(response.model_dump())
+            ImagesResponse.model_validate(dict(response))
 
             for d in response.data:
                 assert isinstance(d, Image)
