@@ -2259,6 +2259,7 @@ class SelectTokenizerResponse(TypedDict):
 
 class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
+    seed: Optional[int] = None
 
     def __init__(self, **kwargs):
         if "error" in kwargs and kwargs["error"] is not None:
