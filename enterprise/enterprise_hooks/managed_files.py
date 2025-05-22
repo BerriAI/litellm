@@ -7,6 +7,8 @@ import json
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
+from fastapi import HTTPException
+
 from litellm import Router, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -167,6 +169,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return initial_value.file_object
 
+    async def can_user_call_unified_object_id(
+        self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        ## check if the user has access to the unified object id
+        ## check if the user has access to the unified object id
+        user_id = user_api_key_dict.user_id
+        managed_object = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": unified_object_id}
+            )
+        )
+        if managed_object:
+            return managed_object.created_by == user_id
+        return False
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -243,12 +260,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
             if accessor_key:
                 retrieve_object_id = cast(Optional[str], data.get(accessor_key))
+
             potential_llm_object_id = (
                 _is_base64_encoded_unified_file_id(retrieve_object_id)
                 if retrieve_object_id
                 else False
             )
-            if potential_llm_object_id:
+            if potential_llm_object_id and retrieve_object_id:
+                ## VALIDATE USER HAS ACCESS TO THE OBJECT ##
+                if not await self.can_user_call_unified_object_id(
+                    retrieve_object_id, user_api_key_dict
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"User {user_api_key_dict.user_id} does not have access to the object {retrieve_object_id}",
+                    )
+
                 ## for managed batch id - get the model id
                 potential_model_id = self.get_model_id_from_unified_batch_id(
                     potential_llm_object_id
