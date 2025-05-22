@@ -229,6 +229,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -1966,6 +1967,7 @@ def supports_prompt_caching(
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_caching",
     )
+
 
 def supports_computer_use(
     model: str, custom_llm_provider: Optional[str] = None
@@ -6681,6 +6683,19 @@ class ProviderConfigManager:
             return GeminiRealtimeConfig()
         return None
 
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageEditConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit.transformation import (
+                OpenAIImageEditConfig,
+            )
+
+            return OpenAIImageEditConfig()
+        return None
+
 
 def get_end_user_id_for_cost_tracking(
     litellm_params: dict,
@@ -6818,6 +6833,14 @@ def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
 
     # Re-add the original query parameters
     return str(modified_url.copy_with(params=original_url.params))
+
+
+def get_standard_openai_params(params: dict) -> dict:
+    return {
+        k: v
+        for k, v in params.items()
+        if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS and v is not None
+    }
 
 
 def get_non_default_completion_params(kwargs: dict) -> dict:
