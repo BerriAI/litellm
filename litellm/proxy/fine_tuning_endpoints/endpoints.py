@@ -612,6 +612,12 @@ async def cancel_fine_tuning_job(
                 **data,
             )
 
+        if response is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid request, No litellm managed file id or custom_llm_provider provided.",
+            )
+
         ### CALL HOOKS ### - modify outgoing data
         _response = await proxy_logging_obj.post_call_success_hook(
             data=data,
