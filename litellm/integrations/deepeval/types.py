@@ -1,6 +1,6 @@
 # Duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/tracing/api.py
 from enum import Enum
-from typing import Any, ClassVar, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -21,8 +21,6 @@ class TraceSpanApiStatus(Enum):
 
 
 class BaseApiSpan(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(use_enum_values=True)
-
     uuid: str
     name: Optional[str] = None
     status: TraceSpanApiStatus
@@ -41,6 +39,8 @@ class BaseApiSpan(BaseModel):
     output_token_count: Optional[int] = Field(None, alias="outputTokenCount")
     cost_per_input_token: Optional[float] = Field(None, alias="costPerInputToken")
     cost_per_output_token: Optional[float] = Field(None, alias="costPerOutputToken")
+
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class TraceApi(BaseModel):

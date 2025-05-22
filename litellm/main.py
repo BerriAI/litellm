@@ -140,6 +140,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
+from .llms.cloudflare.embed import handler as cloudflare_embedding
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -3154,13 +3155,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key
                 or litellm.cloudflare_api_key
                 or litellm.api_key
-                or get_secret("CLOUDFLARE_API_KEY")
+                or get_secret_str("CLOUDFLARE_API_KEY")
             )
-            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
+            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
             api_base = (
                 api_base
                 or litellm.api_base
-                or get_secret("CLOUDFLARE_API_BASE")
+                or get_secret_str("CLOUDFLARE_API_BASE")
                 or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
             )
 
@@ -4265,6 +4266,38 @@ def embedding(  # noqa: PLR0915
                 or "http://127.0.0.1:9997/v1"
             )
             response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "cloudflare":
+            api_key = (
+                api_key
+                or litellm.cloudflare_api_key
+                or litellm.api_key
+                or get_secret_str("CLOUDFLARE_API_KEY")
+            )
+            account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("CLOUDFLARE_API_BASE")
+                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
+
+            cloudflare_embeddings_fn = (
+                cloudflare_embedding.aembedding
+                if aembedding is True
+                else cloudflare_embedding.embedding
+            )
+            response = cloudflare_embeddings_fn(
                 model=model,
                 input=input,
                 api_base=api_base,

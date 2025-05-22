@@ -6936,6 +6936,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            from litellm.llms.cloudflare.embed.transformation import (
+                CloudflareEmbeddingConfig,
+            )
+
+            return CloudflareEmbeddingConfig()
         return None
 
     @staticmethod
