@@ -6805,6 +6805,58 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/claude-opus-4@20250514": {
+        "max_tokens": 128000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 15e-6,
+        "output_cost_per_token": 75e-6,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 1e-2, 
+            "search_context_size_medium": 1e-2,
+            "search_context_size_high": 1e-2
+        },
+        "cache_creation_input_token_cost": 18.75e-6,
+        "cache_read_input_token_cost": 1.5e-6,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_computer_use": true
+    },
+    "vertex_ai/claude-sonnet-4@20250514": {
+        "max_tokens": 128000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 1e-2, 
+            "search_context_size_medium": 1e-2,
+            "search_context_size_high": 1e-2
+        },
+        "cache_creation_input_token_cost": 3.75e-6,
+        "cache_read_input_token_cost": 0.3e-6,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_computer_use": true
+    },
     "vertex_ai/claude-3-haiku": {
         "max_tokens": 4096, 
         "max_input_tokens": 200000,
