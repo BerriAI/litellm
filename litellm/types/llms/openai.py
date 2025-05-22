@@ -878,7 +878,7 @@ class FineTuningJobCreate(BaseModel):
 
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None
 
     model_config = {
         "extra": "allow"
