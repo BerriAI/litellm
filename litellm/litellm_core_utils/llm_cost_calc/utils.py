@@ -324,35 +324,21 @@ def _get_cache_cost(
     else:
         return float(token_count) * base_cost
 
-def generic_cost_per_token(
-    model: str, usage: Usage, custom_llm_provider: str
-) -> Tuple[float, float]:
+def _extract_prompt_token_details(usage: Usage) -> Tuple[int, int, int, int, int, int]:
     """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
-
-    Handles context caching as well.
-
-    Input:
-        - model: str, the model name without provider prefix
-        - usage: LiteLLM Usage block, containing anthropic caching information
+    Extract token details from the usage prompt_tokens_details.
 
     Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        Tuple[int, int, int, int, int, int] - text_tokens, cache_hit_tokens, audio_tokens, 
+                                             character_count, image_count, video_length_seconds
     """
-
-    ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-    ## CALCULATE INPUT COST
-    ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
-    ### PROCESSING COST
     text_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
     audio_tokens = 0
     character_count = 0
     image_count = 0
     video_length_seconds = 0
+
     if usage.prompt_tokens_details:
         cache_hit_tokens = (
             cast(
@@ -389,28 +375,31 @@ def generic_cost_per_token(
             or 0
         )
 
-    ## EDGE CASE - text tokens not set inside PromptTokensDetails
+    # EDGE CASE - text tokens not set inside PromptTokensDetails
     if text_tokens == 0:
         text_tokens = usage.prompt_tokens - cache_hit_tokens - audio_tokens
 
-    prompt_base_cost, completion_base_cost = _get_token_base_cost(
-        model_info=model_info, usage=usage
-    )
+    return text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds
 
-    prompt_cost = float(text_tokens) * prompt_base_cost
 
-    ### CACHE READ COST
+def _calculate_cache_read_cost(model_info: ModelInfo, usage: Usage, cache_hit_tokens: int) -> float:
+    """
+    Calculate the cost for reading from cache.
+
+    Returns:
+        float - The cost for reading from cache
+    """
+    cache_cost = 0.0
+
     # Handle regular text tokens cache read cost
     if cache_hit_tokens > 0:
-        prompt_cost += _get_cache_cost(
+        cache_cost += _get_cache_cost(
             model_info=model_info,
             cost_key_prefix="cache_read_input_token_cost",
             token_count=cache_hit_tokens,
         )
 
     # Handle audio tokens cache read cost if applicable
-    # Only calculate audio cache cost if audio tokens are actually cached
-    # This is determined by checking if there are cached_audio_tokens in prompt_tokens_details
     cached_audio_tokens = 0
     if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_audio_tokens"):
         cached_audio_tokens = getattr(usage.prompt_tokens_details, "cached_audio_tokens") or 0
@@ -418,13 +407,12 @@ def generic_cost_per_token(
     if cached_audio_tokens > 0:
         # Check if we have a specific audio cache cost
         if "cache_read_input_audio_token_cost" in model_info:
-            prompt_cost += _get_cache_cost(
+            cache_cost += _get_cache_cost(
                 model_info=model_info,
                 cost_key_prefix="cache_read_input_audio_token_cost",
                 token_count=cached_audio_tokens,
             )
-        # If no specific audio cache cost, but we have a regular cache cost and audio input cost,
-        # calculate the audio cache cost based on the ratio between regular cache cost and regular input cost
+        # If no specific audio cache cost, calculate based on ratio
         elif "cache_read_input_token_cost" in model_info and "input_cost_per_audio_token" in model_info and "input_cost_per_token" in model_info:
             # Get the ratio between audio input cost and regular input cost
             audio_to_regular_ratio = model_info["input_cost_per_audio_token"] / model_info["input_cost_per_token"]
@@ -434,29 +422,33 @@ def generic_cost_per_token(
             temp_model_info = model_info.copy()
             temp_model_info["cache_read_input_audio_token_cost"] = audio_cache_cost
             # Calculate the cost using the temporary model_info
-            prompt_cost += _get_cache_cost(
+            cache_cost += _get_cache_cost(
                 model_info=temp_model_info,
                 cost_key_prefix="cache_read_input_audio_token_cost",
                 token_count=cached_audio_tokens,
             )
 
-    ### AUDIO COST
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_audio_token", audio_tokens
-    )
+    return cache_cost
 
-    ### CACHE WRITING COST
+
+def _calculate_cache_writing_cost(model_info: ModelInfo, usage: Usage) -> float:
+    """
+    Calculate the cost for writing to cache.
+
+    Returns:
+        float - The cost for writing to cache
+    """
+    cache_cost = 0.0
+
     # Handle regular text tokens cache creation cost
     if usage._cache_creation_input_tokens and usage._cache_creation_input_tokens > 0:
-        prompt_cost += _get_cache_cost(
+        cache_cost += _get_cache_cost(
             model_info=model_info,
             cost_key_prefix="cache_creation_input_token_cost",
             token_count=usage._cache_creation_input_tokens,
         )
 
     # Handle audio tokens cache creation cost if applicable
-    # Only calculate audio cache creation cost if audio tokens are actually being cached
-    # This is determined by checking if there are cached_audio_tokens in _cache_creation_audio_tokens
     cached_creation_audio_tokens = 0
     if hasattr(usage, "_cache_creation_audio_tokens"):
         cached_creation_audio_tokens = getattr(usage, "_cache_creation_audio_tokens") or 0
@@ -464,13 +456,12 @@ def generic_cost_per_token(
     if cached_creation_audio_tokens > 0:
         # Check if we have a specific audio cache creation cost
         if "cache_creation_input_audio_token_cost" in model_info:
-            prompt_cost += _get_cache_cost(
+            cache_cost += _get_cache_cost(
                 model_info=model_info,
                 cost_key_prefix="cache_creation_input_audio_token_cost",
                 token_count=cached_creation_audio_tokens,
             )
-        # If no specific audio cache creation cost, but we have a regular cache creation cost and audio input cost,
-        # calculate the audio cache creation cost based on the ratio between regular cache cost and regular input cost
+        # If no specific audio cache creation cost, calculate based on ratio
         elif "cache_creation_input_token_cost" in model_info and "input_cost_per_audio_token" in model_info and "input_cost_per_token" in model_info:
             # Get the ratio between audio input cost and regular input cost
             audio_to_regular_ratio = model_info["input_cost_per_audio_token"] / model_info["input_cost_per_token"]
@@ -480,34 +471,27 @@ def generic_cost_per_token(
             temp_model_info = model_info.copy()
             temp_model_info["cache_creation_input_audio_token_cost"] = audio_cache_creation_cost
             # Calculate the cost using the temporary model_info
-            prompt_cost += _get_cache_cost(
+            cache_cost += _get_cache_cost(
                 model_info=temp_model_info,
                 cost_key_prefix="cache_creation_input_audio_token_cost",
                 token_count=cached_creation_audio_tokens,
             )
 
+    return cache_cost
 
-    ### CHARACTER COST
 
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_character", character_count
-    )
+def _extract_completion_token_details(usage: Usage) -> Tuple[int, int, int, bool]:
+    """
+    Extract token details from the usage completion_tokens_details.
 
-    ### IMAGE COUNT COST
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_image", image_count
-    )
-
-    ### VIDEO LENGTH COST
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_video_per_second", video_length_seconds
-    )
-
-    ## CALCULATE OUTPUT COST
+    Returns:
+        Tuple[int, int, int, bool] - text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total
+    """
     text_tokens = 0
     audio_tokens = 0
     reasoning_tokens = 0
     is_text_tokens_total = False
+
     if usage.completion_tokens_details is not None:
         audio_tokens = (
             cast(
@@ -535,18 +519,80 @@ def generic_cost_per_token(
         text_tokens = usage.completion_tokens
     if text_tokens == usage.completion_tokens:
         is_text_tokens_total = True
-    ## TEXT COST
+
+    return text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total
+
+
+def generic_cost_per_token(
+    model: str, usage: Usage, custom_llm_provider: str
+) -> Tuple[float, float]:
+    """
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+
+    Handles context caching as well.
+
+    Input:
+        - model: str, the model name without provider prefix
+        - usage: LiteLLM Usage block, containing anthropic caching information
+
+    Returns:
+        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+    """
+    # Get model info
+    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+
+    # Extract prompt token details
+    text_tokens, cache_hit_tokens, audio_tokens, character_count, image_count, video_length_seconds = _extract_prompt_token_details(usage)
+
+    # Get base costs
+    prompt_base_cost, completion_base_cost = _get_token_base_cost(
+        model_info=model_info, usage=usage
+    )
+
+    # Calculate prompt cost
+    prompt_cost = float(text_tokens) * prompt_base_cost
+
+    # Add cache read cost
+    prompt_cost += _calculate_cache_read_cost(model_info, usage, cache_hit_tokens)
+
+    # Add audio cost
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_audio_token", audio_tokens
+    )
+
+    # Add cache writing cost
+    prompt_cost += _calculate_cache_writing_cost(model_info, usage)
+
+    # Add character cost
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_character", character_count
+    )
+
+    # Add image count cost
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_image", image_count
+    )
+
+    # Add video length cost
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_video_per_second", video_length_seconds
+    )
+
+    # Extract completion token details
+    text_tokens, audio_tokens, reasoning_tokens, is_text_tokens_total = _extract_completion_token_details(usage)
+
+    # Calculate completion cost
     completion_cost = float(text_tokens) * completion_base_cost
 
+    # Get output costs per token type
     _output_cost_per_audio_token: Optional[float] = model_info.get(
         "output_cost_per_audio_token"
     )
-
     _output_cost_per_reasoning_token: Optional[float] = model_info.get(
         "output_cost_per_reasoning_token"
     )
 
-    ## AUDIO COST
+    # Add audio output cost
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
         _output_cost_per_audio_token = (
             _output_cost_per_audio_token
@@ -555,7 +601,7 @@ def generic_cost_per_token(
         )
         completion_cost += float(audio_tokens) * _output_cost_per_audio_token
 
-    ## REASONING COST
+    # Add reasoning output cost
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
         _output_cost_per_reasoning_token = (
             _output_cost_per_reasoning_token
