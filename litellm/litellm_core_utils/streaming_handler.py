@@ -1207,10 +1207,10 @@ class CustomStreamWrapper:
                         if hasattr(chunk, "usageMetadata") and chunk.usageMetadata is not None:
                             usage_metadata = chunk.usageMetadata
 
-                            cached_tokens = None
-                            audio_tokens = None
-                            text_tokens = None
-                            image_tokens = None
+                            cached_tokens = 0
+                            audio_tokens = 0
+                            text_tokens = 0
+                            image_tokens = 0
 
                             if hasattr(usage_metadata, "cachedContentTokenCount"):
                                 cached_tokens = usage_metadata.cachedContentTokenCount
