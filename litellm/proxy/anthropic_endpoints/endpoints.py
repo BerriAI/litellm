@@ -24,13 +24,13 @@ from litellm.proxy.utils import ProxyLogging
 router = APIRouter()
 
 
-def return_anthropic_chunk(chunk: str | dict) -> str:
+def return_anthropic_chunk(chunk: Any) -> str:
     """
     Helper function to format streaming chunks for Anthropic API format
-    
+
     Args:
         chunk: A string or dictionary to be returned in SSE format
-        
+
     Returns:
         str: A properly formatted SSE chunk string
     """
