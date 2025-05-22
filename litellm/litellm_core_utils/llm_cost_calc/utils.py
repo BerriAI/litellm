@@ -468,7 +468,6 @@ def generic_cost_per_token(
                 model_info=model_info,
                 cost_key_prefix="cache_creation_input_audio_token_cost",
                 token_count=cached_creation_audio_tokens,
-                total_prompt_tokens=usage.prompt_tokens
             )
         # If no specific audio cache creation cost, but we have a regular cache creation cost and audio input cost,
         # calculate the audio cache creation cost based on the ratio between regular cache cost and regular input cost
@@ -485,25 +484,8 @@ def generic_cost_per_token(
                 model_info=temp_model_info,
                 cost_key_prefix="cache_creation_input_audio_token_cost",
                 token_count=cached_creation_audio_tokens,
-                total_prompt_tokens=usage.prompt_tokens
             )
 
-    ### CACHE STORAGE COST PER HOUR
-    # If the model has a cache storage cost per token per hour, add it
-    # This is typically charged separately and not included in the prompt or completion cost
-    cache_storage_cost_key = "cache_storage_cost_per_token_per_hour"
-    if cache_storage_cost_key in model_info and model_info[cache_storage_cost_key] > 0:
-        # We assume the storage is for all tokens that were cached (both text and audio)
-        total_cached_tokens = usage._cache_creation_input_tokens or 0
-        if total_cached_tokens > 0:
-            # The cost is per hour, but we only charge for the actual usage
-            # This is handled elsewhere in the billing system
-            storage_cost = total_cached_tokens * model_info[cache_storage_cost_key]
-            # We don't add this to prompt_cost as it's typically billed separately
-            # Just log it for now
-            verbose_logger.debug(
-                f"Cache storage cost for {total_cached_tokens} tokens: ${storage_cost:.6f} per hour"
-            )
 
     ### CHARACTER COST
 
