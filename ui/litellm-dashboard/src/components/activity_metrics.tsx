@@ -1,8 +1,9 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
-import { AreaChart, BarChart } from '@tremor/react';
+import { AreaChart, BarChart, BarList } from '@tremor/react';
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
+import { ModelFailureRates } from './model_failure_rates';
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
@@ -192,7 +193,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
           </Card>
         </Grid>
 
-        <Grid numItems={2} className="gap-4">
+        <Grid numItems={2} className="gap-4 mb-4">
           <Card>
             <Title>Total Tokens Over Time</Title>
             <AreaChart    
@@ -215,7 +216,15 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
             />
           </Card>
         </Grid>
+
+         {/* Add Model Failure Rates component */}
+      <Card>
+        <Title className="text-base mb-4 ml-2">Top Models by Failure Rate</Title>
+        <ModelFailureRates modelMetrics={modelMetrics} />
+      </Card>
+        
       </div>
+
 
       {/* Individual Model Sections */}
       <Collapse defaultActiveKey={modelNames[0]}>
