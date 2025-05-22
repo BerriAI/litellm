@@ -1550,7 +1550,11 @@ class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     """The number of text tokens in the input prompt."""
 
 
-class ImageUsage(BaseLiteLLMOpenAIResponseObject):
+from openai.types.images_response import ImagesResponse as OpenAIImageResponse
+from openai.types.images_response import Usage as OpenAIImageResponseUsage
+
+
+class ImageUsage(OpenAIImageResponseUsage, BaseLiteLLMOpenAIResponseObject):
     input_tokens: int
     """The number of tokens (images and text) in the input prompt."""
 
@@ -1569,7 +1573,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
-    usage: ImageUsage
+    usage: Optional[ImageUsage] = None
 
     def __init__(
         self,
