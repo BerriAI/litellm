@@ -13,6 +13,9 @@ from unittest.mock import MagicMock
 
 from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+)
 from litellm.types.utils import SpecialEnums
 
 
@@ -161,3 +164,45 @@ async def test_async_pre_call_hook_batch_retrieve():
 #     assert len(batch_files) == 1
 #     assert assistant_files[0].id == file1.id
 #     assert batch_files[0].id == file2.id
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_for_unified_finetuning_job():
+    from litellm.types.utils import LiteLLMFineTuningJob
+
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxiZTQ0ZDVlYi1mNDU3LTRiNzktOWM4My01N2QxMTMxYWM0YzY7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00LjEtb3BlbmFpO2xsbV9vdXRwdXRfZmlsZV9pZCxmaWxlLURKMnQ0OWZlQ2NTQk5vNG9oekZ6NGc7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLGRiNjY5ODcwNzdkZTdmYzZjNzAzY2Y1MDczMGU2MmNkOWQ3YTU1N2NlNjVmMDUzNTFkYTM4YTA3ZjBlZDEyNzQ"
+    provider_ft_job = LiteLLMFineTuningJob(
+        object="fine_tuning.job",
+        id="ftjob-0kEBV5b4sPrFcMnuzmYSzU1G",
+        model="gpt-3.5-turbo-0613",
+        created_at=1692779769,
+        finished_at=None,
+        fine_tuned_model=None,
+        organization_id="org-dUVLhaAQ37YCGwVC2QVY8sdB",
+        result_files=[],
+        status="validating_files",
+        validation_file=None,
+        training_file="file-azQuKMLAmiFdEjxpCcbI11zF",
+        hyperparameters={"n_epochs": 8},
+        trained_tokens=None,
+        seed=0,
+    )
+    provider_ft_job._hidden_params = {
+        "unified_file_id": unified_file_id,
+        "model_id": "gpt-3.5-turbo-0613",
+    }
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    data = {
+        "user_api_key_dict": {"parent_otel_span": MagicMock()},
+    }
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=MagicMock(),
+        response=provider_ft_job,
+    )
+
+    assert isinstance(response, LiteLLMFineTuningJob)
+    assert _is_base64_encoded_unified_file_id(response.id)

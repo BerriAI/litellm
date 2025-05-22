@@ -3936,6 +3936,19 @@
         "supports_vision": true,
         "supports_tool_choice": true
     },
+    "xai/grok-3": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": false,
+        "source": "https://x.ai/api#pricing"
+    },
     "xai/grok-3-beta": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
@@ -12335,6 +12348,20 @@
         "mode": "chat",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."},
+        "supports_tool_choice": true
+    },
+    "databricks/databricks-llama-4-maverick": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000005,
+        "input_dbu_cost_per_token": 0.00007143,
+        "output_cost_per_token": 0.000015,
+        "output_dbu_cost_per_token": 0.00021429,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "metadata": {"notes": "Databricks documentation now provides both DBU costs (_dbu_cost_per_token) and dollar costs(_cost_per_token)."},
         "supports_tool_choice": true
     },
     "databricks/databricks-dbrx-instruct": {

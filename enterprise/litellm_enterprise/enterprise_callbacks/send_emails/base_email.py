@@ -189,7 +189,7 @@ class BaseEmailLogger(CustomLogger):
         # get the latest invitation link for the user
         invitation_rows = await prisma_client.db.litellm_invitationlink.find_many(
             where={"user_id": user_id},
-            orderBy={"created_at": "desc"},
+            order={"created_at": "desc"},
         )
         if len(invitation_rows) > 0:
             invitation_row = invitation_rows[0]

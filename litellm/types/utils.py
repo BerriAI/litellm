@@ -44,6 +44,7 @@ from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     FileSearchTool,
+    FineTuningJob,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -2257,6 +2258,18 @@ class SelectTokenizerResponse(TypedDict):
     tokenizer: Any
 
 
+class LiteLLMFineTuningJob(FineTuningJob):
+    _hidden_params: dict = {}
+
+    def __init__(self, **kwargs):
+        if "error" in kwargs and kwargs["error"] is not None:
+            # check if error is all None - if so, set error to None
+            if all(value is None for value in kwargs["error"].values()):
+                kwargs["error"] = None
+        super().__init__(**kwargs)
+        self._hidden_params = kwargs.get("_hidden_params", {})
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
     usage: Optional[Usage] = None
@@ -2361,9 +2374,16 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
+    LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
 
 LLMResponseTypes = Union[
-    ModelResponse, EmbeddingResponse, ImageResponse, OpenAIFileObject, LiteLLMBatch
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    OpenAIFileObject,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
 ]
 
 
