@@ -12,6 +12,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from litellm.llms.custom_httpx.http_handler import headers
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
@@ -42,6 +44,7 @@ class TestProxyInitializationHelpers:
         # Setup
         mock_response = MagicMock()
         mock_response.json.return_value = {"status": "healthy"}
+        mock_response.status_code = 200
         mock_get.return_value = mock_response
         mock_dumps.return_value = '{"status": "healthy"}'
 
@@ -49,7 +52,7 @@ class TestProxyInitializationHelpers:
         ProxyInitializationHelpers._run_health_check("localhost", 8000)
 
         # Assert
-        mock_get.assert_called_once_with(url="http://localhost:8000/health")
+        mock_get.assert_called_once_with(url="http://localhost:8000/health", headers = {"x-litellm-api-key":os.getenv("LITELLM_MASTER_KEY")})
         mock_response.json.assert_called_once()
         mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
 

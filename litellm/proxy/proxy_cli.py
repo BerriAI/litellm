@@ -55,7 +55,14 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _run_health_check(host, port):
         print("\nLiteLLM: Health Testing models in config")  # noqa
-        response = httpx.get(url=f"http://{host}:{port}/health")
+        headers = {
+            "x-litellm-api-key":os.getenv("LITELLM_MASTER_KEY")
+        }
+        response = httpx.get(url=f"http://{host}:{port}/health" , headers=headers)
+        if response.status_code != 200:
+            raise Exception(
+                f"LiteLLM: Health check failed with status code {response.status_code}"
+            )
         print(json.dumps(response.json(), indent=4))  # noqa
 
     @staticmethod
