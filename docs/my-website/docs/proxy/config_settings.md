@@ -570,6 +570,7 @@ router_settings:
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
 | PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES | Refresh interval in minutes for Prometheus budget metrics. Default is 5
 | PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS | Fallback time in hours for sending stats to Prometheus. Default is 9
+| PROMETHEUS_MULTIPROC_DIR | Temp directory for Prometheus multiprocess collector
 | PROMETHEUS_URL | URL for Prometheus service
 | PROMPTLAYER_API_KEY | API key for PromptLayer integration
 | PROXY_ADMIN_ID | Admin identifier for proxy server

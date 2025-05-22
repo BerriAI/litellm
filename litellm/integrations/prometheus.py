@@ -2,6 +2,7 @@
 #### What this does ####
 #    On success, log events to Prometheus
 import sys
+import os
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
@@ -1805,20 +1806,31 @@ class PrometheusLogger(CustomLogger):
                                         Defaults to False.
         """
         from prometheus_client import make_asgi_app
-
+        from fastapi import Response, FastAPI
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import app
+        from prometheus_client import CollectorRegistry, multiprocess, generate_latest, CONTENT_TYPE_LATEST
 
         if premium_user is not True:
             verbose_proxy_logger.warning(
                 f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
 
-        # Create metrics ASGI app
-        metrics_app = make_asgi_app()
+        # If we're running in a multi-process environment, use the multiprocess collector
+        # See https://prometheus.github.io/client_python/multiprocess/
+        if os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None:
+            metrics_app = make_asgi_app()
+        else:
+            metrics_app = FastAPI()
+            @metrics_app.get("/", include_in_schema=False)
+            def metrics_endpoint():
+                """Multiprocess-aware metrics endpoint"""
+                registry = CollectorRegistry()
+                multiprocess.MultiProcessCollector(registry)
+                data = generate_latest(registry)
+                return Response(content=data, media_type=CONTENT_TYPE_LATEST, status_code=200)
 
-        # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
         verbose_proxy_logger.debug(
             "Starting Prometheus Metrics on /metrics (no authentication)"

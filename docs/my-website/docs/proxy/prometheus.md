@@ -261,7 +261,12 @@ Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitor
 | `litellm_in_memory_spend_update_queue_size`         | In-memory aggregate spend values for keys, users, teams, team members, etc.| In-Memory    |
 | `litellm_redis_spend_update_queue_size`             | Redis aggregate spend values for keys, users, teams, etc.                  | Redis        |
 
+## Multiple Workers
+When using multiple workers, a special temporary directory is used to store metrics across workers.
+By default a temporary directory is created and deleted at when litellm closes.
 
+You can manually specify the directory by setting the environment variable `PROMETHEUS_MULTIPROC_DIR`.
+Do note that it needs to be cleared manually before litellm starts.
 
 ## **🔥 LiteLLM Maintained Grafana Dashboards **
 
