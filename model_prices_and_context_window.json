@@ -3123,7 +3123,7 @@
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.0000004,
         "output_cost_per_token": 0.000002,
-        "litellm_provider": "mistral",
+        "litellm_provider": "azure_ai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
