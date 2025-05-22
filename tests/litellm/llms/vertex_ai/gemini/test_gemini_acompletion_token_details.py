@@ -1,0 +1,191 @@
+import pytest
+from unittest.mock import MagicMock, patch
+
+import litellm
+from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
+
+@pytest.mark.asyncio
+async def test_acompletion_includes_all_token_types():
+    """Test that acompletion responses include all token types"""
+    # Create a mock response with usage information
+    mock_response = {
+        "id": "test-id",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gemini-1.5-pro",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "This is a test response"
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 150,
+            "completion_tokens": 74,
+            "total_tokens": 224,
+            "prompt_tokens_details": {
+                "cached_tokens": 30,
+                "text_tokens": 57,
+                "audio_tokens": 43,
+                "image_tokens": 50
+            },
+            "completion_tokens_details": {
+                "text_tokens": 74
+            }
+        }
+    }
+
+    # Patch the acompletion function to return our mock response
+    with patch('litellm.acompletion', return_value=mock_response):
+        response = await litellm.acompletion(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+
+        # Verify that the response has the correct usage information
+        assert response["usage"] is not None
+        assert response["usage"]["prompt_tokens"] == 150
+        assert response["usage"]["completion_tokens"] == 74
+        assert response["usage"]["total_tokens"] == 224
+        assert response["usage"]["prompt_tokens_details"]["cached_tokens"] == 30
+        assert response["usage"]["prompt_tokens_details"]["text_tokens"] == 57
+        assert response["usage"]["prompt_tokens_details"]["audio_tokens"] == 43
+        assert response["usage"]["prompt_tokens_details"]["image_tokens"] == 50
+        assert response["usage"]["completion_tokens_details"]["text_tokens"] == 74
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_includes_all_token_types():
+    """Test that acompletion streaming responses include all token types"""
+    # Create a mock streaming chunk with usage information
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [MagicMock()]
+    mock_chunk.choices[0].delta = MagicMock()
+    mock_chunk.choices[0].delta.content = "This is a test response"
+    mock_chunk.usage = Usage(
+        prompt_tokens=150,
+        completion_tokens=74,
+        total_tokens=224,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            text_tokens=57,
+            audio_tokens=43,
+            image_tokens=50
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=74
+        )
+    )
+
+    # Create a mock async generator that yields our mock chunk
+    async def mock_acompletion_stream(*args, **kwargs):
+        yield mock_chunk
+
+    # Patch the acompletion function to return our mock generator
+    with patch('litellm.acompletion', return_value=mock_acompletion_stream()):
+        response = await litellm.acompletion(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True
+        )
+
+        # Process the streaming response
+        async for chunk in response:
+            # Verify that the chunk has the correct usage information
+            assert chunk.usage is not None
+            assert chunk.usage.prompt_tokens == 150
+            assert chunk.usage.completion_tokens == 74
+            assert chunk.usage.total_tokens == 224
+            assert chunk.usage.prompt_tokens_details.cached_tokens == 30
+            assert chunk.usage.prompt_tokens_details.text_tokens == 57
+            assert chunk.usage.prompt_tokens_details.audio_tokens == 43
+            assert chunk.usage.prompt_tokens_details.image_tokens == 50
+            assert chunk.usage.completion_tokens_details.text_tokens == 74
+            break  # We only need to check the first chunk
+
+@pytest.mark.asyncio
+async def test_acompletion_cached_response_includes_all_token_types():
+    """Test that acompletion cached responses include all token types"""
+    # Enable caching
+    litellm.cache = litellm.Cache(type="local")
+
+    # Create a mock response with usage information but without prompt_tokens_details
+    mock_response = {
+        "id": "test-id",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gemini-1.5-pro",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "This is a test response"
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 150,
+            "completion_tokens": 74,
+            "total_tokens": 224
+        }
+    }
+
+    # Create a patched version of acompletion that returns our mock response
+    # and then a cached version with prompt_tokens_details
+    call_count = 0
+
+    async def patched_acompletion(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            # First call returns the mock response
+            return mock_response
+        else:
+            # Second call returns a cached response with prompt_tokens_details
+            cached_response = mock_response.copy()
+            cached_response["usage"] = {
+                "prompt_tokens": 150,
+                "completion_tokens": 74,
+                "total_tokens": 224,
+                "prompt_tokens_details": {
+                    "cached_tokens": 150,
+                    "text_tokens": 150,
+                    "audio_tokens": None,
+                    "image_tokens": None
+                }
+            }
+            cached_response["custom_llm_provider"] = "cached_response"
+            return cached_response
+
+    # Patch the acompletion function
+    with patch('litellm.acompletion', side_effect=patched_acompletion):
+        # First call to cache the response
+        await litellm.acompletion(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+
+        # Second call should use the cache
+        response = await litellm.acompletion(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+
+        # Verify that the cached response has the correct usage information
+        assert response["usage"] is not None
+        assert response["usage"]["prompt_tokens"] == 150
+        assert response["usage"]["completion_tokens"] == 74
+        assert response["usage"]["total_tokens"] == 224
+        assert response["usage"]["prompt_tokens_details"]["cached_tokens"] == 150
+        assert response["usage"]["prompt_tokens_details"]["text_tokens"] == 150
+        assert response["usage"]["prompt_tokens_details"]["audio_tokens"] is None
+        assert response["usage"]["prompt_tokens_details"]["image_tokens"] is None
+
+    # Clean up
+    litellm.cache = None

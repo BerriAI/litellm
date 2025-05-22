@@ -802,6 +802,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
+        image_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -829,6 +830,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     audio_tokens = detail["tokenCount"]
                 elif detail["modality"] == "TEXT":
                     text_tokens = detail["tokenCount"]
+                elif detail["modality"] == "IMAGE":
+                    image_tokens = detail["tokenCount"]
         if "thoughtsTokenCount" in completion_response["usageMetadata"]:
             reasoning_tokens = completion_response["usageMetadata"][
                 "thoughtsTokenCount"
@@ -837,6 +840,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
+            image_tokens=image_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get(
