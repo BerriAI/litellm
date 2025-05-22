@@ -23,7 +23,12 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.utils import LiteLLMBatch, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -138,12 +143,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "acreate_batch",
             "aretrieve_batch",
             "afile_content",
+            "acreate_fine_tuning_job",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
+        print(
+            "CALLS ASYNC PRE CALL HOOK - DATA={}, CALL_TYPE={}".format(data, call_type)
+        )
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
@@ -196,7 +205,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data["batch_id"] = self.get_batch_id_from_unified_batch_id(
                     potential_batch_id
                 )
+        elif call_type == CallTypes.acreate_fine_tuning_job.value:
+            input_file_id = cast(Optional[str], data.get("training_file"))
+            if input_file_id:
+                model_file_id_mapping = await self.get_model_file_id_mapping(
+                    [input_file_id], user_api_key_dict.parent_otel_span
+                )
+                data["model_file_id_mapping"] = model_file_id_mapping
 
+        print("DATA={}".format(data))
         return data
 
     async def async_pre_call_deployment_hook(
@@ -205,8 +222,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
+        print(
+            "CALLS ASYNC PRE CALL DEPLOYMENT HOOK - KWARGS={}, CALL_TYPE={}".format(
+                kwargs, call_type
+            )
+        )
+        accessor_key: Optional[str] = None
         if call_type and call_type == CallTypes.acreate_batch:
-            input_file_id = cast(Optional[str], kwargs.get("input_file_id"))
+            accessor_key = "input_file_id"
+        elif call_type and call_type == CallTypes.acreate_fine_tuning_job:
+            accessor_key = "training_file"
+        else:
+            return kwargs
+
+        if accessor_key:
+            input_file_id = cast(Optional[str], kwargs.get(accessor_key))
             model_file_id_mapping = cast(
                 Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping")
             )
@@ -217,7 +247,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     model_id, None
                 )
             if mapped_file_id:
-                kwargs["input_file_id"] = mapped_file_id
+                kwargs[accessor_key] = mapped_file_id
+
         return kwargs
 
     def get_file_ids_from_messages(self, messages: List[AllMessageValues]) -> List[str]:
@@ -383,6 +414,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return response
 
+    def get_unified_generic_response_id(
+        self, model_id: str, generic_response_id: str
+    ) -> str:
+        unified_generic_response_id = (
+            SpecialEnums.LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR.value.format(
+                model_id, generic_response_id
+            )
+        )
+        return (
+            base64.urlsafe_b64encode(unified_generic_response_id.encode())
+            .decode()
+            .rstrip("=")
+        )
+
     def get_unified_batch_id(self, batch_id: str, model_id: str) -> str:
         unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
             model_id, batch_id
@@ -455,7 +500,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_name,
                     )
-
+            return response
+        elif isinstance(response, LiteLLMFineTuningJob):
+            ## Check if unified_file_id is in the response
+            print(f"hidden params={response._hidden_params}")
+            unified_file_id = response._hidden_params.get(
+                "unified_file_id"
+            )  # managed file id
+            model_id = cast(Optional[str], response._hidden_params.get("model_id"))
+            print("MODEL_ID={}".format(model_id))
+            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            if unified_file_id and model_id:
+                response.id = self.get_unified_generic_response_id(
+                    model_id=model_id, generic_response_id=response.id
+                )
+            return response
         return await super().async_post_call_success_hook(
             data, user_api_key_dict, response
         )

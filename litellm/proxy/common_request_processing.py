@@ -117,6 +117,7 @@ class ProxyBaseLLMRequestProcessing:
             "acreate_batch",
             "aretrieve_batch",
             "afile_content",
+            "acreate_fine_tuning_job",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,

@@ -13,12 +13,14 @@ from datetime import datetime, timedelta
 import pytest
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LitellmUserRoles,
     SSOUserDefinedValues,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.utils import get_utc_datetime
 
@@ -59,6 +61,8 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
 
     # Decrypt and verify token contents
     decrypted_token = decrypt_value_helper(token, exception_type="debug")
+    # Check that decrypted_token is not None before using json.loads
+    assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
     assert token_data["user_id"] == "test_user"
@@ -110,3 +114,117 @@ def test_get_key_object_from_ui_hash_key_invalid():
     # Test with invalid token
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key("invalid_token")
     assert key_object is None
+
+
+@pytest.mark.asyncio
+async def test_get_object_from_cache_redis():
+    """Test that _get_object_from_cache retrieves from Redis cache when available"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.auth.auth_checks import _get_object_from_cache
+
+    # Create mock objects
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache = AsyncMock()
+    mock_user_api_key_cache = DualCache()
+
+    # Create test data
+    test_key = "test_key"
+    test_data = {
+        "token": "test_token",
+        "key_name": "test_key_name",
+        "spend": 0.0,
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    # Mock Redis cache response
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache.return_value = (
+        test_data
+    )
+
+    # Call the function
+    result = await _get_object_from_cache(
+        key=test_key,
+        proxy_logging_obj=mock_proxy_logging,
+        user_api_key_cache=mock_user_api_key_cache,
+        parent_otel_span=None,
+        base_model=LiteLLM_VerificationToken,
+    )
+
+    # Verify Redis cache was checked
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache.assert_called_once_with(
+        key=test_key, parent_otel_span=None
+    )
+
+    # Verify result is correct
+    assert isinstance(result, LiteLLM_VerificationToken)
+    assert result.token == "test_token"
+    assert result.key_name == "test_key_name"
+    assert result.spend == 0.0
+    assert result.models == ["gpt-3.5-turbo"]
+
+async def test_default_internal_user_params_with_get_user_object(monkeypatch):
+    """Test that default_internal_user_params is used when creating a new user via get_user_object"""
+    # Set up default_internal_user_params
+    default_params = {
+        "models": ["gpt-4", "claude-3-opus"],
+        "max_budget": 200.0,
+        "user_role": "internal_user",
+    }
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    # Mock the necessary dependencies
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+
+    # Set up the user creation mock - create a complete user model that can be converted to a dict
+    mock_user = MagicMock()
+    mock_user.user_id = "new_test_user"
+    mock_user.models = ["gpt-4", "claude-3-opus"]
+    mock_user.max_budget = 200.0
+    mock_user.user_role = "internal_user"
+    mock_user.organization_memberships = []
+
+    # Make the mock model_dump or dict method return appropriate data
+    mock_user.dict = lambda: {
+        "user_id": "new_test_user",
+        "models": ["gpt-4", "claude-3-opus"],
+        "max_budget": 200.0,
+        "user_role": "internal_user",
+        "organization_memberships": [],
+    }
+
+    # Setup the mock returns
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+
+    # Create a mock cache - use AsyncMock for async methods
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    # Call get_user_object with user_id_upsert=True to trigger user creation
+    try:
+        user_obj = await get_user_object(
+            user_id="new_test_user",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+    except Exception as e:
+        # this fails since the mock object is a MagicMock and not a LiteLLM_UserTable
+        print(e)
+
+    # Verify the user was created with the default params
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+
+    # Verify defaults were applied to the creation args
+    assert "models" in creation_args
+    assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
+    assert creation_args["max_budget"] == 200.0
+    assert creation_args["user_role"] == "internal_user"

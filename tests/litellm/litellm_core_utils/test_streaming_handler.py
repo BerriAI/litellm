@@ -612,6 +612,33 @@ def test_streaming_handler_with_stop_chunk(
     assert returned_chunk is None
 
 
+def test_set_response_id_propagation_empty_to_valid(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test that response_id is properly set when first chunk has empty ID and second chunk has valid ID"""
+
+    model_response1 = ModelResponseStream(id="", created=1742056047, model=None)
+    model_response1 = initialized_custom_stream_wrapper.set_model_id(model_response1.id, model_response1)
+    assert model_response1.id == ""
+
+    model_response2 = ModelResponseStream(id="valid-id-123", created=1742056048, model=None)
+    model_response2 = initialized_custom_stream_wrapper.set_model_id("valid-id-123", model_response2)
+    assert model_response2.id == "valid-id-123"
+    assert initialized_custom_stream_wrapper.response_id == "valid-id-123"
+
+
+def test_set_response_id_propagation_valid_to_invalid(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test that response_id is maintained when first chunk has valid ID and second chunk has invalid ID"""
+
+    model_response1 = ModelResponseStream(id="first-valid-id", created=1742056049, model=None)
+    model_response1 = initialized_custom_stream_wrapper.set_model_id("first-valid-id", model_response1)
+    assert model_response1.id == "first-valid-id"
+    assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
+
+    model_response2 = ModelResponseStream(id="", created=1742056050, model=None)
+    model_response2 = initialized_custom_stream_wrapper.set_model_id("", model_response2)
+    assert model_response2.id == "first-valid-id"
+    assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
+
+
 @pytest.mark.asyncio
 async def test_streaming_completion_start_time(logging_obj: Logging):
     """Test that the start time is set correctly"""

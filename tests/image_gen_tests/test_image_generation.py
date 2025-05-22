@@ -221,6 +221,7 @@ def test_image_generation_azure_dall_e_3():
 # asyncio.run(test_async_image_generation_openai())
 
 
+@pytest.mark.skip(reason="model EOL")
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:

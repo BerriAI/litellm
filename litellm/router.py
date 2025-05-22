@@ -752,6 +752,9 @@ class Router:
         self._arealtime = self.factory_function(
             litellm._arealtime, call_type="_arealtime"
         )
+        self.acreate_fine_tuning_job = self.factory_function(
+            litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -1697,9 +1700,13 @@ class Router:
             specific_deployment=kwargs.pop("specific_deployment", None),
         )
 
-        litellm_model = prompt_management_deployment["litellm_params"].get(
-            "model", None
+        self._update_kwargs_with_deployment(
+            deployment=prompt_management_deployment, kwargs=kwargs
         )
+        data = prompt_management_deployment["litellm_params"].copy()
+
+        litellm_model = data.get("model", None)
+
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
         ].get("prompt_id", None)
@@ -1708,6 +1715,9 @@ class Router:
         ) or prompt_management_deployment["litellm_params"].get(
             "prompt_variables", None
         )
+        prompt_label = kwargs.get("prompt_label", None) or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_label", None)
 
         if prompt_id is None or not isinstance(prompt_id, str):
             raise ValueError(
@@ -1728,14 +1738,16 @@ class Router:
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_label=prompt_label,
         )
 
-        kwargs = {**kwargs, **optional_params}
+        kwargs = {**data, **kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
         kwargs["litellm_logging_obj"] = litellm_logging_object
         kwargs["prompt_id"] = prompt_id
         kwargs["prompt_variables"] = prompt_variables
+        kwargs["prompt_label"] = prompt_label
 
         _model_list = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
@@ -3159,6 +3171,7 @@ class Router:
             "afile_delete",
             "afile_content",
             "_arealtime",
+            "acreate_fine_tuning_job",
         ] = "assistants",
     ):
         """
@@ -3207,6 +3220,7 @@ class Router:
                 "anthropic_messages",
                 "aresponses",
                 "_arealtime",
+                "acreate_fine_tuning_job",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
