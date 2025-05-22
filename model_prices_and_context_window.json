@@ -3117,6 +3117,18 @@
         "supports_function_calling": true,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-nemo-12b-2407?tab=PlansAndPrice"
     },
+    "azure_ai/mistral-medium-2505": {
+        "max_tokens": 8191,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
     "azure_ai/mistral-large": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
