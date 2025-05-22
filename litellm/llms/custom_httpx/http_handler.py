@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
@@ -199,6 +200,7 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
         logging_obj: Optional[LiteLLMLoggingObject] = None,
+        files: Optional[RequestFiles] = None,
     ):
         start_time = time.time()
         try:
@@ -206,7 +208,14 @@ class AsyncHTTPHandler:
                 timeout = self.timeout
 
             req = self.client.build_request(
-                "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                "POST",
+                url,
+                data=data,  # type: ignore
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                files=files,
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -533,7 +542,7 @@ class HTTPHandler:
         headers: Optional[dict] = None,
         stream: bool = False,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        files: Optional[dict] = None,
+        files: Optional[Union[dict, RequestFiles]] = None,
         content: Any = None,
         logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
