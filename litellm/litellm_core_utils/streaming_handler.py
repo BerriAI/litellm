@@ -697,10 +697,11 @@ class CustomStreamWrapper:
 
         If a valid ID is received in any chunk, use it for the response.
         """
+        if self.response_id is None and id and isinstance(id, str) and id.strip():
+            self.response_id = id
+
         if id and isinstance(id, str) and id.strip():
-            self.response_id = id
-        elif self.response_id is None:
-            self.response_id = id
+            model_response._hidden_params["received_model_id"] = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
             model_response.id = self.response_id

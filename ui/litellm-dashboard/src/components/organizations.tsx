@@ -148,44 +148,122 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   }
 
   return (
-    <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Your Organizations</Tab>
-        </div>
-        <div className="flex items-center space-x-2">
-          {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-          <Icon
-            icon={RefreshIcon}
-            variant="shadow"
-            size="xs"
-            className="self-center"
-            onClick={handleRefreshClick}
-          />
-        </div>
-      </TabList>
-      <TabPanels>
-        <TabPanel>
-          <Text>
-            Click on &ldquo;Organization ID&rdquo; to view organization details.
-          </Text>
-          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-            <Col numColSpan={1}>
-              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Organization ID</TableHeaderCell>
-                      <TableHeaderCell>Organization Name</TableHeaderCell>
-                      <TableHeaderCell>Created</TableHeaderCell>
-                      <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                      <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                      <TableHeaderCell>Models</TableHeaderCell>
-                      <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-                      <TableHeaderCell>Info</TableHeaderCell>
-                      <TableHeaderCell>Actions</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+          {(userRole === "Admin" || userRole === "Org Admin") && (
+            <>
+              <Button
+                className="w-fit"
+                onClick={() => setIsOrgModalVisible(true)}
+              >
+                + Create New Organization
+              </Button>
+              <Modal
+                title="Create Organization"
+                visible={isOrgModalVisible}
+                width={800}
+                footer={null}
+                onCancel={handleCancel}
+              >
+                <Form
+                  form={form}
+                  onFinish={handleCreate}
+                  labelCol={{ span: 8 }}
+                  wrapperCol={{ span: 16 }}
+                  labelAlign="left"
+                >
+                  <Form.Item
+                    label="Organization Name"
+                    name="organization_alias"
+                    rules={[{ required: true, message: "Please input an organization name" }]}
+                  >
+                    <TextInput placeholder="" />
+                  </Form.Item>
+                  <Form.Item label="Models" name="models">
+                    <Select2
+                      mode="multiple"
+                      placeholder="Select models"
+                      style={{ width: "100%" }}
+                    >
+                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                        All Proxy Models
+                      </Select2.Option>
+                      {userModels && userModels.length > 0 && userModels.map((model) => (
+                        <Select2.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select2.Option>
+                      ))}
+                    </Select2>
+                  </Form.Item>
+
+                  <Form.Item label="Max Budget (USD)" name="max_budget">
+                    <NumericalInput step={0.01} precision={2} width={200} />
+                  </Form.Item>
+                  <Form.Item label="Reset Budget" name="budget_duration">
+                    <Select2 defaultValue={null} placeholder="n/a">
+                      <Select2.Option value="24h">daily</Select2.Option>
+                      <Select2.Option value="7d">weekly</Select2.Option>
+                      <Select2.Option value="30d">monthly</Select2.Option>
+                    </Select2>
+                  </Form.Item>
+                  <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Form.Item label="Metadata" name="metadata">  
+                    <Input.TextArea rows={4} />
+                  </Form.Item>
+
+                  <div style={{ textAlign: "right", marginTop: "10px" }}>
+                    <Button type="submit">Create Organization</Button>
+                  </div>
+                </Form>
+              </Modal>
+            </>
+          )}
+
+          <TabGroup className="gap-2 h-[75vh] w-full">
+            <TabList className="flex justify-between mt-2 w-full items-center">
+              <div className="flex">
+                <Tab>Your Organizations</Tab>
+              </div>
+              <div className="flex items-center space-x-2">
+                {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+                <Icon
+                  icon={RefreshIcon}
+                  variant="shadow"
+                  size="xs"
+                  className="self-center"
+                  onClick={handleRefreshClick}
+                />
+              </div>
+            </TabList>
+            <TabPanels>
+              <TabPanel>
+                <Text>
+                  Click on &ldquo;Organization ID&rdquo; to view organization details.
+                </Text>
+                <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+                  <Col numColSpan={1}>
+                    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Organization ID</TableHeaderCell>
+                            <TableHeaderCell>Organization Name</TableHeaderCell>
+                            <TableHeaderCell>Created</TableHeaderCell>
+                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
+                            <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                            <TableHeaderCell>Models</TableHeaderCell>
+                            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+                            <TableHeaderCell>Info</TableHeaderCell>
+                            <TableHeaderCell>Actions</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
 
                   <TableBody>
                     {organizations && organizations.length > 0
@@ -462,7 +540,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           </div>
         </div>
       ) : <></>}
-    </TabGroup>
+    </div>
   );
 };
 
