@@ -938,6 +938,7 @@ class NewCustomerRequest(BudgetNewRequest):
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    spend: Optional[float] = None
     allowed_model_region: Optional[
         AllowedModelRegion
     ] = None  # require all user requests to use models in this specific region
