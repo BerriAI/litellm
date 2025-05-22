@@ -2261,7 +2261,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
 
     def __init__(self, **kwargs):
-        if "error" in kwargs:
+        if "error" in kwargs and kwargs["error"] is not None:
             # check if error is all None - if so, set error to None
             if all(value is None for value in kwargs["error"].values()):
                 kwargs["error"] = None
