@@ -752,6 +752,9 @@ class Router:
         self._arealtime = self.factory_function(
             litellm._arealtime, call_type="_arealtime"
         )
+        self.acreate_fine_tuning_job = self.factory_function(
+            litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -3159,6 +3162,7 @@ class Router:
             "afile_delete",
             "afile_content",
             "_arealtime",
+            "acreate_fine_tuning_job",
         ] = "assistants",
     ):
         """
@@ -3207,6 +3211,7 @@ class Router:
                 "anthropic_messages",
                 "aresponses",
                 "_arealtime",
+                "acreate_fine_tuning_job",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
