@@ -136,7 +136,13 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_128k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_audio_token_cost: Optional[float]
     cache_read_input_token_cost: Optional[float]
+    cache_read_input_token_cost_above_128k_tokens: Optional[float]
+    cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_audio_token_cost: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models

@@ -342,8 +342,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_computer_use": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
+                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_storage_cost_per_token_per_hour": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -709,7 +714,7 @@ def test_supports_computer_use_utility():
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="") # Load with local/backup
-    
+
     try:
         # Test a model known to support computer_use from backup JSON
         supports_cu_anthropic = supports_computer_use(model="anthropic/claude-3-7-sonnet-20250219")
@@ -724,7 +729,7 @@ def test_supports_computer_use_utility():
             del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
         else:
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
-        
+
         if original_model_cost is not None:
             litellm.model_cost = original_model_cost
         elif hasattr(litellm, "model_cost"):
@@ -740,12 +745,12 @@ def test_get_model_info_shows_supports_computer_use():
     # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
     litellm.model_cost = litellm.get_model_cost_map(url="") 
-    
+
     # This model should have 'supports_computer_use': True in the backup JSON
     model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
     info = litellm.get_model_info(model_known_to_support_computer_use)
     print(f"Info for {model_known_to_support_computer_use}: {info}")
-    
+
     # After the fix in utils.py, this should now be present and True
     assert info.get("supports_computer_use") is True
 
