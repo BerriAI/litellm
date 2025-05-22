@@ -133,8 +133,12 @@ class LangFuseLogger:
             - Langfuse initializes 1 thread everytime a client is initialized.
             - We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
         """
-        if litellm.initialized_langfuse_clients > MAX_LANGFUSE_INITIALIZED_CLIENTS:
-            raise Exception("Max langfuse clients reached")
+        from langfuse import Langfuse
+
+        if litellm.initialized_langfuse_clients >= MAX_LANGFUSE_INITIALIZED_CLIENTS:
+            raise Exception(
+                f"Max langfuse clients reached: {litellm.initialized_langfuse_clients} is greater than {MAX_LANGFUSE_INITIALIZED_CLIENTS}"
+            )
         langfuse_client = Langfuse(**parameters)
         litellm.initialized_langfuse_clients += 1
         return langfuse_client
