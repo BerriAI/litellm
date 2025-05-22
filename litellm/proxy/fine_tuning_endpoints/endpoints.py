@@ -20,7 +20,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.types.llms.openai import FineTuningJob
 from litellm.types.utils import LiteLLMFineTuningJob
 
 router = APIRouter()
