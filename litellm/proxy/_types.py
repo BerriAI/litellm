@@ -1223,6 +1223,7 @@ class TeamRequest(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
 
+    budget_id: Optional[str] = None
     soft_budget: Optional[float] = None
     max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
