@@ -1000,7 +1000,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     model: Optional[str]
     object: Optional[str]
     output: Union[
-        List[ResponseOutputItem],
+        List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
     parallel_tool_calls: bool
