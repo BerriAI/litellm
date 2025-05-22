@@ -395,10 +395,12 @@ except Exception:
 # Import enterprise routes
 try:
     from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+    from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
 
     enterprise_router = _enterprise_router
+    enterprise_proxy_config: Optional[EnterpriseProxyConfig] = EnterpriseProxyConfig()
 except ImportError:
-    pass
+    enterprise_proxy_config = None
 ###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
@@ -1862,6 +1864,9 @@ class ProxyConfig:
                 user_custom_sso = get_instance_fn(
                     value=custom_sso, config_file_path=config_file_path
                 )
+
+            if enterprise_proxy_config is not None:
+                await enterprise_proxy_config.load_enterprise_config(general_settings)
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
