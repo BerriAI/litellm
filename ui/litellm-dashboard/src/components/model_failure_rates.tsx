@@ -35,13 +35,13 @@ const columns: ColumnDef<ModelFailureRow>[] = [
   {
     header: 'Failed',
     accessorKey: 'failedRequests',
-    cell: (info) => <span className="text-right">{Number(info.getValue())}</span>,
+    cell: (info) => Number(info.getValue()),
     meta: { align: 'right' },
   },
   {
     header: 'Total',
     accessorKey: 'totalRequests',
-    cell: (info) => <span className="text-right">{Number(info.getValue())}</span>,
+    cell: (info) => Number(info.getValue()),
     meta: { align: 'right' },
   },
 ];
