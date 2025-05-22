@@ -256,11 +256,11 @@ def _get_cache_cost(
             regular_cost_key_prefix = cost_key_prefix.replace("_audio", "")
             regular_above_200k_key = f"{regular_cost_key_prefix}_above_200k_tokens"
 
-            if regular_above_200k_key in model_info and base_cost > 0:
+            if regular_above_200k_key in model_info and base_cost is not None and base_cost > 0:
                 # Calculate the multiplier from regular token costs
                 regular_base_cost = model_info.get(regular_cost_key_prefix, 0.0)
                 if regular_base_cost > 0:
-                    multiplier = model_info[regular_above_200k_key] / regular_base_cost
+                    multiplier = float(model_info.get(regular_above_200k_key, 0.0)) / regular_base_cost
                     # Apply the same multiplier to audio cache cost
                     return float(token_count) * (base_cost * multiplier)
 
@@ -269,11 +269,11 @@ def _get_cache_cost(
             regular_cost_key_prefix = cost_key_prefix.replace("_audio", "")
             regular_above_128k_key = f"{regular_cost_key_prefix}_above_128k_tokens"
 
-            if regular_above_128k_key in model_info and base_cost > 0:
+            if regular_above_128k_key in model_info and base_cost is not None and base_cost > 0:
                 # Calculate the multiplier from regular token costs
                 regular_base_cost = model_info.get(regular_cost_key_prefix, 0.0)
                 if regular_base_cost > 0:
-                    multiplier = model_info[regular_above_128k_key] / regular_base_cost
+                    multiplier = float(model_info.get(regular_above_128k_key, 0.0)) / regular_base_cost
                     # Apply the same multiplier to audio cache cost
                     return float(token_count) * (base_cost * multiplier)
 
@@ -288,11 +288,11 @@ def _get_cache_cost(
             above_200k_input_cost = model_info.get(input_cost_above_200k_key)
 
             if (base_input_cost is not None and above_200k_input_cost is not None and 
-                base_input_cost > 0 and base_cost > 0):
+                base_input_cost > 0 and base_cost is not None and base_cost > 0):
                 # Calculate the ratio between cache cost and input cost
-                ratio = base_cost / base_input_cost
+                ratio = float(base_cost) / float(base_input_cost)
                 # Apply the same ratio to the above_200k input cost
-                return float(token_count) * (above_200k_input_cost * ratio)
+                return float(token_count) * (float(above_200k_input_cost) * ratio)
 
     # Similarly for 128k threshold
     if _is_above_128k(tokens=tokens_to_check) and above_128k_key not in model_info:
@@ -304,25 +304,25 @@ def _get_cache_cost(
             above_128k_input_cost = model_info.get(input_cost_above_128k_key)
 
             if (base_input_cost is not None and above_128k_input_cost is not None and 
-                base_input_cost > 0 and base_cost > 0):
+                base_input_cost > 0 and base_cost is not None and base_cost > 0):
                 # Calculate the ratio between cache cost and input cost
-                ratio = base_cost / base_input_cost
+                ratio = float(base_cost) / float(base_input_cost)
                 # Apply the same ratio to the above_128k input cost
-                return float(token_count) * (above_128k_input_cost * ratio)
+                return float(token_count) * (float(above_128k_input_cost) * ratio)
 
     # Standard threshold-based pricing logic
     if _is_above_200k(tokens=tokens_to_check) and above_200k_key in model_info:
         cost_value = model_info.get(above_200k_key)
         if cost_value is not None:
-            return float(token_count) * cost_value
+            return float(token_count) * float(cost_value)
         return 0.0
     elif _is_above_128k(tokens=tokens_to_check) and above_128k_key in model_info:
         cost_value = model_info.get(above_128k_key)
         if cost_value is not None:
-            return float(token_count) * cost_value
+            return float(token_count) * float(cost_value)
         return 0.0
     else:
-        return float(token_count) * base_cost
+        return float(token_count) * (float(base_cost) if base_cost is not None else 0.0)
 
 def _extract_prompt_token_details(usage: Usage) -> Tuple[int, int, int, int, int, int]:
     """
@@ -340,40 +340,23 @@ def _extract_prompt_token_details(usage: Usage) -> Tuple[int, int, int, int, int
     video_length_seconds = 0
 
     if usage.prompt_tokens_details:
-        cache_hit_tokens = (
-            cast(
-                Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)
-            )
-            or 0
-        )
-        text_tokens = (
-            cast(
-                Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None)
-            )
-            or 0  # default to prompt tokens, if this field is not set
-        )
-        audio_tokens = (
-            cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
-            or 0
-        )
-        character_count = (
-            cast(
-                Optional[int],
-                getattr(usage.prompt_tokens_details, "character_count", 0),
-            )
-            or 0
-        )
-        image_count = (
-            cast(Optional[int], getattr(usage.prompt_tokens_details, "image_count", 0))
-            or 0
-        )
-        video_length_seconds = (
-            cast(
-                Optional[int],
-                getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
-            )
-            or 0
-        )
+        cached_tokens_value = getattr(usage.prompt_tokens_details, "cached_tokens", None)
+        cache_hit_tokens = int(cached_tokens_value) if cached_tokens_value is not None else 0
+
+        text_tokens_value = getattr(usage.prompt_tokens_details, "text_tokens", None)
+        text_tokens = int(text_tokens_value) if text_tokens_value is not None else 0  # default to prompt tokens, if this field is not set
+
+        audio_tokens_value = getattr(usage.prompt_tokens_details, "audio_tokens", None)
+        audio_tokens = int(audio_tokens_value) if audio_tokens_value is not None else 0
+
+        character_count_value = getattr(usage.prompt_tokens_details, "character_count", None)
+        character_count = int(character_count_value) if character_count_value is not None else 0
+
+        image_count_value = getattr(usage.prompt_tokens_details, "image_count", None)
+        image_count = int(image_count_value) if image_count_value is not None else 0
+
+        video_length_seconds_value = getattr(usage.prompt_tokens_details, "video_length_seconds", None)
+        video_length_seconds = int(video_length_seconds_value) if video_length_seconds_value is not None else 0
 
     # EDGE CASE - text tokens not set inside PromptTokensDetails
     if text_tokens == 0:
@@ -441,11 +424,12 @@ def _calculate_cache_writing_cost(model_info: ModelInfo, usage: Usage) -> float:
     cache_cost = 0.0
 
     # Handle regular text tokens cache creation cost
-    if usage._cache_creation_input_tokens and usage._cache_creation_input_tokens > 0:
+    cache_creation_tokens = getattr(usage, "_cache_creation_input_tokens", None)
+    if cache_creation_tokens is not None and cache_creation_tokens > 0:
         cache_cost += _get_cache_cost(
             model_info=model_info,
             cost_key_prefix="cache_creation_input_token_cost",
-            token_count=usage._cache_creation_input_tokens,
+            token_count=float(cache_creation_tokens),
         )
 
     # Handle audio tokens cache creation cost if applicable
@@ -493,27 +477,12 @@ def _extract_completion_token_details(usage: Usage) -> Tuple[int, int, int, bool
     is_text_tokens_total = False
 
     if usage.completion_tokens_details is not None:
-        audio_tokens = (
-            cast(
-                Optional[int],
-                getattr(usage.completion_tokens_details, "audio_tokens", 0),
-            )
-            or 0
-        )
-        text_tokens = (
-            cast(
-                Optional[int],
-                getattr(usage.completion_tokens_details, "text_tokens", None),
-            )
-            or 0  # default to completion tokens, if this field is not set
-        )
-        reasoning_tokens = (
-            cast(
-                Optional[int],
-                getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
-            )
-            or 0
-        )
+        audio_tokens_value = getattr(usage.completion_tokens_details, "audio_tokens", None)
+        audio_tokens = int(audio_tokens_value) if audio_tokens_value is not None else 0
+        text_tokens_value = getattr(usage.completion_tokens_details, "text_tokens", None)
+        text_tokens = int(text_tokens_value) if text_tokens_value is not None else 0  # default to 0, if this field is not set
+        reasoning_tokens_value = getattr(usage.completion_tokens_details, "reasoning_tokens", None)
+        reasoning_tokens = int(reasoning_tokens_value) if reasoning_tokens_value is not None else 0
 
     if text_tokens == 0:
         text_tokens = usage.completion_tokens
