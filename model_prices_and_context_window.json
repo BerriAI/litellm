@@ -4638,9 +4638,9 @@
         "supports_tool_choice": true
     },
     "claude-opus-4-0": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "cache_creation_input_token_cost": 18.75e-6,
@@ -4668,9 +4668,9 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview#model-pricing"
     },
     "claude-opus-4-20250514": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "cache_creation_input_token_cost": 18.75e-6,
@@ -4698,9 +4698,9 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview#model-pricing"
     },
     "claude-sonnet-4-0": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "cache_creation_input_token_cost": 3.75e-6,
@@ -4728,9 +4728,9 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview#model-pricing"
     },
     "claude-sonnet-4-20250514": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "cache_creation_input_token_cost": 3.75e-6,
@@ -9465,9 +9465,9 @@
         "supports_tool_choice": true
     },
     "anthropic.claude-opus-4-20250514-v1:0": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 0.015e-3,
         "output_cost_per_token": 0.075e-3,
         "cache_creation_input_token_cost": 0.01875e-3,
@@ -9489,9 +9489,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 8192,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 0.003e-3,
         "output_cost_per_token": 0.015e-3,
         "cache_creation_input_token_cost": 0.00375e-3,
