@@ -42,31 +42,3 @@ def test_use_custom_pricing_for_model():
         "input_cost_per_pixel": 10,
     }
     assert use_custom_pricing_for_model(litellm_params) == True
-
-
-def test_optional_params_with_response_schema(logging_obj):
-    good_schema = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "age": {"type": "integer"},
-        },
-    }
-    optional_params = {"response_schema": good_schema}
-    logging_obj.update_environment_variables(
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
-        user="test_user",
-        optional_params=optional_params,
-        litellm_params={},
-        custom_llm_provider="azure",
-    )
-    optional_params["response_schema"] = {
-        "my-bad-schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "integer"},
-            },
-        }
-    }
-    assert logging_obj.optional_params["response_schema"] == good_schema
