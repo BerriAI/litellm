@@ -26,7 +26,7 @@ const columns: ColumnDef<ModelFailureRow>[] = [
       const value = Number(info.getValue());
       return (
         <div className="w-full flex items-center">
-          <div className="mr-2">
+          <div>
             <div className="w-44 bg-gray-200 rounded-sm h-2">
               <div 
                 className="h-2 rounded-sm" 
@@ -45,12 +45,12 @@ const columns: ColumnDef<ModelFailureRow>[] = [
     },
   },
   {
-    header: 'Failed / Total',
+    header: 'Failed Requests / Total Requests',
     accessorKey: 'failedRequests',
     cell: (info) => {
       const row = info.row.original;
       return (
-        <div className="ml-2 text-sm">
+        <div>
           {row.failedRequests} / {row.totalRequests}
         </div>
       );
