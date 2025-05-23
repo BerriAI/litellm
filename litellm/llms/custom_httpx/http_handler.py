@@ -10,6 +10,7 @@ from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -482,16 +483,55 @@ class AsyncHTTPHandler:
         - Why force ipv4?
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
-        if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address="0.0.0.0")
-
+        #########################################################
+        # AIOHTTP TRANSPORT is used by default
+        # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
+        #########################################################
         if (
             litellm.use_aiohttp_transport
             and AsyncHTTPHandler.aiohttp_transport_exists()
         ):
+            return AsyncHTTPHandler._create_aiohttp_transport()
+
+        #########################################################
+        # HTTPX TRANSPORT is used when aiohttp is not installed
+        #########################################################
+        return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _create_aiohttp_transport() -> AiohttpTransport:
+        """
+        Creates an AiohttpTransport
+
+        - If force_ipv4 is True, it will create an AiohttpTransport with local_addr set to "0.0.0.0"
+        - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
+        """
+        if litellm.force_ipv4:
+            # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
+            verbose_logger.debug("Creating AiohttpTransport with force_ipv4")
+            from aiohttp import TCPConnector
+
             return AiohttpTransport(
-                client=lambda: ClientSession(),
+                client=lambda: ClientSession(
+                    connector=TCPConnector(local_addr=("0.0.0.0", 0))
+                ),
             )
+
+        verbose_logger.debug("Creating AiohttpTransport with default settings")
+        return AiohttpTransport(
+            client=lambda: ClientSession(),
+        )
+
+    @staticmethod
+    def _create_httpx_transport() -> Optional[AsyncHTTPTransport]:
+        """
+        Creates an AsyncHTTPTransport
+
+        - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
+        - [Default] If force_ipv4 is False, it will return None
+        """
+        if litellm.force_ipv4:
+            return AsyncHTTPTransport(local_address="0.0.0.0")
         else:
             return None
 
