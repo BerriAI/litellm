@@ -354,31 +354,36 @@ async def get_user_info_from_db(
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
+    alternate_user_id: Optional[str] = None,
 ) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
     try:
-        user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]] = (
-            await get_existing_user_info_from_db(
-                user_id=cast(
-                    Optional[str],
-                    (
-                        getattr(result, "id", None)
-                        if not isinstance(result, dict)
-                        else result.get("id", None)
-                    ),
-                ),
-                user_email=cast(
-                    Optional[str],
-                    (
-                        getattr(result, "email", None)
-                        if not isinstance(result, dict)
-                        else result.get("email", None)
-                    ),
-                ),
+        potential_user_ids = []
+        if alternate_user_id is not None:
+            potential_user_ids.append(alternate_user_id)
+        if not isinstance(result, dict):
+            potential_user_ids.append(getattr(result, "id", None))
+        else:
+            potential_user_ids.append(result.get("id", None))
+
+        user_email = (
+            getattr(result, "email", None)
+            if not isinstance(result, dict)
+            else result.get("email", None)
+        )
+
+        user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]] = None
+
+        for user_id in potential_user_ids:
+            user_info = await get_existing_user_info_from_db(
+                user_id=user_id,
+                user_email=user_email,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        )
+            if user_info is not None:
+                break
+
         verbose_proxy_logger.debug(
             f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
         )
@@ -567,6 +572,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         proxy_logging_obj=proxy_logging_obj,
         user_email=user_email,
         user_defined_values=user_defined_values,
+        alternate_user_id=user_id,
     )
 
     user_defined_values = apply_user_info_values_to_sso_user_defined_values(
@@ -707,9 +713,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -904,9 +910,9 @@ class SSOAuthenticationHandler:
                 if state:
                     redirect_params["state"] = state
                 elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
+                    redirect_params[
+                        "state"
+                    ] = uuid.uuid4().hex  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -1151,9 +1157,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
@@ -1221,9 +1227,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
