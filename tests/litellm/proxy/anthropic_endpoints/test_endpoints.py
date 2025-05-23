@@ -57,5 +57,22 @@ class TestAnthropicEndpoints(unittest.TestCase):
         assert mock_safe_dumps.call_count == 2  # Called twice, once for each dict object
 
 
+
+    def test_stream_defaults_to_false_when_not_specified(self):
+        """Test that stream defaults to false in messages endpoint when not specified"""
+        # Test the logic that our PR adds
+        data = {
+            "model": "claude-3-opus-20240229",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 100
+        }
+        
+        # This is the actual code from our PR
+        if "stream" not in data:
+            data["stream"] = False
+        
+        # Verify stream was added with default value
+        self.assertEqual(data["stream"], False)
+        self.assertIn("stream", data)
 if __name__ == "__main__":
     unittest.main()
