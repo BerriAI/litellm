@@ -164,22 +164,11 @@ class KeyManagementEventHooks:
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
         if litellm.store_audit_logs is True and data.keys is not None:
-            # make an audit log for each team deleted
-            for key in data.keys:
-                key_row = await prisma_client.get_data(  # type: ignore
-                    token=key, table_name="key", query_type="find_unique"
-                )
-
-                if key_row is None:
-                    raise ProxyException(
-                        message=f"Key {key} not found",
-                        type=ProxyErrorTypes.bad_request_error,
-                        param="key",
-                        code=status.HTTP_404_NOT_FOUND,
-                    )
-
-                key_row = key_row.json(exclude_none=True)
-                _key_row = json.dumps(key_row, default=str)
+            # make an audit log for each key deleted
+            for key in keys_being_deleted:
+                if key.token is None:
+                    continue
+                _key_row = key.model_dump_json(exclude_none=True)
 
                 asyncio.create_task(
                     create_audit_log_for_update(
@@ -191,7 +180,7 @@ class KeyManagementEventHooks:
                             or litellm_proxy_admin_name,
                             changed_by_api_key=user_api_key_dict.api_key,
                             table_name=LitellmTableNames.KEY_TABLE_NAME,
-                            object_id=key,
+                            object_id=key.token,
                             action="deleted",
                             updated_values="{}",
                             before_value=_key_row,
