@@ -755,6 +755,18 @@ class Router:
         self.acreate_fine_tuning_job = self.factory_function(
             litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
         )
+        self.acancel_fine_tuning_job = self.factory_function(
+            litellm.acancel_fine_tuning_job, call_type="acancel_fine_tuning_job"
+        )
+        self.alist_fine_tuning_jobs = self.factory_function(
+            litellm.alist_fine_tuning_jobs, call_type="alist_fine_tuning_jobs"
+        )
+        self.aretrieve_fine_tuning_job = self.factory_function(
+            litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job"
+        )
+        self.afile_list = self.factory_function(
+            litellm.afile_list, call_type="alist_files"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -2439,6 +2451,7 @@ class Router:
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
+
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
             )
@@ -3172,6 +3185,10 @@ class Router:
             "afile_content",
             "_arealtime",
             "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
+            "alist_files",
         ] = "assistants",
     ):
         """
@@ -3221,6 +3238,10 @@ class Router:
                 "aresponses",
                 "_arealtime",
                 "acreate_fine_tuning_job",
+                "acancel_fine_tuning_job",
+                "alist_fine_tuning_jobs",
+                "aretrieve_fine_tuning_job",
+                "alist_files",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

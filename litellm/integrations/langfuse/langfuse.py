@@ -10,6 +10,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
@@ -27,12 +28,13 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from langfuse.client import StatefulTraceClient
+    from langfuse.client import Langfuse, StatefulTraceClient
 
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
     StatefulTraceClient = Any
+    Langfuse = Any
 
 
 class LangFuseLogger:
@@ -84,8 +86,7 @@ class LangFuseLogger:
 
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
-
-        self.Langfuse = Langfuse(**parameters)
+        self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -123,6 +124,24 @@ class LangFuseLogger:
             )
         else:
             self.upstream_langfuse = None
+
+    def safe_init_langfuse_client(self, parameters: dict) -> Langfuse:
+        """
+        Safely init a langfuse client if the number of initialized clients is less than the max
+
+        Note:
+            - Langfuse initializes 1 thread everytime a client is initialized.
+            - We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
+        """
+        from langfuse import Langfuse
+
+        if litellm.initialized_langfuse_clients >= MAX_LANGFUSE_INITIALIZED_CLIENTS:
+            raise Exception(
+                f"Max langfuse clients reached: {litellm.initialized_langfuse_clients} is greater than {MAX_LANGFUSE_INITIALIZED_CLIENTS}"
+            )
+        langfuse_client = Langfuse(**parameters)
+        litellm.initialized_langfuse_clients += 1
+        return langfuse_client
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:

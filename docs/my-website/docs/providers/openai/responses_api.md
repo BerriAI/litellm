@@ -318,3 +318,133 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+
+## MCP Tools 
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="MCP Tools with LiteLLM SDK"
+import litellm
+from typing import Optional
+
+# Configure MCP Tools
+MCP_TOOLS = [
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "allowed_tools": ["ask_question"]
+    }
+]
+
+# Step 1: Make initial request - OpenAI will use MCP LIST and return MCP calls for approval
+response = litellm.responses(
+    model="openai/gpt-4.1",
+    tools=MCP_TOOLS,
+    input="What transport protocols does the 2025-03-26 version of the MCP spec support?"
+)
+
+# Get the MCP approval ID
+mcp_approval_id = None
+for output in response.output:
+    if output.type == "mcp_approval_request":
+        mcp_approval_id = output.id
+        break
+
+# Step 2: Send followup with approval for the MCP call
+response_with_mcp_call = litellm.responses(
+    model="openai/gpt-4.1",
+    tools=MCP_TOOLS,
+    input=[
+        {
+            "type": "mcp_approval_response",
+            "approve": True,
+            "approval_request_id": mcp_approval_id
+        }
+    ],
+    previous_response_id=response.id,
+)
+
+print(response_with_mcp_call)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Set up config.yaml
+
+```yaml showLineNumbers title="OpenAI Proxy Configuration"
+model_list:
+  - model_name: openai/gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start LiteLLM Proxy Server
+
+```bash title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it!
+
+```python showLineNumbers title="MCP Tools with OpenAI SDK via LiteLLM Proxy"
+from openai import OpenAI
+from typing import Optional
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Configure MCP Tools
+MCP_TOOLS = [
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "allowed_tools": ["ask_question"]
+    }
+]
+
+# Step 1: Make initial request - OpenAI will use MCP LIST and return MCP calls for approval
+response = client.responses.create(
+    model="openai/gpt-4.1",
+    tools=MCP_TOOLS,
+    input="What transport protocols does the 2025-03-26 version of the MCP spec support?"
+)
+
+# Get the MCP approval ID
+mcp_approval_id = None
+for output in response.output:
+    if output.type == "mcp_approval_request":
+        mcp_approval_id = output.id
+        break
+
+# Step 2: Send followup with approval for the MCP call
+response_with_mcp_call = client.responses.create(
+    model="openai/gpt-4.1",
+    tools=MCP_TOOLS,
+    input=[
+        {
+            "type": "mcp_approval_response",
+            "approve": True,
+            "approval_request_id": mcp_approval_id
+        }
+    ],
+    previous_response_id=response.id,
+)
+
+print(response_with_mcp_call)
+```
+
+</TabItem>
+</Tabs>
+
+
