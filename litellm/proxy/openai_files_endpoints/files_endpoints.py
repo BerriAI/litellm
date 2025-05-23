@@ -179,6 +179,7 @@ async def route_create_file(
             create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            user_api_key_dict=user_api_key_dict,
         )
     else:
         # get configs for custom_llm_provider
@@ -928,7 +929,6 @@ async def list_files(
             response = await llm_router.afile_list(
                 **data,
             )
-            return response
         elif provider:
             custom_llm_provider = (
                 provider
@@ -939,6 +939,19 @@ async def list_files(
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
             )
+
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
+            )
+
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+        if _response is not None and isinstance(_response, OpenAIFileObject):
+            response = _response
 
         ### ALERTING ###
         asyncio.create_task(

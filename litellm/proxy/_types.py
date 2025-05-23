@@ -2881,6 +2881,9 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: OpenAIFileObject
     model_mappings: Dict[str, str]
+    flat_model_file_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
 
 
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
