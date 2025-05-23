@@ -172,6 +172,7 @@ from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
 from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
 from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
+from litellm.llms.nebius.embed.handler import nebius_embeddings
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
@@ -1765,6 +1766,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nebius"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -3921,10 +3923,8 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "nebius":
-            from litellm.llms.nebius.embed.handler import nebius_embeddings
-
             api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
-            api_base = api_base or litellm.api_base or get_secret_str("NEBIUS_API_BASE")
+            api_base = api_base or litellm.api_base or get_secret_str("NEBIUS_API_BASE") or "api.studio.nebius.ai/v1"
             
             response = nebius_embeddings(
                 model=model,

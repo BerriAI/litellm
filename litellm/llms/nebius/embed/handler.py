@@ -6,7 +6,6 @@ from typing import Optional
 
 from litellm.llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.types.llms.nebius import NebiusAIEndpoint
 from litellm.utils import ModelResponse
 
 

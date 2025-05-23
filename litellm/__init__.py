@@ -597,7 +597,7 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
-        elif value.get("litellm_provider") == "nebius_chat_models":
+        elif value.get("litellm_provider") == "nebius-chat-models":
             nebius_chat_models.append(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
             nebius_embedding_models.append(key)
@@ -1065,6 +1065,7 @@ from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.nebius.embed.transformation import NebiusEmbeddingConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
