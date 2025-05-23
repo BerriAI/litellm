@@ -1,5 +1,5 @@
 import os
-from typing import Callable, Union
+from typing import Any, Callable, Optional, Union
 
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
@@ -32,6 +32,14 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     cred: Union[AzureCredentialType, str] = AzureCredentialType(
         os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
     )
+    credential: Optional[
+        Union[
+            ClientSecretCredential,
+            ManagedIdentityCredential,
+            CertificateCredential,
+            Any,
+        ]
+    ] = None
     if cred == AzureCredentialType.ClientSecretCredential:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],
@@ -50,4 +58,6 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
         cred_cls = getattr(identity, cred)
         credential = cred_cls()
 
+    if credential is None:
+        raise ValueError("No credential provided")
     return get_bearer_token_provider(credential, azure_scope)
