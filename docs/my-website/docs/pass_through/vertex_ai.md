@@ -116,7 +116,7 @@ curl \
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex_ai/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{

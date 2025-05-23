@@ -3358,14 +3358,15 @@ export interface Member {
 export const teamMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberAddCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_add`
       : `/team/member_add`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -3374,21 +3375,30 @@ export const teamMemberAddCall = async (
       },
       body: JSON.stringify({
         team_id: teamId,
-        member: formValues, // Include formValues in the request body
+        member: formValues,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3401,7 +3411,7 @@ export const teamMemberUpdateCall = async (
   formValues: Member // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberUpdateCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
@@ -3420,21 +3430,30 @@ export const teamMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update team member:", error);
     throw error;
   }
-}
+};
 
 export const teamMemberDeleteCall = async (
   accessToken: string,
