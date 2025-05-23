@@ -48,6 +48,7 @@ from litellm.constants import (
     huggingface_models,
     empower_models,
     together_ai_models,
+    netmind_models,
     baseten_models,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -195,6 +196,7 @@ vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
+netmind_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
@@ -649,6 +651,7 @@ model_list = (
     + ai21_models
     + ai21_chat_models
     + together_ai_models
+    + netmind_models
     + baseten_models
     + aleph_alpha_models
     + nlp_cloud_models
@@ -701,6 +704,7 @@ models_by_provider: dict = {
     "replicate": replicate_models,
     "huggingface": huggingface_models,
     "together_ai": together_ai_models,
+    "netmind": netmind_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
     "vertex_ai": vertex_chat_models
@@ -899,6 +903,9 @@ from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
 )
 
+from .llms.netmind.chat.transformation import (
+    NetmindChatConfig
+)
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,

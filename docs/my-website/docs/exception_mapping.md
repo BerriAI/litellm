@@ -149,6 +149,8 @@ Base case - we return `litellm.APIConnectionError` exception (inherits from open
 | ollama_chat                | ✓       |                            | ✓                |               |                             |                     |          |                | ✓                       |                       |                           |
 | vllm                       |         |                            |                  |               |                             | ✓                   | ✓        |                |                         |                       |                           |
 | azure                      | ✓       | ✓                          | ✓                | ✓             | ✓                           | ✓                   |          |                | ✓                       |                       |                           |
+| netmind                     | ✓       | ✓                          | ✓                |               |                             | ✓                   |          |                |                         |                       |                           |
+
 
 - "✓" indicates that the specified `custom_llm_provider` can raise the corresponding exception.
 - Empty cells indicate the lack of association or that the provider does not raise that particular exception type as indicated by the function.
