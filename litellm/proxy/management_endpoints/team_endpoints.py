@@ -423,6 +423,11 @@ def validate_team_org_change(
     - The team's tpm/rpm limit must be less than the org's tpm/rpm limit
     """
 
+    # If the team's organization is the same as the new organization, return True
+    # Since no changes are being made
+    if team.organization_id == organization.organization_id:
+        return True
+
     # Check if the org has access to the team's models
     if len(organization.models) > 0:
         if SpecialModelNames.all_proxy_models.value in organization.models:
@@ -1105,7 +1110,7 @@ async def team_member_update(
 
     Update team member budgets and team member role
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, premium_user
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1113,6 +1118,13 @@ async def team_member_update(
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
+
+    if data.role == "admin" and not premium_user:
+        # exactly the same text your proxy throws for add:
+        raise HTTPException(
+            status_code=400,
+            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing"
+        )
     if data.user_id is None and data.user_email is None:
         raise HTTPException(
             status_code=400,

@@ -42,7 +42,7 @@ else:
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self, message_logging: bool = True) -> None:
+    def __init__(self, message_logging: bool = True, **kwargs) -> None:
         self.message_logging = message_logging
         pass
 
@@ -87,6 +87,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -104,6 +105,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -234,6 +236,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         pass
 

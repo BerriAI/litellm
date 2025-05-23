@@ -573,3 +573,12 @@ def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
             if tool_call_name:
                 tool_call_names.append(tool_call_name)
     return tool_call_names
+
+
+def is_function_call(optional_params: dict) -> bool:
+    """
+    Checks if the optional params contain the function call
+    """
+    if "functions" in optional_params and optional_params.get("functions"):
+        return True
+    return False

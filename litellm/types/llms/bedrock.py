@@ -125,8 +125,14 @@ class ConverseResponseBlock(TypedDict):
     usage: ConverseTokenUsageBlock
 
 
+class ToolJsonSchemaBlock(TypedDict, total=False):
+    type: Literal["object"]
+    properties: dict
+    required: List[str]
+
+
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[dict]
+    json: Optional[ToolJsonSchemaBlock]
 
 
 class ToolSpecBlock(TypedDict, total=False):
@@ -135,8 +141,9 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
-class ToolBlock(TypedDict):
+class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    cachePoint: Optional[CachePointBlock]
 
 
 class SpecificToolChoiceBlock(TypedDict):

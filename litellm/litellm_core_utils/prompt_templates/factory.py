@@ -55,6 +55,11 @@ DEFAULT_USER_CONTINUE_MESSAGE = {
     "content": "Please continue.",
 }  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+DEFAULT_USER_CONTINUE_MESSAGE_TYPED = ChatCompletionUserMessage(
+    role="user",
+    content="Please continue.",
+)
+
 # used to interweave assistant messages, to ensure user/assistant alternating
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     role="assistant",
@@ -1139,7 +1144,7 @@ def convert_to_gemini_tool_call_result(
 
 
 def convert_to_anthropic_tool_result(
-    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1408,6 +1413,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
             AnthopicMessagesAssistantMessageParam,
         ]
     ] = []
+
+    if len(messages) == 0:
+        if not litellm.modify_params:
+            raise litellm.BadRequestError(
+                message=f"Anthropic requires at least one non-system message. Either provide one, or set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add the dummy user message - {DEFAULT_USER_CONTINUE_MESSAGE_TYPED}.",
+                model=model,
+                llm_provider=llm_provider,
+            )
+        else:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -1613,7 +1629,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    if new_messages[-1]["role"] == "assistant":
+    if len(new_messages) > 0 and new_messages[-1]["role"] == "assistant":
         if isinstance(new_messages[-1]["content"], str):
             new_messages[-1]["content"] = new_messages[-1]["content"].rstrip()
         elif isinstance(new_messages[-1]["content"], list):
@@ -2244,6 +2260,7 @@ from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
+from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
@@ -2499,7 +2516,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 
 def _convert_to_bedrock_tool_call_result(
-    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -2672,7 +2689,7 @@ def get_user_message_block_or_continue_message(
 def return_assistant_continue_message(
     assistant_continue_message: Optional[
         Union[str, ChatCompletionAssistantMessage]
-    ] = None
+    ] = None,
 ) -> ChatCompletionAssistantMessage:
     if assistant_continue_message and isinstance(assistant_continue_message, str):
         return ChatCompletionAssistantMessage(
@@ -3024,6 +3041,19 @@ class BedrockConverseMessagesProcessor:
                     )
                 )
                 _assistant_content = assistant_message_block.get("content", None)
+                thinking_blocks = cast(
+                    Optional[List[ChatCompletionThinkingBlock]],
+                    assistant_message_block.get("thinking_blocks"),
+                )
+
+                if thinking_blocks is not None:
+                    converted_thinking_blocks = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                        thinking_blocks
+                    )
+                    assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                        thinking_blocks=converted_thinking_blocks,
+                        assistant_parts=assistant_content,
+                    )
 
                 if _assistant_content is not None and isinstance(
                     _assistant_content, list
@@ -3037,7 +3067,10 @@ class BedrockConverseMessagesProcessor:
                                         cast(ChatCompletionThinkingBlock, element)
                                     ]
                                 )
-                                assistants_parts.extend(thinking_block)
+                                assistants_parts = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                                    thinking_blocks=thinking_block,
+                                    assistant_parts=assistants_parts,
+                                )
                             elif element["type"] == "text":
                                 assistants_part = BedrockContentBlock(
                                     text=element["text"]
@@ -3141,6 +3174,37 @@ class BedrockConverseMessagesProcessor:
         return await BedrockImageProcessor.process_image_async(
             image_url=cast(str, file_id or file_data), format=format
         )
+
+    @staticmethod
+    def add_thinking_blocks_to_assistant_content(
+        thinking_blocks: List[BedrockContentBlock],
+        assistant_parts: List[BedrockContentBlock],
+    ) -> List[BedrockContentBlock]:
+        """
+        If contains 'signature', it is a thinking block.
+        If missing 'signature', it is a text block - e.g. when using a non-anthropic model.
+
+        Handle error raised by bedrock if thinking blocks are provided for a non-thinking model (e.g. nova with tool use)
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
+        """
+        filtered_thinking_blocks = []
+        for block in thinking_blocks:
+            reasoning_content = block.get("reasoningContent", None)
+            reasoning_text = (
+                reasoning_content.get("reasoningText", None)
+                if reasoning_content is not None
+                else None
+            )
+            if reasoning_text and not reasoning_text.get("signature"):
+                reasoning_text_text = reasoning_text["text"]
+                assistants_part = BedrockContentBlock(text=reasoning_text_text)
+                assistant_parts.append(assistants_part)
+            else:
+                filtered_thinking_blocks.append(block)
+        if len(filtered_thinking_blocks) > 0:
+            assistant_parts.extend(filtered_thinking_blocks)
+        return assistant_parts
 
 
 def _bedrock_converse_messages_pt(  # noqa: PLR0915
@@ -3309,10 +3373,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             )
 
             if thinking_blocks is not None:
-                assistant_content.extend(
-                    BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks
-                    )
+                converted_thinking_blocks = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+                    thinking_blocks
+                )
+                assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                    thinking_blocks=converted_thinking_blocks,
+                    assistant_parts=assistant_content,
                 )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
@@ -3325,7 +3391,10 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     cast(ChatCompletionThinkingBlock, element)
                                 ]
                             )
-                            assistants_parts.extend(thinking_block)
+                            assistants_parts = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
+                                thinking_blocks=thinking_block,
+                                assistant_parts=assistants_parts,
+                            )
                         elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
@@ -3399,6 +3468,15 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
+def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+    cache_control = tool.get("cache_control", None)
+    if cache_control is not None:
+        cache_point = cache_control.get("type", "ephemeral")
+        if cache_point == "ephemeral":
+            return {"cachePoint": {"type": "default"}}
+    return None
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -3470,12 +3548,23 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         for _, value in defs_copy.items():
             unpack_defs(value, defs_copy)
         unpack_defs(parameters, defs_copy)
-        tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
+        tool_input_schema = BedrockToolInputSchemaBlock(
+            json=BedrockToolJsonSchemaBlock(
+                type=parameters.get("type", ""),
+                properties=parameters.get("properties", {}),
+                required=parameters.get("required", []),
+            )
+        )
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description
         )
         tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
+
+        ## ADD CACHE POINT TOOL BLOCK ##
+        cache_point_tool_block = add_cache_point_tool_block(tool)
+        if cache_point_tool_block is not None:
+            tool_block_list.append(cache_point_tool_block)
 
     return tool_block_list
 

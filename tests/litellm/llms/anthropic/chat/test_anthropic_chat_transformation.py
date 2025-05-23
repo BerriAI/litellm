@@ -111,3 +111,77 @@ def test_extract_response_content_with_citations():
 
     _, citations, _, _, _ = config.extract_response_content(completion_response)
     assert citations is not None
+
+
+def test_map_tool_helper():
+    config = AnthropicConfig()
+
+    tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+
+    result = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["name"] == "web_search"
+    assert result["max_uses"] == 5
+
+
+def test_server_tool_use_usage():
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 15956,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 567,
+        "server_tool_use": {"web_search_requests": 1},
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    assert usage.server_tool_use.web_search_requests == 1
+
+
+def test_web_search_tool_transformation():
+    from litellm.types.llms.openai import OpenAIWebSearchOptions
+
+    config = AnthropicConfig()
+
+    openai_web_search_options = OpenAIWebSearchOptions(
+        user_location={
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    )
+
+    anthropic_web_search_tool = config.map_web_search_tool(openai_web_search_options)
+    assert anthropic_web_search_tool is not None
+    assert anthropic_web_search_tool["user_location"] is not None
+    assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
+    assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
+
+
+@pytest.mark.parametrize(
+    "search_context_size, expected_max_uses", [("low", 1), ("medium", 5), ("high", 10)]
+)
+def test_web_search_tool_transformation_with_search_context_size(
+    search_context_size, expected_max_uses
+):
+    from litellm.types.llms.openai import OpenAIWebSearchOptions
+
+    config = AnthropicConfig()
+
+    openai_web_search_options = OpenAIWebSearchOptions(
+        user_location={
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        },
+        search_context_size=search_context_size,
+    )
+
+    anthropic_web_search_tool = config.map_web_search_tool(openai_web_search_options)
+    assert anthropic_web_search_tool is not None
+    assert anthropic_web_search_tool["user_location"] is not None
+    assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
+    assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
+    assert anthropic_web_search_tool["max_uses"] == expected_max_uses

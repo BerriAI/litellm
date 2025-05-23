@@ -23,10 +23,13 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -295,7 +298,7 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
-        "/v2/rerank"
+        "/v2/rerank",
         # realtime
         "/realtime",
         "/v1/realtime",
@@ -334,7 +337,16 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
     ]
 
-    llm_api_routes = openai_routes + anthropic_routes + mapped_pass_through_routes
+    apply_guardrail_routes = [
+        "/guardrails/apply_guardrail",
+    ]
+
+    llm_api_routes = (
+        openai_routes
+        + anthropic_routes
+        + mapped_pass_through_routes
+        + apply_guardrail_routes
+    )
     info_routes = [
         "/key/info",
         "/key/health",
@@ -692,7 +704,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
-    expires: Optional[datetime]
+    expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
@@ -2011,6 +2023,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    guardrail_information: Optional[StandardLoggingGuardrailInformation]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
@@ -2047,6 +2060,7 @@ class SpendLogsPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     proxy_server_request: Optional[str]
     session_id: Optional[str]
+    status: Literal["success", "failure"]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -2495,6 +2509,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    user: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):
@@ -2878,3 +2893,10 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: OpenAIFileObject
     model_mappings: Dict[str, str]
+
+
+class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
+    unified_object_id: str
+    model_object_id: str
+    file_purpose: Literal["batch", "fine-tune"]
+    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
