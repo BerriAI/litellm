@@ -4,6 +4,7 @@ import { DataTable } from '../view_logs/table';
 import { columns, ToolTestPanel } from './columns';
 import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse } from './types';
 import { listMCPTools, callMCPTool } from '../networking';
+import MCPServers from './mcp_servers';
 
 // Wrapper to handle the type mismatch between MCPTool and DataTable's expected type
 function DataTableWrapper({
@@ -32,11 +33,11 @@ function DataTableWrapper({
   );
 }
 
-export default function MCPToolsViewer({
+const MCPToolsViewer = ({
   accessToken,
   userRole,
   userID,
-}: MCPToolsViewerProps) {
+}: MCPToolsViewerProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(null);
@@ -92,7 +93,7 @@ export default function MCPToolsViewer({
       const searchLower = searchTerm.toLowerCase();
       return (
         tool.name.toLowerCase().includes(searchLower) ||
-        tool.description.toLowerCase().includes(searchLower) ||
+        (tool.description != null && tool.description.toLowerCase().includes(searchLower)) ||
         tool.mcp_info.server_name.toLowerCase().includes(searchLower)
       );
     });
@@ -171,4 +172,6 @@ export default function MCPToolsViewer({
       )}
     </div>
   );
-} 
+}
+
+export { MCPToolsViewer, MCPServers };

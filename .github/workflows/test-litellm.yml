@@ -36,4 +36,5 @@ jobs:
         cd ..
     - name: Run tests
       run: |
+        poetry run prisma generate
         poetry run pytest tests/litellm -x -vv -n 4 
