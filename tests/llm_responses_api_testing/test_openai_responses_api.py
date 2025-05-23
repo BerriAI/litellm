@@ -680,12 +680,11 @@ async def test_openai_responses_litellm_router_with_metadata():
 
         # Check the request body
         request_body = mock_post.call_args.kwargs["json"]
-        loaded_request_body = json.loads(request_body)
-        print("Request body:", json.dumps(loaded_request_body, indent=4))
+        print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata matches exactly what was passed
         assert (
-            loaded_request_body["metadata"] == test_metadata
+            request_body["metadata"] == test_metadata
         ), "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
