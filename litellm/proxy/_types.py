@@ -178,6 +178,18 @@ def hash_token(token: str):
     return hashed_token
 
 
+def _hash_token_if_needed(token: str) -> str:
+    """
+    Hash the token if it's a string and starts with "sk-"
+
+    Else return the token as is
+    """
+    if token.startswith("sk-"):
+        return hash_token(token=token)
+    else:
+        return token
+
+
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     """
     Set default upperbound to max budget a key called via `/key/generate` can be.
@@ -690,6 +702,8 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
+    token: Optional[str] = None  # If provided, this is the already-computed SHA256 hash to store in the token column.
+    key_name: Optional[str] = None  # Optional display/abbreviation name for the key
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
@@ -1605,12 +1619,9 @@ class UserAPIKeyAuth(
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
-        if values.get("api_key") is not None:
-            values.update({"token": hash_token(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str) and values.get(
-                "api_key"
-            ).startswith("sk-"):
-                values.update({"api_key": hash_token(values.get("api_key"))})
+        api_key = values.get("api_key")
+        if api_key is not None:
+            values.update({"token": _hash_token_if_needed(api_key)})
         return values
 
 
