@@ -75,7 +75,7 @@ def find_unsafe_enterprise_imports_in_directory(directory):
 
 if __name__ == "__main__":
     # Check for unsafe enterprise imports in the litellm directory
-    directory_path = "../../litellm"
+    directory_path = "./litellm"
     unsafe_imports = find_unsafe_enterprise_imports_in_directory(directory_path)
     
     if unsafe_imports:
