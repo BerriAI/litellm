@@ -141,6 +141,8 @@ def test_completion_xai(stream):
             assert response is not None
             assert isinstance(response, litellm.ModelResponse)
             assert response.choices[0].message.content is not None
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
