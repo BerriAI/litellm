@@ -4478,7 +4478,6 @@ class Router:
                 litellm_params=LiteLLM_Params(**_litellm_params),
                 model_info=_model_info,
             )
-
             for field in CustomPricingLiteLLMParams.model_fields.keys():
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
@@ -4523,7 +4522,7 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.warning(
+                verbose_router_logger.exception(
                     f"Error creating deployment: {e}, ignoring and continuing with other deployments."
                 )
                 return None
@@ -4776,12 +4775,11 @@ class Router:
 
         # add to model list
         _deployment = deployment.to_json(exclude_none=True)
-        self.model_list.append(_deployment)
-
         # initialize client
         self._add_deployment(deployment=deployment)
 
         # add to model names
+        self.model_list.append(_deployment)
         self.model_names.append(deployment.model_name)
         return deployment
 
