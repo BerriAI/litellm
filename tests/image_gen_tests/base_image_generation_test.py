@@ -68,10 +68,17 @@ class BaseImageGenTest(ABC):
             assert logged_standard_logging_payload is not None
             assert logged_standard_logging_payload["response_cost"] is not None
             assert logged_standard_logging_payload["response_cost"] > 0
-
+            import openai
             from openai.types.images_response import ImagesResponse
 
-            ImagesResponse.model_validate(response.model_dump())
+            # print openai version
+            print("openai version=", openai.__version__)
+
+            response_dict = dict(response)
+            if "usage" in response_dict:
+                response_dict["usage"] = dict(response_dict["usage"])
+            print("response usage=", response_dict.get("usage"))
+            ImagesResponse.model_validate(response_dict)
 
             for d in response.data:
                 assert isinstance(d, Image)

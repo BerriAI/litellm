@@ -392,6 +392,10 @@ def test_select_azure_base_url_called(setup_mocks):
             "arun_thread_stream",
             "aresponses",
             "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
+            "afile_list",
         ]
     ],
 )

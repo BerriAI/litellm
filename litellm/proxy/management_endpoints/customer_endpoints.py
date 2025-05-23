@@ -185,6 +185,7 @@ async def new_end_user(
     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
+    - spend: Optional[float] - Specify initial spend for a given customer.
     
     
     - Allow specifying allowed regions 
@@ -424,13 +425,65 @@ async def update_end_user(
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
-        ## ADD USER, IF NEW ##
+        ## Get end user table data ##
+        end_user_table_data = await prisma_client.db.litellm_endusertable.find_first(
+            where={"user_id": data.user_id}, include={"litellm_budget_table": True}
+        )
+
+        if end_user_table_data is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "End User Id={} does not exist in db".format(data.user_id)
+                },
+            )
+
+        end_user_table_data_typed = LiteLLM_EndUserTable(
+            **end_user_table_data.model_dump()
+        )
+
+        ## Get budget table data ##
+        end_user_budget_table = end_user_table_data_typed.litellm_budget_table
+
+        ## Get all params for budget table ##
+        budget_table_data = {}
+        update_end_user_table_data = {}
+        for k, v in non_default_values.items():
+            if k in LiteLLM_BudgetTable.model_fields.keys():
+                budget_table_data[k] = v
+
+            if k in LiteLLM_EndUserTable.model_fields.keys():
+                update_end_user_table_data[k] = v
+
+        ## Check if budget id is set ##
+        if budget_table_data:
+            if end_user_budget_table is None:
+                ## Create new budget ##
+                budget_table_data_record = (
+                    await prisma_client.db.litellm_budgettable.create(
+                        data=budget_table_data, include={"litellm_endusertable": True}
+                    )
+                )
+
+                update_end_user_table_data[
+                    "budget_id"
+                ] = budget_table_data_record.budget_id
+            else:
+                ## Update existing budget ##
+                budget_table_data_record = (
+                    await prisma_client.db.litellm_budgettable.update(
+                        where={"budget_id": end_user_budget_table.budget_id},
+                        data=budget_table_data,
+                    )
+                )
+
+        ## Update user table, with update params + new budget id (if set) ##
         verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
         if data.user_id is not None and len(data.user_id) > 0:
-            non_default_values["user_id"] = data.user_id  # type: ignore
+            update_end_user_table_data["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update customer, user_id condition block.")
             response = await prisma_client.db.litellm_endusertable.update(
-                where={"user_id": data.user_id}, data=non_default_values  # type: ignore
+                where={"user_id": data.user_id}, data=update_end_user_table_data, include={"litellm_budget_table": True}  # type: ignore
             )
             if response is None:
                 raise ValueError(
@@ -444,13 +497,13 @@ async def update_end_user(
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
 
         # update based on remaining passed in values
+
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({str(e)})"),

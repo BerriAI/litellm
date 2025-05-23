@@ -198,24 +198,6 @@ export function useLogFilterLogic({
     enabled: !!accessToken,
   });
 
-  const { data: allModels = [] } = useQuery<string[], Error>({
-    queryKey: ['allModels', accessToken, userID, userRole],
-    queryFn: async () => {
-      if (!accessToken || !userID || !userRole) return [];
-
-      const response = await modelAvailableCall(
-        accessToken,
-        userID,
-        userRole,
-        false, // return_wildcard_routes
-        null // teamID
-      );
-
-      return response.data.map((model: { id: string }) => model.id);
-    },
-    enabled: !!accessToken && !!userID && !!userRole,
-  });
-
   // Update filters state
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters(prev => {
@@ -252,7 +234,6 @@ export function useLogFilterLogic({
     filteredLogs,
     allKeyAliases,
     allTeams,
-    allModels,
     handleFilterChange,
     handleFilterReset,
   };
