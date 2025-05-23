@@ -1790,7 +1790,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):

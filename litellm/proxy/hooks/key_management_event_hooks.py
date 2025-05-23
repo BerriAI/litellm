@@ -126,11 +126,16 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_rotated_hook(
         data: Optional[RegenerateKeyRequest],
-        existing_key_row: Any,
+        existing_key_row: LiteLLM_VerificationToken,
         response: GenerateKeyResponse,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
     ):
+        from litellm.proxy.management_helpers.audit_logs import (
+            create_audit_log_for_update,
+        )
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
         # store the generated key in the secret manager
         if data is not None and response.token_id is not None:
             initial_secret_name = (
@@ -140,6 +145,28 @@ class KeyManagementEventHooks:
                 current_secret_name=initial_secret_name,
                 new_secret_name=data.key_alias or f"virtual-key-{response.token_id}",
                 new_secret_value=response.key,
+            )
+
+        # store the audit log
+        if litellm.store_audit_logs is True and existing_key_row.token is not None:
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.token,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=existing_key_row.token,
+                        action="rotated",
+                        updated_values=response.model_dump_json(exclude_none=True),
+                        before_value=existing_key_row.model_dump_json(
+                            exclude_none=True
+                        ),
+                    )
+                )
             )
 
     @staticmethod
