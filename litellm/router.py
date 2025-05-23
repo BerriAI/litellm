@@ -5449,9 +5449,11 @@ class Router:
         for model in self.model_list:
             if model_name is not None and model["model_name"] == model_name:
                 if model_alias is not None:
-                    alias_model = copy.deepcopy(model)
-                    alias_model["model_name"] = model_alias
-                    returned_models.append(alias_model)
+                    returned_models.append(
+                        self._return_deep_copied_deployment_with_model_alias(
+                            model_alias=model_alias, model=model
+                        )
+                    )
                 else:
                     returned_models.append(model)
 
@@ -5542,7 +5544,39 @@ class Router:
                 )
             )
 
+            ######################################
+            # get wildcard models for this specific model_alias value
+            # eg. if a user points special-alias -> xai/grok-3, where the router has a wildcard route for xai/*
+            # then ensure xai/* gets added as a deployment for this alias
+            model_value_str: Optional[str] = None
+            if isinstance(model_value, str):
+                model_value_str = model_value
+            elif hasattr(model_value, "model"):
+                model_value_str = model_value.get("model")
+            wildcard_models = self.get_wildcard_deployments_for_model_name(
+                model_name=model_value_str
+            )
+
+            # for we returned wildcard
+            if model_alias is not None and len(wildcard_models) > 0:
+                for model in wildcard_models:
+                    returned_models.append(
+                        self._return_deep_copied_deployment_with_model_alias(
+                            model_alias=model_alias, model=model
+                        )
+                    )
+            ######################################
         return returned_models
+
+    def _return_deep_copied_deployment_with_model_alias(
+        self, model_alias: str, model: DeploymentTypedDict
+    ):
+        """
+        Creates a deep copy of a specific DeploymentTypedDict with the model_name set to the model_alias
+        """
+        alias_model = copy.deepcopy(model)
+        alias_model["model_name"] = model_alias
+        return alias_model
 
     def get_model_list(
         self, model_name: Optional[str] = None
@@ -5562,12 +5596,9 @@ class Router:
                 )
 
             if len(returned_models) == 0:  # check if wildcard route
-                potential_wildcard_models = self.pattern_router.route(model_name)
-                if model_name is not None and potential_wildcard_models is not None:
-                    for m in potential_wildcard_models:
-                        deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
-                        deployment_typed_dict["model_name"] = model_name
-                        returned_models.append(deployment_typed_dict)
+                returned_models.extend(
+                    self.get_wildcard_deployments_for_model_name(model_name=model_name)
+                )
 
             if model_name is None:
                 returned_models += self.model_list
@@ -5576,6 +5607,21 @@ class Router:
 
             return returned_models
         return None
+
+    def get_wildcard_deployments_for_model_name(
+        self, model_name: Optional[str] = None
+    ) -> List[DeploymentTypedDict]:
+        """
+        Gets all wildcard deployments that match the specific model_name
+        """
+        returned_models: List[DeploymentTypedDict] = []
+        potential_wildcard_models = self.pattern_router.route(model_name)
+        if model_name is not None and potential_wildcard_models is not None:
+            for m in potential_wildcard_models:
+                deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
+                deployment_typed_dict["model_name"] = model_name
+                returned_models.append(deployment_typed_dict)
+        return returned_models
 
     def get_model_access_groups(
         self, model_name: Optional[str] = None, model_access_group: Optional[str] = None
@@ -5649,6 +5695,7 @@ class Router:
             "fallbacks",
             "context_window_fallbacks",
             "model_group_retry_policy",
+            "model_group_alias",
         ]
 
         for var in vars_to_include:
@@ -5678,6 +5725,7 @@ class Router:
             "fallbacks",
             "context_window_fallbacks",
             "model_group_retry_policy",
+            "model_group_alias",
         ]
 
         _int_settings = [
