@@ -5,8 +5,10 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
+from aiohttp import ClientSession
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
+from httpx_aiohttp import AiohttpTransport
 
 import litellm
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
@@ -146,7 +148,7 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-        transport = self._create_async_transport()
+        transport = AsyncHTTPHandler._create_async_transport()
 
         return httpx.AsyncClient(
             transport=transport,
@@ -460,15 +462,31 @@ class AsyncHTTPHandler:
         except Exception:
             pass
 
-    def _create_async_transport(self) -> Optional[AsyncHTTPTransport]:
+    @staticmethod
+    def _create_async_transport() -> (
+        Optional[Union[AiohttpTransport, AsyncHTTPTransport]]
+    ):
         """
-        Create an async transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        - Creates a transport for httpx.AsyncClient
+            - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
+            - [Default] It will return AiohttpTransport
+            - Users can opt out of using AiohttpTransport by setting litellm.use_aiohttp_transport to False
 
-        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+
+        Notes on this handler:
+        - Why AiohttpTransport?
+            - By default, we use AiohttpTransport since it offers much higher throughput and lower latency than httpx.
+
+        - Why force ipv4?
+            - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address="0.0.0.0")
+
+        if litellm.use_aiohttp_transport:
+            return AiohttpTransport(
+                client=lambda: ClientSession(),
+            )
         else:
             return None
 
