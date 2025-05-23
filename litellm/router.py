@@ -725,6 +725,7 @@ class Router:
         self.a_add_message = self.factory_function(litellm.a_add_message)
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
+        self.amodify_assistants = self.factory_function(litellm.amodify_assistants)
 
     def initialize_router_endpoints(self):
         self.amoderation = self.factory_function(
