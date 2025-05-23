@@ -22,10 +22,16 @@ body:
       description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
     validations:
       required: true
-  - type: markdown
+  - type: dropdown
+    id: hiring-interest
     attributes:
-      value: |
-        * litellm is hiring a founding backend engineer, do you want to join us ? https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer
+      label: LiteLLM is hiring a founding backend engineer, are you interested in joining us and shipping to all our users?
+      description: If yes, apply here - https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
   - type: input
     id: contact
     attributes:
