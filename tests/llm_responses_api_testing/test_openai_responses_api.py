@@ -579,7 +579,7 @@ async def test_openai_responses_litellm_router_no_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
+        request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4))
 
         loaded_request_body = json.loads(request_body)
@@ -680,7 +680,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
+        request_body = mock_post.call_args.kwargs["json"]
         loaded_request_body = json.loads(request_body)
         print("Request body:", json.dumps(loaded_request_body, indent=4))
 
@@ -796,7 +796,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         assert request_body["model"] == "o1-pro"
         assert request_body["max_output_tokens"] == 20
 
@@ -908,7 +908,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
                 # Verify the sync request was made correctly
                 mock_sync_post.assert_called_once()
-                request_body = json.loads(mock_sync_post.call_args.kwargs["data"])
+                request_body = mock_sync_post.call_args.kwargs["json"]
                 assert request_body["model"] == "o1-pro"
                 assert request_body["max_output_tokens"] == 20
                 assert "stream" not in request_body
@@ -932,7 +932,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
             # Verify the async request was made correctly
             mock_post.assert_called_once()
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = mock_post.call_args.kwargs["json"]
             assert request_body["model"] == "o1-pro"
             assert request_body["max_output_tokens"] == 20
             assert "stream" not in request_body
@@ -1015,7 +1015,7 @@ def test_basic_computer_use_preview_tool_call():
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         
         # Validate the request structure
         assert request_body["model"] == "computer-use-preview"
