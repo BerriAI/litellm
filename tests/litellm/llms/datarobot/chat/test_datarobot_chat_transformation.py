@@ -49,9 +49,9 @@ class TestDataRobotConfig:
             ) == api_base
 
     def test_resolve_api_base_with_environment_variable(self, handler):
-        os.environ["DATAROBOT_API_BASE"] = "https://env.datarobot.com"
+        os.environ["DATAROBOT_ENDPOINT"] = "https://env.datarobot.com"
         assert handler._resolve_api_base(None) == "https://env.datarobot.com/api/v2/genai/llmgw/chat/completions/"
-        del os.environ["DATAROBOT_API_BASE"]
+        del os.environ["DATAROBOT_ENDPOINT"]
 
     @pytest.mark.parametrize(
         "api_key, expected_api_key",
@@ -64,6 +64,6 @@ class TestDataRobotConfig:
         assert handler._resolve_api_key(api_key) == expected_api_key
 
     def test_resolve_api_key_with_environment_variable(self, handler):
-        os.environ["DATAROBOT_API_KEY"] = "env_key"
+        os.environ["DATAROBOT_API_TOKEN"] = "env_key"
         assert handler._resolve_api_key(None) == "env_key"
-        del os.environ["DATAROBOT_API_KEY"]
+        del os.environ["DATAROBOT_API_TOKEN"]
