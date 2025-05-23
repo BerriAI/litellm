@@ -76,15 +76,24 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels, accessToken, 
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <Form.Item label="Select Model" name="selectedModel">
-            <Select placeholder="Select model" style={{ width: '100%' }}>
-              {userModels.map((model) => (
-                <Option key={model} value={model}>
-                  {model}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
+      <Form.Item
+  label="Select Model"
+  name="selectedModel"
+  rules={[{ required: true, message: "Please select or type a model" }]}
+>
+  <Select
+    placeholder="Select or type model"
+    style={{ width: '100%' }}
+    showSearch
+    mode="combobox"
+  >
+    {userModels.map((model) => (
+      <Option key={model} value={model}>
+        {model}
+      </Option>
+    ))}
+  </Select>
+</Form.Item>
           <Form.Item label="Reason for Access" name="accessReason">
             <Input.TextArea rows={4} placeholder="Enter reason for access" />
           </Form.Item>
