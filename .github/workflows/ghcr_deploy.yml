@@ -117,8 +117,6 @@ jobs:
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-stable', env.REGISTRY) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
-            ${{ github.event.inputs.release_type == 'latest' && format('{0}/berriai/litellm-nightly:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
-            ${{ github.event.inputs.release_type == 'dev' && format('{0}/berriai/litellm-dev:{1}', env.REGISTRY, github.event.inputs.tag) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
