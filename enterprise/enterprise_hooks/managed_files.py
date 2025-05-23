@@ -5,7 +5,7 @@ import asyncio
 import base64
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import HTTPException
 
@@ -26,8 +26,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    AsyncCursorPage,
     ChatCompletionFileObject,
     CreateFileRequest,
+    FileObject,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -67,6 +69,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_object: OpenAIFileObject,
         litellm_parent_otel_span: Optional[Span],
         model_mappings: Dict[str, str],
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         verbose_logger.info(
             f"Storing LiteLLM Managed File object with id={file_id} in cache"
@@ -75,6 +78,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             unified_file_id=file_id,
             file_object=file_object,
             model_mappings=model_mappings,
+            flat_model_file_ids=list(model_mappings.values()),
+            created_by=user_api_key_dict.user_id,
+            updated_by=user_api_key_dict.user_id,
         )
         await self.internal_usage_cache.async_set_cache(
             key=file_id,
@@ -87,6 +93,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_file_id": file_id,
                 "file_object": file_object.model_dump_json(),
                 "model_mappings": json.dumps(model_mappings),
+                "flat_model_file_ids": list(model_mappings.values()),
+                "created_by": user_api_key_dict.user_id,
+                "updated_by": user_api_key_dict.user_id,
             }
         )
 
@@ -169,6 +178,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return initial_value.file_object
 
+    async def can_user_call_unified_file_id(
+        self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        ## check if the user has access to the unified file id
+        user_id = user_api_key_dict.user_id
+        managed_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
+            where={"unified_file_id": unified_file_id}
+        )
+        if managed_file:
+            return managed_file.created_by == user_id
+        return False
+
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
@@ -182,6 +203,44 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         if managed_object:
             return managed_object.created_by == user_id
+        return False
+
+    async def get_user_created_file_ids(
+        self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
+    ) -> List[OpenAIFileObject]:
+        """
+        Get all file ids created by the user for a list of model object ids
+
+        Returns:
+         - List of OpenAIFileObject's
+        """
+        file_ids = await self.prisma_client.db.litellm_managedfiletable.find_many(
+            where={
+                "created_by": user_api_key_dict.user_id,
+                "flat_model_file_ids": {"hasSome": model_object_ids},
+            }
+        )
+        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+
+    async def check_managed_file_id_access(
+        self, data: Dict, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        retrieve_file_id = cast(Optional[str], data.get("file_id"))
+        potential_file_id = (
+            _is_base64_encoded_unified_file_id(retrieve_file_id)
+            if retrieve_file_id
+            else False
+        )
+        if potential_file_id and retrieve_file_id:
+            if await self.can_user_call_unified_file_id(
+                retrieve_file_id, user_api_key_dict
+            ):
+                return True
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
+                )
         return False
 
     async def async_pre_call_hook(
@@ -200,6 +259,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "rerank",
             "acreate_batch",
             "aretrieve_batch",
+            "acreate_file",
+            "afile_list",
+            "afile_delete",
             "afile_content",
             "acreate_fine_tuning_job",
             "aretrieve_fine_tuning_job",
@@ -211,9 +273,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
-        print(
-            "CALLS ASYNC PRE CALL HOOK - DATA={}, CALL_TYPE={}".format(data, call_type)
-        )
+        ### HANDLE FILE ACCESS ###  - ensure user has access to the file
+        if (
+            call_type == CallTypes.afile_content.value
+            or call_type == CallTypes.afile_delete.value
+        ):
+            await self.check_managed_file_id_access(data, user_api_key_dict)
+
+        ### HANDLE TRANSFORMATIONS ###
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
@@ -298,7 +365,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     [input_file_id], user_api_key_dict.parent_otel_span
                 )
 
-        print("DATA={}".format(data))
         return data
 
     async def async_pre_call_deployment_hook(
@@ -416,6 +482,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         target_model_names_list: List[str],
         litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         responses = await self.create_file_for_each_model(
             llm_router=llm_router,
@@ -448,6 +515,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             file_object=response,
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings=model_mappings,
+            user_api_key_dict=user_api_key_dict,
         )
         return response
 
@@ -560,6 +628,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
+        print(f"response: {response}, type: {type(response)}")
         if isinstance(response, LiteLLMBatch):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -619,6 +688,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     user_api_key_dict=user_api_key_dict,
                 )
             )
+        elif isinstance(response, AsyncCursorPage):
+            """
+            For listing files, filter for the ones created by the user
+            """
+            print("INSIDE ASYNC CURSOR PAGE BLOCK")
+            ## check if file object
+            if hasattr(response, "data") and isinstance(response.data, list):
+                if all(
+                    isinstance(file_object, FileObject) for file_object in response.data
+                ):
+                    ## Get all file id's
+                    ## Check which file id's were created by the user
+                    ## Filter the response to only include the files created by the user
+                    ## Return the filtered response
+                    file_ids = [
+                        file_object.id
+                        for file_object in cast(List[FileObject], response.data)  # type: ignore
+                    ]
+                    user_created_file_ids = await self.get_user_created_file_ids(
+                        user_api_key_dict, file_ids
+                    )
+                    ## Filter the response to only include the files created by the user
+                    response.data = user_created_file_ids  # type: ignore
+                    return response
+            return response
         return response
 
     async def afile_retrieve(
@@ -638,6 +732,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         litellm_parent_otel_span: Optional[Span],
         **data: Dict,
     ) -> List[OpenAIFileObject]:
+        """Handled in files_endpoints.py"""
         return []
 
     async def afile_delete(

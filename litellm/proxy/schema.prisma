@@ -454,8 +454,11 @@ model LiteLLM_ManagedFileTable {
   unified_file_id String @unique // The base64 encoded unified file ID
   file_object Json // Stores the OpenAIFileObject
   model_mappings Json 
+  flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
   created_at DateTime @default(now())
+  created_by String? 
   updated_at DateTime @updatedAt
+  updated_by String?
 
   @@index([unified_file_id])
 }
