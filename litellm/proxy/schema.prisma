@@ -453,13 +453,27 @@ model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID
   file_object Json // Stores the OpenAIFileObject
-  model_mappings Json // Stores the mapping of model_id -> provider_file_id
+  model_mappings Json 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([unified_file_id])
 }
 
+model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the 
+  id String @id @default(uuid())
+  unified_object_id String @unique // The base64 encoded unified file ID
+  model_object_id String @unique // the id returned by the backend API provider 
+  file_object Json // Stores the OpenAIFileObject
+  file_purpose String // either 'batch' or 'fine-tune' 
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String? 
+
+  @@index([unified_object_id])
+  @@index([model_object_id])
+}
 
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id

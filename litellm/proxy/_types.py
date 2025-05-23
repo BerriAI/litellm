@@ -23,6 +23,8 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
@@ -2879,3 +2881,10 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: OpenAIFileObject
     model_mappings: Dict[str, str]
+
+
+class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
+    unified_object_id: str
+    model_object_id: str
+    file_purpose: Literal["batch", "fine-tune"]
+    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
