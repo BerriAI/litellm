@@ -299,6 +299,7 @@ greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
 supabaseClient = None
+tinybirdLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
