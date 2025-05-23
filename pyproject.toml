@@ -107,6 +107,7 @@ litellm-proxy = 'litellm.proxy.client.cli:cli'
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.1.0"
 black = "^23.12.0"
+langfuse = "^2.60.5"
 mypy = "^1.0"
 pytest = "^7.4.3"
 pytest-mock = "^3.12.0"
