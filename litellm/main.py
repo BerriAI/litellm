@@ -5230,7 +5230,9 @@ async def ahealth_check(
             _response_headers: dict = (
                 getattr(_response, "_hidden_params", {}).get("headers", {}) or {}
             )
-            return _create_health_check_response(_response_headers)
+            return _create_health_check_response(
+                response_headers=_response_headers, status="healthy"
+            )
         else:
             raise Exception(
                 f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health"
@@ -5242,7 +5244,8 @@ async def ahealth_check(
 
         if mode is None:
             return {
-                "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}"
+                "status": "unhealthy",
+                "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
             }
 
         error_to_return = str(e) + "\nstack trace: " + stack_trace
@@ -5254,6 +5257,7 @@ async def ahealth_check(
         return {
             "error": error_to_return,
             "raw_request_typed_dict": raw_request_typed_dict,
+            "status": "unhealthy",
         }
 
 

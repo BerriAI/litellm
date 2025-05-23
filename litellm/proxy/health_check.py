@@ -3,24 +3,29 @@
 import asyncio
 import logging
 import random
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 import litellm
 
 logger = logging.getLogger(__name__)
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
-
-ILLEGAL_DISPLAY_PARAMS = [
-    "messages",
-    "api_key",
-    "prompt",
-    "input",
-    "vertex_credentials",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-]
+from litellm.types.proxy.health_check import HealthCheckResponseElement
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
+
+
+class HealthCheckHelperUtils:
+    @staticmethod
+    def get_health_check_response_element(
+        endpoint_data: dict, details: Optional[bool] = True
+    ) -> HealthCheckResponseElement:
+        if details is False:
+            minimal_display_params = {
+                k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS
+            }
+            return HealthCheckResponseElement(**minimal_display_params)
+        else:
+            return HealthCheckResponseElement(**endpoint_data)
 
 
 def _get_random_llm_message():
@@ -30,18 +35,6 @@ def _get_random_llm_message():
     messages = ["Hey how's it going?", "What's 1 + 1?"]
 
     return [{"role": "user", "content": random.choice(messages)}]
-
-
-def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
-    """
-    Clean the endpoint data for display to users.
-    """
-    endpoint_data.pop("litellm_logging_obj", None)
-    return (
-        {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
-        if details is not False
-        else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
-    )
 
 
 def filter_deployments_by_id(
@@ -80,14 +73,15 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
-async def _perform_health_check(model_list: list, details: Optional[bool] = True):
+async def _perform_health_check(
+    model_list: list, details: Optional[bool] = True
+) -> Tuple[List[HealthCheckResponseElement], List[HealthCheckResponseElement]]:
     """
     Perform a health check for each model in the list.
     """
-
     tasks = []
     for model in model_list:
-        litellm_params = model["litellm_params"]
+        litellm_params: Dict = model["litellm_params"] or {}
         model_info = model.get("model_info", {})
         mode = model_info.get("mode", None)
         litellm_params = _update_litellm_params_for_health_check(
@@ -109,22 +103,27 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    healthy_endpoints = []
-    unhealthy_endpoints = []
+    healthy_endpoints: List[HealthCheckResponseElement] = []
+    unhealthy_endpoints: List[HealthCheckResponseElement] = []
 
     for is_healthy, model in zip(results, model_list):
-        litellm_params = model["litellm_params"]
+        litellm_params: Dict = model["litellm_params"] or {}
+        if isinstance(is_healthy, dict):
+            litellm_params.update(is_healthy)
 
-        if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            healthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+        health_check_response_element: HealthCheckResponseElement = (
+            HealthCheckHelperUtils.get_health_check_response_element(
+                endpoint_data=litellm_params,
+                details=details,
             )
-        elif isinstance(is_healthy, dict):
-            unhealthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
-            )
+        )
+        health_status: Literal["healthy", "unhealthy"] = litellm_params.get(
+            "status", "healthy"
+        )
+        if health_status == "unhealthy":
+            unhealthy_endpoints.append(health_check_response_element)
         else:
-            unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
+            healthy_endpoints.append(health_check_response_element)
 
     return healthy_endpoints, unhealthy_endpoints
 

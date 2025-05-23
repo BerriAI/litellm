@@ -2,13 +2,17 @@
 Utils used for litellm.ahealth_check()
 """
 
+from typing import Literal
+
 
 def _filter_model_params(model_params: dict) -> dict:
     """Remove 'messages' param from model params."""
     return {k: v for k, v in model_params.items() if k != "messages"}
 
 
-def _create_health_check_response(response_headers: dict) -> dict:
+def _create_health_check_response(
+    response_headers: dict, status: Literal["healthy", "unhealthy"]
+) -> dict:
     response = {}
 
     if (
@@ -25,4 +29,6 @@ def _create_health_check_response(response_headers: dict) -> dict:
 
     if response_headers.get("x-ms-region", None) is not None:
         response["x-ms-region"] = response_headers["x-ms-region"]
+
+    response["status"] = status
     return response
