@@ -22,16 +22,10 @@ body:
       description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
     validations:
       required: true
-  - type: dropdown
-    id: ml-ops-team
+  - type: markdown
     attributes:
-      label: Are you a ML Ops Team?
-      description: This helps us prioritize your requests correctly 
-      options:
-        - "No"
-        - "Yes"
-    validations:
-      required: true
+      value: |
+        * litellm is hiring a founding backend engineer, do you want to join us ? https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer
   - type: input
     id: contact
     attributes:
