@@ -106,11 +106,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     Record<string, string>
   >>(null);
 
-  const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal != true) {
-    console.log = function() {};
-  }
-
   const baseUrl = useBaseUrl();
   const all_ip_address_allowed = "All IP Addresses Allowed";
 

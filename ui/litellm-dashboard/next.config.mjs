@@ -2,6 +2,7 @@
 const nextConfig = {
     output: 'export',
     basePath: process.env.UI_BASE_PATH || '/ui',
+    baseProxyUrl: process.env.PROXY_BASE_URL || '/',
 };
 
 nextConfig.experimental = {
