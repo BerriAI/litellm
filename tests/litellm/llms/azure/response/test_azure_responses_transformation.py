@@ -181,7 +181,7 @@ class TestAzureOpenAIResponsesAPIConfig:
         litellm_params = {}
         
         # Create a token provider that returns a token when called
-        mock_token = "service_principal_token"
+        mock_token = lambda : "service_principal_token"
         
         with patch("litellm.api_key", None):
             with patch("litellm.azure_key", None):
@@ -201,7 +201,7 @@ class TestAzureOpenAIResponsesAPIConfig:
                         
                         # Verify the result contains the expected Authorization header
                         assert "Authorization" in result
-                        assert result["Authorization"] == f"Bearer {mock_token}"
+                        assert result["Authorization"] == f"Bearer {mock_token()}"
     
     def test_validate_environment_service_principal_error(self, mock_azure_env_vars_none):
         """Test validate_environment when Service Principal raises ValueError"""
