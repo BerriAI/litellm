@@ -659,7 +659,7 @@ def run_server(  # noqa: PLR0915
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
-            if database_url is None:
+            if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Check if all required variables are provided
                 database_host = os.getenv("DATABASE_HOST")
                 database_username = os.getenv("DATABASE_USERNAME")
