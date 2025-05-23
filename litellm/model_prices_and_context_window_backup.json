@@ -12557,7 +12557,7 @@
         "max_output_tokens": 128000, 
         "input_cost_per_token": 0.0000025,
         "input_dbu_cost_per_token": 0.00003571,
-        "output_cost_per_token": 0.00017857,
+        "output_cost_per_token": 0.000017857,
         "output_db_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
         "mode": "chat",
