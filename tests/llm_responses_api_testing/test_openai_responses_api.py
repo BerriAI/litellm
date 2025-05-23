@@ -2,7 +2,7 @@ import os
 import sys
 import pytest
 import asyncio
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -1033,3 +1033,50 @@ def test_basic_computer_use_preview_tool_call():
         assert isinstance(request_body["input"], str)
         assert request_body["input"] == "Check the latest OpenAI news on bing.com."
         
+
+
+def test_mcp_tools_with_responses_api():
+    litellm._turn_on_debug()
+    MCP_TOOLS = [
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.deepwiki.com/mcp",
+            "allowed_tools": ["ask_question"]
+        }
+    ]
+    MODEL = "openai/gpt-4.1"
+    USER_QUERY = "What transport protocols does the 2025-03-26 version of the MCP spec (modelcontextprotocol/modelcontextprotocol) support?"
+    #########################################################
+    # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
+    response = litellm.responses(
+        model=MODEL,
+        tools=MCP_TOOLS,
+        input=USER_QUERY
+    )
+    print(response)
+
+    response = cast(ResponsesAPIResponse, response)
+
+    mcp_approval_id: Optional[str]
+    for output in response.output:
+        if output.type == "mcp_approval_request":
+            mcp_approval_id = output.id
+            break
+
+    # Step 2: Send followup with approval for the MCP call
+    response_with_mcp_call = litellm.responses(
+        model=MODEL,
+        tools=MCP_TOOLS,
+        input=[
+            {
+                "type": "mcp_approval_response",
+                "approve": True,
+                "approval_request_id": mcp_approval_id
+            }
+        ],
+        previous_response_id=response.id,
+    )
+    print(response_with_mcp_call)
+
+

@@ -229,6 +229,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -1966,6 +1967,7 @@ def supports_prompt_caching(
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_caching",
     )
+
 
 def supports_computer_use(
     model: str, custom_llm_provider: Optional[str] = None
@@ -5862,7 +5864,7 @@ def _get_valid_models_from_provider_api(
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []
 
 
@@ -5927,7 +5929,7 @@ def get_valid_models(
 
         return valid_models
     except Exception as e:
-        verbose_logger.debug(f"Error getting valid models: {e}")
+        verbose_logger.warning(f"Error getting valid models: {e}")
         return []  # NON-Blocking
 
 
@@ -6612,6 +6614,10 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
+            # Dynamic model listing for Ollama server
+            from litellm.llms.ollama.common_utils import OllamaModelInfo
+            return OllamaModelInfo()
         elif LlmProviders.VLLM == provider:
             from litellm.llms.vllm.common_utils import (
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
@@ -6688,6 +6694,19 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        return None
+
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageEditConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit.transformation import (
+                OpenAIImageEditConfig,
+            )
+
+            return OpenAIImageEditConfig()
         return None
 
 
@@ -6827,6 +6846,14 @@ def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
 
     # Re-add the original query parameters
     return str(modified_url.copy_with(params=original_url.params))
+
+
+def get_standard_openai_params(params: dict) -> dict:
+    return {
+        k: v
+        for k, v in params.items()
+        if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS and v is not None
+    }
 
 
 def get_non_default_completion_params(kwargs: dict) -> dict:

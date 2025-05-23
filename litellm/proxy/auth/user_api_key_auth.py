@@ -55,6 +55,16 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
+try:
+    from litellm_enterprise.proxy.auth.user_api_key_auth import (
+        enterprise_custom_auth as _enterprise_custom_auth,
+    )
+
+    enterprise_custom_auth: Optional[Callable] = _enterprise_custom_auth
+except ImportError as e:
+    verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
+    enterprise_custom_auth = None
+
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
 custom_litellm_key_header = APIKeyHeader(
@@ -346,7 +356,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
-        if user_custom_auth is not None:
+        if enterprise_custom_auth is not None:
+            response = await enterprise_custom_auth(
+                request=request, api_key=api_key, user_custom_auth=user_custom_auth
+            )
+            if response is not None:
+                return UserAPIKeyAuth.model_validate(response)
+        elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             return UserAPIKeyAuth.model_validate(response)
 
