@@ -8,7 +8,6 @@ import httpx
 from aiohttp import ClientSession
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
-from httpx_aiohttp import AiohttpTransport
 
 import litellm
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
@@ -16,6 +15,8 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
+    from httpx_aiohttp import AiohttpTransport
+
     from litellm import LlmProviders
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 else:
     LlmProviders = Any
     LiteLLMLoggingObject = Any
+    AiohttpTransport = Any
 
 try:
     from litellm._version import version
@@ -483,12 +485,31 @@ class AsyncHTTPHandler:
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address="0.0.0.0")
 
-        if litellm.use_aiohttp_transport:
+        if (
+            litellm.use_aiohttp_transport
+            and AsyncHTTPHandler.aiohttp_transport_exists()
+        ):
             return AiohttpTransport(
                 client=lambda: ClientSession(),
             )
         else:
             return None
+
+    @staticmethod
+    def aiohttp_transport_exists() -> bool:
+        """
+        Returns True if `httpx-aiohttp` is installed.
+
+        `httpx-aiohttp` only supports python 3.9+
+
+        For users on python 3.8, we will use `httpx.AsyncClient` instead of `httpx-aiohttp`.
+        """
+        try:
+            import importlib.util
+
+            return importlib.util.find_spec("httpx_aiohttp") is not None
+        except Exception:
+            return False
 
 
 class HTTPHandler:
