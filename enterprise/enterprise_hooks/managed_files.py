@@ -211,9 +211,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
-        print(
-            "CALLS ASYNC PRE CALL HOOK - DATA={}, CALL_TYPE={}".format(data, call_type)
-        )
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
@@ -298,7 +295,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     [input_file_id], user_api_key_dict.parent_otel_span
                 )
 
-        print("DATA={}".format(data))
         return data
 
     async def async_pre_call_deployment_hook(
