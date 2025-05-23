@@ -70,18 +70,11 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    #########################################################
-    # Only run if langfuse prompt management is active
-    #########################################################
-    from litellm.integrations.langfuse.langfuse_prompt_management import (
-        LangfusePromptManagement,
-    )
-
-    if (
-        litellm.logging_callback_manager.callback_is_active(LangfusePromptManagement)
-        is not True
-    ):
+    if "langfuse" not in litellm.logging_callback_manager._get_all_callbacks():
         return None
+    #########################################################
+    # Only run if langfuse is added as a callback
+    #########################################################
 
     if (
         request_data is not None
@@ -95,17 +88,12 @@ async def _add_langfuse_trace_id_to_alert(
             if trace_id is not None:
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
-
-        langfuse_callbacks = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                LangfusePromptManagement
-            )
+        #########################################################
+        langfuse_object = litellm_logging_obj._get_callback_object(
+            service_name="langfuse"
         )
-        if len(langfuse_callbacks) > 0:
-            langfuse_logger: LangfusePromptManagement = cast(
-                LangfusePromptManagement, langfuse_callbacks[0]
-            )
-            base_url = langfuse_logger.Langfuse.base_url
+        if langfuse_object is not None:
+            base_url = langfuse_object.Langfuse.base_url
             return f"{base_url}/trace/{trace_id}"
 
     return None
