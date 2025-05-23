@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -98,7 +99,7 @@ async def test_handle_authentication_error_budget_exceeded():
         from litellm.exceptions import BudgetExceededError
 
         budget_error = BudgetExceededError(
-            message="Budget exceeded", current_cost=100, max_budget=100
+            current_cost=100, max_budget=100, budget_reset_at=datetime.fromisoformat("2025-01-01T00:00:00Z")
         )
         await handler._handle_authentication_error(
             budget_error,
@@ -110,6 +111,7 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert "Budget has been exceeded! Current cost: 100, Max budget: 100, Budget resets at: 2025-01-01 00:00:00+00:00." == str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
