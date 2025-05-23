@@ -1237,6 +1237,14 @@ async def _run_background_health_check():
     if _llm_model_list is None:
         return
 
+    try:
+        health_check_interval = float(health_check_interval) # type: ignore Type errors are handled in the exception handler below
+    except (ValueError, TypeError):
+        verbose_proxy_logger.error(
+            f"Not running background health checks due to invalid health_check_interval '{health_check_interval}'."
+        )
+        return
+
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
@@ -1248,10 +1256,7 @@ async def _run_background_health_check():
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
 
-        if health_check_interval is not None and isinstance(
-            health_check_interval, float
-        ):
-            await asyncio.sleep(health_check_interval)
+        await asyncio.sleep(health_check_interval)
 
 
 class StreamingCallbackError(Exception):
@@ -1471,6 +1476,7 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+    
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
