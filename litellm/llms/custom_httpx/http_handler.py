@@ -506,6 +506,8 @@ class AsyncHTTPHandler:
         - If force_ipv4 is True, it will create an AiohttpTransport with local_addr set to "0.0.0.0"
         - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
+        from httpx_aiohttp import AiohttpTransport
+
         if litellm.force_ipv4:
             # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
             verbose_logger.debug("Creating AiohttpTransport with force_ipv4")
