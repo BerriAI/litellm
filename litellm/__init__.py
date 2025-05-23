@@ -174,7 +174,7 @@ drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 retry = True
 ### AUTH ###
-api_key: Optional[str] = None
+api_key: Optional[str] = os.getenv("LITELLM_API_KEY", None)
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
@@ -347,7 +347,7 @@ def identify(event_details):
 
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
-api_base: Optional[str] = None
+api_base: Optional[str] = os.getenv("LITELLM_API_BASE", None)
 headers = None
 api_version = None
 organization = None
