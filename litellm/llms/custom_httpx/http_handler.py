@@ -507,13 +507,29 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
         from httpx_aiohttp import AiohttpTransport
+        from yarl import URL
+
+        class LiteLLMAiohttpTransport(AiohttpTransport):
+            """
+            LiteLLM wrapper around AiohttpTransport to handle %-encodings in URLs
+            """
+
+            async def handle_async_request(
+                self,
+                request: httpx.Request,
+            ) -> httpx.Response:
+                # replace its URL with a YARL one that preserves %-encodings
+                request.url = URL(str(request.url), encoded=True)  # type: ignore
+
+                # now hand off to the original logic, but with our wrapped URL
+                return await super().handle_async_request(request)
 
         if litellm.force_ipv4:
             # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
             verbose_logger.debug(
                 "Creating AiohttpTransport with force_ipv4 and RequestNotRead fix"
             )
-            return AiohttpTransport(
+            return LiteLLMAiohttpTransport(
                 client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(
                     connector=TCPConnector(local_addr=("0.0.0.0", 0))
                 ),
@@ -521,7 +537,7 @@ class AsyncHTTPHandler:
         verbose_logger.debug(
             "Creating AiohttpTransport with default settings and RequestNotRead fix"
         )
-        return AiohttpTransport(
+        return LiteLLMAiohttpTransport(
             client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(),
         )
 
