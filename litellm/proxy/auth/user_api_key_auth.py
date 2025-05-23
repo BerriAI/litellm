@@ -724,8 +724,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ## Check DB
-        if isinstance(
-            api_key, str
+        if (
+            isinstance(api_key, str) and valid_token is None
         ):  # if generated token, make sure it starts with sk-.
             assert api_key.startswith(
                 "sk-"

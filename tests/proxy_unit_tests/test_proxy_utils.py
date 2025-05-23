@@ -572,6 +572,28 @@ def test_update_internal_new_user_params_with_no_initial_role_set():
         == litellm.default_internal_user_params["budget_duration"]
     )
 
+def test_update_internal_new_user_params_with_user_defined_values():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+        "user_role": "proxy_admin",
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["user_email"] == "krrish3@berri.ai"
+    assert updated_data_json["user_role"] == "proxy_admin"
+    assert updated_data_json["max_budget"] == 1000
+    assert updated_data_json["budget_duration"] == "1mo"
+    
+
 @pytest.mark.asyncio
 async def test_proxy_config_update_from_db():
     from litellm.proxy.proxy_server import ProxyConfig
