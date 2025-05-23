@@ -1003,6 +1003,35 @@ def test_update_config_fields():
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
 
+def test_update_config_fields_default_internal_user_params(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None)
+
+
+    args = {
+        "current_config": {},
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "default_internal_user_params": {
+                "user_role": "proxy_admin",
+                "max_budget": 1000,
+                "budget_duration": "1mo",
+            },
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    assert litellm.default_internal_user_params == {
+        "user_role": "proxy_admin",
+        "max_budget": 1000,
+        "budget_duration": "1mo",
+    }
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None) # reset to default
+
 
 @pytest.mark.parametrize(
     "proxy_model_list,provider",
