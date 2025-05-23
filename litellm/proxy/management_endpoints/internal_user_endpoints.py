@@ -105,7 +105,7 @@ async def _check_duplicate_user_email(
             raise Exception("Database not connected")
 
         existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": user_email}
+            where={"user_email": user_email.strip()}
         )
 
         if existing_user is not None:
