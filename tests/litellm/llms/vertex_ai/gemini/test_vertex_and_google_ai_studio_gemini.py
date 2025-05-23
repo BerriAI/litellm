@@ -409,7 +409,18 @@ def test_check_finish_reason():
 
 def test_vertex_ai_usage_metadata_response_token_count():
     """For Gemini Live API"""
-    from litellm.types.utils import PromptTokensDetailsWrapper
+    expected_prompt_tokens = 57
+    expected_completion_tokens = 74
+    expected_completion_tokens_detail = 74
+    expected_total_tokens = 131
+    expected_cached_text_tokens = 57
+    expected_cached_audio_tokens = 0
+    expected_cached_image_tokens = 0
+    expected_cached_tokens = (
+        expected_cached_text_tokens +
+        expected_cached_audio_tokens +
+        expected_cached_image_tokens
+    )
 
     v = VertexGeminiConfig()
     usage_metadata = {
@@ -422,10 +433,10 @@ def test_vertex_ai_usage_metadata_response_token_count():
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     print("result", result)
-    assert result.prompt_tokens == 57
-    assert result.completion_tokens == 74
-    assert result.total_tokens == 131
-    assert result.prompt_tokens_details.text_tokens == 57
-    assert result.prompt_tokens_details.audio_tokens is None
-    assert result.prompt_tokens_details.cached_tokens is None
-    assert result.completion_tokens_details.text_tokens == 74
+    assert result.prompt_tokens == expected_prompt_tokens
+    assert result.completion_tokens == expected_completion_tokens
+    assert result.total_tokens == expected_total_tokens
+    assert result.prompt_tokens_details.text_tokens == expected_cached_text_tokens
+    assert result.prompt_tokens_details.audio_tokens == expected_cached_audio_tokens
+    assert result.prompt_tokens_details.cached_tokens == expected_cached_tokens
+    assert result.completion_tokens_details.text_tokens == expected_completion_tokens_detail
