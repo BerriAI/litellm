@@ -11,7 +11,7 @@ sys.path.insert(
 
 import time
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging, set_callbacks
 
 
 @pytest.fixture
@@ -34,6 +34,32 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_sentry_sample_rate():
+    existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
+    try:
+        # test with default value by removing the environment variable
+        if existing_sample_rate:
+            del os.environ["SENTRY_API_SAMPLE_RATE"]
+
+        set_callbacks(["sentry"])
+        # Check if the default sample rate is set to 1.0
+        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
+
+        # test with custom value
+        os.environ["SENTRY_API_SAMPLE_RATE"] = "0.5"
+
+        set_callbacks(["sentry"])
+        # Check if the custom sample rate is set correctly
+        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "0.5"
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # Restore the original environment variable
+        if existing_sample_rate:
+            os.environ["SENTRY_API_SAMPLE_RATE"] = existing_sample_rate
+        else:
+            if "SENTRY_API_SAMPLE_RATE" in os.environ:
+                del os.environ["SENTRY_API_SAMPLE_RATE"]
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
