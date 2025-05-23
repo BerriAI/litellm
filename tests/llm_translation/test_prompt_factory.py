@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 
 def test_llama_3_prompt():
@@ -188,6 +188,18 @@ def test_convert_url_to_img():
     response_url = convert_url_to_base64(
         url="https://images.pexels.com/photos/1319515/pexels-photo-1319515.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
     )
+
+    assert "image/jpeg" in response_url
+
+def test_convert_url_with_wrong_cotent_type_to_img():
+    mock_response = Mock()
+    mock_response.content = b'mock_image_data'
+    mock_response.headers = {'Content-Type': ''}
+    mock_response.status_code = 200
+    with patch('httpx.Client.get', return_value=mock_response):
+        response_url = convert_url_to_base64(
+            url="https://images.pexels.com/photos/1319515/pexels-photo-1319515.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
+        )
 
     assert "image/jpeg" in response_url
 
