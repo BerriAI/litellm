@@ -169,6 +169,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return initial_value.file_object
 
+    async def can_user_call_unified_file_id(
+        self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        ## check if the user has access to the unified file id
+        user_id = user_api_key_dict.user_id
+        managed_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
+            where={"unified_file_id": unified_file_id}
+        )
+        if managed_file:
+            return managed_file.created_by == user_id
+        return False
+
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
@@ -182,6 +194,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         if managed_object:
             return managed_object.created_by == user_id
+        return False
+
+    async def check_managed_file_id_access(
+        self, data: Dict, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        retrieve_file_id = cast(Optional[str], data.get("file_id"))
+        potential_file_id = (
+            _is_base64_encoded_unified_file_id(retrieve_file_id)
+            if retrieve_file_id
+            else False
+        )
+        if potential_file_id and retrieve_file_id:
+            if await self.can_user_call_unified_file_id(
+                retrieve_file_id, user_api_key_dict
+            ):
+                return True
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
+                )
         return False
 
     async def async_pre_call_hook(
@@ -200,6 +233,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "rerank",
             "acreate_batch",
             "aretrieve_batch",
+            "acreate_file",
+            "afile_list",
+            "afile_delete",
             "afile_content",
             "acreate_fine_tuning_job",
             "aretrieve_fine_tuning_job",
@@ -211,6 +247,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         - Detect litellm_proxy/ file_id
         - add dictionary of mappings of litellm_proxy/ file_id -> provider_file_id => {litellm_proxy/file_id: {"model_id": id, "file_id": provider_file_id}}
         """
+        ### HANDLE FILE ACCESS ###  - ensure user has access to the file
+        if (
+            call_type == CallTypes.afile_content.value
+            or call_type == CallTypes.afile_delete.value
+        ):
+            await self.check_managed_file_id_access(data, user_api_key_dict)
+
+        ### HANDLE TRANSFORMATIONS ###
         if call_type == CallTypes.completion.value:
             messages = data.get("messages")
             if messages:
