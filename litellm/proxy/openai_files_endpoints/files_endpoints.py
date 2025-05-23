@@ -869,6 +869,7 @@ async def list_files(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     provider: Optional[str] = None,
+    target_model_names: Optional[str] = None,
     purpose: Optional[str] = None,
 ):
     """
@@ -885,8 +886,8 @@ async def list_files(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -894,24 +895,50 @@ async def list_files(
 
     data: Dict = {}
     try:
-        custom_llm_provider = (
-            provider
-            or await get_custom_llm_provider_from_request_body(request=request)
-            or "openai"
-        )
         # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type=CallTypes.alist_fine_tuning_jobs.value,
         )
 
-        response = await litellm.afile_list(
-            custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
-        )
+        response: Optional[Any] = None
+        if target_model_names and isinstance(target_model_names, str):
+            target_model_names_list = target_model_names.split(",")
+            if len(target_model_names_list) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
+                )
+            ## Use router to list fine-tuning jobs for that model
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="LLM Router not initialized. Ensure models added to proxy.",
+                )
+            data["model"] = target_model_names_list[0]
+            response = await llm_router.afile_list(
+                **data,
+            )
+            return response
+        elif provider:
+            custom_llm_provider = (
+                provider
+                or await get_custom_llm_provider_from_request_body(request=request)
+                or "openai"
+            )
+
+            response = await litellm.afile_list(
+                custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
