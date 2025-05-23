@@ -508,59 +508,12 @@ class AsyncHTTPHandler:
         """
         from httpx_aiohttp import AiohttpTransport
 
-        class LiteLLMAiohttpTransport(AiohttpTransport):
-            """
-            An HTTPX AsyncBaseTransport that pre-reads the request body
-            (sync or async stream) to populate request._content,
-            then delegates to the original AiohttpTransport logic.
-            Prevents httpx.RequestNotRead errors.
-            """
-
-            async def handle_async_request(
-                self, request: httpx.Request
-            ) -> httpx.Response:
-                """
-                Override of the base transport's entry point.
-                Ensures the body is fully drained before proceeding.
-                """
-                body = await self._drain_body(request)
-                if body is not None:
-                    request._content = body
-
-                # Delegate back to AiohttpTransport
-                return await super().handle_async_request(request)
-
-            async def _drain_body(self, request: httpx.Request) -> Optional[bytes]:
-                """
-                Read all bytes from request.stream (async or sync) exactly once.
-                Returns None if there's no body.
-                """
-                stream = (
-                    request.stream() if callable(request.stream) else request.stream
-                )
-
-                chunks: list[bytes] = []
-
-                # Async iterable?
-                if hasattr(stream, "__aiter__"):
-                    async for chunk in stream:  # type: ignore
-                        chunks.append(chunk)
-
-                # Sync iterable?
-                elif hasattr(stream, "__iter__"):
-                    for chunk in stream:  # type: ignore
-                        chunks.append(chunk)
-
-                if not chunks:
-                    return None
-                return b"".join(chunks)
-
         if litellm.force_ipv4:
             # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
             verbose_logger.debug(
                 "Creating AiohttpTransport with force_ipv4 and RequestNotRead fix"
             )
-            return LiteLLMAiohttpTransport(
+            return AiohttpTransport(
                 client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(
                     connector=TCPConnector(local_addr=("0.0.0.0", 0))
                 ),
@@ -568,7 +521,7 @@ class AsyncHTTPHandler:
         verbose_logger.debug(
             "Creating AiohttpTransport with default settings and RequestNotRead fix"
         )
-        return LiteLLMAiohttpTransport(
+        return AiohttpTransport(
             client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(),
         )
 
@@ -584,7 +537,6 @@ class AsyncHTTPHandler:
         By default, aiohttp will set the Content-Type header to "application/json" if not set.
         """
         return ClientSession(
-            skip_auto_headers={"Content-Type"},
             connector=connector,
         )
 

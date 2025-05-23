@@ -1412,15 +1412,15 @@ zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
 name = "httpx-aiohttp"
-version = "0.1.2"
+version = "0.1.4"
 description = "Aiohttp transport for HTTPX"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 markers = "python_version >= \"3.9\""
 files = [
-    {file = "httpx_aiohttp-0.1.2-py3-none-any.whl", hash = "sha256:22b7942b3ad59f686529d4edfdbe0b4fe5da6b531706c98969545558e6ca2204"},
-    {file = "httpx_aiohttp-0.1.2.tar.gz", hash = "sha256:5343a77dc32820607a9ffc54c395e7302661c4c84b7b87181ceedab03d2f14f4"},
+    {file = "httpx_aiohttp-0.1.4-py3-none-any.whl", hash = "sha256:740a8725af7b7a03d12f21ccd48a83457baa037304646589b87595746c05c87e"},
+    {file = "httpx_aiohttp-0.1.4.tar.gz", hash = "sha256:61030eed28deeac26286d2e872b7c167f5450b7b0eec5a617ae7d3f7da9c8684"},
 ]
 
 [package.dependencies]
@@ -4945,4 +4945,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "e29905f1ec688f2031e0be1a70f83710c8e33885d04d554868fad6f8b1458832"
+content-hash = "6451fe373165ebb260bd616e43663d0003f50333a5a8a816d0962eb93b46de85"
