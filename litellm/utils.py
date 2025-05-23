@@ -295,6 +295,7 @@ dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
+scope3Logger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
