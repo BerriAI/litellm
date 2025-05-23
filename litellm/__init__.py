@@ -126,6 +126,7 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
 ] = []
+initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
