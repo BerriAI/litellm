@@ -17,7 +17,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
-    PromptTokensDetails,
+    PromptTokensDetailsWrapper,
 )
 
 
@@ -186,7 +186,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=11779,
             total_tokens=11784,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
+            prompt_tokens_details=PromptTokensDetailsWrapper(
                 audio_tokens=None, cached_tokens=11775
             ),
             cache_creation_input_tokens=4,
@@ -222,7 +222,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=0,
             total_tokens=214,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
+            prompt_tokens_details=PromptTokensDetailsWrapper(
                 audio_tokens=None, cached_tokens=0
             ),
             cache_creation_input_tokens=0,

@@ -343,6 +343,60 @@ def test_streaming_chunk_includes_reasoning_tokens():
     )
 
 
+def test_streaming_chunk_includes_prompt_tokens_details():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+    expected_prompt_tokens = 60
+    expected_completion_tokens = 74
+    expected_total_tokens = 224
+    expected_reasoning_tokens = 20
+
+    expected_cached_text_tokens = 57
+    expected_cached_audio_tokens = 43
+    expected_cached_image_tokens = 50
+    expected_cached_tokens = (
+            expected_cached_text_tokens
+            + expected_cached_audio_tokens
+            + expected_cached_image_tokens
+    )
+
+    # Simulate a streaming chunk as would be received from Gemini with all token types
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 60,
+            "candidatesTokenCount": 74,
+            "totalTokenCount": 224,
+            "thoughtsTokenCount": 20,
+            "promptTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 57},
+                {"modality": "AUDIO", "tokenCount": 43},
+                {"modality": "IMAGE", "tokenCount": 50}
+            ],
+        },
+    }
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # Verify that the usage has the correct information
+    assert streaming_chunk["usage"] is not None
+    assert streaming_chunk["usage"]["prompt_tokens"] == expected_prompt_tokens
+    assert streaming_chunk["usage"]["completion_tokens"] == expected_completion_tokens
+    assert streaming_chunk["usage"]["total_tokens"] == expected_total_tokens
+
+    # Verify that prompt_tokens_details is included and has the correct values
+    assert streaming_chunk["usage"]["prompt_tokens_details"] is not None
+    assert streaming_chunk["usage"]["prompt_tokens_details"]["cached_tokens"] == expected_cached_tokens
+    assert streaming_chunk["usage"]["prompt_tokens_details"]["text_tokens"] == expected_cached_text_tokens
+    assert streaming_chunk["usage"]["prompt_tokens_details"]["audio_tokens"] == expected_cached_audio_tokens
+    assert streaming_chunk["usage"]["prompt_tokens_details"]["image_tokens"] == expected_cached_image_tokens
+
+    # Verify that completion_tokens_details is included and has the correct values
+    assert streaming_chunk["usage"]["completion_tokens_details"] is not None
+    assert streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == expected_reasoning_tokens
+
+
 def test_check_finish_reason():
     config = VertexGeminiConfig()
     finish_reason_mappings = config.get_finish_reason_mapping()

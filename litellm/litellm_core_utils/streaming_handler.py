@@ -952,52 +952,6 @@ class CustomStreamWrapper:
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
 
-        # Handle cached responses
-        if self.custom_llm_provider == "cached_response" and isinstance(chunk, litellm.types.utils.ModelResponse):
-            # For cached responses, we need to add cached tokens information
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                # Check if prompt_tokens_details already exists
-                if hasattr(chunk.usage, "prompt_tokens_details") and chunk.usage.prompt_tokens_details is not None:
-                    # If it exists, make sure cached_tokens is set
-                    if not hasattr(chunk.usage.prompt_tokens_details, "cached_tokens") or chunk.usage.prompt_tokens_details.cached_tokens is None:
-                        # Set cached_tokens to prompt_tokens
-                        prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0)
-                        setattr(chunk.usage.prompt_tokens_details, "cached_tokens", prompt_tokens)
-                else:
-                    # Create prompt_tokens_details with cached_tokens if not already present
-                    # Set a reasonable value for cached tokens (all prompt tokens are cached)
-                    prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0)
-
-                    # For cached responses, text tokens should be the same as prompt tokens
-                    # since we're dealing with text messages
-                    text_tokens = prompt_tokens
-
-                    # Try to extract audio_tokens and image_tokens from the original response
-                    audio_tokens = None
-                    image_tokens = None
-
-                    # If the original response has prompt_tokens_details, try to extract values from it
-                    if hasattr(chunk, "usage") and hasattr(chunk.usage, "prompt_tokens_details"):
-                        if hasattr(chunk.usage.prompt_tokens_details, "audio_tokens"):
-                            audio_tokens = chunk.usage.prompt_tokens_details.audio_tokens
-                        if hasattr(chunk.usage.prompt_tokens_details, "image_tokens"):
-                            image_tokens = chunk.usage.prompt_tokens_details.image_tokens
-                        if hasattr(chunk.usage.prompt_tokens_details, "text_tokens") and chunk.usage.prompt_tokens_details.text_tokens is not None:
-                            text_tokens = chunk.usage.prompt_tokens_details.text_tokens
-
-                    # Create prompt_tokens_details with all token types
-                    prompt_tokens_details = litellm.types.utils.PromptTokensDetailsWrapper(
-                        cached_tokens=prompt_tokens,
-                        text_tokens=text_tokens,
-                        audio_tokens=audio_tokens,
-                        image_tokens=image_tokens
-                    )
-                    # Update the usage object with prompt_tokens_details
-                    setattr(chunk.usage, "prompt_tokens_details", prompt_tokens_details)
-
-                # Copy the usage information to the model_response
-                setattr(model_response, "usage", chunk.usage)
-
         try:
             # return this for all models
             completion_obj: Dict[str, Any] = {"content": ""}
@@ -1032,10 +986,9 @@ class CustomStreamWrapper:
                     usage_data = anthropic_response_obj["usage"]
 
                     # Initialize token details
-                    cached_tokens = None
-                    audio_tokens = None
-                    text_tokens = None
-                    image_tokens = None
+                    audio_tokens = 0
+                    text_tokens = 0
+                    image_tokens = 0
                     reasoning_tokens = None
                     response_tokens_details = None
 
@@ -1054,8 +1007,7 @@ class CustomStreamWrapper:
                         if "image_tokens" in prompt_tokens_details_dict:
                             image_tokens = prompt_tokens_details_dict["image_tokens"]
 
-
-                    # Create prompt_tokens_details with text tokens
+                    cached_tokens = text_tokens + audio_tokens + image_tokens
                     prompt_tokens_details = litellm.types.utils.PromptTokensDetailsWrapper(
                         cached_tokens=cached_tokens,
                         audio_tokens=audio_tokens,
@@ -1368,6 +1320,8 @@ class CustomStreamWrapper:
                     self.system_fingerprint = chunk.system_fingerprint
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+                if hasattr(chunk, "usage") and chunk.usage is not None:
+                    setattr(model_response, "usage", chunk.usage)
             else:  # openai / azure chat model
                 if self.custom_llm_provider == "azure":
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):

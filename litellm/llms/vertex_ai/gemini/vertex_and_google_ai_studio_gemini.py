@@ -789,6 +789,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return False
 
+
+    @staticmethod
+    def extract_cached_tokens(usage_metadata : UsageMetadata):
+        audio_tokens = 0
+        text_tokens = 0
+        image_tokens = 0
+        for detail in usage_metadata["promptTokensDetails"]:
+            if detail["modality"] == "AUDIO":
+                audio_tokens = detail["tokenCount"]
+            elif detail["modality"] == "TEXT":
+                text_tokens = detail["tokenCount"]
+            elif detail["modality"] == "IMAGE":
+                image_tokens = detail["tokenCount"]
+
+        return PromptTokensDetailsWrapper(
+            cached_tokens=audio_tokens+text_tokens+image_tokens,
+            audio_tokens=audio_tokens,
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+        )
+
     def _calculate_usage(
         self,
         completion_response: Union[
@@ -799,18 +820,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             raise ValueError(
                 f"usageMetadata not found in completion_response. Got={completion_response}"
             )
-        cached_tokens: Optional[int] = None
-        audio_tokens: Optional[int] = None
-        text_tokens: Optional[int] = None
-        image_tokens: Optional[int] = None
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if "cachedContentTokenCount" in completion_response["usageMetadata"]:
-            cached_tokens = completion_response["usageMetadata"][
-                "cachedContentTokenCount"
-            ]
 
         ## GEMINI LIVE API ONLY PARAMS ##
         if "responseTokenCount" in completion_response["usageMetadata"]:
@@ -825,23 +839,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         #########################################################
 
         if "promptTokensDetails" in completion_response["usageMetadata"]:
-            for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
-                if detail["modality"] == "AUDIO":
-                    audio_tokens = detail["tokenCount"]
-                elif detail["modality"] == "TEXT":
-                    text_tokens = detail["tokenCount"]
-                elif detail["modality"] == "IMAGE":
-                    image_tokens = detail["tokenCount"]
+            prompt_tokens_details = self.extract_cached_tokens(completion_response["usageMetadata"])
+
         if "thoughtsTokenCount" in completion_response["usageMetadata"]:
             reasoning_tokens = completion_response["usageMetadata"][
                 "thoughtsTokenCount"
             ]
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cached_tokens,
-            audio_tokens=audio_tokens,
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
-        )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get(
             "candidatesTokenCount", 0
@@ -1644,6 +1647,12 @@ class ModelResponseIterator:
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
+                prompt_tokens_details = None
+                if "promptTokensDetails" in processed_chunk["usageMetadata"]:
+                    prompt_tokens_details = VertexGeminiConfig.extract_cached_tokens(
+                        processed_chunk["usageMetadata"])
+
+
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=processed_chunk["usageMetadata"].get(
                         "promptTokenCount", 0
@@ -1654,6 +1663,7 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
+                    prompt_tokens_details=prompt_tokens_details.to_dict() if prompt_tokens_details else None,
                     completion_tokens_details={
                         "reasoning_tokens": processed_chunk["usageMetadata"].get(
                             "thoughtsTokenCount", 0
