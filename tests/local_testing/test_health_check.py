@@ -20,7 +20,7 @@ import litellm
 async def test_azure_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4o-new-test",
             "messages": [{"role": "user", "content": "Hey, how's it going?"}],
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),

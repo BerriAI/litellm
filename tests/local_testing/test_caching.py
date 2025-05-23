@@ -324,7 +324,7 @@ def test_caching_with_models_v2():
     litellm.set_verbose = True
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="azure/chatgpt-v-3", messages=messages, caching=True)
+    response3 = completion(model="azure/gpt-4o-new-test", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -1222,7 +1222,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response1 = litellm.completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4o-new-test",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1235,7 +1235,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_1_content)
         else:
             response1 = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4o-new-test",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1255,7 +1255,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response2 = litellm.completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4o-new-test",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1268,7 +1268,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_2_content)
         else:
             response2 = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4o-new-test",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1331,7 +1331,7 @@ async def test_s3_cache_acompletion_azure():
         print("s3 Cache: test for caching, streaming + completion")
 
         response1 = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1341,7 +1341,7 @@ async def test_s3_cache_acompletion_azure():
         time.sleep(2)
 
         response2 = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             max_tokens=40,
             temperature=1,
