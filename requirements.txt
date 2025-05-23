@@ -1,6 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.5.0 # openai + http req.
-httpx==0.27.0 # Pin Httpx dependency
+httpx==0.28.1 # Pin Httpx dependency
 httpx-aiohttp==0.1.2 # for aiohttp transport
 openai==1.81.0  # openai req. 
 fastapi==0.115.5 # server dep
