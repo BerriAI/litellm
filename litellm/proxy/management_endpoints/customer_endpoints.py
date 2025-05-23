@@ -458,16 +458,22 @@ async def update_end_user(
         if budget_table_data:
             if end_user_budget_table is None:
                 ## Create new budget ##
-                budget_table_data = await prisma_client.db.litellm_budgettable.create(
-                    data=budget_table_data, include={"litellm_endusertable": True}
+                budget_table_data_record = (
+                    await prisma_client.db.litellm_budgettable.create(
+                        data=budget_table_data, include={"litellm_endusertable": True}
+                    )
                 )
 
-                update_end_user_table_data["budget_id"] = budget_table_data.budget_id
+                update_end_user_table_data[
+                    "budget_id"
+                ] = budget_table_data_record.budget_id
             else:
                 ## Update existing budget ##
-                budget_table_data = await prisma_client.db.litellm_budgettable.update(
-                    where={"budget_id": end_user_budget_table.budget_id},
-                    data=budget_table_data,
+                budget_table_data_record = (
+                    await prisma_client.db.litellm_budgettable.update(
+                        where={"budget_id": end_user_budget_table.budget_id},
+                        data=budget_table_data,
+                    )
                 )
 
         ## Update user table, with update params + new budget id (if set) ##
