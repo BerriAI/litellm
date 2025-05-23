@@ -929,7 +929,7 @@ async def list_files(
             response = await llm_router.afile_list(
                 **data,
             )
-        elif provider:
+        else:
             custom_llm_provider = (
                 provider
                 or await get_custom_llm_provider_from_request_body(request=request)
