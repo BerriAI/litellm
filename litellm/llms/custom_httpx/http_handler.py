@@ -5,7 +5,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
-from aiohttp import ClientSession
+from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
@@ -511,17 +511,31 @@ class AsyncHTTPHandler:
         if litellm.force_ipv4:
             # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
             verbose_logger.debug("Creating AiohttpTransport with force_ipv4")
-            from aiohttp import TCPConnector
-
             return AiohttpTransport(
-                client=lambda: ClientSession(
+                client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(
                     connector=TCPConnector(local_addr=("0.0.0.0", 0))
                 ),
             )
 
         verbose_logger.debug("Creating AiohttpTransport with default settings")
         return AiohttpTransport(
-            client=lambda: ClientSession(),
+            client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(),
+        )
+
+    @staticmethod
+    def _create_aiohttp_client_session(
+        connector: Optional[TCPConnector] = None,
+    ) -> ClientSession:
+        """
+        Creates an AiohttpClientSession
+
+        Ensure skip_auto_headers is set to {"Content-Type"} to avoid issues with aiohttp.
+
+        By default, aiohttp will set the Content-Type header to "application/json" if not set.
+        """
+        return ClientSession(
+            skip_auto_headers={"Content-Type"},
+            connector=connector,
         )
 
     @staticmethod
