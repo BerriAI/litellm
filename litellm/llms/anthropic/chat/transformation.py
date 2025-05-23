@@ -380,6 +380,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params
         )
 
+        # Add default max_tokens for Anthropic models if not provided
+        if "max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params:
+            optional_params["max_tokens"] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value

@@ -152,6 +152,11 @@ async def anthropic_response(  # noqa: PLR0915
         if user_api_base:
             data["api_base"] = user_api_base
 
+        # Default stream to false for Anthropic messages endpoint if not specified
+        # This matches Anthropic API behavior where streaming must be explicitly requested
+        if "stream" not in data:
+            data["stream"] = False
+
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
