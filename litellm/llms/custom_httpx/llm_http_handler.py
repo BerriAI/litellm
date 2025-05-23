@@ -832,7 +832,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(request_data),
+                json=request_data,
                 timeout=timeout,
             )
         except Exception as e:
