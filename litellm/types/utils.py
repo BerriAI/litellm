@@ -869,6 +869,10 @@ class Usage(CompletionUsage):
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
+    # Public attributes for cache-related tokens
+    cache_creation_input_tokens: Optional[int] = None
+    cache_read_input_tokens: Optional[int] = None
+
     server_tool_use: Optional[ServerToolUse] = None
 
     def __init__(
@@ -1146,6 +1150,8 @@ class ModelResponseStream(ModelResponseBase):
 class ModelResponse(ModelResponseBase):
     choices: List[Union[Choices, StreamingChoices]]
     """The list of completion choices the model generated for the input prompt."""
+    usage: Optional[Usage] = None
+    """Usage statistics for the completion request."""
 
     def __init__(
         self,
