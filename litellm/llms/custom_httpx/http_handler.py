@@ -528,14 +528,14 @@ class AsyncHTTPHandler:
                 timeout = request.extensions.get("timeout", {})
                 sni_hostname = request.extensions.get("sni_hostname")
 
-                if not isinstance(self.client, ClientSession):
-                    self.client = self.client()
+                if not isinstance(self.client, ClientSession):  # type: ignore
+                    self.client = self.client()  # type: ignore
 
                 with map_aiohttp_exceptions():
                     try:
                         data = request.content
                     except httpx.RequestNotRead:
-                        data = request.stream
+                        data = request.stream  # type: ignore
                         request.headers.pop(
                             "transfer-encoding", None
                         )  # handled by aiohttp
