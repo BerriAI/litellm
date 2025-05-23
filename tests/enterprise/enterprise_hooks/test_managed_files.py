@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
@@ -45,11 +45,19 @@ def test_get_file_ids_from_messages():
 
 @pytest.mark.asyncio
 async def test_async_pre_call_hook_batch_retrieve():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    return_value = MagicMock()
+    return_value.created_by = "123"
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=prisma_client
     )
     data = {
-        "user_api_key_dict": {"parent_otel_span": MagicMock()},
+        "user_api_key_dict": UserAPIKeyAuth(
+            user_id="123", parent_otel_span=MagicMock()
+        ),
         "data": {
             "batch_id": "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDpteS1nZW5lcmFsLWF6dXJlLWRlcGxveW1lbnQ7bGxtX2JhdGNoX2lkOmJhdGNoX2EzMjJiNmJhLWFjN2UtNDg4OC05MjljLTFhZDM0NDJmMDZlZA",
         },
@@ -206,3 +214,29 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
 
     assert isinstance(response, LiteLLMFineTuningJob)
     assert _is_base64_encoded_unified_file_id(response.id)
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_for_unified_finetuning_job():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    return_value = MagicMock()
+    return_value.created_by = "123"
+    prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+    data = {
+        "user_api_key_dict": UserAPIKeyAuth(
+            user_id="123", parent_otel_span=MagicMock()
+        ),
+        "data": {
+            "fine_tuning_job_id": "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDo0OTIxODU4MWY3OGViZTllZjE4NDE0ZmE0ZjdmYjlmYTc0YzA5NWVkMTEyY2E4NDBkZDU2ZGZmZTliZDMwZGQxO2dlbmVyaWNfcmVzcG9uc2VfaWQ6ZnRqb2ItalRCeXM3YlZzYnlaRE93TDlHbHBZcVhS",
+        },
+        "call_type": "acancel_fine_tuning_job",
+        "cache": MagicMock(),
+    }
+
+    response = await proxy_managed_files.async_pre_call_hook(**data)
+    assert response["fine_tuning_job_id"] == "ftjob-jTBys7bVsbyZDOwL9GlpYqXR"
