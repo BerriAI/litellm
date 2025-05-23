@@ -178,7 +178,7 @@ class KeyManagementEventHooks:
                             changed_by=litellm_changed_by
                             or user_api_key_dict.user_id
                             or litellm_proxy_admin_name,
-                            changed_by_api_key=user_api_key_dict.api_key,
+                            changed_by_api_key=user_api_key_dict.token,
                             table_name=LitellmTableNames.KEY_TABLE_NAME,
                             object_id=key.token,
                             action="deleted",
