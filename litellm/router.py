@@ -764,6 +764,9 @@ class Router:
         self.aretrieve_fine_tuning_job = self.factory_function(
             litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job"
         )
+        self.afile_list = self.factory_function(
+            litellm.afile_list, call_type="alist_files"
+        )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -3185,6 +3188,7 @@ class Router:
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "aretrieve_fine_tuning_job",
+            "alist_files",
         ] = "assistants",
     ):
         """
@@ -3237,6 +3241,7 @@ class Router:
                 "acancel_fine_tuning_job",
                 "alist_fine_tuning_jobs",
                 "aretrieve_fine_tuning_job",
+                "alist_files",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

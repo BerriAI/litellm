@@ -3,13 +3,14 @@ import os
 import sys
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from enterprise.enterprise_hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.caching import DualCache
@@ -240,3 +241,31 @@ async def test_async_pre_call_hook_for_unified_finetuning_job():
 
     response = await proxy_managed_files.async_pre_call_hook(**data)
     assert response["fine_tuning_job_id"] == "ftjob-jTBys7bVsbyZDOwL9GlpYqXR"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["afile_content", "afile_delete"])
+async def test_can_user_call_unified_file_id(call_type):
+    """
+    Test that on file retrieve, delete we check if the user has access to the file
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    return_value = MagicMock()
+    return_value.created_by = "123"
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = return_value
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        MagicMock(), prisma_client=prisma_client
+    )
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxmMTNlNDAzZS01YWM3LTRhZjktOGQzNS0wNDgwZDMxOTgyYTg7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00by1taW5pLW9wZW5haTtsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1Ib3UxZDFXc3c1SDNKcjFMYllpZDJiO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxmODBiNWU2NzQ1NzdkNjkyMjM4YmVhNTIxZDdiMGI5ZGYyY2FmMTEwMTU2YmU5YzBjM2NjMmNkNTBjOTM1ZDI0"
+
+    with pytest.raises(HTTPException) as e:
+        await proxy_managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="456", parent_otel_span=MagicMock()
+            ),
+            cache=MagicMock(),
+            data={"file_id": unified_file_id},
+            call_type=call_type,
+        )
