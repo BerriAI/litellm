@@ -4980,6 +4980,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("PERPLEXITYAI_API_KEY")
+        elif custom_llm_provider == "morph":
+            if "MORPH_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MORPH_API_KEY")
         elif custom_llm_provider == "voyage":
             if "VOYAGE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6358,6 +6363,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
         elif (
@@ -6499,6 +6506,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphEmbeddingConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
@@ -6529,6 +6538,8 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
