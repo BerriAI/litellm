@@ -8,7 +8,7 @@ GET - /audit - Get all audit logs
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,7 +17,7 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     PaginatedAuditLogResponse,
 )
 
-from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -125,3 +125,48 @@ async def get_audit_logs(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+@router.get(
+    "/audit/{id}",
+    tags=["Audit Logging"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=AuditLogResponse,
+    responses={
+        404: {"description": "Audit log not found"},
+        500: {"description": "Database connection error"},
+    },
+)
+async def get_audit_log_by_id(
+    id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Get detailed information about a specific audit log entry by its ID.
+
+    Args:
+        id (str): The unique identifier of the audit log entry
+
+    Returns:
+        AuditLogResponse: Detailed information about the audit log entry
+
+    Raises:
+        HTTPException: If the audit log is not found or if there's a database connection error
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Get the audit log by ID
+    audit_log = await prisma_client.db.litellm_auditlog.find_unique(where={"id": id})
+
+    if audit_log is None:
+        raise HTTPException(
+            status_code=404, detail={"message": f"Audit log with ID {id} not found"}
+        )
+
+    # Convert to response model
+    return AuditLogResponse(**audit_log.model_dump())
