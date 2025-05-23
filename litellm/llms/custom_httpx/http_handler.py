@@ -507,7 +507,6 @@ class AsyncHTTPHandler:
         - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
         """
         from httpx_aiohttp import AiohttpTransport
-        from yarl import URL
 
         class LiteLLMAiohttpTransport(AiohttpTransport):
             """
@@ -518,11 +517,51 @@ class AsyncHTTPHandler:
                 self,
                 request: httpx.Request,
             ) -> httpx.Response:
-                # replace its URL with a YARL one that preserves %-encodings
-                request.url = URL(str(request.url), encoded=True)  # type: ignore
+                from aiohttp import ClientTimeout
+                from aiohttp.client import ClientSession
+                from httpx_aiohttp.transport import (
+                    AiohttpResponseStream,
+                    map_aiohttp_exceptions,
+                )
+                from yarl import URL as YarlURL
 
-                # now hand off to the original logic, but with our wrapped URL
-                return await super().handle_async_request(request)
+                timeout = request.extensions.get("timeout", {})
+                sni_hostname = request.extensions.get("sni_hostname")
+
+                if not isinstance(self.client, ClientSession):
+                    self.client = self.client()
+
+                with map_aiohttp_exceptions():
+                    try:
+                        data = request.content
+                    except httpx.RequestNotRead:
+                        data = request.stream
+                        request.headers.pop(
+                            "transfer-encoding", None
+                        )  # handled by aiohttp
+
+                    response = await self.client.request(
+                        method=request.method,
+                        url=YarlURL(str(request.url), encoded=True),
+                        headers=request.headers,
+                        data=data,
+                        allow_redirects=False,
+                        auto_decompress=False,
+                        compress=False,
+                        timeout=ClientTimeout(
+                            sock_connect=timeout.get("connect"),
+                            sock_read=timeout.get("read"),
+                            connect=timeout.get("pool"),
+                        ),
+                        server_hostname=sni_hostname,
+                    ).__aenter__()
+
+                return httpx.Response(
+                    status_code=response.status,
+                    headers=response.headers,
+                    content=AiohttpResponseStream(response),
+                    request=request,
+                )
 
         if litellm.force_ipv4:
             # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
