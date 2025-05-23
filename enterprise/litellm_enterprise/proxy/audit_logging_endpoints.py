@@ -169,4 +169,5 @@ async def get_audit_log_by_id(
         )
 
     # Convert to response model
+    print(audit_log)
     return AuditLogResponse(**audit_log.model_dump())
