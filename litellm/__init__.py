@@ -1068,7 +1068,6 @@ from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.nebius.embed.transformation import NebiusEmbeddingConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

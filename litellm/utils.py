@@ -6536,8 +6536,6 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
-        elif litellm.LlmProviders.NEBIUS == provider:
-            return litellm.NebiusEmbeddingConfig()
         return None
 
     @staticmethod
