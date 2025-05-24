@@ -361,9 +361,13 @@ async def get_user_info_from_db(
         if alternate_user_id is not None:
             potential_user_ids.append(alternate_user_id)
         if not isinstance(result, dict):
-            potential_user_ids.append(getattr(result, "id", None))
+            _id = getattr(result, "id", None)
+            if _id is not None and isinstance(_id, str):
+                potential_user_ids.append(_id)
         else:
-            potential_user_ids.append(result.get("id", None))
+            _id = result.get("id", None)
+            if _id is not None and isinstance(_id, str):
+                potential_user_ids.append(_id)
 
         user_email = (
             getattr(result, "email", None)
