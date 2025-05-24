@@ -4,8 +4,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from fastapi import status
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -16,8 +14,6 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_VerificationToken,
     LitellmTableNames,
-    ProxyErrorTypes,
-    ProxyException,
     RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
@@ -126,11 +122,16 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_rotated_hook(
         data: Optional[RegenerateKeyRequest],
-        existing_key_row: Any,
+        existing_key_row: LiteLLM_VerificationToken,
         response: GenerateKeyResponse,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
     ):
+        from litellm.proxy.management_helpers.audit_logs import (
+            create_audit_log_for_update,
+        )
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
         # store the generated key in the secret manager
         if data is not None and response.token_id is not None:
             initial_secret_name = (
@@ -140,6 +141,28 @@ class KeyManagementEventHooks:
                 current_secret_name=initial_secret_name,
                 new_secret_name=data.key_alias or f"virtual-key-{response.token_id}",
                 new_secret_value=response.key,
+            )
+
+        # store the audit log
+        if litellm.store_audit_logs is True and existing_key_row.token is not None:
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.token,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=existing_key_row.token,
+                        action="rotated",
+                        updated_values=response.model_dump_json(exclude_none=True),
+                        before_value=existing_key_row.model_dump_json(
+                            exclude_none=True
+                        ),
+                    )
+                )
             )
 
     @staticmethod
@@ -159,27 +182,16 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
         )
-        from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
         if litellm.store_audit_logs is True and data.keys is not None:
-            # make an audit log for each team deleted
-            for key in data.keys:
-                key_row = await prisma_client.get_data(  # type: ignore
-                    token=key, table_name="key", query_type="find_unique"
-                )
-
-                if key_row is None:
-                    raise ProxyException(
-                        message=f"Key {key} not found",
-                        type=ProxyErrorTypes.bad_request_error,
-                        param="key",
-                        code=status.HTTP_404_NOT_FOUND,
-                    )
-
-                key_row = key_row.json(exclude_none=True)
-                _key_row = json.dumps(key_row, default=str)
+            # make an audit log for each key deleted
+            for key in keys_being_deleted:
+                if key.token is None:
+                    continue
+                _key_row = key.model_dump_json(exclude_none=True)
 
                 asyncio.create_task(
                     create_audit_log_for_update(
@@ -189,9 +201,9 @@ class KeyManagementEventHooks:
                             changed_by=litellm_changed_by
                             or user_api_key_dict.user_id
                             or litellm_proxy_admin_name,
-                            changed_by_api_key=user_api_key_dict.api_key,
+                            changed_by_api_key=user_api_key_dict.token,
                             table_name=LitellmTableNames.KEY_TABLE_NAME,
-                            object_id=key,
+                            object_id=key.token,
                             action="deleted",
                             updated_values="{}",
                             before_value=_key_row,

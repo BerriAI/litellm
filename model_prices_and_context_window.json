@@ -3117,6 +3117,18 @@
         "supports_function_calling": true,
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-nemo-12b-2407?tab=PlansAndPrice"
     },
+    "azure_ai/mistral-medium-2505": {
+        "max_tokens": 8191,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
     "azure_ai/mistral-large": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
@@ -3800,6 +3812,19 @@
         "litellm_provider": "mistral",
         "mode": "chat",
         "source": "https://mistral.ai/technology/",
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "mistral/devstral-small-2505": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/news/devstral",
+        "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
@@ -4685,9 +4710,9 @@
         "supports_tool_choice": true
     },
     "claude-opus-4-20250514": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "search_context_cost_per_query": {
@@ -4711,9 +4736,9 @@
         "supports_computer_use": true
     },
     "claude-sonnet-4-20250514": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "search_context_cost_per_query": {
@@ -6806,9 +6831,9 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-opus-4@20250514": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "search_context_cost_per_query": {
@@ -6832,9 +6857,9 @@
         "supports_computer_use": true
     },
     "vertex_ai/claude-sonnet-4@20250514": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "search_context_cost_per_query": {
@@ -9437,9 +9462,9 @@
         "supports_tool_choice": true
     },
     "anthropic.claude-opus-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "search_context_cost_per_query": {
@@ -9463,9 +9488,9 @@
         "supports_computer_use": true
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "search_context_cost_per_query": {
@@ -9639,9 +9664,9 @@
         "supports_reasoning": true
     },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "search_context_cost_per_query": {
@@ -9665,9 +9690,9 @@
         "supports_computer_use": true
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "search_context_cost_per_query": {
@@ -9812,9 +9837,9 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-opus-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 32000,
         "input_cost_per_token": 15e-6,
         "output_cost_per_token": 75e-6,
         "search_context_cost_per_query": {
@@ -9838,9 +9863,9 @@
         "supports_computer_use": true
     },
     "eu.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "max_tokens": 128000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-6,
         "output_cost_per_token": 15e-6,
         "search_context_cost_per_query": {
@@ -12557,7 +12582,7 @@
         "max_output_tokens": 128000, 
         "input_cost_per_token": 0.0000025,
         "input_dbu_cost_per_token": 0.00003571,
-        "output_cost_per_token": 0.00017857,
+        "output_cost_per_token": 0.000017857,
         "output_db_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
         "mode": "chat",

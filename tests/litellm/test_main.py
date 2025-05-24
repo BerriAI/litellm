@@ -11,8 +11,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock, patch
 import urllib.parse
+from unittest.mock import MagicMock, patch
+
 import litellm
 
 
@@ -287,6 +288,9 @@ async def test_extra_body_with_fallback(
 
     This was perhaps a wider issue with the acompletion function not passing kwargs such as extra_body correctly when fallbacks are specified.
     """
+
+    # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.use_aiohttp_transport = False
     # Set up test parameters
     model = "openrouter/deepseek/deepseek-chat"
     messages = [{"role": "user", "content": "Hello, world!"}]
@@ -352,6 +356,9 @@ async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    litellm.use_aiohttp_transport = (
+        False  # since this uses respx, we need to set use_aiohttp_transport to False
+    )
 
     expected_base_url = "http://localhost:12345/v1"
 
@@ -388,16 +395,17 @@ async def test_openai_env_base(
     assert response.choices[0].message.content == "Hello from mocked response!"
 
 
-
 def build_database_url(username, password, host, dbname):
     username_enc = urllib.parse.quote_plus(username)
     password_enc = urllib.parse.quote_plus(password)
     dbname_enc = urllib.parse.quote_plus(dbname)
     return f"postgresql://{username_enc}:{password_enc}@{host}/{dbname_enc}"
 
+
 def test_build_database_url():
     url = build_database_url("user@name", "p@ss:word", "localhost", "db/name")
     assert url == "postgresql://user%40name:p%40ss%3Aword@localhost/db%2Fname"
+
 
 def test_bedrock_llama():
     litellm._turn_on_debug()
