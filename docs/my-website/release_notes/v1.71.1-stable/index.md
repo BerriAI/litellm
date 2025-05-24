@@ -63,7 +63,6 @@ This release includes significant performance enhancements:
     - New preview models added - [PR](https://github.com/BerriAI/litellm/pull/10991)
     - Additional model updates - [PR](https://github.com/BerriAI/litellm/pull/10998)
 - **[Anthropic](../../docs/providers/anthropic)**
-    - `/chat/completion`
     - Claude-4 model family support - [PR](https://github.com/BerriAI/litellm/pull/11060)
     - Claude Sonnet 4 and Opus 4 reasoning_effort parameter support - [PR](https://github.com/BerriAI/litellm/pull/11114)
 - **[xAI](../../docs/providers/xai)**
