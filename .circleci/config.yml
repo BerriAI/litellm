@@ -923,6 +923,7 @@ jobs:
             pip install "mcp==1.5.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
+            pip install "pytest-xdist==3.6.1"
       - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
@@ -930,7 +931,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=10
+            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
