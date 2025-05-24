@@ -150,7 +150,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-        transport = AsyncHTTPHandler._create_async_transport()
+
+        transport = AsyncHTTPHandler._create_async_transport(
+            ssl_context=ssl_verify if isinstance(ssl_verify, ssl.SSLContext) else None,
+            ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
+        )
 
         return httpx.AsyncClient(
             transport=transport,
@@ -468,9 +472,9 @@ class AsyncHTTPHandler:
             pass
 
     @staticmethod
-    def _create_async_transport() -> (
-        Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]
-    ):
+    def _create_async_transport(
+        ssl_context: Optional[ssl.SSLContext] = None, ssl_verify: Optional[bool] = None
+    ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
@@ -493,7 +497,9 @@ class AsyncHTTPHandler:
             litellm.use_aiohttp_transport
             and AsyncHTTPHandler.aiohttp_transport_exists()
         ):
-            return AsyncHTTPHandler._create_aiohttp_transport()
+            return AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=ssl_context, ssl_verify=ssl_verify
+            )
 
         #########################################################
         # HTTPX TRANSPORT is used when aiohttp is not installed
@@ -501,7 +507,10 @@ class AsyncHTTPHandler:
         return AsyncHTTPHandler._create_httpx_transport()
 
     @staticmethod
-    def _create_aiohttp_transport() -> LiteLLMAiohttpTransport:
+    def _create_aiohttp_transport(
+        ssl_verify: Optional[bool] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
+    ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
 
@@ -510,36 +519,16 @@ class AsyncHTTPHandler:
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        if litellm.force_ipv4:
-            # Configure aiohttp to use IPv4 by setting local_addr on TCPConnector
-            verbose_logger.debug(
-                "Creating AiohttpTransport with force_ipv4 and RequestNotRead fix"
-            )
-            return LiteLLMAiohttpTransport(
-                client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(
-                    connector=TCPConnector(local_addr=("0.0.0.0", 0))
-                ),
-            )
-        verbose_logger.debug(
-            "Creating AiohttpTransport with default settings and RequestNotRead fix"
-        )
+        verbose_logger.debug("Creating AiohttpTransport...")
+
         return LiteLLMAiohttpTransport(
-            client=lambda: AsyncHTTPHandler._create_aiohttp_client_session(),
-        )
-
-    @staticmethod
-    def _create_aiohttp_client_session(
-        connector: Optional[TCPConnector] = None,
-    ) -> ClientSession:
-        """
-        Creates an AiohttpClientSession
-
-        Ensure skip_auto_headers is set to {"Content-Type"} to avoid issues with aiohttp.
-
-        By default, aiohttp will set the Content-Type header to "application/json" if not set.
-        """
-        return ClientSession(
-            connector=connector,
+            client=lambda: ClientSession(
+                connector=TCPConnector(
+                    verify_ssl=ssl_verify or True,
+                    ssl_context=ssl_context,
+                    local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
+                )
+            ),
         )
 
     @staticmethod
