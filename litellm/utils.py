@@ -529,9 +529,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1237,9 +1237,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2766,6 +2766,7 @@ def get_optional_params(  # noqa: PLR0915
         "function_call": None,
         "temperature": None,
         "top_p": None,
+        "top_k": None,
         "n": None,
         "stream": None,
         "stream_options": None,
@@ -2777,6 +2778,7 @@ def get_optional_params(  # noqa: PLR0915
         "audio": None,
         "presence_penalty": None,
         "frequency_penalty": None,
+        "repetition_penalty": None,
         "logit_bias": None,
         "user": None,
         "model": None,
@@ -2848,6 +2850,7 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "cloudflare"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -2857,16 +2860,16 @@ def get_optional_params(  # noqa: PLR0915
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -2889,10 +2892,10 @@ def get_optional_params(  # noqa: PLR0915
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3908,9 +3911,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -6506,6 +6509,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            from litellm.llms.cloudflare.embed.transformation import (
+                CloudflareEmbeddingConfig,
+            )
+
+            return CloudflareEmbeddingConfig()
         return None
 
     @staticmethod
@@ -6604,6 +6613,7 @@ class ProviderConfigManager:
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
+
             return OllamaModelInfo()
         elif LlmProviders.VLLM == provider:
             from litellm.llms.vllm.common_utils import (
