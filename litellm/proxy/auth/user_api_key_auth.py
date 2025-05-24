@@ -767,7 +767,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = "Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
                         abbreviated_api_key, api_key
                     )
                 raise e
