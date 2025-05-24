@@ -534,3 +534,7 @@ def get_model_from_request(
             model = match.group(1)
 
     return model
+
+
+def abbreviate_api_key(api_key: str) -> str:
+    return f"sk-...{api_key[-4:]}"
