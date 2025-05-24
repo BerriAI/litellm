@@ -2,7 +2,7 @@ import asyncio
 import os
 import ssl
 import time
-from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
 
 import httpx
 from aiohttp import ClientSession, TCPConnector
@@ -187,6 +187,9 @@ class AsyncHTTPHandler:
         _follow_redirects = (
             follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         )
+
+        params = params or {}
+        params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
@@ -623,11 +626,27 @@ class HTTPHandler:
         _follow_redirects = (
             follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         )
+        params = params or {}
+        params.update(self.extract_query_params(url))
 
         response = self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
+
         return response
+
+    @staticmethod
+    def extract_query_params(url: str) -> Dict[str, str]:
+        """
+        Parse a URL’s query-string into a dict.
+
+        :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
+        :return: {"foo": "1", "bar": "2"}
+        """
+        from urllib.parse import parse_qsl, urlsplit
+
+        parts = urlsplit(url)
+        return dict(parse_qsl(parts.query))
 
     def post(
         self,
