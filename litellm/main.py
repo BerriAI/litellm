@@ -1178,7 +1178,9 @@ def completion(  # type: ignore # noqa: PLR0915
             **non_default_params,
         )
 
-        standard_openai_params = optional_params.pop("standard_openai_params", None)
+        processed_non_default_params = optional_params.pop(
+            "processed_non_default_params", None
+        )
 
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
@@ -1243,7 +1245,7 @@ def completion(  # type: ignore # noqa: PLR0915
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=standard_openai_params,  # [IMPORTANT] - using standard_openai_params ensures consistent params logged to langfuse for finetuning / eval datasets.
+            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )

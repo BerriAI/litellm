@@ -3630,7 +3630,8 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
-    optional_params["standard_openai_params"] = non_default_params
+    ## USED FOR STANDARD PARAM LOGGING ##
+    optional_params["processed_non_default_params"] = non_default_params
     return optional_params
 
 
