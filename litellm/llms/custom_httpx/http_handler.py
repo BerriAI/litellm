@@ -13,7 +13,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
-from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -515,6 +514,8 @@ class AsyncHTTPHandler:
         Controlled by either
         - litellm.use_aiohttp_transport or os.getenv("USE_AIOHTTP_TRANSPORT") = "True"
         """
+        from litellm.secret_managers.main import str_to_bool
+
         if (
             str_to_bool(os.getenv("USE_AIOHTTP_TRANSPORT", "False"))
             or litellm.use_aiohttp_transport
