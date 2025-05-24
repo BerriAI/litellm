@@ -6604,6 +6604,7 @@ class ProviderConfigManager:
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
+
             return OllamaModelInfo()
         elif LlmProviders.VLLM == provider:
             from litellm.llms.vllm.common_utils import (
@@ -6694,6 +6695,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIImageEditConfig()
+        if LlmProviders.AZURE == provider:
+            from litellm.llms.azure.image_edit.transformation import (
+                AzureImageEditConfig,
+            )
+
+            return AzureImageEditConfig()
         return None
 
 

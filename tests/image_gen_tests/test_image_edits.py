@@ -143,3 +143,39 @@ async def test_openai_image_edit_with_bytesio():
                     f.write(image_bytes)
     except litellm.ContentPolicyViolationError as e:
         pass
+
+
+
+# @pytest.mark.flaky(retries=3, delay=2)
+@pytest.mark.asyncio
+async def test_azure_image_edit_litellm_sdk():
+    from litellm import image_edit, aimage_edit
+    litellm._turn_on_debug()
+    try:
+        prompt = """
+        Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
+        """
+        result = await aimage_edit(
+            prompt=prompt,
+            model="azure/Dalle3",
+            api_base=os.environ.get("AZURE_IMAGE_ENDPOINT"),
+            api_key=os.environ.get("AZURE_IMAGE_API_KEY"),
+            api_version=os.environ.get("AZURE_IMAGE_API_VERSION"),
+            image=TEST_IMAGES,
+        )
+        print("result from image edit", result)
+
+        # Validate the response meets expected schema
+        ImageResponse.model_validate(result)
+        
+        if isinstance(result, ImageResponse) and result.data:
+            image_base64 = result.data[0].b64_json
+            if image_base64:
+                image_bytes = base64.b64decode(image_base64)
+
+                # Save the image to a file
+                with open("test_image_edit.png", "wb") as f:
+                    f.write(image_bytes)
+    except litellm.ContentPolicyViolationError as e:
+        pass
+
