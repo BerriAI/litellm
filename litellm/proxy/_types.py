@@ -781,7 +781,7 @@ class KeyRequest(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
-    id: int
+    id: Optional[int] = None
     model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
