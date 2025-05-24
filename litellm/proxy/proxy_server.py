@@ -835,7 +835,7 @@ use_background_health_checks = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
-health_check_results: dict[str, Union[int, List[Dict[str, Any]]]] = {}
+health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1231,9 +1231,11 @@ async def _run_background_health_check():
     """
     global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    if health_check_interval is None or not isinstance(
-            health_check_interval, int
-        ) or health_check_interval <= 0:
+    if (
+        health_check_interval is None
+        or not isinstance(health_check_interval, int)
+        or health_check_interval <= 0
+    ):
         return
 
     while True:
