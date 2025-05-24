@@ -2000,6 +2000,7 @@ class ProxyConfig:
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
+            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
         )  # type:ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -2326,6 +2327,7 @@ class ProxyConfig:
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
