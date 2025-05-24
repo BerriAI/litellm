@@ -753,7 +753,7 @@ def completion_cost(  # noqa: PLR0915
                     == PassthroughCallTypes.passthrough_image_generation.value
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
-                    if custom_llm_provider == "vertex_ai":
+                    if custom_llm_provider in ("vertex_ai", "vertex_ai-image-models"):
                         if isinstance(completion_response, ImageResponse):
                             return vertex_ai_image_cost_calculator(
                                 model=model,
