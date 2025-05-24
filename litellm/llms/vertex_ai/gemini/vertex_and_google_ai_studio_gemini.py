@@ -219,6 +219,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "logprobs",
             "top_logprobs",
             "modalities",
+            "parallel_tool_calls",
         ]
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
@@ -463,6 +464,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            elif param == "parallel_tool_calls":
+                if value is False:
+                    tools = non_default_params.get("tools", non_default_params.get("functions"))
+                    num_function_declarations = len(tools) if isinstance(tools, list) else 0
+                    if num_function_declarations > 1:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                "`parallel_tool_calls=False` is not supported when multiple tools are "
+                                "provided for Gemini. Specify a single tool, or set "
+                                "`parallel_tool_calls=True`."
+                            ),
+                            status_code=400,
+                        )
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
