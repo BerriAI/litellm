@@ -317,11 +317,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif (
-                    "invalid_request_error" in error_str
-                    and "content_policy_violation" in error_str
-                ) or (
-                    "Invalid prompt" in error_str
-                    and "violating our usage policy" in error_str
+                    (
+                        "invalid_request_error" in error_str
+                        and "content_policy_violation" in error_str
+                    )
+                    or (
+                        "Invalid prompt" in error_str
+                        and "violating our usage policy" in error_str
+                    )
+                    or (
+                        "request was rejected as a result of the safety system"
+                        in error_str.lower()
+                    )
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(

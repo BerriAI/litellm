@@ -1869,7 +1869,8 @@ export const modelAvailableCall = async (
   userID: String,
   userRole: String,
   return_wildcard_routes: boolean = false,
-  teamID: String | null = null
+  teamID: String | null = null,
+  include_model_access_groups: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1880,6 +1881,9 @@ export const modelAvailableCall = async (
     const params = new URLSearchParams();
     if (return_wildcard_routes === true) {
       params.append('return_wildcard_routes', 'True');
+    }
+    if (include_model_access_groups === true) {
+      params.append('include_model_access_groups', 'True');
     }
     if (teamID) {
       params.append('team_id', teamID.toString());
@@ -3354,14 +3358,15 @@ export interface Member {
 export const teamMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberAddCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_add`
       : `/team/member_add`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -3370,21 +3375,30 @@ export const teamMemberAddCall = async (
       },
       body: JSON.stringify({
         team_id: teamId,
-        member: formValues, // Include formValues in the request body
+        member: formValues,
       }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3397,7 +3411,7 @@ export const teamMemberUpdateCall = async (
   formValues: Member // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in teamMemberUpdateCall:", formValues);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
@@ -3416,21 +3430,30 @@ export const teamMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
     }
 
     const data = await response.json();
     console.log("API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to update team member:", error);
     throw error;
   }
-}
+};
 
 export const teamMemberDeleteCall = async (
   accessToken: string,
@@ -5121,6 +5144,69 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to get guardrail info");
+    }
+
+    const data = await response.json();
+    console.log("Guardrail info response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get guardrail info:", error);
+    throw error;
+  }
+};
+
+export const updateGuardrailCall = async (
+  accessToken: string,
+  guardrailId: string,
+  updateData: {
+    guardrail_name?: string;
+    default_on?: boolean;
+    guardrail_info?: Record<string, any>;
+  }
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
+    
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updateData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Failed to update guardrail");
+    }
+
+    const data = await response.json();
+    console.log("Update guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update guardrail:", error);
     throw error;
   }
 };

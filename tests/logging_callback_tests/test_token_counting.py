@@ -224,10 +224,10 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     )
 
     input_tokens_anthropic_api = sum(
-        [getattr(usage, "input_tokens", 0) for usage in all_anthropic_usage_chunks]
+        [getattr(usage, "input_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
     )
     output_tokens_anthropic_api = sum(
-        [getattr(usage, "output_tokens", 0) for usage in all_anthropic_usage_chunks]
+        [getattr(usage, "output_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
     )
     print("input_tokens_anthropic_api", input_tokens_anthropic_api)
     print("output_tokens_anthropic_api", output_tokens_anthropic_api)

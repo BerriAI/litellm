@@ -23,10 +23,13 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayloadErrorInformation,
@@ -247,6 +250,9 @@ class LiteLLMRoutes(enum.Enum):
         # image generation
         "/images/generations",
         "/v1/images/generations",
+        # image edit
+        "/images/edits",
+        "/v1/images/edits",
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",
@@ -701,7 +707,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
-    expires: Optional[datetime]
+    expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
@@ -778,9 +784,11 @@ class KeyRequest(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
+    id: Optional[int] = None
     model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
+    team: Optional["LiteLLM_TeamTable"] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -937,6 +945,7 @@ class NewCustomerRequest(BudgetNewRequest):
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    spend: Optional[float] = None
     allowed_model_region: Optional[
         AllowedModelRegion
     ] = None  # require all user requests to use models in this specific region
@@ -1221,6 +1230,7 @@ class TeamRequest(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record"""
 
+    budget_id: Optional[str] = None
     soft_budget: Optional[float] = None
     max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
@@ -1785,7 +1795,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -2008,6 +2018,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    guardrail_information: Optional[StandardLoggingGuardrailInformation]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
@@ -2160,6 +2171,10 @@ class CommonProxyErrors(str, enum.Enum):
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
+    missing_enterprise_package = "Missing litellm-enterprise package. Please install it to use this feature. Run `pip install litellm-enterprise`"
+    missing_enterprise_package_docker = (
+        "This uses the enterprise folder - only available on the Docker image."
     )
 
 
@@ -2877,3 +2892,13 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: OpenAIFileObject
     model_mappings: Dict[str, str]
+    flat_model_file_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+
+
+class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
+    unified_object_id: str
+    model_object_id: str
+    file_purpose: Literal["batch", "fine-tune"]
+    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]

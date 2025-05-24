@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
     set_schema_property_ordering,
+    _get_vertex_url
 )
 
 
@@ -516,3 +517,45 @@ def test_vertex_ai_complex_response_schema():
     assert "additionalProperties" not in type2
     assert "additionalProperties" not in type3
     assert "additionalProperties" not in type3_prop3_items
+
+@pytest.mark.parametrize(
+    "stream, expected_endpoint_suffix",
+    [
+        (True, "streamGenerateContent?alt=sse"),
+        (False, "generateContent"),
+    ],
+)
+def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
+    """
+    Test _get_vertex_url when vertex_location is 'global' for chat mode.
+    """
+    mode = "chat"
+    model = "gemini-1.5-pro-preview-0409"
+    vertex_project = "test-g-project"
+    vertex_location = "global"
+    vertex_api_version = "v1"
+
+    # Mock litellm.VertexGeminiConfig.get_model_for_vertex_ai_url to return model as is
+    # as we are not testing that part here, just the URL construction
+    with patch("litellm.VertexGeminiConfig.get_model_for_vertex_ai_url", side_effect=lambda model: model):
+        url, endpoint = _get_vertex_url(
+            mode=mode,
+            model=model,
+            stream=stream,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version=vertex_api_version,
+        )
+
+    expected_url_base = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}"
+    
+    if stream:
+        expected_endpoint = "streamGenerateContent"
+        expected_url = f"{expected_url_base}:{expected_endpoint}?alt=sse"
+    else:
+        expected_endpoint = "generateContent"
+        expected_url = f"{expected_url_base}:{expected_endpoint}"
+
+
+    assert endpoint == expected_endpoint
+    assert url == expected_url

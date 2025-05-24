@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 
@@ -30,7 +30,8 @@ def test_initialize_presidio_guardrail():
     }
 
     # Call the initialize_guardrail method
-    result = InitializeGuardrails.initialize_guardrail(
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
         guardrail=test_guardrail,
     )
 

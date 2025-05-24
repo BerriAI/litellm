@@ -146,12 +146,14 @@ class InternalUsageCache:
         key,
         litellm_parent_otel_span: Union[Span, None],
         local_only: bool = False,
+        redis_only: bool = False,
         **kwargs,
     ) -> Any:
         return await self.dual_cache.async_get_cache(
             key=key,
             local_only=local_only,
             parent_otel_span=litellm_parent_otel_span,
+            redis_only=redis_only,
             **kwargs,
         )
 
@@ -778,6 +780,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         error_type: Optional[ProxyErrorTypes] = None,
         route: Optional[str] = None,
+        traceback_str: Optional[str] = None,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -786,6 +789,14 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings
         3. /image/generation
+
+        Args:
+            - request_data: dict - The request data.
+            - original_exception: Exception - The original exception.
+            - user_api_key_dict: UserAPIKeyAuth - The user api key dict.
+            - error_type: Optional[ProxyErrorTypes] - The error type.
+            - route: Optional[str] - The route.
+            - traceback_str: Optional[str] - The traceback string, sometimes upstream endpoints might need to send the upstream traceback. In which case we use this
         """
 
         ### ALERTING ###
@@ -840,6 +851,7 @@ class ProxyLogging:
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
+                            traceback_str=traceback_str,
                         )
                     )
             except Exception as e:

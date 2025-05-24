@@ -40,15 +40,7 @@ class VertexBase:
     def load_auth(
         self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
     ) -> Tuple[Any, str]:
-        import google.auth as google_auth
-        from google.auth import identity_pool
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
-
         if credentials is not None:
-            import google.oauth2.service_account
-
             if isinstance(credentials, str):
                 verbose_logger.debug(
                     "Vertex: Loading vertex credentials from %s", credentials
@@ -80,26 +72,33 @@ class VertexBase:
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = identity_pool.Credentials.from_info(json_obj)
+                creds = self._credentials_from_identity_pool(json_obj)
+            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+            elif "type" in json_obj and json_obj["type"] == "authorized_user":
+                creds = self._credentials_from_authorized_user(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                if project_id is None:
+                    project_id = (
+                        creds.quota_project_id
+                    )  # authorized user credentials don't have a project_id, only quota_project_id
             else:
-                creds = (
-                    google.oauth2.service_account.Credentials.from_service_account_info(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
+                creds = self._credentials_from_service_account(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
 
             if project_id is None:
                 project_id = getattr(creds, "project_id", None)
         else:
-            creds, creds_project_id = google_auth.default(
-                quota_project_id=project_id,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            creds, creds_project_id = self._credentials_from_default_auth(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
             )
             if project_id is None:
                 project_id = creds_project_id
 
-        creds.refresh(Request())  # type: ignore
+        self.refresh_auth(creds)
 
         if not project_id:
             raise ValueError("Could not resolve project_id")
@@ -110,6 +109,31 @@ class VertexBase:
             )
 
         return creds, project_id
+
+    # Google Auth Helpers -- extracted for mocking purposes in tests
+    def _credentials_from_identity_pool(self, json_obj):
+        from google.auth import identity_pool
+
+        return identity_pool.Credentials.from_info(json_obj)
+
+    def _credentials_from_authorized_user(self, json_obj, scopes):
+        import google.oauth2.credentials
+
+        return google.oauth2.credentials.Credentials.from_authorized_user_info(
+            json_obj, scopes=scopes
+        )
+
+    def _credentials_from_service_account(self, json_obj, scopes):
+        import google.oauth2.service_account
+
+        return google.oauth2.service_account.Credentials.from_service_account_info(
+            json_obj, scopes=scopes
+        )
+
+    def _credentials_from_default_auth(self, scopes):
+        import google.auth as google_auth
+
+        return google_auth.default(scopes=scopes)
 
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import (
@@ -288,7 +312,7 @@ class VertexBase:
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+                    f"Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {str(e)}"
                 )
                 raise e
 
@@ -304,16 +328,6 @@ class VertexBase:
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
         if (
-            project_id is not None
-            and credential_project_id
-            and credential_project_id != project_id
-        ):
-            raise ValueError(
-                "Could not resolve project_id. Credential project_id: {} does not match requested project_id: {}".format(
-                    _credentials.quota_project_id, project_id
-                )
-            )
-        elif (
             project_id is None
             and credential_project_id is not None
             and isinstance(credential_project_id, str)

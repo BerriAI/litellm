@@ -54,7 +54,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling"],
+          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
         },
         {
           type: "link",
@@ -62,7 +62,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/management_client",
         "proxy/management_cli",
         {
           type: "category",
@@ -267,8 +266,16 @@ const sidebars = {
           ]
         },
         "realtime",
-        "fine_tuning",
+        {
+          type: "category",
+          label: "/fine_tuning",
+          items: [
+            "fine_tuning",
+            "proxy/managed_finetuning",
+          ]
+        },
         "moderation",
+        "apply_guardrail",
       ],
     },
     {
@@ -293,17 +300,24 @@ const sidebars = {
         },
         "providers/text_completion_openai",
         "providers/openai_compatible",
-        "providers/azure",
+        {
+          type: "category",
+          label: "Azure OpenAI",
+          items: [
+            "providers/azure/azure",
+            "providers/azure/azure_embedding",
+          ]
+        },
         "providers/azure_ai",
         "providers/aiml",
         "providers/vertex",
-
         {
           type: "category",
           label: "Google AI Studio",
           items: [
             "providers/gemini",
             "providers/google_ai_studio/files",
+            "providers/google_ai_studio/realtime",
           ]
         },
         "providers/anthropic",
@@ -363,7 +377,8 @@ const sidebars = {
         "providers/sambanova",
         "providers/custom_llm_server",
         "providers/petals",
-        "providers/snowflake"
+        "providers/snowflake",
+        "providers/featherless_ai"
       ],
     },
     {
@@ -452,6 +467,7 @@ const sidebars = {
         "observability/agentops_integration",
         "observability/langfuse_integration",
         "observability/lunary_integration",
+        "observability/deepeval_integration",
         "observability/mlflow",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
@@ -491,6 +507,7 @@ const sidebars = {
         "tutorials/prompt_caching",
         "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/gemini_realtime_with_audio",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
@@ -566,7 +583,6 @@ const sidebars = {
             "projects/GPTLocalhost",
           ],
         },
-        "proxy/pii_masking",
         "extras/code_quality",
         "rules",
         "proxy/team_based_routing",

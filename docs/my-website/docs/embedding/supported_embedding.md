@@ -225,36 +225,6 @@ response = embedding(
 | text-embedding-3-large | `embedding('text-embedding-3-large', input)` | `os.environ['OPENAI_API_KEY']`       |
 | text-embedding-ada-002 | `embedding('text-embedding-ada-002', input)` | `os.environ['OPENAI_API_KEY']`       |
 
-## Azure OpenAI Embedding Models
-
-### API keys
-This can be set as env variables or passed as **params to litellm.embedding()**
-```python
-import os
-os.environ['AZURE_API_KEY'] = 
-os.environ['AZURE_API_BASE'] = 
-os.environ['AZURE_API_VERSION'] = 
-```
-
-### Usage
-```python
-from litellm import embedding
-response = embedding(
-    model="azure/<your deployment name>",
-    input=["good morning from litellm"],
-    api_key=api_key,
-    api_base=api_base,
-    api_version=api_version,
-)
-print(response)
-```
-
-| Model Name           | Function Call                               |
-|----------------------|---------------------------------------------|
-| text-embedding-ada-002 | `embedding(model="azure/<your deployment name>", input=input)` |
-
-h/t to [Mikko](https://www.linkedin.com/in/mikkolehtimaki/) for this integration
-
 ## OpenAI Compatible Embedding Models
 Use this for calling `/embedding` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference
 

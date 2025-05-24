@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -143,7 +144,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._experimental.mcp_server.server import router as mcp_router
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -173,7 +173,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_streaming_response
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -198,6 +198,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -215,6 +216,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
@@ -395,10 +397,12 @@ except Exception:
 # Import enterprise routes
 try:
     from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+    from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
 
     enterprise_router = _enterprise_router
+    enterprise_proxy_config: Optional[EnterpriseProxyConfig] = EnterpriseProxyConfig()
 except ImportError:
-    pass
+    enterprise_proxy_config = None
 ###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
@@ -833,7 +837,7 @@ use_background_health_checks = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
-health_check_results = {}
+health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1229,13 +1233,17 @@ async def _run_background_health_check():
     """
     global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    # make 1 deep copy of llm_model_list -> use this for all background health checks
-    _llm_model_list = copy.deepcopy(llm_model_list)
-
-    if _llm_model_list is None:
+    if (
+        health_check_interval is None
+        or not isinstance(health_check_interval, int)
+        or health_check_interval <= 0
+    ):
         return
 
     while True:
+        # make 1 deep copy of llm_model_list on every health check iteration
+        _llm_model_list = copy.deepcopy(llm_model_list) or []
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1246,10 +1254,7 @@ async def _run_background_health_check():
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
 
-        if health_check_interval is not None and isinstance(
-            health_check_interval, float
-        ):
-            await asyncio.sleep(health_check_interval)
+        await asyncio.sleep(health_check_interval)
 
 
 class StreamingCallbackError(Exception):
@@ -1863,6 +1868,9 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
+            if enterprise_proxy_config is not None:
+                await enterprise_proxy_config.load_enterprise_config(general_settings)
+
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
                 await initialize_pass_through_endpoints(
@@ -1994,6 +2002,7 @@ class ProxyConfig:
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
+            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
         )  # type:ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -2320,6 +2329,7 @@ class ProxyConfig:
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
@@ -2573,13 +2583,21 @@ class ProxyConfig:
         Returns:
             dict: Updated configuration dictionary
         """
+
         if param_name == "environment_variables":
             self._decrypt_and_set_db_env_variables(db_param_value)
             return current_config
+        elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
+            for key, value in db_param_value.items():
+                if (
+                    key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+                ):  # params that are safe to override with db values
+                    setattr(litellm, key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
             current_config[param_name] = db_param_value
+
             return current_config
 
         # For dictionary values, update only non-empty values
@@ -2591,6 +2609,7 @@ class ProxyConfig:
             current_config[param_name].update(non_empty_values)
         else:
             current_config[param_name] = db_param_value
+
         return current_config
 
     async def _update_config_from_db(
@@ -2707,10 +2726,10 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
-        from litellm.proxy.guardrails.init_guardrails import InitializeGuardrails
 
         try:
             guardrails_in_db: List[
@@ -2722,7 +2741,7 @@ class ProxyConfig:
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
             for guardrail in guardrails_in_db:
-                InitializeGuardrails.initialize_guardrail(
+                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
                     guardrail=dict(guardrail),
                 )
         except Exception as e:
@@ -3302,7 +3321,9 @@ class ProxyStartupEvent:
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             spend_log_cleanup = SpendLogCleanup()
             # Get the interval from config or default to 1 day
-            retention_interval = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            retention_interval = general_settings.get(
+                "maximum_spend_logs_retention_interval", "1d"
+            )
             try:
                 interval_seconds = duration_in_seconds(retention_interval)
                 scheduler.add_job(
@@ -3312,8 +3333,9 @@ class ProxyStartupEvent:
                     args=[prisma_client],
                 )
             except ValueError:
-                verbose_proxy_logger.error(f"Invalid maximum_spend_logs_retention_interval value: {retention_interval}, defaulting to 60 seconds")
-                interval_seconds = 60
+                verbose_proxy_logger.error(
+                    "Invalid maximum_spend_logs_retention_interval value"
+                )
 
         scheduler.start()
 
@@ -3387,6 +3409,7 @@ async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: Optional[bool] = False,
     team_id: Optional[str] = None,
+    include_model_access_groups: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -3407,6 +3430,7 @@ async def model_list(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     team_models: List[str] = user_api_key_dict.team_models
@@ -3426,6 +3450,7 @@ async def model_list(
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     all_models = get_complete_model_list(
@@ -3436,6 +3461,8 @@ async def model_list(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
     )
 
     return dict(
@@ -3554,6 +3581,7 @@ async def chat_completion(  # noqa: PLR0915
             return StreamingResponse(
                 selected_data_generator,
                 media_type="text/event-stream",
+                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -3696,8 +3724,8 @@ async def completion(  # noqa: PLR0915
                 request_data=data,
             )
 
-            return StreamingResponse(
-                selected_data_generator,
+            return await create_streaming_response(
+                generator=selected_data_generator,
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
@@ -3755,6 +3783,7 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 headers={},
+                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
             )
         else:
             _response = litellm.TextCompletionResponse()
@@ -3977,126 +4006,6 @@ async def embeddings(  # noqa: PLR0915
             message = get_error_message_str(e)
             raise ProxyException(
                 message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
-            )
-
-
-@router.post(
-    "/v1/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["images"],
-)
-@router.post(
-    "/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["images"],
-)
-async def image_generation(
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    global proxy_logging_obj
-    data = {}
-    try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        data["model"] = (
-            general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
-        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
-        )
-
-        ## ROUTE TO CORRECT ENDPOINT ##
-        llm_call = await route_request(
-            data=data,
-            route_type="aimage_generation",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
-        response = await llm_call
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-        ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-
-        return response
-    except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
-        )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -5190,13 +5099,14 @@ async def run_thread(
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            return StreamingResponse(
-                async_assistants_data_generator(
+            return await create_streaming_response(
+                generator=async_assistants_data_generator(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_data=data,
                 ),
                 media_type="text/event-stream",
+                headers={}, # Added empty headers dict, original call missed this argument
             )
 
         ### ALERTING ###
@@ -8348,6 +8258,7 @@ app.include_router(router)
 app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(rerank_router)
+app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)

@@ -113,6 +113,14 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
                 </Select.Option>
               ))}
             </Select>
+          ) : field.type === "bool" ? (
+            <Select
+              placeholder={field.description}
+              defaultValue={field.default_value}
+            >
+              <Select.Option value="True">True</Select.Option>
+              <Select.Option value="False">False</Select.Option>
+            </Select>
           ) : field.param.includes("password") || field.param.includes("secret") ? (
             <TextInput
               placeholder={field.description}

@@ -12,7 +12,17 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import aiohttp
 
@@ -25,6 +35,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     GuardrailEventHooks,
+    LitellmParams,
     PiiAction,
     PiiEntityType,
     PresidioPerRequestConfig,
@@ -38,6 +49,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
 )
 
@@ -535,6 +547,87 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     ].message.content.replace(key, value)
         return response
 
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Process streaming response chunks to unmask PII tokens when needed.
+
+        If PII processing is enabled, this collects all chunks, applies PII unmasking,
+        and returns a reconstructed stream. Otherwise, it passes through the original stream.
+        """
+        # If PII unmasking not needed, just pass through the original stream
+        if not (self.output_parse_pii and self.pii_tokens):
+            async for chunk in response:
+                yield chunk
+            return
+
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.types.utils import Choices, Message
+
+        try:
+            # Collect all chunks to process them together
+            collected_content = ""
+            last_chunk = None
+
+            async for chunk in response:
+                last_chunk = chunk
+
+                # Extract content safely with proper attribute checks
+                if (
+                    hasattr(chunk, "choices")
+                    and chunk.choices
+                    and hasattr(chunk.choices[0], "delta")
+                    and hasattr(chunk.choices[0].delta, "content")
+                    and isinstance(chunk.choices[0].delta.content, str)
+                ):
+                    collected_content += chunk.choices[0].delta.content
+
+            # No need to proceed if we didn't capture a valid chunk
+            if not last_chunk:
+                async for chunk in response:
+                    yield chunk
+                return
+
+            # Apply PII unmasking to the complete content
+            for token, original_text in self.pii_tokens.items():
+                collected_content = collected_content.replace(token, original_text)
+
+            # Reconstruct the response with unmasked content
+            mock_response = MockResponseIterator(
+                model_response=ModelResponse(
+                    id=last_chunk.id,
+                    object=last_chunk.object,
+                    created=last_chunk.created,
+                    model=last_chunk.model,
+                    choices=[
+                        Choices(
+                            message=Message(
+                                role="assistant",
+                                content=collected_content,
+                            ),
+                            index=0,
+                            finish_reason="stop",
+                        )
+                    ],
+                ),
+                json_mode=False,
+            )
+
+            # Return the reconstructed stream
+            async for chunk in mock_response:
+                yield chunk
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
+            # Fallback to original stream on error
+            async for chunk in response:
+                yield chunk
+
     def get_presidio_settings_from_request_data(
         self, data: dict
     ) -> Optional[PresidioPerRequestConfig]:
@@ -575,3 +668,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data={},
         )
         return text
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        Update the guardrails litellm params in memory
+        """
+        if litellm_params.pii_entities_config:
+            self.pii_entities_config = litellm_params.pii_entities_config

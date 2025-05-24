@@ -49,6 +49,7 @@ from litellm.utils import (
     Usage,
     add_dummy_tool,
     has_tool_call_blocks,
+    supports_reasoning,
     token_counter,
 )
 
@@ -121,7 +122,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "web_search_options",
         ]
 
-        if "claude-3-7-sonnet" in model:
+        if "claude-3-7-sonnet" in model or supports_reasoning(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+        ):
             params.append("thinking")
 
         return params

@@ -26,6 +26,11 @@ class TestOpenRouterChatCompletionStreamingHandler:
             "id": "test_id",
             "created": 1234567890,
             "model": "test_model",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            },
             "choices": [
                 {"delta": {"content": "test content", "reasoning": "test reasoning"}}
             ],
@@ -39,6 +44,9 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert result.object == "chat.completion.chunk"
         assert result.created == 1234567890
         assert result.model == "test_model"
+        assert result.usage.prompt_tokens == chunk["usage"]["prompt_tokens"]
+        assert result.usage.completion_tokens == chunk["usage"]["completion_tokens"]
+        assert result.usage.total_tokens == chunk["usage"]["total_tokens"]
         assert len(result.choices) == 1
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 

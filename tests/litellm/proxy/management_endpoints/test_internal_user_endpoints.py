@@ -10,9 +10,14 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTableFiltered,
+    UpdateUserRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    _update_internal_user_params,
     get_user_key_counts,
     get_users,
     ui_view_users,
@@ -169,3 +174,66 @@ def test_validate_sort_params():
     assert _validate_sort_params("user_id", "desc") == {"user_id": "desc"}
     with pytest.raises(Exception):
         _validate_sort_params("user_id", "invalid")
+
+
+def test_update_user_request_pydantic_object():
+    """
+    Test that _update_internal_user_params correctly processes an email-only update
+    """
+    data = UpdateUserRequest(user_email="test@example.com")
+
+    data_json = data.model_dump(exclude_unset=True)
+
+    assert data_json == {"user_email": "test@example.com"}
+
+
+def test_update_internal_user_params_email():
+    """
+    Test that _update_internal_user_params correctly processes an email-only update
+    """
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    # Create test data with only email update
+    data_json = {"user_email": "test@example.com"}
+    data = UpdateUserRequest(user_email="test@example.com")
+
+    # Call the function
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # Assertions
+    assert len(non_default_values) == 1  # Should only contain email
+    assert "user_email" in non_default_values
+    assert non_default_values["user_email"] == "test@example.com"
+    assert "user_id" not in non_default_values  # Should not add user_id if not provided
+    assert "max_budget" not in non_default_values  # Should not add default values
+    assert "budget_duration" not in non_default_values  # Should not add default values
+
+
+def test_update_internal_user_params_reset_spend_and_max_budget():
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/10495
+    """
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    # Create test data with only email update
+    data = UpdateUserRequest(spend=0, max_budget=0, user_id="test_user_id")
+    data_json = data.model_dump(exclude_unset=True)
+
+    # Call the function
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # Assertions
+    assert len(non_default_values) == 3  # Should only contain email
+    assert "spend" in non_default_values
+    assert non_default_values["spend"] == 0
+    assert "max_budget" in non_default_values
+    assert non_default_values["max_budget"] == 0
+    assert "user_id" in non_default_values  # Should not add user_id if not provided
+    assert non_default_values["user_id"] == "test_user_id"
+    assert "budget_duration" not in non_default_values  # Should not add default values

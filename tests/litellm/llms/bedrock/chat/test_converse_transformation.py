@@ -176,3 +176,61 @@ def test_apply_tool_call_transformation_if_needed():
     assert transformed_message.tool_calls[0].function.arguments == json.dumps(
         tool_response["parameters"]
     )
+
+
+def test_transform_tool_call_with_cache_control():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    messages = [{"role": "user", "content": "Am I lost?"}]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_location",
+                "description": "Get the user's location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" in result
+    assert "tools" in result["toolConfig"]
+
+    assert len(result["toolConfig"]["tools"]) == 2
+
+    function_out_msg = result["toolConfig"]["tools"][0]
+    print(function_out_msg)
+    assert function_out_msg["toolSpec"]["name"] == "get_location"
+    assert function_out_msg["toolSpec"]["description"] == "Get the user's location"
+    assert (
+        function_out_msg["toolSpec"]["inputSchema"]["json"]["properties"]["location"][
+            "type"
+        ]
+        == "string"
+    )
+
+    transformed_cache_msg = result["toolConfig"]["tools"][1]
+    assert "cachePoint" in transformed_cache_msg
+    assert transformed_cache_msg["cachePoint"]["type"] == "default"

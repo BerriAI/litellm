@@ -1,15 +1,4 @@
 model_list:
-  - model_name: openai/gpt-4o
+  - model_name: openai/*
     litellm_params:
-      model: openai/gpt-4o
-      api_key: any_key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+      model: openai/*
