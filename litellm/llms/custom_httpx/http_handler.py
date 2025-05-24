@@ -527,6 +527,10 @@ class AsyncHTTPHandler:
                     verify_ssl=ssl_verify or True,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
+                    limit=1000,  # Same as httpx max_connections
+                    limit_per_host=100,  # Reasonable per-host limit
+                    ttl_dns_cache=300,  # DNS caching (httpx doesn't have)
+                    use_dns_cache=True,
                 )
             ),
         )
