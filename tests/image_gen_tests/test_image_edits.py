@@ -22,6 +22,7 @@ TEST_IMAGES = [
 ]
 
 @pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_openai_image_edit_litellm_sdk(sync_mode):
     from litellm import image_edit, aimage_edit
