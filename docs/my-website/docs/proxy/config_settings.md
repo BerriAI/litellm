@@ -349,6 +349,7 @@ router_settings:
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
 | CONFIG_FILE_PATH | File path for configuration file
+| CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | DATABASE_HOST | Hostname for the database server
@@ -515,6 +516,7 @@ router_settings:
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
+| LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
