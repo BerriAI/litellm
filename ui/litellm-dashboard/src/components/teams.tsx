@@ -26,7 +26,7 @@ import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardMo
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
-import TeamInfoView from "@/components/team/team_info";
+import TeamInfoView, { TeamData } from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
 import {
@@ -55,7 +55,7 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
-import type { Team } from "./key_team_helpers/key_list";
+import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -95,6 +95,15 @@ import {
   v2TeamListCall
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+
+interface TeamInfo {
+  members_with_roles: Member[];
+}
+
+interface PerTeamInfo {
+  keys: KeyResponse[];
+  team_info: TeamInfo;
+}
 
 const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
   let tempModelsToPick = [];
@@ -164,10 +173,7 @@ const Teams: React.FC<TeamProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
-  
-
-
-  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
+  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, PerTeamInfo>>({});
 
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
@@ -202,26 +208,24 @@ const Teams: React.FC<TeamProps> = ({
   }, [accessToken]);
 
   useEffect(() => {
-    const fetchTeamInfo = async () => {
-      if (!teams || !accessToken) return;
+    const fetchTeamInfo = () => {
+      if (!teams) return;
       
-      const teamInfoPromises = teams.map(async (team) => {
-        try {
-          const info = await teamInfoCall(accessToken, team.team_id);
-          return { [team.team_id]: info };
-        } catch (error) {
-          console.error(`Error fetching info for team ${team.team_id}:`, error);
-          return { [team.team_id]: null };
-        }
-      });
-
-      const results = await Promise.all(teamInfoPromises);
-      const newPerTeamInfo = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      const newPerTeamInfo = teams.reduce((acc, team) => {
+        acc[team.team_id] = {
+          keys: team.keys || [],
+          team_info: {
+            members_with_roles: team.members_with_roles || []
+          }
+        };
+        return acc;
+      }, {} as Record<string, PerTeamInfo>);
+      
       setPerTeamInfo(newPerTeamInfo);
     };
 
     fetchTeamInfo();
-  }, [teams, accessToken]);
+  }, [teams]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
