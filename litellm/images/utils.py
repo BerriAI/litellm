@@ -76,7 +76,7 @@ class ImageEditRequestUtils:
     @staticmethod
     def get_image_content_type(image_data: Any) -> str:
         """
-        Detect the content type of image data using existing LiteLLM infrastructure.
+        Detect the content type of image data using existing LiteLLM utils.
 
         Args:
             image_data: Can be BytesIO, bytes, BufferedReader, or other file-like objects

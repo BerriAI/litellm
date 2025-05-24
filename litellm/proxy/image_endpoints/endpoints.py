@@ -2,18 +2,42 @@ import asyncio
 import traceback
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.proxy.add_litellm_data_to_request import add_litellm_data_to_request
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import get_form_data
 from litellm.proxy.route_llm_request import route_request
 
 router = APIRouter()
+
+import io
+
+from fastapi import UploadFile
+
+
+async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
+    """
+    Read a FastAPI UploadFile into a BytesIO and set .name so OpenAI SDK
+    infers filename/content-type correctly.
+    """
+    data = await upload.read()
+    buffer = io.BytesIO(data)
+    buffer.name = upload.filename
+    return buffer
+
+
+async def batch_to_bytesio(uploads: list[UploadFile] | None) -> list[io.BytesIO] | None:
+    """
+    Convert a list of UploadFiles to a list of BytesIO buffers, or None.
+    """
+    if not uploads:
+        return None
+    return [await uploadfile_to_bytesio(u) for u in uploads]
 
 
 @router.post(
@@ -34,6 +58,7 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
         general_settings,
         llm_router,
         proxy_config,
@@ -157,6 +182,8 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
+    image: list[UploadFile] = File(...),
+    mask: list[UploadFile] | None = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -187,7 +214,21 @@ async def image_edit_api(
         version,
     )
 
+    #########################################################
+    # Read request body and convert UploadFiles to BytesIO
+    #########################################################
     data = await _read_request_body(request=request)
+    image_files = await batch_to_bytesio(image)
+    mask_files = await batch_to_bytesio(mask)
+    if image_files:
+        data["image"] = image_files
+    if mask_files:
+        data["mask"] = mask_files
+
+    #########################################################
+    # Process request
+    #########################################################
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

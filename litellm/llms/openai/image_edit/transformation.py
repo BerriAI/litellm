@@ -5,6 +5,7 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -85,10 +86,17 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
         files_list: List[Tuple[str, Any]] = []
         for _image in _images:
+            image_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                _image
+            )
             if isinstance(_image, BufferedReader):
-                files_list.append(("image[]", (_image.name, _image, "image/png")))
+                files_list.append(
+                    ("image[]", (_image.name, _image, image_content_type))
+                )
             else:
-                files_list.append(("image[]", (_image, "image/png")))
+                files_list.append(
+                    ("image[]", ("image.png", _image, image_content_type))
+                )
         return data_without_images, files_list
 
     def transform_image_edit_response(
