@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -395,10 +396,12 @@ except Exception:
 # Import enterprise routes
 try:
     from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+    from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
 
     enterprise_router = _enterprise_router
+    enterprise_proxy_config: Optional[EnterpriseProxyConfig] = EnterpriseProxyConfig()
 except ImportError:
-    pass
+    enterprise_proxy_config = None
 ###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
@@ -833,7 +836,7 @@ use_background_health_checks = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
-health_check_results = {}
+health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1229,13 +1232,17 @@ async def _run_background_health_check():
     """
     global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    # make 1 deep copy of llm_model_list -> use this for all background health checks
-    _llm_model_list = copy.deepcopy(llm_model_list)
-
-    if _llm_model_list is None:
+    if (
+        health_check_interval is None
+        or not isinstance(health_check_interval, int)
+        or health_check_interval <= 0
+    ):
         return
 
     while True:
+        # make 1 deep copy of llm_model_list on every health check iteration
+        _llm_model_list = copy.deepcopy(llm_model_list) or []
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1246,10 +1253,7 @@ async def _run_background_health_check():
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
 
-        if health_check_interval is not None and isinstance(
-            health_check_interval, float
-        ):
-            await asyncio.sleep(health_check_interval)
+        await asyncio.sleep(health_check_interval)
 
 
 class StreamingCallbackError(Exception):
@@ -1863,6 +1867,9 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
+            if enterprise_proxy_config is not None:
+                await enterprise_proxy_config.load_enterprise_config(general_settings)
+
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
                 await initialize_pass_through_endpoints(
@@ -1994,6 +2001,7 @@ class ProxyConfig:
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
+            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
         )  # type:ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -2320,6 +2328,7 @@ class ProxyConfig:
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
@@ -2573,13 +2582,21 @@ class ProxyConfig:
         Returns:
             dict: Updated configuration dictionary
         """
+
         if param_name == "environment_variables":
             self._decrypt_and_set_db_env_variables(db_param_value)
             return current_config
+        elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
+            for key, value in db_param_value.items():
+                if (
+                    key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+                ):  # params that are safe to override with db values
+                    setattr(litellm, key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
             current_config[param_name] = db_param_value
+
             return current_config
 
         # For dictionary values, update only non-empty values
@@ -2591,6 +2608,7 @@ class ProxyConfig:
             current_config[param_name].update(non_empty_values)
         else:
             current_config[param_name] = db_param_value
+
         return current_config
 
     async def _update_config_from_db(

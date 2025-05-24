@@ -11,6 +11,7 @@ Log Proxy input, output, and exceptions using:
 - GCS, s3, Azure (Blob) Buckets
 - Lunary
 - MLflow
+- Deepeval
 - Custom Callbacks - Custom code and API endpoints
 - Langsmith
 - DataDog
@@ -1182,7 +1183,58 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
+## Deepeval
+LiteLLM supports logging on [Confidential AI](https://documentation.confident-ai.com/) (The Deepeval Platform):
 
+### Usage:
+1. Add `deepeval` in the LiteLLM `config.yaml`
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+litellm_settings:
+  success_callback: ["deepeval"]
+  failure_callback: ["deepeval"]
+```
+
+2. Set your environment variables in `.env` file. 
+```shell
+CONFIDENT_API_KEY=<your-api-key>
+```
+:::info
+You can obtain your `CONFIDENT_API_KEY` by logging into [Confident AI](https://app.confident-ai.com/project) platform. 
+:::
+
+3. Start your proxy server:
+```shell
+litellm --config config.yaml --debug
+```
+
+4. Make a request:
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
+
+5. Check trace on platform: 
+
+<Image img={require('../../img/deepeval_visible_trace.png')} />
 
 ## s3 Buckets
 

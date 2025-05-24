@@ -59,28 +59,34 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             "table_name"
         ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
-    is_internal_user = False
-    if data.user_role and data.user_role.is_internal_user_role:
-        is_internal_user = True
-        if litellm.default_internal_user_params:
-            for key, value in litellm.default_internal_user_params.items():
-                if key == "available_teams":
-                    continue
-                elif key not in data_json or data_json[key] is None:
-                    data_json[key] = value
-                elif (
-                    key == "models"
-                    and isinstance(data_json[key], list)
-                    and len(data_json[key]) == 0
-                ):
-                    data_json[key] = value
+    if litellm.default_internal_user_params:
+        for key, value in litellm.default_internal_user_params.items():
+            if key == "available_teams":
+                continue
+            elif key not in data_json or data_json[key] is None:
+                data_json[key] = value
+            elif (
+                key == "models"
+                and isinstance(data_json[key], list)
+                and len(data_json[key]) == 0
+            ):
+                data_json[key] = value
 
-    if "max_budget" in data_json and data_json["max_budget"] is None:
-        if is_internal_user and litellm.max_internal_user_budget is not None:
+    ## INTERNAL USER ROLE ONLY DEFAULT PARAMS ##
+    if (
+        data.user_role is not None
+        and data.user_role == LitellmUserRoles.INTERNAL_USER.value
+    ):
+        if (
+            litellm.max_internal_user_budget is not None
+            and data_json.get("max_budget") is None
+        ):
             data_json["max_budget"] = litellm.max_internal_user_budget
 
-    if "budget_duration" in data_json and data_json["budget_duration"] is None:
-        if is_internal_user and litellm.internal_user_budget_duration is not None:
+        if (
+            litellm.internal_user_budget_duration is not None
+            and data_json.get("budget_duration") is None
+        ):
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     return data_json
@@ -105,7 +111,7 @@ async def _check_duplicate_user_email(
             raise Exception("Database not connected")
 
         existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": user_email}
+            where={"user_email": user_email.strip()}
         )
 
         if existing_user is not None:
@@ -208,9 +214,6 @@ async def new_user(
                             role="user",
                             user_email=data_json.get("user_email", None),
                         ),
-                    ),
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/new"},
                     ),
                     user_api_key_dict=user_api_key_dict,
                 )

@@ -149,14 +149,14 @@ class CustomStreamWrapper:
         )
 
     def check_is_function_call(self, logging_obj) -> bool:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            is_function_call,
+        )
+
         if hasattr(logging_obj, "optional_params") and isinstance(
             logging_obj.optional_params, dict
         ):
-            if (
-                "litellm_param_is_function_call" in logging_obj.optional_params
-                and logging_obj.optional_params["litellm_param_is_function_call"]
-                is True
-            ):
+            if is_function_call(logging_obj.optional_params):
                 return True
 
         return False

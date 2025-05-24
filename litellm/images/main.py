@@ -650,7 +650,7 @@ def image_edit(
 
     except Exception as e:
         raise litellm.exception_type(
-            model=None,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -728,7 +728,7 @@ async def aimage_edit(
         return response
     except Exception as e:
         raise litellm.exception_type(
-            model=None,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,

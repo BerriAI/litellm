@@ -4027,6 +4027,30 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif (
+            custom_llm_provider in litellm._custom_providers
+        ):
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            handler_fn = custom_handler.embedding if not aembedding else custom_handler.aembedding
+
+            response = handler_fn(
+                model=model,
+                input=input,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                print_verbose=print_verbose,
+                litellm_params=litellm_params
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
