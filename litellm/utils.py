@@ -2677,9 +2677,10 @@ def pre_process_non_default_params(
     special_params: dict,
     custom_llm_provider: str,
     additional_drop_params: Optional[List[str]],
+    model: str,
 ) -> dict:
     """
-    Pre-process non-default params
+    Pre-process non-default params to a standardized format
     """
     # retrieve all parameters passed to the function
 
@@ -2719,6 +2720,45 @@ def pre_process_non_default_params(
         )
     }
 
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+    if "response_format" in non_default_params:
+        if provider_config is not None:
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
+            )
+        else:
+            non_default_params["response_format"] = type_to_response_format_param(
+                response_format=non_default_params["response_format"]
+            )
+
+    if "tools" in non_default_params and isinstance(
+        non_default_params, list
+    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
+        tools = non_default_params["tools"]
+        for (
+            tool
+        ) in (
+            tools
+        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+            tool_function = tool.get("function", {})
+            parameters = tool_function.get("parameters", None)
+            if parameters is not None:
+                new_parameters = copy.deepcopy(parameters)
+                if (
+                    "additionalProperties" in new_parameters
+                    and new_parameters["additionalProperties"] is False
+                ):
+                    new_parameters.pop("additionalProperties", None)
+                tool_function["parameters"] = new_parameters
     return non_default_params
 
 
@@ -2866,6 +2906,7 @@ def get_optional_params(  # noqa: PLR0915
         special_params=special_params,
         custom_llm_provider=custom_llm_provider,
         additional_drop_params=additional_drop_params,
+        model=model,
     )
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
@@ -2879,38 +2920,6 @@ def get_optional_params(  # noqa: PLR0915
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
-
-    if "response_format" in non_default_params:
-        if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
-            )
-        else:
-            non_default_params["response_format"] = type_to_response_format_param(
-                response_format=non_default_params["response_format"]
-            )
-
-    if "tools" in non_default_params and isinstance(
-        non_default_params, list
-    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
-        tools = non_default_params["tools"]
-        for (
-            tool
-        ) in (
-            tools
-        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
-            tool_function = tool.get("function", {})
-            parameters = tool_function.get("parameters", None)
-            if parameters is not None:
-                new_parameters = copy.deepcopy(parameters)
-                if (
-                    "additionalProperties" in new_parameters
-                    and new_parameters["additionalProperties"] is False
-                ):
-                    new_parameters.pop("additionalProperties", None)
-                tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params: List[str]):
         """
