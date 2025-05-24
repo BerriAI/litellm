@@ -40,8 +40,11 @@ else:
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
 
-async def _parse_event_data_for_error(event_line: str) -> Optional[int]:
+async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
     """Parses an event line and returns an error code if present, else None."""
+    event_line = (
+        event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    )
     if event_line.startswith("data: "):
         json_str = event_line[len("data: ") :].strip()
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
@@ -121,7 +124,9 @@ async def create_streaming_response(
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.error(f"Error consuming first chunk from generator: {e}")
+        verbose_proxy_logger.exception(
+            f"Error consuming first chunk from generator: {e}"
+        )
 
         # Fallback to a generic error stream
         async def error_gen_message() -> AsyncGenerator[str, None]:
