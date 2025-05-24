@@ -1,3 +1,4 @@
+import asyncio
 from typing import Callable, Union
 
 import httpx
@@ -41,8 +42,6 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # Check if the existing session is still valid for the current event loop
         try:
-            import asyncio
-
             session_loop = getattr(self.client, "_loop", None)
             current_loop = asyncio.get_running_loop()
 
