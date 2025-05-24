@@ -1614,7 +1614,7 @@ class ModelResponseIterator:
                 and "content" in gemini_chunk
                 and "parts" in gemini_chunk["content"]
             ):
-                if "text" in gemini_chunk["content"]["parts"][0]:
+                if "text" in gemini_chunk["content"]["parts"][0] and gemini_chunk["content"]["parts"][0].get("thought") is not True:
                     text = gemini_chunk["content"]["parts"][0]["text"]
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
                     function_call = ChatCompletionToolCallFunctionChunk(
