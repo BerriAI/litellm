@@ -2,7 +2,16 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Tuple, Union, AsyncGenerator
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Callable,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 import orjson
@@ -34,12 +43,16 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 async def _parse_event_data_for_error(event_line: str) -> Optional[int]:
     """Parses an event line and returns an error code if present, else None."""
     if event_line.startswith("data: "):
-        json_str = event_line[len("data: "):].strip()
-        if not json_str or json_str == "[DONE]": # handle empty data or [DONE] message
+        json_str = event_line[len("data: ") :].strip()
+        if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
             data = orjson.loads(json_str)
-            if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
+            if (
+                isinstance(data, dict)
+                and "error" in data
+                and isinstance(data["error"], dict)
+            ):
                 error_code_raw = data["error"].get("code")
                 error_code: Optional[int] = None
 
@@ -49,19 +62,26 @@ async def _parse_event_data_for_error(event_line: str) -> Optional[int]:
                     try:
                         error_code = int(error_code_raw)
                     except ValueError:
-                        verbose_proxy_logger.warning(f"Error code is a string but not a valid integer: {error_code_raw}")
+                        verbose_proxy_logger.warning(
+                            f"Error code is a string but not a valid integer: {error_code_raw}"
+                        )
                         # Not a valid integer string, treat as if no valid code was found for this check
                         pass
 
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
-                elif error_code_raw is not None : # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                elif (
+                    error_code_raw is not None
+                ):  # Log if original code was present but not valid
+                    verbose_proxy_logger.warning(
+                        f"Error has invalid or non-convertible code: {error_code_raw}"
+                    )
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
     return None
+
 
 async def create_streaming_response(
     generator: AsyncGenerator[str, None],
@@ -83,21 +103,37 @@ async def create_streaming_response(
             error_code_from_chunk = await _parse_event_data_for_error(first_chunk_value)
             if error_code_from_chunk is not None:
                 final_status_code = error_code_from_chunk
-                verbose_proxy_logger.debug(f"Error detected in first stream chunk. Status code set to: {final_status_code}")
+                verbose_proxy_logger.debug(
+                    f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+                )
 
     except StopAsyncIteration:
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
-            if False: yield # type: ignore
-        return StreamingResponse(empty_gen(), media_type=media_type, headers=headers, status_code=default_status_code)
+            if False:
+                yield  # type: ignore
+
+        return StreamingResponse(
+            empty_gen(),
+            media_type=media_type,
+            headers=headers,
+            status_code=default_status_code,
+        )
     except Exception as e:
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.error(f"Error consuming first chunk from generator: {e}")
+
         # Fallback to a generic error stream
         async def error_gen_message() -> AsyncGenerator[str, None]:
             yield f"data: {json.dumps({'error': {'message': 'Error processing stream start', 'code': status.HTTP_500_INTERNAL_SERVER_ERROR}})}\n\n"
             yield "data: [DONE]\n\n"
-        return StreamingResponse(error_gen_message(), media_type=media_type, headers=headers, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return StreamingResponse(
+            error_gen_message(),
+            media_type=media_type,
+            headers=headers,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
         if first_chunk_value is not None:
