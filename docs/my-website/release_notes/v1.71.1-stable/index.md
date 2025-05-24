@@ -44,11 +44,7 @@ pip install litellm==1.71.1
 
 LiteLLM v1.71.1-stable is live now. Here are the key highlights of this release:
 
-- **Image Edits API**: Complete support for OpenAI's `/v1/images/edits` endpoint
-- **Featherless AI Provider**: Access to 4200+ models through the new Featherless AI integration
-- **Enhanced Performance**: 97% lower median latency with aiohttp transport
-- **Advanced UI Improvements**: Better team management, spend tracking, and model filtering
-- **Azure AD Certificate Authentication**: Enhanced enterprise security options
+
 
 ## Performance Improvements
 
