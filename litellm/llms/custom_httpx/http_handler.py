@@ -2,13 +2,15 @@ import asyncio
 import os
 import ssl
 import time
-from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
 
 import httpx
+from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -18,9 +20,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
     )
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 else:
     LlmProviders = Any
     LiteLLMLoggingObject = Any
+    LiteLLMAiohttpTransport = Any
 
 try:
     from litellm._version import version
@@ -146,7 +150,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-        transport = self._create_async_transport()
+
+        transport = AsyncHTTPHandler._create_async_transport(
+            ssl_context=ssl_verify if isinstance(ssl_verify, ssl.SSLContext) else None,
+            ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
+        )
 
         return httpx.AsyncClient(
             transport=transport,
@@ -183,6 +191,9 @@ class AsyncHTTPHandler:
         _follow_redirects = (
             follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         )
+
+        params = params or {}
+        params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
@@ -460,17 +471,94 @@ class AsyncHTTPHandler:
         except Exception:
             pass
 
-    def _create_async_transport(self) -> Optional[AsyncHTTPTransport]:
+    @staticmethod
+    def _create_async_transport(
+        ssl_context: Optional[ssl.SSLContext] = None, ssl_verify: Optional[bool] = None
+    ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
-        Create an async transport with IPv4 only if litellm.force_ipv4 is True.
-        Otherwise, return None.
+        - Creates a transport for httpx.AsyncClient
+            - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
+            - [Default] It will return AiohttpTransport
+            - Users can opt out of using AiohttpTransport by setting litellm.use_aiohttp_transport to False
 
-        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+
+        Notes on this handler:
+        - Why AiohttpTransport?
+            - By default, we use AiohttpTransport since it offers much higher throughput and lower latency than httpx.
+
+        - Why force ipv4?
+            - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        """
+        #########################################################
+        # AIOHTTP TRANSPORT is used by default
+        # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
+        #########################################################
+        if (
+            litellm.use_aiohttp_transport
+            and AsyncHTTPHandler.aiohttp_transport_exists()
+        ):
+            return AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=ssl_context, ssl_verify=ssl_verify
+            )
+
+        #########################################################
+        # HTTPX TRANSPORT is used when aiohttp is not installed
+        #########################################################
+        return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _create_aiohttp_transport(
+        ssl_verify: Optional[bool] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
+    ) -> LiteLLMAiohttpTransport:
+        """
+        Creates an AiohttpTransport with RequestNotRead error handling
+
+        - If force_ipv4 is True, it will create an AiohttpTransport with local_addr set to "0.0.0.0"
+        - [Default] If force_ipv4 is False, it will create an AiohttpTransport with default settings
+        """
+        from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+        verbose_logger.debug("Creating AiohttpTransport...")
+
+        return LiteLLMAiohttpTransport(
+            client=lambda: ClientSession(
+                connector=TCPConnector(
+                    verify_ssl=ssl_verify or True,
+                    ssl_context=ssl_context,
+                    local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
+                )
+            ),
+        )
+
+    @staticmethod
+    def _create_httpx_transport() -> Optional[AsyncHTTPTransport]:
+        """
+        Creates an AsyncHTTPTransport
+
+        - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
+        - [Default] If force_ipv4 is False, it will return None
         """
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address="0.0.0.0")
         else:
             return None
+
+    @staticmethod
+    def aiohttp_transport_exists() -> bool:
+        """
+        Returns True if `httpx-aiohttp` is installed.
+
+        `httpx-aiohttp` only supports python 3.9+
+
+        For users on python 3.8, we will use `httpx.AsyncClient` instead of `httpx-aiohttp`.
+        """
+        try:
+            import importlib.util
+
+            return importlib.util.find_spec("httpx_aiohttp") is not None
+        except Exception:
+            return False
 
 
 class HTTPHandler:
@@ -527,11 +615,27 @@ class HTTPHandler:
         _follow_redirects = (
             follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         )
+        params = params or {}
+        params.update(self.extract_query_params(url))
 
         response = self.client.get(
             url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
+
         return response
+
+    @staticmethod
+    def extract_query_params(url: str) -> Dict[str, str]:
+        """
+        Parse a URL’s query-string into a dict.
+
+        :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
+        :return: {"foo": "1", "bar": "2"}
+        """
+        from urllib.parse import parse_qsl, urlsplit
+
+        parts = urlsplit(url)
+        return dict(parse_qsl(parts.query))
 
     def post(
         self,
