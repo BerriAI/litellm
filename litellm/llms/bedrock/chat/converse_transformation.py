@@ -146,7 +146,7 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "claude-3-7" in model or supports_reasoning(
+        if "claude-3-7" in model or "claude-sonnet-4" in model or "claude-opus-4" in model or supports_reasoning(
             model=model,
             custom_llm_provider=self.custom_llm_provider,
         ):
