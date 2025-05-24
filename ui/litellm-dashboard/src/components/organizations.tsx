@@ -355,12 +355,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                   </Col>
                   {(userRole === "Admin" || userRole === "Org Admin") && (
                     <Col numColSpan={1}>
-                      <Button
-                        className="mx-auto"
-                        onClick={() => setIsOrgModalVisible(true)}
-                      >
-                        + Create New Organization
-                      </Button>
                       <Modal
                         title="Create Organization"
                         visible={isOrgModalVisible}
