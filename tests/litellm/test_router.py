@@ -298,11 +298,33 @@ async def test_router_amoderation_with_credential_name(mock_amoderation):
     assert call_kwargs["model"] == "text-moderation-stable"
 
 
+
+def test_router_test_team_model():
+    """
+    Test that router.test_team_model returns the correct model
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "team_id": "test-team",
+                    "team_public_model_name": "test-model",
+                },
+            },
+        ],
+    )
+
+    result = router.map_team_model(team_model_name="test-model", team_id="test-team")
+    assert result is not None
+
 def test_router_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
     """
     from litellm.types.router import Deployment
+
 
     router = litellm.Router(
         model_list=[

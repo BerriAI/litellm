@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 from typing import Dict, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
@@ -46,6 +48,33 @@ class MockPrismaClient:
     @property
     def litellm_teamtable(self):
         return self
+
+
+class MockLLMRouter:
+    def __init__(self):
+        self.model_list = ["model1", "model2"]
+        self.model_names = {"model1": True, "model2": True}
+        self.cleared = False
+        
+    def get_deployment(self, model_id):
+        return {"model_id": model_id} if model_id in self.model_list else None
+        
+    def delete_deployment(self, id):
+        if id in self.model_list:
+            self.model_list.remove(id)
+            self.model_names.pop(id, None)
+
+
+class MockProxyConfig:
+    def __init__(self, success=True):
+        self.success = success
+        self.deployment_called = False
+        
+    async def add_deployment(self, prisma_client, proxy_logging_obj):
+        self.deployment_called = True
+        if not self.success:
+            raise Exception("Failed to add deployment")
+        return True
 
 
 class TestModelManagementAuthChecks:
@@ -331,3 +360,38 @@ class TestDeleteTeamModelAlias:
         # Verify no updates were made
         mock_db = mock_prisma.db.litellm_modeltable
         assert len(mock_db.update_calls) == 0
+
+class TestClearCache:
+    """
+    Tests for the clear_cache function in model_management_endpoints.py
+    """
+    
+    @pytest.mark.asyncio
+    async def test_clear_cache_success(self):
+        """
+        Test that clear_cache successfully clears router model caches and reloads models.
+        """
+        mock_router = MagicMock()
+        mock_router.model_list = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+        
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+        
+        mock_prisma = MagicMock()
+        mock_logging = MagicMock()
+        
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+             patch("litellm.proxy.proxy_server.proxy_config", mock_config), \
+             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
+             patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging), \
+             patch("litellm.proxy.proxy_server.verbose_proxy_logger"):
+            
+            await clear_cache()
+    
+            
+            assert len(mock_router.model_list) == 0
+            
+            mock_config.add_deployment.assert_called_once_with(
+                prisma_client=mock_prisma,
+                proxy_logging_obj=mock_logging
+            )
