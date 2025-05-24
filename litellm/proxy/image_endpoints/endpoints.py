@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from typing import List
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
@@ -10,7 +11,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import get_form_data
 from litellm.proxy.route_llm_request import route_request
 
 router = APIRouter()
@@ -31,7 +31,9 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     return buffer
 
 
-async def batch_to_bytesio(uploads: list[UploadFile] | None) -> list[io.BytesIO] | None:
+async def batch_to_bytesio(
+    uploads: Optional[List[UploadFile]],
+) -> Optional[List[io.BytesIO]]:
     """
     Convert a list of UploadFiles to a list of BytesIO buffers, or None.
     """
