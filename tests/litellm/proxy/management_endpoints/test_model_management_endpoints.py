@@ -1,7 +1,8 @@
 import json
 import os
 import sys
-from typing import Optional
+import uuid
+from typing import Dict, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import (
+    LiteLLM_ModelTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
@@ -202,9 +204,11 @@ class TestModelManagementAuthChecks:
 
 
 class MockModelTable:
-    def __init__(self, model_aliases):
+    def __init__(self, model_aliases: Dict[str, str], include: Optional[dict] = None):
+        for alias, model in model_aliases.items():
+            setattr(self, alias, model)
+        self.id = str(uuid.uuid4())
         self.model_aliases = model_aliases
-        self.id = "test_id"
 
 
 class MockPrismaDB:
@@ -213,8 +217,9 @@ class MockPrismaDB:
         self.model_aliases_list = model_aliases_list
         self.update_calls = []
 
-    async def find_many(self):
-        return [MockModelTable(aliases) for aliases in self.model_aliases_list]
+    async def find_many(self, include=None):
+        print(f"self.model_aliases_list: {self.model_aliases_list}")
+        return [LiteLLM_ModelTable(**aliases) for aliases in self.model_aliases_list]
 
     async def update(self, where, data):
         self.update_calls.append({"where": where, "data": data})
@@ -236,15 +241,28 @@ class TestDeleteTeamModelAlias:
 
         # Setup test data
         model_aliases_list = [
-            {"alias1": "public_model_1", "alias2": "public_model_2"},
             {
-                "alias3": "public_model_3",
-                "alias4": "public_model_1",
+                "id": 1,
+                "model_aliases": {
+                    "alias1": "public_model_1",
+                    "alias2": "public_model_2",
+                },
+                "updated_by": "test_user",
+                "created_by": "test_user",
+            },
+            {
+                "id": 2,
+                "model_aliases": {
+                    "alias3": "public_model_3",
+                    "alias4": "public_model_1",
+                },
+                "updated_by": "test_user",
+                "created_by": "test_user",
             },  # public_model_1 appears twice
         ]
 
         # Create mock prisma client
-        mock_prisma = PrismaClient(database_url="test_url", proxy_logging_obj=None)
+        mock_prisma = MockPrismaClient(team_exists=True)
         mock_prisma.db = MockPrismaWrapper(model_aliases_list)
 
         # Call the function
@@ -260,14 +278,14 @@ class TestDeleteTeamModelAlias:
 
         # Verify first update
         first_update = mock_db.update_calls[0]
-        assert first_update["where"] == {"id": "test_id"}
+        assert first_update["where"] == {"id": 1}
         assert json.loads(first_update["data"]["model_aliases"]) == {
             "alias2": "public_model_2"
         }
 
         # Verify second update
         second_update = mock_db.update_calls[1]
-        assert second_update["where"] == {"id": "test_id"}
+        assert second_update["where"] == {"id": 2}
         assert json.loads(second_update["data"]["model_aliases"]) == {
             "alias3": "public_model_3"
         }
@@ -281,12 +299,28 @@ class TestDeleteTeamModelAlias:
 
         # Setup test data with no matching model
         model_aliases_list = [
-            {"alias1": "public_model_1", "alias2": "public_model_2"},
-            {"alias3": "public_model_3", "alias4": "public_model_4"},
+            {
+                "id": 1,
+                "model_aliases": {
+                    "alias1": "public_model_1",
+                    "alias2": "public_model_2",
+                },
+                "updated_by": "test_user",
+                "created_by": "test_user",
+            },
+            {
+                "id": 2,
+                "model_aliases": {
+                    "alias3": "public_model_3",
+                    "alias4": "public_model_4",
+                },
+                "updated_by": "test_user",
+                "created_by": "test_user",
+            },
         ]
 
         # Create mock prisma client
-        mock_prisma = PrismaClient(database_url="test_url", proxy_logging_obj=None)
+        mock_prisma = MockPrismaClient(team_exists=True)
         mock_prisma.db = MockPrismaWrapper(model_aliases_list)
 
         # Call the function with non-existent model
