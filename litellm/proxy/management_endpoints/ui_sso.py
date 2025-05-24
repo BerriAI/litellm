@@ -353,31 +353,41 @@ async def get_user_info_from_db(
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
+    alternate_user_id: Optional[str] = None,
 ) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
     try:
-        user_info: Optional[
-            Union[LiteLLM_UserTable, NewUserResponse]
-        ] = await get_existing_user_info_from_db(
-            user_id=cast(
-                Optional[str],
-                (
-                    getattr(result, "id", None)
-                    if not isinstance(result, dict)
-                    else result.get("id", None)
-                ),
-            ),
-            user_email=cast(
-                Optional[str],
-                (
-                    getattr(result, "email", None)
-                    if not isinstance(result, dict)
-                    else result.get("email", None)
-                ),
-            ),
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+
+        potential_user_ids = []
+        if alternate_user_id is not None:
+            potential_user_ids.append(alternate_user_id)
+        if not isinstance(result, dict):
+            _id = getattr(result, "id", None)
+            if _id is not None and isinstance(_id, str):
+                potential_user_ids.append(_id)
+        else:
+            _id = result.get("id", None)
+            if _id is not None and isinstance(_id, str):
+                potential_user_ids.append(_id)
+
+        user_email = (
+            getattr(result, "email", None)
+            if not isinstance(result, dict)
+            else result.get("email", None)
         )
+
+        user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]] = None
+
+        for user_id in potential_user_ids:
+            user_info = await get_existing_user_info_from_db(
+                user_id=user_id,
+                user_email=user_email,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_info is not None:
+                break
+                
         verbose_proxy_logger.debug(
             f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
         )
@@ -566,6 +576,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         proxy_logging_obj=proxy_logging_obj,
         user_email=user_email,
         user_defined_values=user_defined_values,
+        alternate_user_id=user_id,
     )
 
     user_defined_values = apply_user_info_values_to_sso_user_defined_values(
