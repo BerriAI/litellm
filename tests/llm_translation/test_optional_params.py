@@ -460,6 +460,26 @@ def test_dynamic_drop_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
 
+def test_dynamic_pass_additional_params():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                custom_param="test",
+                api_key="my-custom-key",
+            )
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "custom_param" in mock_response.call_args.kwargs["data"]
+        assert "api_key" not in mock_response.call_args.kwargs["data"]
+
 
 @pytest.mark.parametrize(
     "model, provider, should_drop",
@@ -559,6 +579,7 @@ def test_dynamic_drop_additional_params_e2e():
                 additional_drop_params=["response_format"],
             )
         except Exception as e:
+            print(f"Error occurred: {e}")
             pass
 
         mock_response.assert_called_once()

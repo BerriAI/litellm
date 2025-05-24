@@ -63,6 +63,7 @@ from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
+    DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
@@ -2671,50 +2672,18 @@ def _remove_unsupported_params(
     return non_default_params
 
 
-def get_optional_params(  # noqa: PLR0915
-    # use the openai defaults
-    # https://platform.openai.com/docs/api-reference/chat/create
+def pre_process_non_default_params(
+    passed_params: dict,
+    special_params: dict,
+    custom_llm_provider: str,
+    additional_drop_params: Optional[List[str]],
     model: str,
-    functions=None,
-    function_call=None,
-    temperature=None,
-    top_p=None,
-    n=None,
-    stream=False,
-    stream_options=None,
-    stop=None,
-    max_tokens=None,
-    max_completion_tokens=None,
-    modalities=None,
-    prediction=None,
-    audio=None,
-    presence_penalty=None,
-    frequency_penalty=None,
-    logit_bias=None,
-    user=None,
-    custom_llm_provider="",
-    response_format=None,
-    seed=None,
-    tools=None,
-    tool_choice=None,
-    max_retries=None,
-    logprobs=None,
-    top_logprobs=None,
-    extra_headers=None,
-    api_version=None,
-    parallel_tool_calls=None,
-    drop_params=None,
-    allowed_openai_params: Optional[List[str]] = None,
-    reasoning_effort=None,
-    additional_drop_params=None,
-    messages: Optional[List[AllMessageValues]] = None,
-    thinking: Optional[AnthropicThinkingParam] = None,
-    web_search_options: Optional[OpenAIWebSearchOptions] = None,
-    **kwargs,
-):
+) -> dict:
+    """
+    Pre-process non-default params to a standardized format
+    """
     # retrieve all parameters passed to the function
-    passed_params = locals().copy()
-    special_params = passed_params.pop("kwargs")
+
     for k, v in special_params.items():
         if k.startswith("aws_") and (
             custom_llm_provider != "bedrock"
@@ -2731,6 +2700,72 @@ def get_optional_params(  # noqa: PLR0915
             continue
         passed_params[k] = v
 
+    # filter out those parameters that were passed with non-default values
+
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (
+            k != "model"
+            and k != "custom_llm_provider"
+            and k != "api_version"
+            and k != "drop_params"
+            and k != "allowed_openai_params"
+            and k != "additional_drop_params"
+            and k != "messages"
+            and k in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+            and v != DEFAULT_CHAT_COMPLETION_PARAM_VALUES[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
+        )
+    }
+
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+    if "response_format" in non_default_params:
+        if provider_config is not None:
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
+            )
+        else:
+            non_default_params["response_format"] = type_to_response_format_param(
+                response_format=non_default_params["response_format"]
+            )
+
+    if "tools" in non_default_params and isinstance(
+        non_default_params, list
+    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
+        tools = non_default_params["tools"]
+        for (
+            tool
+        ) in (
+            tools
+        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+            tool_function = tool.get("function", {})
+            parameters = tool_function.get("parameters", None)
+            if parameters is not None:
+                new_parameters = copy.deepcopy(parameters)
+                if (
+                    "additionalProperties" in new_parameters
+                    and new_parameters["additionalProperties"] is False
+                ):
+                    new_parameters.pop("additionalProperties", None)
+                tool_function["parameters"] = new_parameters
+    return non_default_params
+
+
+def pre_process_optional_params(
+    passed_params: dict, non_default_params: dict, custom_llm_provider: str
+) -> dict:
+    """For .completion(), preprocess optional params"""
     optional_params: Dict = {}
 
     common_auth_dict = litellm.common_cloud_provider_auth_params
@@ -2760,65 +2795,6 @@ def get_optional_params(  # noqa: PLR0915
             optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
                 non_default_params=passed_params, optional_params=optional_params
             )
-
-    default_params = {
-        "functions": None,
-        "function_call": None,
-        "temperature": None,
-        "top_p": None,
-        "n": None,
-        "stream": None,
-        "stream_options": None,
-        "stop": None,
-        "max_tokens": None,
-        "max_completion_tokens": None,
-        "modalities": None,
-        "prediction": None,
-        "audio": None,
-        "presence_penalty": None,
-        "frequency_penalty": None,
-        "logit_bias": None,
-        "user": None,
-        "model": None,
-        "custom_llm_provider": "",
-        "response_format": None,
-        "seed": None,
-        "tools": None,
-        "tool_choice": None,
-        "max_retries": None,
-        "logprobs": None,
-        "top_logprobs": None,
-        "extra_headers": None,
-        "api_version": None,
-        "parallel_tool_calls": None,
-        "drop_params": None,
-        "allowed_openai_params": None,
-        "additional_drop_params": None,
-        "messages": None,
-        "reasoning_effort": None,
-        "thinking": None,
-        "web_search_options": None,
-    }
-
-    # filter out those parameters that were passed with non-default values
-
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (
-            k != "model"
-            and k != "custom_llm_provider"
-            and k != "api_version"
-            and k != "drop_params"
-            and k != "allowed_openai_params"
-            and k != "additional_drop_params"
-            and k != "messages"
-            and k in default_params
-            and v != default_params[k]
-            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
-            is False
-        )
-    }
 
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
@@ -2879,6 +2855,64 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
+    return optional_params
+
+
+def get_optional_params(  # noqa: PLR0915
+    # use the openai defaults
+    # https://platform.openai.com/docs/api-reference/chat/create
+    model: str,
+    functions=None,
+    function_call=None,
+    temperature=None,
+    top_p=None,
+    n=None,
+    stream=False,
+    stream_options=None,
+    stop=None,
+    max_tokens=None,
+    max_completion_tokens=None,
+    modalities=None,
+    prediction=None,
+    audio=None,
+    presence_penalty=None,
+    frequency_penalty=None,
+    logit_bias=None,
+    user=None,
+    custom_llm_provider="",
+    response_format=None,
+    seed=None,
+    tools=None,
+    tool_choice=None,
+    max_retries=None,
+    logprobs=None,
+    top_logprobs=None,
+    extra_headers=None,
+    api_version=None,
+    parallel_tool_calls=None,
+    drop_params=None,
+    allowed_openai_params: Optional[List[str]] = None,
+    reasoning_effort=None,
+    additional_drop_params=None,
+    messages: Optional[List[AllMessageValues]] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    **kwargs,
+):
+    passed_params = locals().copy()
+    special_params = passed_params.pop("kwargs")
+    non_default_params = pre_process_non_default_params(
+        passed_params=passed_params,
+        special_params=special_params,
+        custom_llm_provider=custom_llm_provider,
+        additional_drop_params=additional_drop_params,
+        model=model,
+    )
+    optional_params = pre_process_optional_params(
+        passed_params=passed_params,
+        non_default_params=non_default_params,
+        custom_llm_provider=custom_llm_provider,
+    )
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
@@ -2886,38 +2920,6 @@ def get_optional_params(  # noqa: PLR0915
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
-
-    if "response_format" in non_default_params:
-        if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
-            )
-        else:
-            non_default_params["response_format"] = type_to_response_format_param(
-                response_format=non_default_params["response_format"]
-            )
-
-    if "tools" in non_default_params and isinstance(
-        non_default_params, list
-    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
-        tools = non_default_params["tools"]
-        for (
-            tool
-        ) in (
-            tools
-        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
-            tool_function = tool.get("function", {})
-            parameters = tool_function.get("parameters", None)
-            if parameters is not None:
-                new_parameters = copy.deepcopy(parameters)
-                if (
-                    "additionalProperties" in new_parameters
-                    and new_parameters["additionalProperties"] is False
-                ):
-                    new_parameters.pop("additionalProperties", None)
-                tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params: List[str]):
         """
@@ -3608,7 +3610,7 @@ def get_optional_params(  # noqa: PLR0915
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in default_params.keys():
+                if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
             optional_params["extra_body"] = {
@@ -3621,15 +3623,27 @@ def get_optional_params(  # noqa: PLR0915
             )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
-        for k in passed_params.keys():
-            if k not in default_params.keys():
-                optional_params[k] = passed_params[k]
+        optional_params = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params, passed_params=passed_params
+        )
     print_verbose(f"Final returned optional params: {optional_params}")
     optional_params = _apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
+    return optional_params
+
+
+def add_provider_specific_params_to_optional_params(
+    optional_params: dict, passed_params: dict
+) -> dict:
+    """
+    Add provider specific params to optional_params
+    """
+    for k in passed_params.keys():
+        if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
+            optional_params[k] = passed_params[k]
     return optional_params
 
 
@@ -3649,31 +3663,6 @@ def _apply_openai_param_overrides(
 
 
 def get_non_default_params(passed_params: dict) -> dict:
-    default_params = {
-        "functions": None,
-        "function_call": None,
-        "temperature": None,
-        "top_p": None,
-        "n": None,
-        "stream": None,
-        "stream_options": None,
-        "stop": None,
-        "max_tokens": None,
-        "presence_penalty": None,
-        "frequency_penalty": None,
-        "logit_bias": None,
-        "user": None,
-        "model": None,
-        "custom_llm_provider": "",
-        "response_format": None,
-        "seed": None,
-        "tools": None,
-        "tool_choice": None,
-        "max_retries": None,
-        "logprobs": None,
-        "top_logprobs": None,
-        "extra_headers": None,
-    }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
         k: v
@@ -3681,8 +3670,8 @@ def get_non_default_params(passed_params: dict) -> dict:
         if (
             k != "model"
             and k != "custom_llm_provider"
-            and k in default_params
-            and v != default_params[k]
+            and k in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+            and v != DEFAULT_CHAT_COMPLETION_PARAM_VALUES[k]
         )
     }
 
@@ -6604,6 +6593,7 @@ class ProviderConfigManager:
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo
+
             return OllamaModelInfo()
         elif LlmProviders.VLLM == provider:
             from litellm.llms.vllm.common_utils import (
