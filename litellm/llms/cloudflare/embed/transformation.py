@@ -120,11 +120,23 @@ class CloudflareEmbeddingConfig(BaseEmbeddingConfig):
             "text": ["text1", "text2", ...]
         }
         """
-        # Ensure input is a list
+        # Ensure input is a list of strings
+        text_input: list[str]
         if isinstance(input, str):
             text_input = [input]
         elif isinstance(input, list):
-            text_input = input
+            # Handle different list types
+            if all(isinstance(item, str) for item in input):
+                text_input = input  # type: ignore[assignment]
+            elif all(isinstance(item, int) for item in input):
+                # Convert list of integers to list of strings
+                text_input = [str(item) for item in input]
+            elif all(isinstance(item, list) for item in input):
+                # Convert list of lists to list of strings (join inner lists)
+                text_input = [str(item) for item in input]
+            else:
+                # Mixed types or unsupported types
+                text_input = [str(item) for item in input]
         else:
             raise ValueError(
                 f"Invalid input type for Cloudflare embedding: {type(input)}"
