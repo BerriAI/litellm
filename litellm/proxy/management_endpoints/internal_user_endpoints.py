@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import UserObjectCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -54,32 +55,38 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
-    is_internal_user = False
-    if data.user_role and data.user_role.is_internal_user_role:
-        is_internal_user = True
-        if litellm.default_internal_user_params:
-            for key, value in litellm.default_internal_user_params.items():
-                if key == "available_teams":
-                    continue
-                elif key not in data_json or data_json[key] is None:
-                    data_json[key] = value
-                elif (
-                    key == "models"
-                    and isinstance(data_json[key], list)
-                    and len(data_json[key]) == 0
-                ):
-                    data_json[key] = value
+    if litellm.default_internal_user_params:
+        for key, value in litellm.default_internal_user_params.items():
+            if key == "available_teams":
+                continue
+            elif key not in data_json or data_json[key] is None:
+                data_json[key] = value
+            elif (
+                key == "models"
+                and isinstance(data_json[key], list)
+                and len(data_json[key]) == 0
+            ):
+                data_json[key] = value
 
-    if "max_budget" in data_json and data_json["max_budget"] is None:
-        if is_internal_user and litellm.max_internal_user_budget is not None:
+    ## INTERNAL USER ROLE ONLY DEFAULT PARAMS ##
+    if (
+        data.user_role is not None
+        and data.user_role == LitellmUserRoles.INTERNAL_USER.value
+    ):
+        if (
+            litellm.max_internal_user_budget is not None
+            and data_json.get("max_budget") is None
+        ):
             data_json["max_budget"] = litellm.max_internal_user_budget
 
-    if "budget_duration" in data_json and data_json["budget_duration"] is None:
-        if is_internal_user and litellm.internal_user_budget_duration is not None:
+        if (
+            litellm.internal_user_budget_duration is not None
+            and data_json.get("budget_duration") is None
+        ):
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     return data_json
@@ -104,7 +111,7 @@ async def _check_duplicate_user_email(
             raise Exception("Database not connected")
 
         existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": user_email}
+            where={"user_email": user_email.strip()}
         )
 
         if existing_user is not None:
@@ -208,9 +215,6 @@ async def new_user(
                             user_email=data_json.get("user_email", None),
                         ),
                     ),
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/new"},
-                    ),
                     user_api_key_dict=user_api_key_dict,
                 )
             except HTTPException as e:
@@ -238,23 +242,15 @@ async def new_user(
                 else:
                     raise e
 
-        new_user_response = NewUserResponse(
-            key=response.get("token", ""),
-            expires=response.get("expires", None),
-            max_budget=response["max_budget"],
-            user_id=response["user_id"],
-            user_role=response.get("user_role", None),
-            user_email=response.get("user_email", None),
-            user_alias=response.get("user_alias", None),
-            teams=response.get("teams", None),
-            team_id=response.get("team_id", None),
-            metadata=response.get("metadata", None),
-            models=response.get("models", None),
-            tpm_limit=response.get("tpm_limit", None),
-            rpm_limit=response.get("rpm_limit", None),
-            budget_duration=response.get("budget_duration", None),
-            model_max_budget=response.get("model_max_budget", None),
-        )
+        special_keys = ["token", "token_id"]
+        response_dict = {}
+        for key, value in response.items():
+            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+                response_dict[key] = value
+
+        response_dict["key"] = response.get("token", "")
+
+        new_user_response = NewUserResponse(**response_dict)
 
         #########################################################
         ########## USER CREATED HOOK ################
@@ -555,7 +551,6 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
             not in (
                 [],
                 {},
-                0,
             )
             and k not in LiteLLM_ManagementEndpoint_MetadataFields
         ):  # models default to [], spend defaults to 0, we should not reset these values
@@ -582,9 +577,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -650,10 +645,15 @@ async def user_update(
             
     
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     try:
-        data_json: dict = data.json()
+        data_json: dict = data.model_dump(exclude_unset=True)
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
@@ -734,6 +734,16 @@ async def user_update(
                 user_row_litellm_typed = LiteLLM_UserTable(
                     **user_row.model_dump(exclude_none=True)
                 )
+
+                ## UPDATE CACHE ##
+                user_object_cache = UserObjectCache(
+                    user_api_key_cache=user_api_key_cache,
+                    internal_usage_cache=proxy_logging_obj.internal_usage_cache,
+                )
+                await user_object_cache.update_user_object(
+                    user_id=response["user_id"], user_object=user_row_litellm_typed
+                )
+
                 asyncio.create_task(
                     UserManagementEventHooks.create_internal_user_audit_log(
                         user_id=user_row_litellm_typed.user_id,
@@ -1227,13 +1237,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:

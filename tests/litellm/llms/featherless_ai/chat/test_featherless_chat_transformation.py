@@ -71,7 +71,7 @@ class TestFeatherlessAIConfig:
     def test_map_openai_params_with_tool_choice(self):
         """Test map_openai_params handles tool_choice parameter correctly"""
         config = FeatherlessAIConfig()
-        
+
         # Test with auto value (supported)
         non_default_params = {"tool_choice": "auto"}
         optional_params = {}
@@ -79,11 +79,11 @@ class TestFeatherlessAIConfig:
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="featherless-ai/Qwerky-72B",
-            drop_params=False
+            drop_params=False,
         )
         assert "tool_choice" in result
         assert result["tool_choice"] == "auto"
-        
+
         # Test with none value (supported)
         non_default_params = {"tool_choice": "none"}
         optional_params = {}
@@ -91,38 +91,42 @@ class TestFeatherlessAIConfig:
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="featherless-ai/Qwerky-72B",
-            drop_params=False
+            drop_params=False,
         )
         assert "tool_choice" in result
         assert result["tool_choice"] == "none"
-        
+
         # Test with unsupported value and drop_params=True
-        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+        non_default_params = {
+            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
+        }
         optional_params = {}
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="featherless-ai/Qwerky-72B",
-            drop_params=True
+            drop_params=True,
         )
         assert "tool_choice" not in result
-        
+
         # Test with unsupported value and drop_params=False
-        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+        non_default_params = {
+            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
+        }
         optional_params = {}
         with pytest.raises(Exception) as excinfo:
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model="featherless-ai/Qwerky-72B",
-                drop_params=False
+                drop_params=False,
             )
         assert "Featherless AI doesn't support tool_choice=" in str(excinfo.value)
 
     def test_map_openai_params_with_tools(self):
         """Test map_openai_params handles tools parameter correctly"""
         config = FeatherlessAIConfig()
-        
+
         # Test with tools and drop_params=True
         tools = [{"type": "function", "function": {"name": "get_weather"}}]
         non_default_params = {"tools": tools}
@@ -131,17 +135,17 @@ class TestFeatherlessAIConfig:
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="featherless-ai/Qwerky-72B",
-            drop_params=True
+            drop_params=True,
         )
         assert "tools" not in result
-        
+
         # Test with tools and drop_params=False
         with pytest.raises(Exception) as excinfo:
             config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model="featherless-ai/Qwerky-72B",
-                drop_params=False
+                drop_params=False,
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
 
@@ -165,7 +169,7 @@ class TestFeatherlessAIConfig:
         # Verify headers are still set correctly
         assert result["Authorization"] == f"Bearer {api_key}"
         assert result["Content-Type"] == "application/json"
-        
+
         # We can't directly test the api_base value here since validate_environment
         # only returns the headers, but we can verify it doesn't raise an exception
         # which would happen if api_base handling was incorrect
@@ -175,15 +179,17 @@ class TestFeatherlessAIConfig:
         Mock test for Featherless AI completion using the model format from docs.
         This test mocks the actual HTTP request to test the integration properly.
         """
-        import respx
+        import litellm
+
+        litellm.use_aiohttp_transport = False  # since this uses respx, we need to set use_aiohttp_transport to False
         from litellm import completion
-        
+
         # Set up environment variables for the test
         api_key = "fake-featherless-key"
         api_base = "https://api.featherless.ai/v1"
         model = "featherless_ai/featherless-ai/Qwerky-72B"
         model_name = "Qwerky-72B"  # The actual model name without provider prefix
-        
+
         # Mock the HTTP request to the Featherless AI API
         respx_mock.post(f"{api_base}/chat/completions").respond(
             json={
@@ -196,24 +202,30 @@ class TestFeatherlessAIConfig:
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "```python\nprint(\"Hi from LiteLLM!\")\n```\n\nThis simple Python code prints a greeting message from LiteLLM.",
+                            "content": '```python\nprint("Hi from LiteLLM!")\n```\n\nThis simple Python code prints a greeting message from LiteLLM.',
                         },
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 12,
+                    "total_tokens": 21,
+                },
             },
-            status_code=200
+            status_code=200,
         )
-        
+
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
+            messages=[
+                {"role": "user", "content": "write code for saying hi from LiteLLM"}
+            ],
             api_key=api_key,
-            api_base=api_base
+            api_base=api_base,
         )
-        
+
         # Verify response structure
         assert response is not None
         assert hasattr(response, "choices")
@@ -221,7 +233,7 @@ class TestFeatherlessAIConfig:
         assert hasattr(response.choices[0], "message")
         assert hasattr(response.choices[0].message, "content")
         assert response.choices[0].message.content is not None
-        
+
         # Check for specific content in the response
         assert "```python" in response.choices[0].message.content
         assert "Hi from LiteLLM" in response.choices[0].message.content

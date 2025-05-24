@@ -45,7 +45,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import add_dummy_tool, has_tool_call_blocks
+from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
@@ -146,9 +146,10 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if (
-            "claude-3-7" in model
-        ):  # [TODO]: move to a 'supports_reasoning_content' param from model cost map
+        if "claude-3-7" in model or supports_reasoning(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+        ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
         return supported_params
