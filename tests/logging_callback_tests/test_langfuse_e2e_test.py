@@ -381,3 +381,42 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
             )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_with_router(self, mock_setup):
+        """Test Langfuse logging with router"""
+        setup = await mock_setup  # Await the fixture
+        litellm._turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "mock_response": "Hello! How can I assist you today?",
+                        "api_key": "test_api_key",
+                    }
+                }
+            ]
+        )
+        with patch("httpx.Client.post", setup["mock_post"]):
+            mock_response = litellm.ModelResponse(
+                choices=[],
+                usage=litellm.Usage(
+                    prompt_tokens=10,
+                    completion_tokens=10,
+                    total_tokens=20,
+                ),
+                model="gpt-3.5-turbo",
+                object="chat.completion",
+                created=1723081200,
+            ).model_dump()
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response=mock_response,
+                metadata={"trace_id": setup["trace_id"]},
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"], "completion_with_router.json", setup["trace_id"]
+            )
