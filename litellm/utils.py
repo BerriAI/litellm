@@ -63,6 +63,7 @@ from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
+    DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
@@ -2671,50 +2672,17 @@ def _remove_unsupported_params(
     return non_default_params
 
 
-def get_optional_params(  # noqa: PLR0915
-    # use the openai defaults
-    # https://platform.openai.com/docs/api-reference/chat/create
-    model: str,
-    functions=None,
-    function_call=None,
-    temperature=None,
-    top_p=None,
-    n=None,
-    stream=False,
-    stream_options=None,
-    stop=None,
-    max_tokens=None,
-    max_completion_tokens=None,
-    modalities=None,
-    prediction=None,
-    audio=None,
-    presence_penalty=None,
-    frequency_penalty=None,
-    logit_bias=None,
-    user=None,
-    custom_llm_provider="",
-    response_format=None,
-    seed=None,
-    tools=None,
-    tool_choice=None,
-    max_retries=None,
-    logprobs=None,
-    top_logprobs=None,
-    extra_headers=None,
-    api_version=None,
-    parallel_tool_calls=None,
-    drop_params=None,
-    allowed_openai_params: Optional[List[str]] = None,
-    reasoning_effort=None,
-    additional_drop_params=None,
-    messages: Optional[List[AllMessageValues]] = None,
-    thinking: Optional[AnthropicThinkingParam] = None,
-    web_search_options: Optional[OpenAIWebSearchOptions] = None,
-    **kwargs,
-):
+def pre_process_non_default_params(
+    passed_params: dict,
+    special_params: dict,
+    custom_llm_provider: str,
+    additional_drop_params: Optional[List[str]],
+) -> dict:
+    """
+    Pre-process non-default params
+    """
     # retrieve all parameters passed to the function
-    passed_params = locals().copy()
-    special_params = passed_params.pop("kwargs")
+
     for k, v in special_params.items():
         if k.startswith("aws_") and (
             custom_llm_provider != "bedrock"
@@ -2731,6 +2699,33 @@ def get_optional_params(  # noqa: PLR0915
             continue
         passed_params[k] = v
 
+    # filter out those parameters that were passed with non-default values
+
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (
+            k != "model"
+            and k != "custom_llm_provider"
+            and k != "api_version"
+            and k != "drop_params"
+            and k != "allowed_openai_params"
+            and k != "additional_drop_params"
+            and k != "messages"
+            and k in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+            and v != DEFAULT_CHAT_COMPLETION_PARAM_VALUES[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
+        )
+    }
+
+    return non_default_params
+
+
+def pre_process_optional_params(
+    passed_params: dict, non_default_params: dict, custom_llm_provider: str
+) -> dict:
+    """For .completion(), preprocess optional params"""
     optional_params: Dict = {}
 
     common_auth_dict = litellm.common_cloud_provider_auth_params
@@ -2760,65 +2755,6 @@ def get_optional_params(  # noqa: PLR0915
             optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
                 non_default_params=passed_params, optional_params=optional_params
             )
-
-    default_params = {
-        "functions": None,
-        "function_call": None,
-        "temperature": None,
-        "top_p": None,
-        "n": None,
-        "stream": None,
-        "stream_options": None,
-        "stop": None,
-        "max_tokens": None,
-        "max_completion_tokens": None,
-        "modalities": None,
-        "prediction": None,
-        "audio": None,
-        "presence_penalty": None,
-        "frequency_penalty": None,
-        "logit_bias": None,
-        "user": None,
-        "model": None,
-        "custom_llm_provider": "",
-        "response_format": None,
-        "seed": None,
-        "tools": None,
-        "tool_choice": None,
-        "max_retries": None,
-        "logprobs": None,
-        "top_logprobs": None,
-        "extra_headers": None,
-        "api_version": None,
-        "parallel_tool_calls": None,
-        "drop_params": None,
-        "allowed_openai_params": None,
-        "additional_drop_params": None,
-        "messages": None,
-        "reasoning_effort": None,
-        "thinking": None,
-        "web_search_options": None,
-    }
-
-    # filter out those parameters that were passed with non-default values
-
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (
-            k != "model"
-            and k != "custom_llm_provider"
-            and k != "api_version"
-            and k != "drop_params"
-            and k != "allowed_openai_params"
-            and k != "additional_drop_params"
-            and k != "messages"
-            and k in default_params
-            and v != default_params[k]
-            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
-            is False
-        )
-    }
 
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
@@ -2879,6 +2815,63 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
+    return optional_params
+
+
+def get_optional_params(  # noqa: PLR0915
+    # use the openai defaults
+    # https://platform.openai.com/docs/api-reference/chat/create
+    model: str,
+    functions=None,
+    function_call=None,
+    temperature=None,
+    top_p=None,
+    n=None,
+    stream=False,
+    stream_options=None,
+    stop=None,
+    max_tokens=None,
+    max_completion_tokens=None,
+    modalities=None,
+    prediction=None,
+    audio=None,
+    presence_penalty=None,
+    frequency_penalty=None,
+    logit_bias=None,
+    user=None,
+    custom_llm_provider="",
+    response_format=None,
+    seed=None,
+    tools=None,
+    tool_choice=None,
+    max_retries=None,
+    logprobs=None,
+    top_logprobs=None,
+    extra_headers=None,
+    api_version=None,
+    parallel_tool_calls=None,
+    drop_params=None,
+    allowed_openai_params: Optional[List[str]] = None,
+    reasoning_effort=None,
+    additional_drop_params=None,
+    messages: Optional[List[AllMessageValues]] = None,
+    thinking: Optional[AnthropicThinkingParam] = None,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    **kwargs,
+):
+    passed_params = locals().copy()
+    special_params = passed_params.pop("kwargs")
+    non_default_params = pre_process_non_default_params(
+        passed_params=passed_params,
+        special_params=special_params,
+        custom_llm_provider=custom_llm_provider,
+        additional_drop_params=additional_drop_params,
+    )
+    optional_params = pre_process_optional_params(
+        passed_params=passed_params,
+        non_default_params=non_default_params,
+        custom_llm_provider=custom_llm_provider,
+    )
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
@@ -3608,7 +3601,7 @@ def get_optional_params(  # noqa: PLR0915
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in default_params.keys():
+                if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
             optional_params["extra_body"] = {
@@ -3622,7 +3615,7 @@ def get_optional_params(  # noqa: PLR0915
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
-            if k not in default_params.keys():
+            if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
                 optional_params[k] = passed_params[k]
     print_verbose(f"Final returned optional params: {optional_params}")
     optional_params = _apply_openai_param_overrides(
@@ -3630,8 +3623,6 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
-    ## USED FOR STANDARD PARAM LOGGING ##
-    optional_params["processed_non_default_params"] = non_default_params
     return optional_params
 
 
@@ -3651,31 +3642,6 @@ def _apply_openai_param_overrides(
 
 
 def get_non_default_params(passed_params: dict) -> dict:
-    default_params = {
-        "functions": None,
-        "function_call": None,
-        "temperature": None,
-        "top_p": None,
-        "n": None,
-        "stream": None,
-        "stream_options": None,
-        "stop": None,
-        "max_tokens": None,
-        "presence_penalty": None,
-        "frequency_penalty": None,
-        "logit_bias": None,
-        "user": None,
-        "model": None,
-        "custom_llm_provider": "",
-        "response_format": None,
-        "seed": None,
-        "tools": None,
-        "tool_choice": None,
-        "max_retries": None,
-        "logprobs": None,
-        "top_logprobs": None,
-        "extra_headers": None,
-    }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
         k: v
@@ -3683,8 +3649,8 @@ def get_non_default_params(passed_params: dict) -> dict:
         if (
             k != "model"
             and k != "custom_llm_provider"
-            and k in default_params
-            and v != default_params[k]
+            and k in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+            and v != DEFAULT_CHAT_COMPLETION_PARAM_VALUES[k]
         )
     }
 

@@ -1245,7 +1245,7 @@ def completion(  # type: ignore # noqa: PLR0915
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
+            optional_params=optional_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )

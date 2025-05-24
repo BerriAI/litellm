@@ -559,6 +559,7 @@ def test_dynamic_drop_additional_params_e2e():
                 additional_drop_params=["response_format"],
             )
         except Exception as e:
+            print(f"Error occurred: {e}")
             pass
 
         mock_response.assert_called_once()
