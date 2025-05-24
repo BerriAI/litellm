@@ -12,11 +12,11 @@ from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+    EmailEvent,
     SendKeyCreatedEmailEvent,
 )
 
 from litellm.proxy._types import Litellm_EntityType, WebhookEvent
-from litellm.types.enterprise.enterprise_callbacks.send_emails import EmailEvent
 
 
 @pytest.fixture
