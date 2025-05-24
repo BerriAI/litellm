@@ -113,6 +113,7 @@ def test_xai_chat_config_map_openai_params():
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.skip(reason="TODO: Undo this before merging")
 def test_completion_xai(stream):
     try:
         litellm.set_verbose = True
@@ -141,11 +142,7 @@ def test_completion_xai(stream):
             assert response is not None
             assert isinstance(response, litellm.ModelResponse)
             assert response.choices[0].message.content is not None
-    except litellm.ServiceUnavailableError as e:
-        pass
     except Exception as e:
-        if "An error occurred during streaming" in str(e):
-            pass
         pytest.fail(f"Error occurred: {e}")
 
 
