@@ -982,10 +982,51 @@ class CustomStreamWrapper:
                     ]
 
                 if anthropic_response_obj["usage"] is not None:
+                    # Extract token details from usage if available
+                    usage_data = anthropic_response_obj["usage"]
+
+                    # Initialize token details
+                    audio_tokens = 0
+                    text_tokens = 0
+                    image_tokens = 0
+                    reasoning_tokens = None
+                    response_tokens_details = None
+
+                    # Extract reasoning tokens if available
+                    completion_tokens_details = usage_data.get("completion_tokens_details")
+                    if completion_tokens_details is not None and "reasoning_tokens" in completion_tokens_details:
+                        reasoning_tokens = completion_tokens_details["reasoning_tokens"]
+
+                    # Extract prompt tokens details if available
+                    prompt_tokens_details_dict = usage_data.get("prompt_tokens_details")
+                    if prompt_tokens_details_dict is not None:
+                        if "text_tokens" in prompt_tokens_details_dict:
+                            text_tokens = prompt_tokens_details_dict["text_tokens"]
+                        if "audio_tokens" in prompt_tokens_details_dict:
+                            audio_tokens = prompt_tokens_details_dict["audio_tokens"]
+                        if "image_tokens" in prompt_tokens_details_dict:
+                            image_tokens = prompt_tokens_details_dict["image_tokens"]
+
+                    cached_tokens = text_tokens + audio_tokens + image_tokens
+                    prompt_tokens_details = litellm.types.utils.PromptTokensDetailsWrapper(
+                        cached_tokens=cached_tokens,
+                        audio_tokens=audio_tokens,
+                        text_tokens=text_tokens,
+                        image_tokens=image_tokens
+                    )
+
+                    # Create usage object with all details
                     setattr(
                         model_response,
                         "usage",
-                        litellm.Usage(**anthropic_response_obj["usage"]),
+                        litellm.Usage(
+                            prompt_tokens=usage_data.get("prompt_tokens", 0),
+                            completion_tokens=usage_data.get("completion_tokens", 0),
+                            total_tokens=usage_data.get("total_tokens", 0),
+                            prompt_tokens_details=prompt_tokens_details,
+                            reasoning_tokens=reasoning_tokens,
+                            completion_tokens_details=response_tokens_details
+                        ),
                     )
 
                 if (
@@ -1113,6 +1154,64 @@ class CustomStreamWrapper:
                             self.received_finish_reason = chunk.candidates[  # type: ignore
                                 0
                             ].finish_reason.name
+
+                        # Extract usage information if available
+                        if hasattr(chunk, "usageMetadata") and chunk.usageMetadata is not None:
+                            usage_metadata = chunk.usageMetadata
+
+                            cached_tokens = 0
+                            audio_tokens = 0
+                            text_tokens = 0
+                            image_tokens = 0
+
+                            if hasattr(usage_metadata, "cachedContentTokenCount"):
+                                cached_tokens = usage_metadata.cachedContentTokenCount
+
+                            # Extract text, audio, and image tokens from promptTokensDetails if available
+                            if hasattr(usage_metadata, "promptTokensDetails"):
+                                for detail in usage_metadata.promptTokensDetails:
+                                    if hasattr(detail, "modality") and detail.modality == "AUDIO":
+                                        audio_tokens = detail.tokenCount
+                                    elif hasattr(detail, "modality") and detail.modality == "TEXT":
+                                        text_tokens = detail.tokenCount
+                                    elif hasattr(detail, "modality") and detail.modality == "IMAGE":
+                                        image_tokens = detail.tokenCount
+
+                            # Create prompt_tokens_details with all token types
+                            prompt_tokens_details = litellm.types.utils.PromptTokensDetailsWrapper(
+                                cached_tokens=cached_tokens,
+                                audio_tokens=audio_tokens,
+                                text_tokens=text_tokens,
+                                image_tokens=image_tokens
+                            )
+
+                            # Extract response tokens details if available
+                            response_tokens_details = None
+                            if hasattr(usage_metadata, "responseTokensDetails"):
+                                response_tokens_details = litellm.types.utils.CompletionTokensDetailsWrapper()
+                                for detail in usage_metadata.responseTokensDetails:
+                                    if detail.modality == "TEXT":
+                                        response_tokens_details.text_tokens = detail.tokenCount
+                                    elif detail.modality == "AUDIO":
+                                        response_tokens_details.audio_tokens = detail.tokenCount
+
+                            # Extract reasoning tokens if available
+                            reasoning_tokens = None
+                            if hasattr(usage_metadata, "thoughtsTokenCount"):
+                                reasoning_tokens = usage_metadata.thoughtsTokenCount
+
+                            setattr(
+                                model_response,
+                                "usage",
+                                litellm.Usage(
+                                    prompt_tokens=getattr(usage_metadata, "promptTokenCount", 0),
+                                    completion_tokens=getattr(usage_metadata, "candidatesTokenCount", 0),
+                                    total_tokens=getattr(usage_metadata, "totalTokenCount", 0),
+                                    prompt_tokens_details=prompt_tokens_details,
+                                    completion_tokens_details=response_tokens_details,
+                                    reasoning_tokens=reasoning_tokens
+                                ),
+                            )
                     except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(
@@ -1221,6 +1320,8 @@ class CustomStreamWrapper:
                     self.system_fingerprint = chunk.system_fingerprint
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+                if hasattr(chunk, "usage") and chunk.usage is not None:
+                    setattr(model_response, "usage", chunk.usage)
             else:  # openai / azure chat model
                 if self.custom_llm_provider == "azure":
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
@@ -1881,17 +1982,31 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    prompt_tokens_details = None
+    completion_tokens_details = None
+    reasoning_tokens = None
+
     for chunk in chunks:
-        if "usage" in chunk:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+        usage = chunk.get("usage")
+        if usage is not None:
+            if "prompt_tokens" in usage:
+                prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            if "completion_tokens" in usage:
+                completion_tokens = usage.get("completion_tokens", 0) or 0
+            if "prompt_tokens_details" in usage:
+                prompt_tokens_details = usage.get("prompt_tokens_details")
+            if "completion_tokens_details" in usage:
+                completion_tokens_details = usage.get("completion_tokens_details")
+            if "reasoning_tokens" in usage:
+                reasoning_tokens = usage.get("reasoning_tokens")
 
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=prompt_tokens_details,
+        completion_tokens_details=completion_tokens_details,
+        reasoning_tokens=reasoning_tokens,
     )
 
     return returned_usage_chunk

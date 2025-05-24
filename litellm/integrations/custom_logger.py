@@ -340,12 +340,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         # Method definition
         try:
+            cache_hit = kwargs.get("cache_hit", False)
             kwargs["log_event_type"] = "post_api_call"
             await callback_func(
                 kwargs,  # kwargs to func
                 response_obj,
                 start_time,
                 end_time,
+                cache_hit
             )
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")

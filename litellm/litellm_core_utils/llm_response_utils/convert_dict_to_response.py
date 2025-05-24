@@ -129,6 +129,9 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
             ),
         )
 
+        if "prompt_tokens_details" in response_object["usage"] and response_object["usage"]["prompt_tokens_details"] is not None and model_response_object.usage is not None:
+            model_response_object.usage.prompt_tokens_details = response_object["usage"]["prompt_tokens_details"]
+
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
