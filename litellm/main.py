@@ -86,6 +86,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Usage,
     add_openai_metadata,
+    add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -1186,6 +1187,10 @@ def completion(  # type: ignore # noqa: PLR0915
             special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
+        )
+        processed_non_default_params = add_provider_specific_params_to_optional_params(
+            optional_params=processed_non_default_params,
+            passed_params=non_default_params,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(

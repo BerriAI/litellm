@@ -469,6 +469,7 @@ def test_dynamic_pass_additional_params():
                 model="command-r",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 custom_param="test",
+                api_key="my-custom-key",
             )
         except Exception as e:
             print(f"Error occurred: {e}")
@@ -477,6 +478,7 @@ def test_dynamic_pass_additional_params():
         mock_response.assert_called_once()
         print(mock_response.call_args.kwargs["data"])
         assert "custom_param" in mock_response.call_args.kwargs["data"]
+        assert "api_key" not in mock_response.call_args.kwargs["data"]
 
 
 @pytest.mark.parametrize(

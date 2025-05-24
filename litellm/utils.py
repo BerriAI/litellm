@@ -3623,15 +3623,27 @@ def get_optional_params(  # noqa: PLR0915
             )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
-        for k in passed_params.keys():
-            if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
-                optional_params[k] = passed_params[k]
+        optional_params = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params, passed_params=passed_params
+        )
     print_verbose(f"Final returned optional params: {optional_params}")
     optional_params = _apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
+    return optional_params
+
+
+def add_provider_specific_params_to_optional_params(
+    optional_params: dict, passed_params: dict
+) -> dict:
+    """
+    Add provider specific params to optional_params
+    """
+    for k in passed_params.keys():
+        if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
+            optional_params[k] = passed_params[k]
     return optional_params
 
 
