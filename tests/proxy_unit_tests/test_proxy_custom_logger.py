@@ -97,7 +97,7 @@ def test_embedding(client):
             "headers": {
                 "host": "testserver",
                 "accept": "*/*",
-                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-encoding": "gzip, deflate, zstd",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
                 "content-length": "51",
@@ -194,7 +194,7 @@ def test_chat_completion(client):
             "headers": {
                 "host": "testserver",
                 "accept": "*/*",
-                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-encoding": "gzip, deflate, zstd",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
                 "content-length": "115",
