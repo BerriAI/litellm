@@ -48,12 +48,8 @@ async def get_audit_logs(
     object_id: Optional[str] = Query(
         None, description="Filter by ID of the object that was modified"
     ),
-    start_date: Optional[datetime] = Query(
-        None, description="Filter logs after this date"
-    ),
-    end_date: Optional[datetime] = Query(
-        None, description="Filter logs before this date"
-    ),
+    start_date: Optional[str] = Query(None, description="Filter logs after this date"),
+    end_date: Optional[str] = Query(None, description="Filter logs before this date"),
     # Sorting parameters
     sort_by: Optional[str] = Query(
         None,
@@ -75,7 +71,7 @@ async def get_audit_logs(
         )
 
     # Build filter conditions
-    where_conditions = {}
+    where_conditions: Dict[str, Any] = {}
     if changed_by:
         where_conditions["changed_by"] = changed_by
     if changed_by_api_key:
@@ -96,9 +92,9 @@ async def get_audit_logs(
 
     # Build sort conditions
     order_by = {}
-    if sort_by:
+    if sort_by and isinstance(sort_by, str):
         order_by[sort_by] = sort_order
-    else:
+    elif sort_order and isinstance(sort_order, str):
         order_by["updated_at"] = sort_order  # Default sort by updated_at
 
     # Get paginated results

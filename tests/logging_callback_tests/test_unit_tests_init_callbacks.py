@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger
 from prometheus_client import REGISTRY, CollectorRegistry
 
 from litellm.integrations.lago import LagoLogger
+from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.galileo import GalileoObserve
@@ -85,6 +86,7 @@ callback_class_str_to_classType = {
     "generic_api": GenericAPILogger,
     "resend_email": ResendEmailLogger,
     "smtp_email": SMTPEmailLogger,
+    "deepeval": DeepEvalLogger,
 }
 
 expected_env_vars = {
