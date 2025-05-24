@@ -511,14 +511,80 @@ class AsyncHTTPHandler:
         class LiteLLMAiohttpTransport(AiohttpTransport):
             """
             LiteLLM wrapper around AiohttpTransport to handle %-encodings in URLs
+            and event loop lifecycle issues in CI/CD environments
             """
+
+            def __init__(self, client):
+                super().__init__(client=client)
+                # Store the client factory for recreating sessions when needed
+                if callable(client):
+                    self._client_factory = client
+
+            def _get_valid_client_session(self) -> ClientSession:
+                """
+                Helper to get a valid ClientSession for the current event loop.
+
+                This handles the case where the session was created in a different
+                event loop that may have been closed (common in CI/CD environments).
+                """
+                from aiohttp.client import ClientSession
+
+                # If we don't have a client or it's not a ClientSession, create one
+                if not isinstance(self.client, ClientSession):
+                    if hasattr(self, "_client_factory") and callable(
+                        self._client_factory
+                    ):
+                        self.client = self._client_factory()
+                    else:
+                        self.client = ClientSession()
+                    return self.client
+
+                # Check if the existing session is still valid for the current event loop
+                try:
+                    import asyncio
+
+                    session_loop = getattr(self.client, "_loop", None)
+                    current_loop = asyncio.get_running_loop()
+
+                    # If session is from a different or closed loop, recreate it
+                    if (
+                        session_loop is None
+                        or session_loop != current_loop
+                        or session_loop.is_closed()
+                    ):
+                        # Clean up the old session
+                        try:
+                            # Note: not awaiting close() here as it might be from a different loop
+                            # The session will be garbage collected
+                            pass
+                        except Exception as e:
+                            verbose_logger.debug(f"Error closing old session: {e}")
+                            pass
+
+                        # Create a new session in the current event loop
+                        if hasattr(self, "_client_factory") and callable(
+                            self._client_factory
+                        ):
+                            self.client = self._client_factory()
+                        else:
+                            self.client = ClientSession()
+
+                except (RuntimeError, AttributeError):
+                    # If we can't check the loop or session is invalid, recreate it
+                    if hasattr(self, "_client_factory") and callable(
+                        self._client_factory
+                    ):
+                        self.client = self._client_factory()
+                    else:
+                        self.client = ClientSession()
+
+                return self.client
 
             async def handle_async_request(
                 self,
                 request: httpx.Request,
             ) -> httpx.Response:
                 from aiohttp import ClientTimeout
-                from aiohttp.client import ClientSession
                 from httpx_aiohttp.transport import (
                     AiohttpResponseStream,
                     map_aiohttp_exceptions,
@@ -528,8 +594,8 @@ class AsyncHTTPHandler:
                 timeout = request.extensions.get("timeout", {})
                 sni_hostname = request.extensions.get("sni_hostname")
 
-                if not isinstance(self.client, ClientSession):  # type: ignore
-                    self.client = self.client()  # type: ignore
+                # Use helper to ensure we have a valid session for the current event loop
+                client_session = self._get_valid_client_session()
 
                 with map_aiohttp_exceptions():
                     try:
@@ -540,7 +606,7 @@ class AsyncHTTPHandler:
                             "transfer-encoding", None
                         )  # handled by aiohttp
 
-                    response = await self.client.request(
+                    response = await client_session.request(
                         method=request.method,
                         url=YarlURL(str(request.url), encoded=True),
                         headers=request.headers,
