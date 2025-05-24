@@ -32,6 +32,7 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
+from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -85,6 +86,7 @@ callback_class_str_to_classType = {
     "generic_api": GenericAPILogger,
     "resend_email": ResendEmailLogger,
     "smtp_email": SMTPEmailLogger,
+    "deepeval": DeepEvalLogger,
 }
 
 expected_env_vars = {
@@ -108,6 +110,8 @@ expected_env_vars = {
     "PAGERDUTY_API_KEY": "pagerduty_api_key",
     "GCS_PUBSUB_TOPIC_ID": "gcs_pubsub_topic_id",
     "GCS_PUBSUB_PROJECT_ID": "gcs_pubsub_project_id",
+    "CONFIDENT_API_KEY": "confident_api_key",
+    "LITELM_ENVIRONMENT": "development",
 }
 
 
