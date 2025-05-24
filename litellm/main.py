@@ -1178,6 +1178,8 @@ def completion(  # type: ignore # noqa: PLR0915
             **non_default_params,
         )
 
+        standard_openai_params = optional_params.pop("standard_openai_params", None)
+
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
         ):  # if user opts to add it to prompt, when API doesn't support function calling
@@ -1241,10 +1243,7 @@ def completion(  # type: ignore # noqa: PLR0915
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params={
-                **standard_openai_params,
-                **non_default_params,
-            },  # [IMPORTANT] - using standard_openai_params ensures consistent params logged to langfuse for finetuning / eval datasets.
+            optional_params=standard_openai_params,  # [IMPORTANT] - using standard_openai_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -4027,9 +4026,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):
+        elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
@@ -4040,7 +4037,11 @@ def embedding(  # noqa: PLR0915
                     model=model, custom_llm_provider=custom_llm_provider
                 )
 
-            handler_fn = custom_handler.embedding if not aembedding else custom_handler.aembedding
+            handler_fn = (
+                custom_handler.embedding
+                if not aembedding
+                else custom_handler.aembedding
+            )
 
             response = handler_fn(
                 model=model,
@@ -4049,7 +4050,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
                 print_verbose=print_verbose,
-                litellm_params=litellm_params
+                litellm_params=litellm_params,
             )
         else:
             raise LiteLLMUnknownProvider(
