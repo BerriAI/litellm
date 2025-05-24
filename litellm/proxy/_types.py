@@ -250,6 +250,9 @@ class LiteLLMRoutes(enum.Enum):
         # image generation
         "/images/generations",
         "/v1/images/generations",
+        # image edit
+        "/images/edits",
+        "/v1/images/edits",
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",

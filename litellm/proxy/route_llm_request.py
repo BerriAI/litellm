@@ -22,6 +22,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "aimage_edit": "/images/edits",
 }
 
 
@@ -69,6 +70,7 @@ async def route_request(
         "aget_responses",
         "adelete_responses",
         "_arealtime",  # private function for realtime API
+        "aimage_edit",
     ],
 ):
     """

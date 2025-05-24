@@ -121,6 +121,7 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "aretrieve_fine_tuning_job",
+            "aimage_edit",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -197,6 +198,7 @@ class ProxyBaseLLMRequestProcessing:
             "_arealtime",
             "aget_responses",
             "adelete_responses",
+            "aimage_edit",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -215,7 +217,9 @@ class ProxyBaseLLMRequestProcessing:
         Common request processing logic for both chat completions and responses API endpoints
         """
         verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(self.data, indent=4)),
+            "Request received by LiteLLM:\n{}".format(
+                json.dumps(self.data, indent=4, default=str)
+            ),
         )
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
