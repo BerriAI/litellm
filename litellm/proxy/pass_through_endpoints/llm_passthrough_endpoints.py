@@ -672,6 +672,8 @@ async def _base_vertex_proxy_route(
         location=vertex_location,
     )
 
+    verbose_proxy_logger.debug(f"vertex_credentials: {vertex_credentials}")
+
     base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(
         vertex_location
     )
@@ -687,8 +689,8 @@ async def _base_vertex_proxy_route(
         headers.pop("content-length", None)
         headers.pop("host", None)
     else:
-        vertex_project = vertex_credentials.vertex_project
-        vertex_location = vertex_credentials.vertex_location
+        vertex_project = vertex_credentials.vertex_project or vertex_project
+        vertex_location = vertex_credentials.vertex_location or vertex_location
         vertex_credentials_str = vertex_credentials.vertex_credentials
 
         _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(

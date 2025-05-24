@@ -116,6 +116,10 @@ class PassthroughEndpointRouter:
         Add the vertex credentials for the given project-id, location
         """
 
+        verbose_router_logger.debug(
+            f"Adding vertex credentials for project_id: {project_id}, location: {location}, vertex_credentials length: {len(vertex_credentials)}"
+        )
+
         deployment_key = self._get_deployment_key(
             project_id=project_id,
             location=location,
@@ -129,6 +133,9 @@ class PassthroughEndpointRouter:
             vertex_project=project_id,
             vertex_location=location,
             vertex_credentials=vertex_credentials,
+        )
+        verbose_router_logger.debug(
+            f"Adding vertex credentials for deployment_key: {deployment_key}, vertex_pass_through_credentials: {vertex_pass_through_credentials}"
         )
         self.deployment_key_to_vertex_credentials[
             deployment_key
@@ -154,12 +161,24 @@ class PassthroughEndpointRouter:
             project_id=project_id,
             location=location,
         )
+        verbose_router_logger.debug(
+            f"Getting vertex credentials for deployment_key: {deployment_key}"
+        )
 
         if deployment_key is None:
+            verbose_router_logger.debug(
+                "No deployment key found for project-id, location"
+            )
             return self.default_vertex_config
         if deployment_key in self.deployment_key_to_vertex_credentials:
+            verbose_router_logger.debug(
+                f"Found vertex credentials for deployment_key: {deployment_key}"
+            )
             return self.deployment_key_to_vertex_credentials[deployment_key]
         else:
+            verbose_router_logger.debug(
+                "No vertex credentials found for deployment_key, returning default vertex config"
+            )
             return self.default_vertex_config
 
     def _get_credential_name_for_provider(
