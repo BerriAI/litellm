@@ -72,12 +72,21 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
             ):
                 data_json[key] = value
 
-    if "max_budget" in data_json and data_json["max_budget"] is None:
-        if litellm.max_internal_user_budget is not None:
+    ## INTERNAL USER ROLE ONLY DEFAULT PARAMS ##
+    if (
+        data.user_role is not None
+        and data.user_role == LitellmUserRoles.INTERNAL_USER.value
+    ):
+        if (
+            litellm.max_internal_user_budget is not None
+            and data_json.get("max_budget") is None
+        ):
             data_json["max_budget"] = litellm.max_internal_user_budget
 
-    if "budget_duration" in data_json and data_json["budget_duration"] is None:
-        if litellm.internal_user_budget_duration is not None:
+        if (
+            litellm.internal_user_budget_duration is not None
+            and data_json.get("budget_duration") is None
+        ):
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     return data_json
