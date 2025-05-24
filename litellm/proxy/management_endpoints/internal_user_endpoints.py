@@ -209,9 +209,6 @@ async def new_user(
                             user_email=data_json.get("user_email", None),
                         ),
                     ),
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/new"},
-                    ),
                     user_api_key_dict=user_api_key_dict,
                 )
             except HTTPException as e:
