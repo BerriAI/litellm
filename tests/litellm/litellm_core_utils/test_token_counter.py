@@ -9,8 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 
 sys.path.insert(
-    0, os.path.abspath("../../..")
+    0, os.path.abspath(f"{__file__}/../../..")
 )  # Adds the parent directory to the system path
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from messages_with_counts import (
@@ -23,7 +24,7 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from tests.large_text import text
+from large_text import text
 
 
 def token_counter_both_assert_same(**args):

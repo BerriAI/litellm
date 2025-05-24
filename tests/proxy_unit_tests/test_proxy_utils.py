@@ -830,7 +830,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
             {"service_account_settings": {"enforced_params": ["user"]}},
             UserAPIKeyAuth(
                 api_key="test_api_key",
-                user_id="test_user_id", 
+                user_id="test_user_id",
                 org_id="test_org_id",
                 metadata={"service_account_id": "test_service_account_id"}
             ),
