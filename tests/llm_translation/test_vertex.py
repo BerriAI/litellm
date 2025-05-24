@@ -1409,3 +1409,64 @@ def test_aaavertex_embeddings_distances(
         text_embedding = text_response.data[0].embedding
 
 
+def test_vertex_parallel_tool_calls_true():
+    """
+    Test that parallel_tool_calls = True sets the correct tool_config.
+    """
+    tools = [
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"type": "function", "function": {"name": "get_time"}},
+    ]
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+        parallel_tool_calls=True,
+    )
+    assert "tools" in optional_params
+
+
+def test_vertex_parallel_tool_calls_false_multiple_tools_error():
+    """
+    Test that parallel_tool_calls = False with multiple tools raises UnsupportedParamsError
+    when drop_params is False.
+    """
+    tools = [
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"type": "function", "function": {"name": "get_time"}},
+    ]
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as excinfo:
+        get_optional_params(
+            model="gemini-1.5-pro",
+            custom_llm_provider="vertex_ai",
+            tools=tools,
+            parallel_tool_calls=False,
+        )
+    assert "`parallel_tool_calls=False` is not supported when multiple tools are provided" in str(excinfo.value)
+
+    # works when specified as "functions"
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as excinfo:
+        get_optional_params(
+            model="gemini-1.5-pro",
+            custom_llm_provider="vertex_ai",
+            functions=tools,
+            parallel_tool_calls=False,
+        )
+    assert "`parallel_tool_calls=False` is not supported when multiple tools are provided" in str(excinfo.value)
+
+
+def test_vertex_parallel_tool_calls_false_single_tool():
+    """
+    Test that parallel_tool_calls = False with a single tool does not raise an error
+    and does not add 'tool_config' if not otherwise specified.
+    """
+    tools = [
+        {"type": "function", "function": {"name": "get_weather"}},
+    ]
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+        parallel_tool_calls=False,
+    )
+    assert "tools" in optional_params
