@@ -678,14 +678,8 @@ class UserObjectCache:
             if isinstance(v, datetime):
                 user_object_dict[k] = v.isoformat()
         await self.user_api_key_cache.async_set_cache(
-            key=user_id, value=user_object_dict
+            key=user_id, value=user_object_dict, ttl=60
         )
-        if self.internal_usage_cache is not None:
-            await self.internal_usage_cache.async_set_cache(
-                key=user_id,
-                value=user_object_dict,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-            )
 
     async def get_user_object(
         self, user_id: str, litellm_parent_otel_span: Optional[Span] = None
@@ -694,14 +688,6 @@ class UserObjectCache:
         - get user object from cache
         """
         cached_obj: Optional[Union[dict, LiteLLM_UserTable]] = None
-
-        ## CHECK REDIS CACHE ##
-        if self.internal_usage_cache is not None:
-            cached_obj = await self.internal_usage_cache.async_get_cache(
-                key=user_id,
-                litellm_parent_otel_span=litellm_parent_otel_span,
-                redis_only=True,
-            )
 
         if cached_obj is None:
             cached_obj = await self.user_api_key_cache.async_get_cache(key=user_id)
