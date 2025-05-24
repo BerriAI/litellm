@@ -33,6 +33,25 @@ class ProxyModelNotFoundError(HTTPException):
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
+def get_team_id_from_data(data: dict) -> Optional[str]:
+    """
+    Get the team id from the data's metadata or litellm_metadata params.
+    """
+    if (
+        "metadata" in data
+        and data["metadata"] is not None
+        and "user_api_key_team_id" in data["metadata"]
+    ):
+        return data["metadata"].get("user_api_key_team_id")
+    elif (
+        "litellm_metadata" in data
+        and data["litellm_metadata"] is not None
+        and "user_api_key_team_id" in data["litellm_metadata"]
+    ):
+        return data["litellm_metadata"].get("user_api_key_team_id")
+    return None
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -55,6 +74,7 @@ async def route_request(
     """
     Common helper to route the request
     """
+    team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
     if "api_key" in data or "api_base" in data:
         return getattr(llm_router, f"{route_type}")(**data)
@@ -78,7 +98,16 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
-        if (
+        team_model_name = (
+            llm_router.map_team_model(data["model"], team_id)
+            if team_id is not None
+            else None
+        )
+        if team_model_name is not None:
+            data["model"] = team_model_name
+            return getattr(llm_router, f"{route_type}")(**data)
+
+        elif (
             data["model"] in router_model_names
             or data["model"] in llm_router.get_model_ids()
         ):
