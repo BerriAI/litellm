@@ -87,12 +87,6 @@ class TestFireworksAIChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Fireworks AI raises a 500 BadRequest error when the request contains invalid utf-8 sequences.
-        """
-        pass
-
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_base_audio_transcription_call_args(self) -> dict:

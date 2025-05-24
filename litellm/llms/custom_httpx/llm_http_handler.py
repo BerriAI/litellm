@@ -826,7 +826,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(request_data),
+                json=request_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1317,7 +1317,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                     stream=stream,
@@ -1345,7 +1345,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                 )
@@ -1438,7 +1438,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                     stream=stream,
@@ -1468,7 +1468,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                 )
@@ -1544,7 +1544,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.delete(
-                url=url, headers=headers, data=json.dumps(data), timeout=timeout
+                url=url, headers=headers, json=data, timeout=timeout
             )
 
         except Exception as e:
@@ -1628,7 +1628,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.delete(
-                url=url, headers=headers, data=json.dumps(data), timeout=timeout
+                url=url, headers=headers, json=data, timeout=timeout
             )
 
         except Exception as e:

@@ -99,7 +99,7 @@ jobs:
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -219,7 +219,7 @@ jobs:
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -326,7 +326,7 @@ jobs:
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -451,7 +451,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -582,7 +582,7 @@ jobs:
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -654,7 +654,7 @@ jobs:
             pip install --upgrade pip wheel setuptools
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
@@ -700,7 +700,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       - run:
           name: Show current pydantic version
           command: |
@@ -737,7 +737,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -780,7 +780,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
       # Run pytest and generate JUnit XML report
@@ -825,7 +825,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "boto3==1.34.34"
       # Run pytest and generate JUnit XML report
@@ -870,7 +870,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -914,7 +914,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
@@ -959,7 +959,7 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -1005,7 +1005,7 @@ jobs:
             python -m pip install --upgrade pip
             pip install numpydoc
             python -m pip install -r requirements.txt
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -1055,7 +1055,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1098,7 +1098,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1142,10 +1142,11 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install pytest-mock
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
+            pip install "anthropic==0.52.0"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -2272,7 +2273,7 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install "anthropic==0.49.0"
+            pip install "anthropic==0.52.0"
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
