@@ -113,7 +113,6 @@ def test_xai_chat_config_map_openai_params():
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.skip(reason="TODO: Undo this before merging")
 def test_completion_xai(stream):
     try:
         litellm.set_verbose = True
@@ -147,24 +146,21 @@ def test_completion_xai(stream):
 
 
 def test_xai_message_name_filtering():
-    try:
-        messages = [
-            {
-                "role": "system",
-                "content": "*I press the green button*",
-                "name": "example_user"
-            },
-            {"role": "user", "content": "Hello", "name": "John"},
-            {"role": "assistant", "content": "Hello", "name": "Jane"},
-        ]
-        response = completion(
-            model="xai/grok-beta",
-            messages=messages,
-        )
-        assert response is not None
-        assert response.choices[0].message.content is not None
-    except litellm.ServiceUnavailableError as e:
-        pass
+    messages = [
+        {
+            "role": "system",
+            "content": "*I press the green button*",
+            "name": "example_user"
+        },
+        {"role": "user", "content": "Hello", "name": "John"},
+        {"role": "assistant", "content": "Hello", "name": "Jane"},
+    ]
+    response = completion(
+        model="xai/grok-beta",
+        messages=messages,
+    )
+    assert response is not None
+    assert response.choices[0].message.content is not None
 
 
 class TestXAIReasoningEffort(BaseReasoningLLMTests):
