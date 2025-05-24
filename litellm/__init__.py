@@ -300,7 +300,7 @@ custom_prometheus_metadata_labels: List[str] = []
 priority_reservation: Optional[Dict[str, float]] = None
 
 ######## Networking Settings ########
-use_aiohttp_transport: bool = True
+use_aiohttp_transport: bool = False
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
