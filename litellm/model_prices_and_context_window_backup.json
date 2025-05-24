@@ -12289,7 +12289,7 @@
         "mode": "chat",
         "supports_vision": true,
         "supports_system_messages": true
-
+    },
     "snowflake/deepseek-r1": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
