@@ -57,6 +57,7 @@ def decrypt_value_helper(
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
             return None
+
         verbose_proxy_logger.error(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
         return None

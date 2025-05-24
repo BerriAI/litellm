@@ -30,8 +30,11 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
     ScopeMapping,
     Span,
+    TeamMemberAddRequest,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -856,6 +859,45 @@ class JWTAuthManager:
         return True
 
     @staticmethod
+    async def map_user_to_teams(
+        user_object: Optional[LiteLLM_UserTable],
+        team_object: Optional[LiteLLM_TeamTable],
+    ):
+        """
+        Map user to teams.
+        - If user is not in team, add them to the team
+        - If user is in team, do nothing
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+        if not user_object:
+            return None
+
+        if not team_object:
+            return None
+
+        # check if user is in team
+        for member in team_object.members_with_roles:
+            if member.user_id and member.user_id == user_object.user_id:
+                return None
+
+        data = TeamMemberAddRequest(
+            member=Member(
+                user_id=user_object.user_id,
+                role="user",  # [TODO]: allow controlling role within team based on jwt token
+            ),
+            team_id=team_object.team_id,
+        )
+        # add user to team
+        await team_member_add(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN
+            ),  # [TODO]: expose an internal service role, for better tracking
+        )
+        return None
+
+    @staticmethod
     async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
@@ -974,6 +1016,12 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+        )
+
+        ## MAP USER TO TEAMS
+        await JWTAuthManager.map_user_to_teams(
+            user_object=user_object,
+            team_object=team_object,
         )
 
         # Validate that a valid rbac id is returned for spend tracking

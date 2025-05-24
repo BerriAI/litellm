@@ -135,7 +135,13 @@ class OpenTelemetry(CustomLogger):
         - Adds Otel as a service callback
         - Sets `proxy_server.open_telemetry_logger` to self
         """
-        from litellm.proxy import proxy_server
+        try:
+            from litellm.proxy import proxy_server
+        except ImportError:
+            verbose_logger.warning(
+                "Proxy Server is not installed. Skipping OpenTelemetry initialization."
+            )
+            return
 
         # Add Otel as a service callback
         if "otel" not in litellm.service_callback:

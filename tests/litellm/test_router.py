@@ -296,3 +296,34 @@ async def test_router_amoderation_with_credential_name(mock_amoderation):
     )
     assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
     assert call_kwargs["model"] == "text-moderation-stable"
+
+
+def test_router_ignore_invalid_deployments():
+    """
+    Test that router.ignore_invalid_deployments is set to True
+    """
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "my-bad-model"},
+            },
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+    assert router.ignore_invalid_deployments is True
+    assert router.get_model_list() == []
+
+    ## check upsert deployment
+    router.upsert_deployment(
+        Deployment(
+            model_name="gpt-3.5-turbo",
+            litellm_params={"model": "my-bad-model"},
+            model_info={"tpm": 1000, "rpm": 1000},
+        )
+    )
+
+    assert router.get_model_list() == []

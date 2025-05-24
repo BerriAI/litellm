@@ -293,22 +293,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         """
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Tests that the provider can handle multilingual requests and invalid utf-8 sequences
-
-        Context: https://github.com/openai/openai-python/issues/1921
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        try:
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
-            )
-            assert response is not None
-        except litellm.InternalServerError:
-            pytest.skip("Skipping test due to InternalServerError")
-
     def test_prompt_caching(self):
         """
         Works locally but CI/CD is failing this test. Temporary skip to push out a new release.

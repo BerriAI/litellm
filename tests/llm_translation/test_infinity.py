@@ -227,11 +227,10 @@ async def test_infinity_embedding():
         # Assert
         mock_post.assert_called_once()
         print("call args", mock_post.call_args)
-        args_to_api = mock_post.call_args.kwargs["data"]
+        request_data = mock_post.call_args.kwargs["json"]
         _url = mock_post.call_args.kwargs["url"]
         assert _url == "https://api.infinity.ai/embeddings"
 
-        request_data = json.loads(args_to_api)
         assert request_data["input"] == expected_payload["input"]
         assert request_data["model"] == expected_payload["model"]
         assert request_data["output_dimension"] == expected_payload["output_dimension"]
@@ -283,11 +282,10 @@ async def test_infinity_embedding_with_env(monkeypatch):
         # Assert
         mock_post.assert_called_once()
         print("call args", mock_post.call_args)
-        args_to_api = mock_post.call_args.kwargs["data"]
+        request_data = mock_post.call_args.kwargs["json"]
         _url = mock_post.call_args.kwargs["url"]
         assert _url == "https://api.infinity.ai/embeddings"
 
-        request_data = json.loads(args_to_api)
         assert request_data["input"] == expected_payload["input"]
         assert request_data["model"] == expected_payload["model"]
         assert request_data["output_dimension"] == expected_payload["output_dimension"]
@@ -330,14 +328,14 @@ async def test_infinity_embedding_extra_params():
         )
 
         mock_post.assert_called_once()
-        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        request_data = mock_post.call_args.kwargs["json"]
 
         # Assert the request parameters
-        assert json_data["input"] == ["test input"]
-        assert json_data["model"] == "custom-model/embedding-v1"
-        assert json_data["output_dimension"] == 512
-        assert json_data["encoding_format"] == "float"
-        assert json_data["modality"] == "text"
+        assert request_data["input"] == ["test input"]
+        assert request_data["model"] == "custom-model/embedding-v1"
+        assert request_data["output_dimension"] == 512
+        assert request_data["encoding_format"] == "float"
+        assert request_data["modality"] == "text"
 
 
 @pytest.mark.asyncio()

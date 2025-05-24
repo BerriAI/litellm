@@ -588,3 +588,44 @@ async def test_get_user_info_from_db():
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         mock_get_user_object.call_args.kwargs["user_id"] = "krrishd"
+
+
+async def test_get_user_info_from_db_alternate_user_id():
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "krrishdholakia@gmail.com"
+    user_defined_values = {
+        "models": [],
+        "user_id": "krrishd",
+        "user_email": "krrishdholakia@gmail.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+    args = {
+        "result": CustomOpenID(
+            id="krrishd",
+            email="krrishdholakia@gmail.com",
+            first_name=None,
+            last_name=None,
+            display_name="a3f1c107-04dc-4c93-ae60-7f32eb4b05ce",
+            picture=None,
+            provider=None,
+            team_ids=[],
+        ),
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+        "alternate_user_id": "krrishd-email1234",
+    }
+    with patch.object(
+        litellm.proxy.management_endpoints.ui_sso, "get_user_object"
+    ) as mock_get_user_object:
+        user_info = await get_user_info_from_db(**args)
+        mock_get_user_object.assert_called_once()
+        mock_get_user_object.call_args.kwargs["user_id"] = "krrishd-email1234"
