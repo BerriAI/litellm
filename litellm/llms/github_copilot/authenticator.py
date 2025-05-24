@@ -298,7 +298,7 @@ class Authenticator:
         user_code = device_code_info["user_code"]
         verification_uri = device_code_info["verification_uri"]
 
-        print(
+        print(  # noqa: T201
             f"Please visit {verification_uri} and enter code {user_code} to authenticate."
         )
 
