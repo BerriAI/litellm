@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Optional, TypedDict
 
+from litellm.types.utils import CallTypes as LiteLLMCallTypes
+
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
@@ -32,3 +34,15 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
     The body of the response
     """
+
+
+class PassthroughEndpointInitKwargs(TypedDict, total=False):
+    """
+    Kwargs for the pass-through endpoint
+    """
+
+    litellm_params: dict
+    model: Optional[str]
+    call_type: LiteLLMCallTypes
+    litellm_call_id: Optional[str]
+    passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload]
