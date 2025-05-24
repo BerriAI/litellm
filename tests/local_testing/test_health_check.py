@@ -229,6 +229,7 @@ def test_update_litellm_params_for_health_check():
     Test if _update_litellm_params_for_health_check correctly:
     1. Updates messages with a random message
     2. Updates model name when health_check_model is provided
+    3. Updates voice when health_check_voice is provided for audio_speech mode
     """
     from litellm.proxy.health_check import _update_litellm_params_for_health_check
 
@@ -258,6 +259,34 @@ def test_update_litellm_params_for_health_check():
     assert isinstance(updated_params["messages"], list)
     assert updated_params["model"] == "gpt-4"
 
+    # Test with health_check_voice for audio_speech mode
+    model_info = {"mode": "audio_speech", "health_check_voice": "en-US-JennyNeural"}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" in updated_params
+    assert updated_params["voice"] == "en-US-JennyNeural"
+
+    # Test without health_check_voice for audio_speech mode
+    model_info = {"mode": "audio_speech"}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" in updated_params
+    assert updated_params["voice"] == "alloy"
+
+    # Test with health_check_voice for non-audio_speech mode
+    model_info = {"mode": "chat", "health_check_voice": "en-US-JennyNeural"}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" not in updated_params
 
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
