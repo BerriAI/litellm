@@ -184,8 +184,8 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    image: list[UploadFile] = File(...),
-    mask: list[UploadFile] | None = File(None),
+    image: List[UploadFile] = File(...),
+    mask: Optional[List[UploadFile]] = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
