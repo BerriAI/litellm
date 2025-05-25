@@ -173,10 +173,12 @@ This release includes numerous bug fixes to improve stability and reliability:
     - VertexAI: 
         - Fixed quota_project_id parameter issue - [PR](https://github.com/BerriAI/litellm/pull/10915)
         - Fixed credential refresh exceptions - [PR](https://github.com/BerriAI/litellm/pull/10969)
-    - Cohere: Fixed Rerank Provider - [PR](https://github.com/BerriAI/litellm/pull/10822)
+    - Cohere: 
+        Fixes for adding Cohere models through LiteLLM UI - [PR](https://github.com/BerriAI/litellm/pull/10822)
     - Anthropic: 
         - Fixed streaming dict object handling for /v1/messages - [PR](https://github.com/BerriAI/litellm/pull/11032)
-    - OpenRouter: Fixed stream usage ID issues - [PR](https://github.com/BerriAI/litellm/pull/11004)
+    - OpenRouter: 
+        - Fixed stream usage ID issues - [PR](https://github.com/BerriAI/litellm/pull/11004)
 
 - **Authentication & Users**
     - Fixed invitation email link generation - [PR](https://github.com/BerriAI/litellm/pull/10958) 
