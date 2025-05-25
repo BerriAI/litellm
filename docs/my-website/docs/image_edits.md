@@ -106,13 +106,6 @@ for i, image_data in enumerate(response.data):
 
 ### LiteLLM Proxy with OpenAI SDK
 
-First, set up and start your LiteLLM proxy server.
-
-```bash showLineNumbers title="Start LiteLLM Proxy Server"
-litellm --config /path/to/config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
 
 <Tabs>
 <TabItem value="openai" label="OpenAI">
@@ -124,6 +117,14 @@ model_list:
     litellm_params:
       model: gpt-image-1
       api_key: os.environ/OPENAI_API_KEY
+```
+
+Start the LiteLLM proxy server:
+
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
 ```
 
 #### Basic Image Edit via Proxy
@@ -143,29 +144,6 @@ response = client.images.edit(
     prompt="Add a red hat to the person in the image",
     n=1,
     size="1024x1024"
-)
-
-print(response)
-```
-
-#### Image Edit with Mask via Proxy
-```python showLineNumbers title="OpenAI Proxy Image Edit with Mask"
-from openai import OpenAI
-
-# Initialize client with your proxy URL
-client = OpenAI(
-    base_url="http://localhost:4000",  # Your proxy URL
-    api_key="your-api-key"             # Your proxy API key
-)
-
-# Edit an image with a mask
-response = client.images.edit(
-    model="gpt-image-1",
-    image=open("original_image.png", "rb"),
-    mask=open("mask_image.png", "rb"),
-    prompt="Replace the background with a mountain landscape",
-    n=2,
-    size="512x512"
 )
 
 print(response)
