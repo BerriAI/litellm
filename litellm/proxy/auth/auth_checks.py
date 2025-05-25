@@ -20,7 +20,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    DEFAULT_IN_MEMORY_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MAX_RECURSE_DEPTH,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -727,7 +731,9 @@ async def get_user_object(
 
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
-            key=user_id, value=response_dict, ttl=DEFAULT_IN_MEMORY_TTL
+            key=user_id,
+            value=response_dict,
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
         # save to db access time
