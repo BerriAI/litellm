@@ -644,12 +644,7 @@ async def user_update(
             
     
     """
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.model_dump(exclude_unset=True)
