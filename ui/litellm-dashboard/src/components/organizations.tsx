@@ -501,8 +501,11 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
               </Col>
             )}
           </Grid>
-        </TabPanel>
-      </TabPanels>
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
+        </Col>
+      </Grid>
 
       {isDeleteModalOpen ? (
         <div className="fixed z-10 inset-0 overflow-y-auto">
