@@ -428,13 +428,15 @@ const Teams: React.FC<TeamProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
+        {
+          userRole == "Admin" || userRole == "Org Admin"? 
           <Button
             className="w-fit"
             onClick={() => setIsTeamModalVisible(true)}
           >
             + Create New Team
-          </Button>
-          
+          </Button> : null
+        }          
           {selectedTeamId ? (
             <TeamInfoView 
             teamId={selectedTeamId} 

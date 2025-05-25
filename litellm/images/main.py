@@ -584,7 +584,7 @@ def image_edit(
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("adelete_responses", False) is True
+        _is_async = kwargs.pop("async_call", False) is True
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -650,7 +650,7 @@ def image_edit(
 
     except Exception as e:
         raise litellm.exception_type(
-            model=None,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -728,7 +728,7 @@ async def aimage_edit(
         return response
     except Exception as e:
         raise litellm.exception_type(
-            model=None,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,

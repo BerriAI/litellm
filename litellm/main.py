@@ -86,6 +86,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Usage,
     add_openai_metadata,
+    add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -97,7 +98,9 @@ from litellm.utils import (
     get_optional_params_image_gen,
     get_optional_params_transcription,
     get_secret,
+    get_standard_openai_params,
     mock_completion_streaming_obj,
+    pre_process_non_default_params,
     read_config_args,
     supports_httpx_timeout,
     token_counter,
@@ -428,6 +431,7 @@ async def acompletion(
             prompt_id=kwargs.get("prompt_id", None),
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     #########################################################
@@ -983,6 +987,7 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
+    standard_openai_params = get_standard_openai_params(params=args)
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
@@ -1001,6 +1006,7 @@ def completion(  # type: ignore # noqa: PLR0915
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
         )
 
     try:
@@ -1136,42 +1142,55 @@ def completion(  # type: ignore # noqa: PLR0915
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        optional_params = get_optional_params(
-            functions=functions,
-            function_call=function_call,
-            temperature=temperature,
-            top_p=top_p,
-            n=n,
-            stream=stream,
-            stream_options=stream_options,
-            stop=stop,
-            max_tokens=max_tokens,
-            max_completion_tokens=max_completion_tokens,
-            modalities=modalities,
-            prediction=prediction,
-            audio=audio,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            user=user,
+        optional_param_args = {
+            "functions": functions,
+            "function_call": function_call,
+            "temperature": temperature,
+            "top_p": top_p,
+            "n": n,
+            "stream": stream,
+            "stream_options": stream_options,
+            "stop": stop,
+            "max_tokens": max_tokens,
+            "max_completion_tokens": max_completion_tokens,
+            "modalities": modalities,
+            "prediction": prediction,
+            "audio": audio,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "logit_bias": logit_bias,
+            "user": user,
             # params to identify the model
+            "model": model,
+            "custom_llm_provider": custom_llm_provider,
+            "response_format": response_format,
+            "seed": seed,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "max_retries": max_retries,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "api_version": api_version,
+            "parallel_tool_calls": parallel_tool_calls,
+            "messages": messages,
+            "reasoning_effort": reasoning_effort,
+            "thinking": thinking,
+            "web_search_options": web_search_options,
+            "allowed_openai_params": kwargs.get("allowed_openai_params"),
+        }
+        optional_params = get_optional_params(
+            **optional_param_args, **non_default_params
+        )
+        processed_non_default_params = pre_process_non_default_params(
             model=model,
+            passed_params=optional_param_args,
+            special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
-            response_format=response_format,
-            seed=seed,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_retries=max_retries,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            api_version=api_version,
-            parallel_tool_calls=parallel_tool_calls,
-            messages=messages,
-            reasoning_effort=reasoning_effort,
-            thinking=thinking,
-            web_search_options=web_search_options,
-            allowed_openai_params=kwargs.get("allowed_openai_params"),
-            **non_default_params,
+            additional_drop_params=kwargs.get("additional_drop_params"),
+        )
+        processed_non_default_params = add_provider_specific_params_to_optional_params(
+            optional_params=processed_non_default_params,
+            passed_params=non_default_params,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
@@ -1234,10 +1253,10 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
         )
-        logging.update_environment_variables(
+        cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=optional_params,
+            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -4019,6 +4038,32 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider in litellm._custom_providers:
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            handler_fn = (
+                custom_handler.embedding
+                if not aembedding
+                else custom_handler.aembedding
+            )
+
+            response = handler_fn(
+                model=model,
+                input=input,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                print_verbose=print_verbose,
+                litellm_params=litellm_params,
             )
         else:
             raise LiteLLMUnknownProvider(

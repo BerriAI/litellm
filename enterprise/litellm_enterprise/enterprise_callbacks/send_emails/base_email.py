@@ -7,6 +7,12 @@ import json
 import os
 from typing import List, Optional
 
+from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+    EmailEvent,
+    EmailParams,
+    SendKeyCreatedEmailEvent,
+)
+
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
@@ -17,11 +23,6 @@ from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
 from litellm.proxy._types import WebhookEvent
-from litellm.types.enterprise.enterprise_callbacks.send_emails import (
-    EmailEvent,
-    EmailParams,
-    SendKeyCreatedEmailEvent,
-)
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
@@ -189,7 +190,7 @@ class BaseEmailLogger(CustomLogger):
         # get the latest invitation link for the user
         invitation_rows = await prisma_client.db.litellm_invitationlink.find_many(
             where={"user_id": user_id},
-            orderBy={"created_at": "desc"},
+            order={"created_at": "desc"},
         )
         if len(invitation_rows) > 0:
             invitation_row = invitation_rows[0]

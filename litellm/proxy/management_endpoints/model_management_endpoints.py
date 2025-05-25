@@ -14,7 +14,7 @@ import asyncio
 import datetime
 import json
 import uuid
-from typing import Dict, List, Literal, Optional, Union, cast
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -219,6 +219,9 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
+        
+        # Clear cache and reload models
+        await clear_cache()
 
         return updated_model
 
@@ -505,6 +508,35 @@ async def delete_model(
             premium_user=premium_user,
         )
 
+        # delete team model alias
+        if model_params.model_info.team_id is not None:
+            removed_model_aliases = await delete_team_model_alias(
+                public_model_name=model_params.model_name,
+                prisma_client=prisma_client,
+            )
+
+            valid_team_model_aliases = [
+                model
+                for team_id, model in removed_model_aliases
+                if team_id == model_params.model_info.team_id
+            ]
+
+            ## UPDATE TEAM TO NOT LIST MODEL ##
+            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": model_params.model_info.team_id}
+            )
+            if existing_team_row is not None:
+                existing_team_row.models = [
+                    model
+                    for model in existing_team_row.models
+                    if model not in valid_team_model_aliases
+                ]
+
+                await prisma_client.db.litellm_teamtable.update(
+                    where={"team_id": model_params.model_info.team_id},
+                    data={"models": existing_team_row.models},
+                )
+
         # update DB
         if store_model_in_db is True:
             """
@@ -567,6 +599,45 @@ async def delete_model(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+async def delete_team_model_alias(
+    public_model_name: str,
+    prisma_client: PrismaClient,
+) -> List[Tuple[str, str]]:
+    """
+    Delete a team model alias
+
+    Iterate through all team model aliases and delete the one that matches the model_id
+
+    Returns:
+    - List of team id + model alias pairs that were removed
+    """
+    team_model_aliases = await prisma_client.db.litellm_modeltable.find_many(
+        include={"team": True}
+    )
+    tasks = []
+    removed_model_aliases = []
+    for team_model_alias in team_model_aliases:
+        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        id = team_model_alias.id
+
+        if public_model_name in model_aliases.values():
+            key = list(model_aliases.keys())[
+                list(model_aliases.values()).index(public_model_name)
+            ]
+            if team_model_alias.team is not None:
+                removed_model_aliases.append((team_model_alias.team.team_id, key))
+            del model_aliases[key]
+            tasks.append(
+                prisma_client.db.litellm_modeltable.update(
+                    where={"id": id},
+                    data={"model_aliases": json.dumps(model_aliases)},
+                )
+            )
+    await asyncio.gather(*tasks)
+
+    return removed_model_aliases
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
@@ -879,3 +950,26 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             unique_models.append(model)
             seen_ids.add(model_id)
     return unique_models
+
+async def clear_cache():
+    """
+    Clear router caches and reload models.
+    """
+    from litellm.proxy.proxy_server import (
+        proxy_config,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        verbose_proxy_logger,
+    )
+    try:
+        llm_router.model_list.clear()
+        
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, 
+            proxy_logging_obj=proxy_logging_obj
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to clear cache and reload models. Due to error - {str(e)}"
+        )

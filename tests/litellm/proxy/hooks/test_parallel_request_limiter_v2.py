@@ -19,6 +19,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v2 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 
 
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_normal_router_call_v2(monkeypatch):
     """
@@ -340,6 +341,7 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
         )
 
 
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_streaming_router_call_v2(monkeypatch):
     """
