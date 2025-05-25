@@ -217,6 +217,7 @@ const sidebars = {
           label: "/images",
           items: [
             "image_generation",
+            "image_edits",
             "image_variations",
           ]
         },
