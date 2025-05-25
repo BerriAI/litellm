@@ -55,9 +55,13 @@ This release includes significant performance enhancements:
 
 ## New Models / Updated Models
 
-- **[Gemini](../../docs/providers/google_ai_studio)**
-    - New preview models added - [PR](https://github.com/BerriAI/litellm/pull/10991)
-    - Additional model updates - [PR](https://github.com/BerriAI/litellm/pull/10998)
+- **[Gemini, VertexAI](../../docs/providers/google_ai_studio)**
+    - New gemini models - [PR 1](https://github.com/BerriAI/litellm/pull/10991), [PR 2](https://github.com/BerriAI/litellm/pull/10998)
+        - `gemini-2.5-flash-preview-tts`
+        - `gemini-2.0-flash-preview-image-generation`
+        - `gemini/gemini-2.5-flash-preview-05-20`
+        - `gemini-2.5-flash-preview-05-20`
+
 - **[Anthropic](../../docs/providers/anthropic)**
     - Claude-4 model family support - [PR](https://github.com/BerriAI/litellm/pull/11060)
     - Claude Sonnet 4 and Opus 4 reasoning_effort parameter support - [PR](https://github.com/BerriAI/litellm/pull/11114)
