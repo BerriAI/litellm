@@ -146,6 +146,7 @@ class InMemoryCache(BaseCache):
             if key in self.ttl_dict:
                 if time.time() > self.ttl_dict[key]:
                     self.cache_dict.pop(key, None)
+                    self.ttl_dict.pop(key, None)
                     return None
             original_cached_response = self.cache_dict[key]
             try:
