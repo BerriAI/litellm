@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
     # Set environment variable for SSL security level
+    litellm.use_aiohttp_transport = True
     monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
 
     # Create async client with SSL verification disabled to isolate SSL context testing
