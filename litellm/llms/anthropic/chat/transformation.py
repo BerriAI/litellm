@@ -63,7 +63,7 @@ else:
     LoggingClass = Any
 
 
-ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor"]
+ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor", "code_execution"]
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
