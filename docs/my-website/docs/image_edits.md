@@ -30,7 +30,7 @@ import litellm
 
 # Edit an image with a prompt
 response = litellm.image_edit(
-    model="pt-image-1",
+    model="gpt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
     n=1,
@@ -46,7 +46,7 @@ import litellm
 
 # Edit an image with a mask to specify the area to edit
 response = litellm.image_edit(
-    model="pt-image-1",
+    model="gpt-image-1",
     image=open("original_image.png", "rb"),
     mask=open("mask_image.png", "rb"),  # Transparent areas will be edited
     prompt="Replace the background with a beach scene",
@@ -65,7 +65,7 @@ import asyncio
 
 async def edit_image():
     response = await litellm.aimage_edit(
-        model="pt-image-1",
+        model="gpt-image-1",
         image=open("original_image.png", "rb"),
         prompt="Make the image look like a painting",
         n=1,
@@ -85,7 +85,7 @@ import litellm
 
 # Edit image with additional parameters
 response = litellm.image_edit(
-    model="pt-image-1",
+    model="gpt-image-1",
     image=open("portrait.png", "rb"),
     prompt="Add sunglasses and a smile",
     n=3,
@@ -120,9 +120,9 @@ litellm --config /path/to/config.yaml
 First, add this to your litellm proxy config.yaml:
 ```yaml showLineNumbers title="OpenAI Proxy Configuration"
 model_list:
-  - model_name: pt-image-1
+  - model_name: gpt-image-1
     litellm_params:
-      model: pt-image-1
+      model: gpt-image-1
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -138,7 +138,7 @@ client = OpenAI(
 
 # Edit an image
 response = client.images.edit(
-    model="pt-image-1",
+    model="gpt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
     n=1,
@@ -160,7 +160,7 @@ client = OpenAI(
 
 # Edit an image with a mask
 response = client.images.edit(
-    model="pt-image-1",
+    model="gpt-image-1",
     image=open("original_image.png", "rb"),
     mask=open("mask_image.png", "rb"),
     prompt="Replace the background with a mountain landscape",
@@ -175,7 +175,7 @@ print(response)
 ```bash showLineNumbers title="cURL Image Edit Request"
 curl -X POST "http://localhost:4000/v1/images/edits" \
   -H "Authorization: Bearer your-api-key" \
-  -F "model=pt-image-1" \
+  -F "model=gpt-image-1" \
   -F "image=@original_image.png" \
   -F "mask=@mask_image.png" \
   -F "prompt=Add a beautiful sunset in the background" \
