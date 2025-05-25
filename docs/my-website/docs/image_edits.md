@@ -30,7 +30,7 @@ import litellm
 
 # Edit an image with a prompt
 response = litellm.image_edit(
-    model="dall-e-2",
+    model="pt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
     n=1,
@@ -46,7 +46,7 @@ import litellm
 
 # Edit an image with a mask to specify the area to edit
 response = litellm.image_edit(
-    model="dall-e-2",
+    model="pt-image-1",
     image=open("original_image.png", "rb"),
     mask=open("mask_image.png", "rb"),  # Transparent areas will be edited
     prompt="Replace the background with a beach scene",
@@ -65,7 +65,7 @@ import asyncio
 
 async def edit_image():
     response = await litellm.aimage_edit(
-        model="dall-e-2",
+        model="pt-image-1",
         image=open("original_image.png", "rb"),
         prompt="Make the image look like a painting",
         n=1,
@@ -85,7 +85,7 @@ import litellm
 
 # Edit image with additional parameters
 response = litellm.image_edit(
-    model="dall-e-2",
+    model="pt-image-1",
     image=open("portrait.png", "rb"),
     prompt="Add sunglasses and a smile",
     n=3,
@@ -120,9 +120,9 @@ litellm --config /path/to/config.yaml
 First, add this to your litellm proxy config.yaml:
 ```yaml showLineNumbers title="OpenAI Proxy Configuration"
 model_list:
-  - model_name: dall-e-2
+  - model_name: pt-image-1
     litellm_params:
-      model: dall-e-2
+      model: pt-image-1
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -138,7 +138,7 @@ client = OpenAI(
 
 # Edit an image
 response = client.images.edit(
-    model="dall-e-2",
+    model="pt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
     n=1,
@@ -160,7 +160,7 @@ client = OpenAI(
 
 # Edit an image with a mask
 response = client.images.edit(
-    model="dall-e-2",
+    model="pt-image-1",
     image=open("original_image.png", "rb"),
     mask=open("mask_image.png", "rb"),
     prompt="Replace the background with a mountain landscape",
@@ -175,7 +175,7 @@ print(response)
 ```bash showLineNumbers title="cURL Image Edit Request"
 curl -X POST "http://localhost:4000/v1/images/edits" \
   -H "Authorization: Bearer your-api-key" \
-  -F "model=dall-e-2" \
+  -F "model=pt-image-1" \
   -F "image=@original_image.png" \
   -F "mask=@mask_image.png" \
   -F "prompt=Add a beautiful sunset in the background" \
@@ -193,7 +193,7 @@ curl -X POST "http://localhost:4000/v1/images/edits" \
 |-----------|------|-------------|----------|
 | `image` | `FileTypes` | The image to edit. Must be a valid PNG file, less than 4MB, and square. | ✅ |
 | `prompt` | `str` | A text description of the desired image edit. | ✅ |
-| `model` | `str` | The model to use for image editing. Currently only `dall-e-2` is supported. | Optional (defaults to `dall-e-2`) |
+| `model` | `str` | The model to use for image editing | Optional (defaults to `dall-e-2`) |
 | `mask` | `str` | An additional image whose fully transparent areas indicate where the original image should be edited. Must be a valid PNG file, less than 4MB, and have the same dimensions as `image`. | Optional |
 | `n` | `int` | The number of images to generate. Must be between 1 and 10. | Optional (defaults to 1) |
 | `size` | `str` | The size of the generated images. Must be one of `256x256`, `512x512`, or `1024x1024`. | Optional (defaults to `1024x1024`) |
