@@ -1,5 +1,5 @@
 ---
-title: v1.71.1-stable - Performance improvements
+title: v1.71.1-stable - 2x Higher Requests Per Second (RPS)
 slug: v1.71.1-stable
 date: 2025-05-24T10:00:00
 authors:
@@ -57,11 +57,12 @@ LiteLLM v1.71.1-stable is live now. Here are the key highlights of this release:
 <br/>
 
 
-This release brings aiohttp support for all LLM api providers. This means that LiteLLM can now scale to 200 RPS per instance with a 74ms median response time. 
+This release brings aiohttp support for all LLM api providers. This means that LiteLLM can now scale to 200 RPS per instance with a 40ms median latency overhead. 
 
-This change doubles the RPS LiteLLM can scale to at this latency. 
+This change doubles the RPS LiteLLM can scale to at this latency overhead.
 
-You can opt into this by enabling this flag. (We expect to make this the default in 1 week.)
+You can opt into this by enabling the flag below. (We expect to make this the default in 1 week.)
+
 
 ### Flag to enable
 
@@ -193,7 +194,6 @@ This release brings support for [File Permissions](../../docs/proxy/litellm_mana
 
 - **aiohttp Transport**
     - 97% lower median latency (feature flagged) - [PR](https://github.com/BerriAI/litellm/pull/11097) [PR](https://github.com/BerriAI/litellm/pull/11132)
-    - Support for `aiohttp` transport - [PR](https://github.com/BerriAI/litellm/pull/11097)
 - **Background Health Checks**
     - Improved reliability - [PR](https://github.com/BerriAI/litellm/pull/10887)
 - **Response Handling**
