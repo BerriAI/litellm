@@ -85,6 +85,7 @@ async def test_force_ipv4_transport():
 async def test_ssl_context_transport():
     """Test transport creation with SSL context"""
     # Create a test SSL context
+    litellm.use_aiohttp_transport = True
     ssl_context = ssl.create_default_context()
 
     transport = AsyncHTTPHandler._create_async_transport(ssl_context=ssl_context)
