@@ -94,12 +94,11 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
-        elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
+        else:
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob = BlobType(data=image["data"], mime_type=image["media_type"])
             return PartType(inline_data=_blob)
-        raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
 
