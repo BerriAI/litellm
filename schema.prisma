@@ -204,7 +204,7 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
-    organization_id String?
+    organization_id String? // deprecated param, as user can be part of multiple organizations. Check LiteLLM_OrganizationMembership instead.
     object_permission_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?

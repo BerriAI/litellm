@@ -17,8 +17,7 @@ from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     router,
     update_event_settings,
 )
-
-from litellm.types.enterprise.enterprise_callbacks.send_emails import (
+from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     DefaultEmailSettings,
     EmailEvent,
     EmailEventSettings,

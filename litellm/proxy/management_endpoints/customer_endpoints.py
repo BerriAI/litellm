@@ -102,9 +102,18 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
-    from enterprise.enterprise_hooks.blocked_user_list import (
-        _ENTERPRISE_BlockedUserList,
-    )
+    try:
+        from enterprise.enterprise_hooks.blocked_user_list import (
+            _ENTERPRISE_BlockedUserList,
+        )
+    except ImportError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Blocked user check was never set. This call has no effect."
+                + CommonProxyErrors.missing_enterprise_package_docker.value
+            },
+        )
 
     if (
         not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)

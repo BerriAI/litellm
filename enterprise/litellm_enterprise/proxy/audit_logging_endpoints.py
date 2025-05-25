@@ -7,8 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -165,5 +164,4 @@ async def get_audit_log_by_id(
         )
 
     # Convert to response model
-    print(audit_log)
     return AuditLogResponse(**audit_log.model_dump())
