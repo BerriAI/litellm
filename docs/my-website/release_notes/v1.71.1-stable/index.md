@@ -55,7 +55,7 @@ This release includes significant performance enhancements:
 
 ## New Models / Updated Models
 
-- **Gemini [(VertexAI + Google AI Studio)](../../docs/providers/google_ai_studio)**
+- **Gemini [VertexAI](https://docs.litellm.ai/docs/providers/vertex), [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini)**
     - New gemini models - [PR 1](https://github.com/BerriAI/litellm/pull/10991), [PR 2](https://github.com/BerriAI/litellm/pull/10998)
         - `gemini-2.5-flash-preview-tts`
         - `gemini-2.0-flash-preview-image-generation`
@@ -86,9 +86,9 @@ This release includes significant performance enhancements:
     - devstral-small-2505 model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11103)
 - **[Ollama](../../docs/providers/ollama)**
     - Wildcard model support - [PR](https://github.com/BerriAI/litellm/pull/10982)
-- **[CustomLLM](../../docs/providers/custom_llm)**
+- **[CustomLLM](../../docs/providers/custom_llm_server)**
     - Embeddings support added - [PR](https://github.com/BerriAI/litellm/pull/10980)
-- **[Featherless AI](../../docs/providers/featherless)**
+- **[Featherless AI](../../docs/providers/featherless_ai)**
     - Access to 4200+ models - [PR](https://github.com/BerriAI/litellm/pull/10596)
 
 ## LLM API Endpoints
