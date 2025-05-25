@@ -511,6 +511,8 @@ class OutputConfig(TypedDict, total=False):
     predictionsFormat: str
     gcsDestination: GcsDestination
 
+class OutputInfo(TypedDict):
+    gcsOutputDirectory: str
 
 class GcsBucketResponse(TypedDict):
     """
@@ -570,8 +572,10 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    outputInfo: OutputInfo
     state: str
     createTime: str
+    endTime: str
     updateTime: str
     modelVersionId: str
 
