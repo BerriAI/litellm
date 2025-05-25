@@ -217,7 +217,6 @@ const sidebars = {
           label: "/images",
           items: [
             "image_generation",
-            "image_edits",
             "image_variations",
           ]
         },
@@ -267,14 +266,7 @@ const sidebars = {
           ]
         },
         "realtime",
-        {
-          type: "category",
-          label: "/fine_tuning",
-          items: [
-            "fine_tuning",
-            "proxy/managed_finetuning",
-          ]
-        },
+        "fine_tuning",
         "moderation",
         "apply_guardrail",
       ],
@@ -379,7 +371,8 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/featherless_ai"
+        "providers/featherless_ai",
+        "providers/nebius"
       ],
     },
     {
@@ -468,7 +461,6 @@ const sidebars = {
         "observability/agentops_integration",
         "observability/langfuse_integration",
         "observability/lunary_integration",
-        "observability/deepeval_integration",
         "observability/mlflow",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",

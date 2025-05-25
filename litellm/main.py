@@ -86,7 +86,6 @@ from litellm.utils import (
     ProviderConfigManager,
     Usage,
     add_openai_metadata,
-    add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -100,7 +99,6 @@ from litellm.utils import (
     get_secret,
     get_standard_openai_params,
     mock_completion_streaming_obj,
-    pre_process_non_default_params,
     read_config_args,
     supports_httpx_timeout,
     token_counter,
@@ -1142,55 +1140,42 @@ def completion(  # type: ignore # noqa: PLR0915
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        optional_param_args = {
-            "functions": functions,
-            "function_call": function_call,
-            "temperature": temperature,
-            "top_p": top_p,
-            "n": n,
-            "stream": stream,
-            "stream_options": stream_options,
-            "stop": stop,
-            "max_tokens": max_tokens,
-            "max_completion_tokens": max_completion_tokens,
-            "modalities": modalities,
-            "prediction": prediction,
-            "audio": audio,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-            "logit_bias": logit_bias,
-            "user": user,
-            # params to identify the model
-            "model": model,
-            "custom_llm_provider": custom_llm_provider,
-            "response_format": response_format,
-            "seed": seed,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "max_retries": max_retries,
-            "logprobs": logprobs,
-            "top_logprobs": top_logprobs,
-            "api_version": api_version,
-            "parallel_tool_calls": parallel_tool_calls,
-            "messages": messages,
-            "reasoning_effort": reasoning_effort,
-            "thinking": thinking,
-            "web_search_options": web_search_options,
-            "allowed_openai_params": kwargs.get("allowed_openai_params"),
-        }
         optional_params = get_optional_params(
-            **optional_param_args, **non_default_params
-        )
-        processed_non_default_params = pre_process_non_default_params(
+            functions=functions,
+            function_call=function_call,
+            temperature=temperature,
+            top_p=top_p,
+            n=n,
+            stream=stream,
+            stream_options=stream_options,
+            stop=stop,
+            max_tokens=max_tokens,
+            max_completion_tokens=max_completion_tokens,
+            modalities=modalities,
+            prediction=prediction,
+            audio=audio,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            user=user,
+            # params to identify the model
             model=model,
-            passed_params=optional_param_args,
-            special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
-            additional_drop_params=kwargs.get("additional_drop_params"),
-        )
-        processed_non_default_params = add_provider_specific_params_to_optional_params(
-            optional_params=processed_non_default_params,
-            passed_params=non_default_params,
+            response_format=response_format,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_retries=max_retries,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            api_version=api_version,
+            parallel_tool_calls=parallel_tool_calls,
+            messages=messages,
+            reasoning_effort=reasoning_effort,
+            thinking=thinking,
+            web_search_options=web_search_options,
+            allowed_openai_params=kwargs.get("allowed_openai_params"),
+            **non_default_params,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
@@ -1256,7 +1241,10 @@ def completion(  # type: ignore # noqa: PLR0915
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
+            optional_params={
+                **standard_openai_params,
+                **non_default_params,
+            },  # [IMPORTANT] - using standard_openai_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -1777,6 +1765,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nebius"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -3920,6 +3909,27 @@ def embedding(  # noqa: PLR0915
             api_key = (
                 api_key or litellm.api_key or get_secret_str("FIREWORKS_AI_API_KEY")
             )
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "nebius":
+            api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("NEBIUS_API_BASE")
+                or "api.studio.nebius.ai/v1"
+            )
+
             response = openai_chat_completions.embedding(
                 model=model,
                 input=input,

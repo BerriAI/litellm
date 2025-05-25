@@ -118,7 +118,6 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "generic_api",
     "resend_email",
     "smtp_email",
-    "deepeval",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -203,6 +202,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+nebius_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -298,9 +298,6 @@ disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
-
-######## Networking Settings ########
-use_aiohttp_transport: bool = False
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
@@ -444,6 +441,8 @@ assemblyai_models: List = []
 snowflake_models: List = []
 llama_models: List = []
 nscale_models: List = []
+nebius_chat_models: List = []
+nebius_embedding_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -601,6 +600,10 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
+        elif value.get("litellm_provider") == "nebius-chat-models":
+            nebius_chat_models.append(key)
+        elif value.get("litellm_provider") == "nebius-embedding-models":
+            nebius_embedding_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -744,6 +747,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "novita": novita_models,
+    "nebius": nebius_chat_models + nebius_embedding_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -782,6 +786,7 @@ all_embedding_models = (
     + bedrock_embedding_models
     + vertex_embedding_models
     + fireworks_ai_embedding_models
+    + nebius_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -1060,6 +1065,9 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.cerebras.chat import CerebrasConfig
+from .llms.sambanova.chat import SambanovaConfig
+from .llms.nebius.chat import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
