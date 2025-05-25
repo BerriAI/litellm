@@ -2,6 +2,7 @@ import base64
 import time
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -255,8 +256,8 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-        completion_tokens_details: Optional[CompletionTokensDetails] = None
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
         if "prompt_tokens" in usage_chunk:
             prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
@@ -277,7 +278,7 @@ class ChunkProcessor:
                 completion_tokens_details = usage_chunk.completion_tokens_details
         if hasattr(usage_chunk, "prompt_tokens_details"):
             if isinstance(usage_chunk.prompt_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetails(
+                prompt_tokens_details = PromptTokensDetailsWrapper(
                     **usage_chunk.prompt_tokens_details
                 )
             elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetails):
@@ -306,6 +307,45 @@ class ChunkProcessor:
 
         return reasoning_tokens
 
+    def _set_token_details(
+        self,
+        returned_usage: Usage,
+        cache_creation_input_tokens: Optional[int],
+        cache_read_input_tokens: Optional[int],
+        completion_tokens_details: Optional[CompletionTokensDetails],
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        reasoning_tokens: Optional[int],
+    ) -> None:
+        """
+        Helper method to set token details on the usage object
+        """
+        if cache_creation_input_tokens is not None:
+            returned_usage._cache_creation_input_tokens = cache_creation_input_tokens
+            returned_usage.cache_creation_input_tokens = cache_creation_input_tokens
+        if cache_read_input_tokens is not None:
+            returned_usage._cache_read_input_tokens = cache_read_input_tokens
+            returned_usage.cache_read_input_tokens = cache_read_input_tokens
+
+        if completion_tokens_details is not None:
+            if isinstance(completion_tokens_details, CompletionTokensDetails) and not isinstance(completion_tokens_details, CompletionTokensDetailsWrapper):
+                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(**completion_tokens_details.model_dump())
+            else:
+                returned_usage.completion_tokens_details = completion_tokens_details
+
+        if reasoning_tokens is not None:
+            if returned_usage.completion_tokens_details is None:
+                returned_usage.completion_tokens_details = (
+                    CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
+                )
+            elif (
+                returned_usage.completion_tokens_details is not None
+                and returned_usage.completion_tokens_details.reasoning_tokens is None
+            ):
+                returned_usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+
+        if prompt_tokens_details is not None:
+            returned_usage.prompt_tokens_details = prompt_tokens_details
+
     def calculate_usage(
         self,
         chunks: List[Union[Dict[str, Any], ModelResponse]],
@@ -325,7 +365,7 @@ class ChunkProcessor:
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -385,35 +425,15 @@ class ChunkProcessor:
             returned_usage.prompt_tokens + returned_usage.completion_tokens
         )
 
-        if cache_creation_input_tokens is not None:
-            returned_usage._cache_creation_input_tokens = cache_creation_input_tokens
-            setattr(
-                returned_usage,
-                "cache_creation_input_tokens",
-                cache_creation_input_tokens,
-            )  # for anthropic
-        if cache_read_input_tokens is not None:
-            returned_usage._cache_read_input_tokens = cache_read_input_tokens
-            setattr(
-                returned_usage, "cache_read_input_tokens", cache_read_input_tokens
-            )  # for anthropic
-        if completion_tokens_details is not None:
-            returned_usage.completion_tokens_details = completion_tokens_details
-
-        if reasoning_tokens is not None:
-            if returned_usage.completion_tokens_details is None:
-                returned_usage.completion_tokens_details = (
-                    CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
-                )
-            elif (
-                returned_usage.completion_tokens_details is not None
-                and returned_usage.completion_tokens_details.reasoning_tokens is None
-            ):
-                returned_usage.completion_tokens_details.reasoning_tokens = (
-                    reasoning_tokens
-                )
-        if prompt_tokens_details is not None:
-            returned_usage.prompt_tokens_details = prompt_tokens_details
+        # Set token details using the helper method
+        self._set_token_details(
+            returned_usage,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            completion_tokens_details,
+            prompt_tokens_details,
+            reasoning_tokens,
+        )
 
         return returned_usage
 
