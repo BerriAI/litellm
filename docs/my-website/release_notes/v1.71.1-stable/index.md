@@ -1,5 +1,5 @@
 ---
-title: v1.71.1-stable - 97% lower median latency - aiohttp transport
+title: v1.71.1-stable - Performance improvements
 slug: v1.71.1-stable
 date: 2025-05-24T10:00:00
 authors:
@@ -44,20 +44,57 @@ pip install litellm==1.71.1
 
 LiteLLM v1.71.1-stable is live now. Here are the key highlights of this release:
 
+- **Performance improvements**: LiteLLM can now scale to 200 RPS per instance with a 74ms median response time. 
+- **File Permissions**:  Control file access across OpenAI, Azure, VertexAI. 
+- **MCP x OpenAI**: Use MCP servers with OpenAI Responses API.
+
 
 
 ## Performance Improvements
 
-This release includes significant performance enhancements:
+<Image img={require('../../img/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
 
-- **aiohttp Transport**: 97% lower median latency (available as feature flag)
+<br/>
 
+
+This release brings aiohttp support for all LLM api providers. This means that LiteLLM can now scale to 200 RPS per instance with a 74ms median response time. 
+
+This change doubles the RPS LiteLLM can scale to at this latency. 
+
+You can opt into this by enabling this flag. (We expect to make this the default in 1 week.)
+
+### Flag to enable
+
+**On LiteLLM Proxy**
+
+Set the `USE_AIOHTTP_TRANSPORT=True` in the environment variables. 
+
+```yaml showLineNumbers title="Environment Variable"
+export USE_AIOHTTP_TRANSPORT="True"
+```
+
+**On LiteLLM Python SDK**
+
+Set the `use_aiohttp_transport=True` to enable aiohttp transport. 
+
+```python showLineNumbers title="Python SDK"
+import litellm
+
+litellm.use_aiohttp_transport = True # default is False, enable this to use aiohttp transport
+result = litellm.completion(
+    model="openai/gpt-4o",
+    messages=[{"role": "user", "content": "Hello, world!"}],
+)
+print(result)
+```
 
 ## File Permissions
 
 <Image img={require('../../img/files_api_graphic.png')}  style={{ width: '800px', height: 'auto' }} />
 
-v1.71.1-stable brings support for [File Permissions](../../docs/proxy/litellm_managed_files#file-permissions) and [Finetuning APIs](../../docs/proxy/managed_finetuning) to [LiteLLM Managed Files](../../docs/proxy/litellm_managed_files). This is great for: 
+<br/>
+
+This release brings support for [File Permissions](../../docs/proxy/litellm_managed_files#file-permissions) and [Finetuning APIs](../../docs/proxy/managed_finetuning) to [LiteLLM Managed Files](../../docs/proxy/litellm_managed_files). This is great for: 
 
 - **Proxy Admins**: as users can only view/edit/delete files they’ve created - even when using shared OpenAI/Azure/Vertex deployments.
 - **Developers**: get a standard interface to use Files across Chat/Finetuning/Batch APIs.
