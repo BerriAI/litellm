@@ -545,8 +545,7 @@ class AsyncHTTPHandler:
                     verify_ssl=ssl_verify or True,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
-                ),
-                trust_env=True,
+                )
             ),
         )
 

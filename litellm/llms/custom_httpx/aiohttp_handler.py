@@ -44,7 +44,7 @@ class BaseLLMAIOHTTPHandler:
             return self.client_session
         else:
             # init client session, and then return new session
-            self.client_session = aiohttp.ClientSession(trust_env=True)
+            self.client_session = aiohttp.ClientSession()
             return self.client_session
 
     async def _make_common_async_call(
