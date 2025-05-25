@@ -55,18 +55,23 @@ This release includes significant performance enhancements:
 
 ## New Models / Updated Models
 
-- **[Gemini, VertexAI](../../docs/providers/google_ai_studio)**
+- **Gemini [(VertexAI + Google AI Studio)](../../docs/providers/google_ai_studio)**
     - New gemini models - [PR 1](https://github.com/BerriAI/litellm/pull/10991), [PR 2](https://github.com/BerriAI/litellm/pull/10998)
         - `gemini-2.5-flash-preview-tts`
         - `gemini-2.0-flash-preview-image-generation`
         - `gemini/gemini-2.5-flash-preview-05-20`
         - `gemini-2.5-flash-preview-05-20`
-
 - **[Anthropic](../../docs/providers/anthropic)**
     - Claude-4 model family support - [PR](https://github.com/BerriAI/litellm/pull/11060)
-    - Claude Sonnet 4 and Opus 4 reasoning_effort parameter support - [PR](https://github.com/BerriAI/litellm/pull/11114)
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Claude-4 model family support - [PR](https://github.com/BerriAI/litellm/pull/11060)
+    - Support for `reasoning_effort` and `thinking` parameters for Claude-4 - [PR](https://github.com/BerriAI/litellm/pull/11114)
+- **[VertexAI](../../docs/providers/vertex)**
+    - Claude-4 model family support - [PR](https://github.com/BerriAI/litellm/pull/11060)
+    - Global endpoints support - [PR](https://github.com/BerriAI/litellm/pull/10658)
+    - authorized_user credentials type support - [PR](https://github.com/BerriAI/litellm/pull/10899)
 - **[xAI](../../docs/providers/xai)**
-    - Grok-3 pricing information - [PR](https://github.com/BerriAI/litellm/pull/11028)
+    - `xai/grok-3` pricing information - [PR](https://github.com/BerriAI/litellm/pull/11028)
 - **[LM Studio](../../docs/providers/lm_studio)**
     - Structured JSON schema outputs support - [PR](https://github.com/BerriAI/litellm/pull/10929)
 - **[SambaNova](../../docs/providers/sambanova)**
@@ -79,9 +84,6 @@ This release includes significant performance enhancements:
     - Certificate-based authentication support - [PR](https://github.com/BerriAI/litellm/pull/11069)
 - **[Mistral](../../docs/providers/mistral)**
     - devstral-small-2505 model pricing and context window - [PR](https://github.com/BerriAI/litellm/pull/11103)
-- **[Vertex AI](../../docs/providers/vertex)**
-    - Global endpoints support - [PR](https://github.com/BerriAI/litellm/pull/10658)
-    - authorized_user credentials type support - [PR](https://github.com/BerriAI/litellm/pull/10899)
 - **[Ollama](../../docs/providers/ollama)**
     - Wildcard model support - [PR](https://github.com/BerriAI/litellm/pull/10982)
 - **[CustomLLM](../../docs/providers/custom_llm)**
@@ -92,7 +94,7 @@ This release includes significant performance enhancements:
 ## LLM API Endpoints
 
 - **[Image Edits](../../docs/image_generation)**
-    - `/v1/images/edits` - Full support for image editing - [PR](https://github.com/BerriAI/litellm/pull/11020) [PR](https://github.com/BerriAI/litellm/pull/11123)
+    - `/v1/images/edits` - Support for /images/edits endpoint - [PR](https://github.com/BerriAI/litellm/pull/11020) [PR](https://github.com/BerriAI/litellm/pull/11123)
     - Content policy violation error mapping - [PR](https://github.com/BerriAI/litellm/pull/11113)
 - **[Responses API](../../docs/response_api)**
     - MCP support for Responses API - [PR](https://github.com/BerriAI/litellm/pull/11029)
@@ -117,8 +119,8 @@ This release includes significant performance enhancements:
 - **Organizations/Users**
     - Spend rounded to 4 decimal points - [PR](https://github.com/BerriAI/litellm/pull/11023)
     - Show clear error when adding a user to a team - [PR](https://github.com/BerriAI/litellm/pull/10978)
-- **[Audit Logs](../../docs/proxy/audit_logs)**
-    - `/list` and `/info` endpoints exposed - [PR](https://github.com/BerriAI/litellm/pull/11102)
+- **Audit Logs**
+    - `/list` and `/info` endpoints for Audit Logs - [PR](https://github.com/BerriAI/litellm/pull/11102)
 
 ## Logging / Alerting Integrations
 
@@ -167,22 +169,24 @@ This release includes significant performance enhancements:
 
 This release includes numerous bug fixes to improve stability and reliability:
 
-- **Provider Fixes**
-    - Fixed Vertex AI quota_project_id parameter issue - [PR](https://github.com/BerriAI/litellm/pull/10915)
-    - Fixed Cohere Rerank Provider - [PR](https://github.com/BerriAI/litellm/pull/10822)
-    - Fixed Vertex AI credential refresh exceptions - [PR](https://github.com/BerriAI/litellm/pull/10969)
-    - Fixed Anthropic streaming dict object handling - [PR](https://github.com/BerriAI/litellm/pull/11032)
-    - Fixed OpenRouter stream usage ID issues - [PR](https://github.com/BerriAI/litellm/pull/11004)
+- **LLM Provider Fixes**
+    - VertexAI: 
+        - Fixed quota_project_id parameter issue - [PR](https://github.com/BerriAI/litellm/pull/10915)
+        - Fixed credential refresh exceptions - [PR](https://github.com/BerriAI/litellm/pull/10969)
+    - Cohere: Fixed Rerank Provider - [PR](https://github.com/BerriAI/litellm/pull/10822)
+    - Anthropic: 
+        - Fixed streaming dict object handling for /v1/messages - [PR](https://github.com/BerriAI/litellm/pull/11032)
+    - OpenRouter: Fixed stream usage ID issues - [PR](https://github.com/BerriAI/litellm/pull/11004)
 
 - **Authentication & Users**
-    - Fixed invitation email link generation - [PR](https://github.com/BerriAI/litellm/pull/10958)
+    - Fixed invitation email link generation - [PR](https://github.com/BerriAI/litellm/pull/10958) 
     - Fixed JWT authentication default role - [PR](https://github.com/BerriAI/litellm/pull/10995)
     - Fixed user budget reset functionality - [PR](https://github.com/BerriAI/litellm/pull/10993)
     - Fixed SSO user compatibility and email validation - [PR](https://github.com/BerriAI/litellm/pull/11106)
 
 - **Database & Infrastructure**
     - Fixed DB connection parameter handling - [PR](https://github.com/BerriAI/litellm/pull/10842)
-    - Fixed invitation link Prisma queries - [PR](https://github.com/BerriAI/litellm/pull/11031)
+    - Fixed email invitation link  - [PR](https://github.com/BerriAI/litellm/pull/11031)
 
 - **UI & Display**
     - Fixed MCP tool rendering when no arguments required - [PR](https://github.com/BerriAI/litellm/pull/11012)
@@ -192,8 +196,6 @@ This release includes numerous bug fixes to improve stability and reliability:
 - **Model & Routing**
     - Fixed team model mapping in route requests - [PR](https://github.com/BerriAI/litellm/pull/11111)
     - Fixed standard optional parameter passing - [PR](https://github.com/BerriAI/litellm/pull/11124)
-    - Fixed Claude 4 reasoning_effort parameter support - [PR](https://github.com/BerriAI/litellm/pull/11114)
-
 
 
 ## New Contributors
