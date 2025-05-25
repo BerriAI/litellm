@@ -4,8 +4,6 @@ Nebius AI Studio Chat Completions API - Transformation
 This is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Optional
-
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 

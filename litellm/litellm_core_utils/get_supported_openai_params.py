@@ -140,8 +140,6 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
-        elif request_type == "embeddings":
-            return litellm.OpenAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
