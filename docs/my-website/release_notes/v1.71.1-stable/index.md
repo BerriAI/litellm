@@ -126,26 +126,27 @@ This release includes significant performance enhancements:
 
 - **[Prometheus](../../docs/proxy/prometheus)**
     - Track `route` on proxy_* metrics - [PR](https://github.com/BerriAI/litellm/pull/10992)
-- **[Langfuse](../../docs/proxy/langfuse)**
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Support for `prompt_label` parameter - [PR](https://github.com/BerriAI/litellm/pull/11018)
     - Consistent modelParams logging - [PR](https://github.com/BerriAI/litellm/pull/11018)
-- **[ConfidentAI](../../docs/observability/confidentai)**
+- **[DeepEval/ConfidentAI](../../docs/proxy/logging#deepeval)**
     - Logging enabled for proxy and SDK - [PR](https://github.com/BerriAI/litellm/pull/10649)
-- **[OpenTelemetry/Logfire](../../docs/observability/otel)**
-    - Fixed proxy server initialization - [PR](https://github.com/BerriAI/litellm/pull/11091)
+- **[Logfire](../../docs/proxy/logging)**
+    - Fix otel proxy server initialization when using Logfire - [PR](https://github.com/BerriAI/litellm/pull/11091)
 
 ## Authentication & Security
 
-- **[JWT Authentication](../../docs/proxy/jwt_auth)**
-    - Default role configuration - [PR](https://github.com/BerriAI/litellm/pull/10995)
-    - User to team mapping - [PR](https://github.com/BerriAI/litellm/pull/11108)
+- **[JWT Authentication](../../docs/proxy/token_auth)**
+    - Support for applying default internal user parameters when upserting a user via JWT authentication - [PR](https://github.com/BerriAI/litellm/pull/10995)
+    - Map a user to a team when upserting a user via JWT authentication - [PR](https://github.com/BerriAI/litellm/pull/11108)
 - **Custom Auth**
-    - Switch between custom auth and API key auth - [PR](https://github.com/BerriAI/litellm/pull/11070)
+    - Support for switching between custom auth and API key auth - [PR](https://github.com/BerriAI/litellm/pull/11070)
 
 ## Performance / Reliability Improvements
 
-- **[aiohttp Transport](../../docs/proxy/performance)**
+- **aiohttp Transport**
     - 97% lower median latency (feature flagged) - [PR](https://github.com/BerriAI/litellm/pull/11097) [PR](https://github.com/BerriAI/litellm/pull/11132)
+    - Support for `aiohttp` transport - [PR](https://github.com/BerriAI/litellm/pull/11097)
 - **Background Health Checks**
     - Improved reliability - [PR](https://github.com/BerriAI/litellm/pull/10887)
 - **Response Handling**
