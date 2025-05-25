@@ -53,6 +53,16 @@ This release includes significant performance enhancements:
 - **aiohttp Transport**: 97% lower median latency (available as feature flag)
 
 
+## File Permissions
+
+<Image img={require('../../img/files_api_graphic.png')}  style={{ width: '800px', height: 'auto' }} />
+
+v1.71.2-stable brings support for [File Permissions](../../docs/proxy/litellm_managed_files#file-permissions) and [Finetuning APIs](../../docs/proxy/managed_finetuning) to [LiteLLM Managed Files](../../docs/proxy/litellm_managed_files). This is great for: 
+
+- **Proxy Admins**: as users can only view/edit/delete files they’ve created - even when using shared OpenAI/Azure/Vertex deployments.
+- **Developers**: get a standard interface to use Files across Chat/Finetuning/Batch APIs.
+
+
 ## New Models / Updated Models
 
 - **Gemini [VertexAI](https://docs.litellm.ai/docs/providers/vertex), [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini)**
