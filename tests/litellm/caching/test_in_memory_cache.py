@@ -43,3 +43,29 @@ def test_in_memory_cache_max_size_per_item():
     result = in_memory_cache.check_value_size("a" * 100000000)
 
     assert result is False
+
+
+def test_in_memory_cache_ttl():
+    """
+    Check that
+    - if ttl is not set, it will be set to default ttl
+    - if object expires, the ttl is also removed
+    """
+    in_memory_cache = InMemoryCache()
+
+    in_memory_cache.set_cache(key="my-fake-key", value="my-fake-value", ttl=10)
+    initial_ttl_time = in_memory_cache.ttl_dict["my-fake-key"]
+    assert initial_ttl_time is not None
+
+    in_memory_cache.set_cache(key="my-fake-key", value="my-fake-value-2", ttl=10)
+    new_ttl_time = in_memory_cache.ttl_dict["my-fake-key"]
+    assert new_ttl_time == initial_ttl_time  # ttl should not be updated
+
+    ## On object expiration, the ttl should be removed
+    in_memory_cache.set_cache(key="new-fake-key", value="new-fake-value", ttl=1)
+    new_ttl_time = in_memory_cache.ttl_dict["new-fake-key"]
+    assert new_ttl_time is not None
+    time.sleep(1)
+    cached_obj = in_memory_cache.get_cache(key="new-fake-key")
+    new_ttl_time = in_memory_cache.ttl_dict.get("new-fake-key")
+    assert new_ttl_time is None
