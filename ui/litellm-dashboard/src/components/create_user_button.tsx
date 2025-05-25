@@ -62,7 +62,6 @@ const Createuser: React.FC<CreateuserProps> = ({
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
   const router = useRouter();
-  const isLocal = process.env.NODE_ENV === "development";
 
   const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
   // get all models
