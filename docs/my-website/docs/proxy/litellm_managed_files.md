@@ -420,3 +420,8 @@ No, as of `v1.71.2` users can only view/edit/delete files they have created.
 
 
 <Image img={require('../../img/managed_files_arch.png')}  style={{ width: '800px', height: 'auto' }} />
+
+## See Also
+
+- [Managed Files w/ Finetuning APIs](../../docs/proxy/managed_finetuning)
+- [Managed Files w/ Batch APIs](../../docs/proxy/managed_batch)
