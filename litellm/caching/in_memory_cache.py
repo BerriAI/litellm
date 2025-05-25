@@ -114,10 +114,11 @@ class InMemoryCache(BaseCache):
             return
 
         self.cache_dict[key] = value
-        if "ttl" in kwargs and kwargs["ttl"] is not None:
-            self.ttl_dict[key] = time.time() + kwargs["ttl"]
-        else:
-            self.ttl_dict[key] = time.time() + self.default_ttl
+        if self.ttl_dict.get(key) is None:  # if ttl is not set, set it to default ttl
+            if "ttl" in kwargs and kwargs["ttl"] is not None:
+                self.ttl_dict[key] = time.time() + kwargs["ttl"]
+            else:
+                self.ttl_dict[key] = time.time() + self.default_ttl
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -145,6 +146,7 @@ class InMemoryCache(BaseCache):
             if key in self.ttl_dict:
                 if time.time() > self.ttl_dict[key]:
                     self.cache_dict.pop(key, None)
+                    self.ttl_dict.pop(key, None)
                     return None
             original_cached_response = self.cache_dict[key]
             try:
