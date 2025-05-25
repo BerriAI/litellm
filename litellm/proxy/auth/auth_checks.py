@@ -726,7 +726,9 @@ async def get_user_object(
         response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+        await user_api_key_cache.async_set_cache(
+            key=user_id, value=response_dict, ttl=DEFAULT_IN_MEMORY_TTL
+        )
 
         # save to db access time
         _update_last_db_access_time(
