@@ -36,4 +36,4 @@ jobs:
         cd ..
     - name: Run tests
       run: |
-        poetry run pytest tests/litellm -x -vv -n 4 
+        poetry run pytest tests/tests_litellm -x -vv -n 4 
