@@ -174,20 +174,23 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
-    @pytest.mark.parametrize("image_url", ["str", "dict"])
-    def test_pdf_handling(self, pdf_messages, image_url):
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_pdf_handling(self, pdf_messages, sync_mode):
         from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        if image_url == "str":
-            image_url = pdf_messages
-        elif image_url == "dict":
-            image_url = {"url": pdf_messages}
+        litellm._turn_on_debug()
+
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
-                "type": "image_url",
-                "image_url": image_url,
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                },
             },
         ]
 
@@ -198,10 +201,17 @@ class BaseLLMChatTest(ABC):
         if not supports_pdf_input(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
 
-        response = self.completion_function(
-            **base_completion_call_args,
-            messages=image_messages,
-        )
+        if sync_mode:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+        else:
+            response = await self.async_completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+
         assert response is not None
     
     def test_file_data_unit_test(self, pdf_messages):
@@ -1091,6 +1101,7 @@ class BaseLLMChatTest(ABC):
     def test_function_calling_with_tool_response(self):
         from litellm.utils import supports_function_calling
         from litellm import completion
+        litellm._turn_on_debug()
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1110,6 +1121,8 @@ class BaseLLMChatTest(ABC):
                     "name": "get_weather",
                     "description": "Get the weather in a city",
                     "parameters": {
+                        "$id": "https://some/internal/name",
+                        "$schema": "https://json-schema.org/draft-07/schema",
                         "type": "object",
                         "properties": {
                             "city": {

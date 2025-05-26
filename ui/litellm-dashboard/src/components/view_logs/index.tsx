@@ -1,9 +1,9 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -17,6 +17,11 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../key_info_view";
 import { SessionView } from './SessionView';
 import { VectorStoreViewer } from './VectorStoreViewer';
+import { GuardrailViewer } from './GuardrailViewer';
+import FilterComponent from "../common_components/filter";
+import { FilterOption } from "../common_components/filter";
+import { useLogFilterLogic } from "./log_filter_logic";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -26,7 +31,7 @@ interface SpendLogsTableProps {
   allTeams: Team[];
 }
 
-interface PaginatedResponse {
+export interface PaginatedResponse {
   data: LogEntry[];
   total: number;
   page: number;
@@ -70,9 +75,10 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState("Team ID");
+  const [selectedStatus, setSelectedStatus] = useState(""); 
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
@@ -86,7 +92,6 @@ export default function SpendLogsTable({
     const fetchKeyInfo = async () => {
       if (selectedKeyIdInfoView && accessToken) {
         const keyData = await keyInfoV1Call(accessToken, selectedKeyIdInfoView);
-        console.log("keyData", keyData);
 
         const keyResponse: KeyResponse = {
           ...keyData["info"],
@@ -145,10 +150,11 @@ export default function SpendLogsTable({
       selectedTeamId,
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
+      selectedStatus,
+      selectedModel
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
-        console.log("Missing required auth parameters");
         return {
           data: [],
           total: 0,
@@ -173,7 +179,9 @@ export default function SpendLogsTable({
         formattedEndTime,
         currentPage,
         pageSize,
-        filterByCurrentUser ? userID : undefined
+        filterByCurrentUser ? userID : undefined,
+        selectedStatus,
+        selectedModel
       );
 
       // Trigger prefetch for all logs
@@ -204,6 +212,81 @@ export default function SpendLogsTable({
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
+
+  const logsData = logs.data || {
+    data: [],
+    total: 0,
+    page: 1,
+    page_size: pageSize || 10,
+    total_pages: 1
+  };
+
+  const {
+    filters,
+    filteredLogs,
+    allTeams: hookAllTeams,
+    allKeyAliases,
+    handleFilterChange,
+    handleFilterReset
+  } = useLogFilterLogic({
+    logs: logsData,
+    accessToken,
+    startTime,
+    endTime,
+    pageSize,
+    isCustomDate,
+    setCurrentPage,
+    userID,
+    userRole
+  })
+
+  const fetchKeyHashForAlias = useCallback(async (keyAlias: string) => {
+    if (!accessToken) return;
+    
+    try {
+      const response = await keyListCall(
+        accessToken,
+        null,
+        null,
+        keyAlias,
+        null,
+        null,
+        currentPage,
+        pageSize
+      );
+
+      const selectedKey = response.keys.find(
+        (key: any) => key.key_alias === keyAlias
+      );
+
+      if (selectedKey) {
+        setSelectedKeyHash(selectedKey.token);
+      }
+    } catch (error) {
+      console.error("Error fetching key hash for alias:", error);
+    }
+  }, [accessToken, currentPage, pageSize]);
+
+  // Add this effect to update selected filters when filter changes
+  useEffect(() => {
+    if(!accessToken) return;
+
+    if (filters['Team ID']) {
+      setSelectedTeamId(filters['Team ID']);
+    } else {
+      setSelectedTeamId("");
+    }
+    setSelectedStatus(filters['Status'] || "");
+    setSelectedModel(filters['Model'] || "");
+    
+    if (filters['Key Hash']) {
+      setSelectedKeyHash(filters['Key Hash']);
+    } else if (filters['Key Alias']) {
+      fetchKeyHashForAlias(filters['Key Alias']);
+    } else {
+      setSelectedKeyHash("");
+    }
+  }, [filters, accessToken, fetchKeyHashForAlias]);
 
   // Fetch logs for a session if selected
   const sessionLogs = useQuery<PaginatedResponse>({
@@ -236,14 +319,11 @@ export default function SpendLogsTable({
   }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
-    console.log(
-      "got None values for one of accessToken, token, userRole, userID",
-    );
     return null;
   }
 
   const filteredData =
-    logs.data?.data?.filter((log) => {
+    filteredLogs.data.filter((log) => {
       const matchesSearch =
         !searchTerm ||
         log.request_id.includes(searchTerm) ||
@@ -298,6 +378,60 @@ export default function SpendLogsTable({
     setExpandedRequestId(requestId);
   };
 
+  const logFilterOptions: FilterOption[] = [
+    {
+      name: 'Team ID',
+      label: 'Team ID',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!allTeams || allTeams.length === 0) return [];
+        const filtered = allTeams.filter((team: Team) =>{
+          return team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
+          (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
+        });
+        return filtered.map((team: Team) => ({
+          label: `${team.team_alias || team.team_id} (${team.team_id})`,
+          value: team.team_id
+        }));
+      }
+    },
+    {
+      name:'Status',
+      label:'Status',
+      isSearchable: false,
+      options: [
+        { label: 'Success', value: 'success' },
+        { label: 'Failure', value: 'failure' }
+      ]
+    },
+    {
+      name: 'Model',
+      label: 'Model',
+      isSearchable: false,
+    },
+    {
+      name: 'Key Alias',
+      label: 'Key Alias',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        const keyAliases = await fetchAllKeyAliases(accessToken);
+        const filtered = keyAliases.filter(alias => 
+          alias.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filtered.map(alias => ({
+          label: alias,
+          value: alias
+        }));
+      }
+    },
+    {
+      name: 'Key Hash',
+      label: 'Key Hash',
+      isSearchable: false,
+    },
+  ]
+
   // When a session is selected, render the SessionView component
   if (selectedSessionId && sessionLogs.data) {
     return (
@@ -313,6 +447,7 @@ export default function SpendLogsTable({
 
   return (
     <div className="w-full p-6">
+
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">
           {selectedSessionId ? (
@@ -344,6 +479,7 @@ export default function SpendLogsTable({
         </div>
       ) : (
         <>
+        <FilterComponent options={logFilterOptions} onApplyFilters={handleFilterChange} onResetFilters={handleFilterReset} />
         <div className="bg-white rounded-lg shadow">
           <div className="border-b px-6 py-4">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
@@ -369,144 +505,6 @@ export default function SpendLogsTable({
                       d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
                     />
                   </svg>
-                </div>
-                <div className="relative" ref={filtersRef}>
-                  <button
-                    className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    onClick={() => setShowFilters(!showFilters)}
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                      />
-                    </svg>
-                    Filter
-                  </button>
-
-                  {showFilters && (
-                    <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
-                      <div className="flex flex-col gap-4">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">Where</span>
-                          <div className="relative">
-                            <button
-                              onClick={() => setShowColumnDropdown(!showColumnDropdown)}
-                              className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
-                            >
-                              {selectedFilter}
-                              <svg
-                                className="h-4 w-4 text-gray-500"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M19 9l-7 7-7-7"
-                                />
-                              </svg>
-                            </button>
-                            {showColumnDropdown && (
-                              <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
-                                {["Team ID", "Key Hash"].map((option) => (
-                                  <button
-                                    key={option}
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
-                                      selectedFilter === option
-                                        ? "bg-blue-50 text-blue-600"
-                                        : ""
-                                    }`}
-                                    onClick={() => {
-                                      setSelectedFilter(option);
-                                      setShowColumnDropdown(false);
-                                      if (option === "Team ID") {
-                                        setTempKeyHash("");
-                                      } else {
-                                        setTempTeamId("");
-                                      }
-                                    }}
-                                  >
-                                    {selectedFilter === option && (
-                                      <svg
-                                        className="h-4 w-4 text-blue-600"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        stroke="currentColor"
-                                      >
-                                        <path
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                          strokeWidth={2}
-                                          d="M5 13l4 4L19 7"
-                                        />
-                                      </svg>
-                                    )}
-                                    {option}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <input
-                            type="text"
-                            placeholder="Enter value..."
-                            className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            value={selectedFilter === "Team ID" ? tempTeamId : tempKeyHash}
-                            onChange={(e) => {
-                              if (selectedFilter === "Team ID") {
-                                setTempTeamId(e.target.value);
-                              } else {
-                                setTempKeyHash(e.target.value);
-                              }
-                            }}
-                          />
-                          <button
-                            className="p-1 hover:bg-gray-100 rounded-md"
-                            onClick={() => {
-                              setTempTeamId("");
-                              setTempKeyHash("");
-                            }}
-                          >
-                            <span className="text-gray-500">×</span>
-                          </button>
-                        </div>
-                        
-                        <div className="flex justify-end gap-2">
-                          <button
-                            className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50"
-                            onClick={() => {
-                              setTempTeamId("");
-                              setTempKeyHash("");
-                              setShowFilters(false);
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
-                            onClick={() => {
-                              setSelectedTeamId(tempTeamId);
-                              setSelectedKeyHash(tempKeyHash);
-                              setCurrentPage(1); // Reset to first page when applying new filters
-                              setShowFilters(false);
-                            }}
-                          >
-                            Apply Filters
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -630,20 +628,20 @@ export default function SpendLogsTable({
                   Showing{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
+                    : filteredLogs
                     ? (currentPage - 1) * pageSize + 1
                     : 0}{" "}
                   -{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
-                    ? Math.min(currentPage * pageSize, logs.data.total)
+                    : filteredLogs
+                    ? Math.min(currentPage * pageSize, filteredLogs.total)
                     : 0}{" "}
                   of{" "}
                   {logs.isLoading
                     ? "..."
-                    : logs.data
-                    ? logs.data.total
+                    : filteredLogs
+                    ? filteredLogs.total
                     : 0}{" "}
                   results
                 </span>
@@ -652,8 +650,8 @@ export default function SpendLogsTable({
                     Page {logs.isLoading ? "..." : currentPage} of{" "}
                     {logs.isLoading
                       ? "..."
-                      : logs.data
-                      ? logs.data.total_pages
+                      : filteredLogs
+                      ? filteredLogs.total_pages
                       : 1}
                   </span>
                   <button
@@ -669,14 +667,14 @@ export default function SpendLogsTable({
                     onClick={() =>
                       setCurrentPage((p) =>
                         Math.min(
-                          logs.data?.total_pages || 1,
+                          filteredLogs.total_pages || 1,
                           p + 1,
                         ),
                       )
                     }
                     disabled={
                       logs.isLoading ||
-                      currentPage === (logs.data?.total_pages || 1)
+                      currentPage === (filteredLogs.total_pages || 1)
                     }
                     className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -753,6 +751,20 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     Array.isArray(metadata.vector_store_request_metadata) && 
     metadata.vector_store_request_metadata.length > 0;
 
+  // Extract guardrail information from metadata if available
+  const hasGuardrailData = row.original.metadata && row.original.metadata.guardrail_information;
+  
+  // Calculate total masked entities if guardrail data exists
+  const getTotalMaskedEntities = (): number => {
+    if (!hasGuardrailData || !row.original.metadata?.guardrail_information.masked_entity_count) {
+      return 0;
+    }
+    return Object.values(row.original.metadata.guardrail_information.masked_entity_count)
+      .reduce((sum: number, count: any) => sum + (typeof count === 'number' ? count : 0), 0);
+  };
+  
+  const totalMaskedEntities = getTotalMaskedEntities();
+
   return (
     <div className="p-6 bg-gray-50 space-y-6">
       {/* Combined Info Card */}
@@ -794,7 +806,19 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 <span>{row?.original?.requester_ip_address}</span>
               </div>
             )}
-
+            {hasGuardrailData && (
+              <div className="flex">
+                <span className="font-medium w-1/3">Guardrail:</span>
+                <div>
+                  <span className="font-mono">{row.original.metadata!.guardrail_information.guardrail_name}</span>
+                  {totalMaskedEntities > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+                      {totalMaskedEntities} masked
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <div className="flex">
@@ -846,6 +870,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
         getRawRequest={getRawRequest}
         formattedResponse={formattedResponse}
       />
+
+      {/* Guardrail Data - Show only if present */}
+      {hasGuardrailData && (
+        <GuardrailViewer data={row.original.metadata!.guardrail_information} />
+      )}
 
       {/* Vector Store Request Data - Show only if present */}
       {hasVectorStoreData && (

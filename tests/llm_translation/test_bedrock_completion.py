@@ -1264,6 +1264,50 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_tools_transformation_valid_params():
+    from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "$id": "https://some/internal/name",
+                    "type": "object",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+     # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert toolJsonSchema is not None
+    print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
+    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
+    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+
+    
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[0]["toolSpec"]["description"] == "Invalid name test"
+    assert "inputSchema" in result[0]["toolSpec"]
+    assert "json" in result[0]["toolSpec"]["inputSchema"]
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
+    assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
+
+
+
 def test_not_found_error():
     with pytest.raises(litellm.NotFoundError):
         completion(
@@ -2157,14 +2201,6 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
-
     def test_prompt_caching(self):
         """
         Remove override once we have access to Bedrock prompt caching
@@ -2218,13 +2254,26 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
 
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
+class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.amazon.nova-lite-v1:0",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+    
+    def test_prompt_caching(self):
+        """
+        TODO: Ensure this test passes our base llm test suite
+        """
 
 
 class TestBedrockRerank(BaseLLMRerankTest):
@@ -3028,5 +3077,67 @@ def test_bedrock_application_inference_profile():
             "https://bedrock-runtime.eu-central-1.amazonaws.com/"
         )
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
+
+
+def return_mocked_response(model: str):
+    if model == "bedrock/mistral.mistral-large-2407-v1:0":
+        return {
+            "metrics": {"latencyMs": 316},
+            "output": {
+                "message": {
+                    "content": [{"text": "Hello! How are you doing today? How can"}],
+                    "role": "assistant",
+                }
+            },
+            "stopReason": "max_tokens",
+            "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
+        }
+
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/mistral.mistral-large-2407-v1:0",
+    ],
+)
+@pytest.mark.asyncio()
+async def test_bedrock_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to bedrock models
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    litellm.set_verbose = True
+
+    client = AsyncHTTPHandler()
+
+    mock_response = return_mocked_response(model)
+    _model = model.split("/")[1]
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
+            "additionalModelRequestFields": {},
+            "system": [],
+            "inferenceConfig": {"maxTokens": 10},
+        }
 
 

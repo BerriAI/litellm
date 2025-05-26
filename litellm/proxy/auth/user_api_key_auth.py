@@ -10,7 +10,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 import asyncio
 import secrets
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -39,6 +39,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
+    abbreviate_api_key,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -54,6 +55,16 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
+
+try:
+    from litellm_enterprise.proxy.auth.user_api_key_auth import (
+        enterprise_custom_auth as _enterprise_custom_auth,
+    )
+
+    enterprise_custom_auth: Optional[Callable] = _enterprise_custom_auth
+except ImportError as e:
+    verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
+    enterprise_custom_auth = None
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -87,6 +98,17 @@ azure_apim_header = APIKeyHeader(
     auto_error=False,
     description="The default name of the subscription key header of Azure",
 )
+
+
+def _get_bearer_token_or_received_api_key(api_key: str) -> str:
+    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
+        api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
+    elif api_key.startswith("bearer "):
+        api_key = api_key.replace("bearer ", "")
+
+    return api_key
 
 
 def _get_bearer_token(
@@ -217,6 +239,53 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def get_api_key(
+    custom_litellm_key_header: Optional[str],
+    api_key: str,
+    azure_api_key_header: Optional[str],
+    anthropic_api_key_header: Optional[str],
+    google_ai_studio_api_key_header: Optional[str],
+    azure_apim_header: Optional[str],
+    pass_through_endpoints: Optional[List[dict]],
+    route: str,
+    request: Request,
+) -> Tuple[str, Optional[str]]:
+    """
+    Returns:
+        Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
+    """
+    api_key = api_key
+    passed_in_key: Optional[str] = None
+    if isinstance(custom_litellm_key_header, str):
+        passed_in_key = custom_litellm_key_header
+        api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+    elif isinstance(api_key, str):
+        passed_in_key = api_key
+        api_key = _get_bearer_token(api_key=api_key)
+    elif isinstance(azure_api_key_header, str):
+        passed_in_key = azure_api_key_header
+        api_key = azure_api_key_header
+    elif isinstance(anthropic_api_key_header, str):
+        passed_in_key = anthropic_api_key_header
+        api_key = anthropic_api_key_header
+    elif isinstance(google_ai_studio_api_key_header, str):
+        passed_in_key = google_ai_studio_api_key_header
+        api_key = google_ai_studio_api_key_header
+    elif isinstance(azure_apim_header, str):
+        passed_in_key = azure_apim_header
+        api_key = azure_apim_header
+    elif pass_through_endpoints is not None:
+        for endpoint in pass_through_endpoints:
+            if endpoint.get("path", "") == route:
+                headers: Optional[dict] = endpoint.get("headers", None)
+                if headers is not None:
+                    header_key: str = headers.get("litellm_user_api_key", "")
+                    if request.headers.get(key=header_key) is not None:
+                        api_key = request.headers.get(key=header_key)
+                        passed_in_key = api_key
+    return api_key, passed_in_key
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -260,28 +329,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        if isinstance(custom_litellm_key_header, str):
-            api_key = custom_litellm_key_header
-        elif isinstance(api_key, str):
-            passed_in_key = api_key
-            api_key = _get_bearer_token(api_key=api_key)
-        elif isinstance(azure_api_key_header, str):
-            api_key = azure_api_key_header
-        elif isinstance(anthropic_api_key_header, str):
-            api_key = anthropic_api_key_header
-        elif isinstance(google_ai_studio_api_key_header, str):
-            api_key = google_ai_studio_api_key_header
-        elif isinstance(azure_apim_header, str):
-            api_key = azure_apim_header
-        elif pass_through_endpoints is not None:
-            for endpoint in pass_through_endpoints:
-                if endpoint.get("path", "") == route:
-                    headers: Optional[dict] = endpoint.get("headers", None)
-                    if headers is not None:
-                        header_key: str = headers.get("litellm_user_api_key", "")
-                        if request.headers.get(key=header_key) is not None:
-                            api_key = request.headers.get(key=header_key)
-
+        api_key, passed_in_key = get_api_key(
+            custom_litellm_key_header=custom_litellm_key_header,
+            api_key=api_key,
+            azure_api_key_header=azure_api_key_header,
+            anthropic_api_key_header=anthropic_api_key_header,
+            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+            azure_apim_header=azure_apim_header,
+            pass_through_endpoints=pass_through_endpoints,
+            route=route,
+            request=request,
+        )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
@@ -299,7 +357,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
-        if user_custom_auth is not None:
+        if enterprise_custom_auth is not None:
+            response = await enterprise_custom_auth(
+                request=request, api_key=api_key, user_custom_auth=user_custom_auth
+            )
+            if response is not None:
+                return UserAPIKeyAuth.model_validate(response)
+        elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             return UserAPIKeyAuth.model_validate(response)
 
@@ -661,8 +725,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ## Check DB
-        if isinstance(
-            api_key, str
+        if (
+            isinstance(api_key, str) and valid_token is None
         ):  # if generated token, make sure it starts with sk-.
             assert api_key.startswith(
                 "sk-"
@@ -688,17 +752,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
+        abbreviated_api_key = abbreviate_api_key(api_key=api_key)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
 
         if valid_token is None:
-            valid_token = await get_key_object(
-                hashed_token=api_key,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                valid_token = await get_key_object(
+                    hashed_token=api_key,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except ProxyException as e:
+                if e.code == 401 or e.code == "401":
+                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                        abbreviated_api_key, api_key
+                    )
+                raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")
@@ -711,13 +783,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token = _update_key_budget_with_temp_budget_increase(
                 valid_token
             )  # updating it here, allows all downstream reporting / checks to use the updated budget
-
-        if valid_token is None:
-            raise Exception(
-                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
-                    api_key
-                )
-            )
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}

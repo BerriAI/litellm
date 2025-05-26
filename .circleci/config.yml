@@ -95,11 +95,11 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.68.2
+            pip install openai==1.81.0
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -142,10 +142,13 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
+            pip install "cryptography<40.0.0"
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
+            if ! python -m mypy . \
+                --config-file mypy.ini \
+                --ignore-missing-imports; then
+                echo "mypy detected errors"
+                exit 1
             fi
             cd ..
 
@@ -215,11 +218,11 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.68.2
+            pip install openai==1.81.0
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -322,11 +325,11 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.68.2
+            pip install openai==1.81.0
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -451,7 +454,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -578,11 +581,11 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.68.2
+            pip install openai==1.81.0
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==4.2.0"
@@ -654,11 +657,12 @@ jobs:
             pip install --upgrade pip wheel setuptools
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
       # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
       - run:
           name: Run tests
           command: |
@@ -699,7 +703,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       - run:
           name: Show current pydantic version
           command: |
@@ -736,7 +740,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -779,7 +783,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
       # Run pytest and generate JUnit XML report
@@ -804,6 +808,51 @@ jobs:
           paths:
             - mcp_coverage.xml
             - mcp_coverage
+  guardrails_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "pydantic==2.10.2"
+            pip install "boto3==1.34.34"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/guardrails_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml guardrails_coverage.xml
+            mv .coverage guardrails_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - guardrails_coverage.xml
+            - guardrails_coverage
   llm_responses_api_testing:
     docker:
       - image: cimg/python:3.11
@@ -824,7 +873,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -868,20 +917,28 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
             pip install "mcp==1.5.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
+            pip install "pytest-xdist==3.6.1"
       - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
-          name: Run tests
+          name: Run litellm tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+          no_output_timeout: 120m
+      - run:
+          name: Run enterprise tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -913,7 +970,7 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -959,7 +1016,7 @@ jobs:
             python -m pip install --upgrade pip
             pip install numpydoc
             python -m pip install -r requirements.txt
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -1009,7 +1066,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1052,7 +1109,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1096,10 +1153,11 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install pytest-mock
-            pip install "respx==0.21.1"
+            pip install "respx==0.22.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
+            pip install "anthropic==0.52.0"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1291,6 +1349,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
       - run: python ./tests/documentation_tests/test_circular_imports.py
       - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
+      - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -1423,7 +1482,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.68.2"
+            pip install "openai==1.81.0"
       - run:
           name: Install Grype
           command: |
@@ -1498,7 +1557,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
@@ -1561,7 +1620,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.68.2"
+            pip install "openai==1.81.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -1684,7 +1743,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.68.2"
+            pip install "openai==1.81.0"
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -2207,7 +2266,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.68.2"
+            pip install "openai==1.81.0"
             pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.10.2"
@@ -2226,7 +2285,7 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install "anthropic==0.49.0"
+            pip install "anthropic==0.52.0"
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
@@ -2357,7 +2416,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2595,7 +2654,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.68.2"
+            pip install "openai==1.81.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.10.2"
             pip install "pytest==7.3.1"
@@ -2847,6 +2906,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - guardrails_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - llm_responses_api_testing:
           filters:
             branches:
@@ -2893,6 +2958,7 @@ workflows:
           requires:
             - llm_translation_testing
             - mcp_testing
+            - guardrails_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
             - batches_testing
@@ -2984,4 +3050,5 @@ workflows:
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
             - publish_proxy_extras
+            - guardrails_testing
 

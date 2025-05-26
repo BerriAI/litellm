@@ -13,7 +13,18 @@ import traceback
 import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+)
 
 from pydantic import BaseModel
 
@@ -41,8 +52,8 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -137,12 +148,22 @@ try:
     from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
         GenericAPILogger,
     )
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+        PagerDutyAlerting,
+    )
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
         ResendEmailLogger,
     )
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
+    )
+
+    EnterpriseStandardLoggingPayloadSetupVAR: Optional[
+        Type[EnterpriseStandardLoggingPayloadSetup]
+    ] = EnterpriseStandardLoggingPayloadSetup
 except Exception as e:
     verbose_logger.debug(
         f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
@@ -150,6 +171,8 @@ except Exception as e:
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
+    PagerDutyAlerting = CustomLogger  # type: ignore
+    EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
@@ -176,6 +199,7 @@ s3Logger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
+deepevalLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -517,6 +541,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -537,6 +562,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
+                prompt_label=prompt_label,
             )
         self.messages = messages
         return model, messages, non_default_params
@@ -550,6 +576,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -572,6 +599,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 litellm_logging_obj=self,
                 tools=tools,
+                prompt_label=prompt_label,
             )
         self.messages = messages
         return model, messages, non_default_params
@@ -1697,7 +1725,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2645,7 +2672,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -2929,6 +2956,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
+        
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
+                    return callback  # type: ignore
+            deepeval_logger = DeepEvalLogger()
+            _in_memory_loggers.append(deepeval_logger)
+            return deepeval_logger  # type: ignore
+        
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:
                 raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -3097,6 +3133,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
                     return callback
         elif logging_integration == "langsmith":
             for callback in _in_memory_loggers:
@@ -3328,6 +3368,7 @@ class StandardLoggingPayloadSetup:
             List[StandardLoggingVectorStoreRequest]
         ] = None,
         usage_object: Optional[dict] = None,
+        proxy_server_request: Optional[dict] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -3377,6 +3418,7 @@ class StandardLoggingPayloadSetup:
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
+            requester_custom_headers=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3399,6 +3441,16 @@ class StandardLoggingPayloadSetup:
                 and isinstance(_potential_requester_metadata, dict)
             ):
                 clean_metadata["requester_metadata"] = _potential_requester_metadata
+
+        if (
+            EnterpriseStandardLoggingPayloadSetupVAR
+            and proxy_server_request is not None
+        ):
+            clean_metadata = EnterpriseStandardLoggingPayloadSetupVAR.apply_enterprise_specific_metadata(
+                standard_logging_metadata=clean_metadata,
+                proxy_server_request=proxy_server_request,
+            )
+
         return clean_metadata
 
     @staticmethod
@@ -3560,7 +3612,10 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_error_information(
         original_exception: Optional[Exception],
+        traceback_str: Optional[str] = None,
     ) -> StandardLoggingPayloadErrorInformation:
+        from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+
         error_status: str = str(getattr(original_exception, "status_code", ""))
         error_class: str = (
             str(original_exception.__class__.__name__) if original_exception else ""
@@ -3568,14 +3623,14 @@ class StandardLoggingPayloadSetup:
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
 
         # Get traceback information (first 100 lines)
-        traceback_info = ""
+        traceback_info = traceback_str or ""
         if original_exception:
             tb = getattr(original_exception, "__traceback__", None)
             if tb:
-                import traceback
-
                 tb_lines = traceback.format_tb(tb)
-                traceback_info = "".join(tb_lines[:100])  # Limit to first 100 lines
+                traceback_info += "".join(
+                    tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
+                )  # Limit to first 100 lines
 
         # Get additional error details
         error_message = str(original_exception)
@@ -3730,6 +3785,7 @@ def get_standard_logging_object_payload(
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
         )
+
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -3741,6 +3797,7 @@ def get_standard_logging_object_payload(
                 "vector_store_request_metadata", None
             ),
             usage_object=usage.model_dump(),
+            proxy_server_request=proxy_server_request,
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3886,6 +3943,7 @@ def get_standard_logging_metadata(
         mcp_tool_call_metadata=None,
         vector_store_request_metadata=None,
         usage_object=None,
+        requester_custom_headers=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

@@ -391,6 +391,11 @@ def test_select_azure_base_url_called(setup_mocks):
             "add_message",
             "arun_thread_stream",
             "aresponses",
+            "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
+            "afile_list",
         ]
     ],
 )
@@ -795,3 +800,77 @@ async def test_azure_client_reuse(function_name, is_async, args):
 
         # Verify we tried to get from cache 10 times (once per request)
         assert mock_get_cache.call_count == 10, "Should check cache for each request"
+
+
+@pytest.mark.asyncio
+async def test_azure_client_cache_separates_sync_and_async():
+    """
+    Test that the Azure client cache correctly separates sync and async clients.
+    This directly tests the fix for issues #9801 and #10318 where sync and async
+    clients were being mixed up in the cache.
+    """
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+
+    # Clear the in-memory cache before test
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    # Create mock sync and async clients
+    mock_sync_client = MagicMock()
+    mock_async_client = MagicMock()
+
+    # Patch the Azure client classes
+    with patch(
+        "litellm.llms.azure.common_utils.AzureOpenAI"
+    ) as mock_sync_client_class, patch(
+        "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
+    ) as mock_async_client_class, patch.object(
+        BaseAzureLLM, "initialize_azure_sdk_client"
+    ) as mock_init_azure:
+        # Configure the mocks to return our instances
+        mock_sync_client_class.return_value = mock_sync_client
+        mock_async_client_class.return_value = mock_async_client
+
+        # Mock the initialize_azure_sdk_client to return necessary params
+        mock_init_azure.return_value = {
+            "api_key": "test-api-key",
+            "azure_endpoint": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        # Create an instance and make identical requests with different async flags
+        base_llm = BaseAzureLLM()
+        common_params = {
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+            "model": "gpt-4",
+            "litellm_params": {},
+        }
+
+        # Get a sync client
+        sync_client = base_llm.get_azure_openai_client(_is_async=False, **common_params)
+        # Then get an async client with identical parameters
+        async_client = base_llm.get_azure_openai_client(_is_async=True, **common_params)
+
+        # Verify we got the right classes
+        assert (
+            sync_client is mock_sync_client
+        ), "Sync client should be the mock sync client"
+        assert (
+            async_client is mock_async_client
+        ), "Async client should be the mock async client"
+
+        # Verify each client class was instantiated exactly once
+        assert (
+            mock_sync_client_class.call_count == 1
+        ), "AzureOpenAI should be instantiated once"
+        assert (
+            mock_async_client_class.call_count == 1
+        ), "AsyncAzureOpenAI should be instantiated once"
+
+        # Verify initialize_azure_sdk_client was called for each client type
+        assert (
+            mock_init_azure.call_count == 2
+        ), "initialize_azure_sdk_client should be called twice"

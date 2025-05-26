@@ -173,6 +173,9 @@ class GeminiThinkingConfig(TypedDict, total=False):
     thinkingBudget: int
 
 
+GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -187,7 +190,7 @@ class GenerationConfig(TypedDict, total=False):
     seed: int
     responseLogprobs: bool
     logprobs: int
-    responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
+    responseModalities: List[GeminiResponseModalities]
     thinkingConfig: GeminiThinkingConfig
 
 
@@ -218,9 +221,11 @@ class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int
+    responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
+    responseTokensDetails: List[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):

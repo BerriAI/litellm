@@ -29,7 +29,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -37,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
+from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -63,6 +63,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
+    CompletionTokensDetailsWrapper,
     GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
@@ -454,9 +455,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and value
             ):
                 optional_params["tools"] = self._map_function(value=value)
-                optional_params["litellm_param_is_function_call"] = (
-                    True if param == "functions" else False
-                )
             elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -571,6 +569,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "BLOCKLIST": "The token generation was stopped as the response was flagged for the terms which are included from the terminology blocklist.",
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
+            "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+        }
+
+    def get_finish_reason_mapping(self) -> Dict[str, OpenAIChatCompletionFinishReason]:
+        """
+        Return Dictionary of finish reasons which indicate response was flagged
+
+        and what it means
+        """
+        return {
+            "FINISH_REASON_UNSPECIFIED": "stop",  # openai doesn't have a way of representing this
+            "STOP": "stop",
+            "MAX_TOKENS": "length",
+            "SAFETY": "content_filter",
+            "RECITATION": "content_filter",
+            "LANGUAGE": "content_filter",
+            "OTHER": "content_filter",
+            "BLOCKLIST": "content_filter",
+            "PROHIBITED_CONTENT": "content_filter",
+            "SPII": "content_filter",
+            "MALFORMED_FUNCTION_CALL": "stop",  # openai doesn't have a way of representing this
+            "IMAGE_SAFETY": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -768,17 +788,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _calculate_usage(
         self,
-        completion_response: GenerateContentResponseBody,
+        completion_response: Union[
+            GenerateContentResponseBody, BidiGenerateContentServerMessage
+        ],
     ) -> Usage:
+        if "usageMetadata" not in completion_response:
+            raise ValueError(
+                f"usageMetadata not found in completion_response. Got={completion_response}"
+            )
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
+        response_tokens: Optional[int] = None
+        response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
             ]
+
+        ## GEMINI LIVE API ONLY PARAMS ##
+        if "responseTokenCount" in completion_response["usageMetadata"]:
+            response_tokens = completion_response["usageMetadata"]["responseTokenCount"]
+        if "responseTokensDetails" in completion_response["usageMetadata"]:
+            response_tokens_details = CompletionTokensDetailsWrapper()
+            for detail in completion_response["usageMetadata"]["responseTokensDetails"]:
+                if detail["modality"] == "TEXT":
+                    response_tokens_details.text_tokens = detail["tokenCount"]
+                elif detail["modality"] == "AUDIO":
+                    response_tokens_details.audio_tokens = detail["tokenCount"]
+        #########################################################
+
         if "promptTokensDetails" in completion_response["usageMetadata"]:
             for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -795,7 +836,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             text_tokens=text_tokens,
         )
 
-        completion_tokens = completion_response["usageMetadata"].get(
+        completion_tokens = response_tokens or completion_response["usageMetadata"].get(
             "candidatesTokenCount", 0
         )
         if (
@@ -814,28 +855,36 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
             reasoning_tokens=reasoning_tokens,
+            completion_tokens_details=response_tokens_details,
         )
 
         return usage
 
     def _check_finish_reason(
         self,
-        chat_completion_message: ChatCompletionResponseMessage,
+        chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
     ) -> OpenAIChatCompletionFinishReason:
-        if chat_completion_message.get("function_call"):
+        mapped_finish_reason = self.get_finish_reason_mapping()
+        if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
-        elif chat_completion_message.get("tool_calls"):
+        elif chat_completion_message and chat_completion_message.get("tool_calls"):
             return "tool_calls"
-        elif finish_reason and (
-            finish_reason == "SAFETY" or finish_reason == "RECITATION"
+        elif (
+            finish_reason and finish_reason in mapped_finish_reason.keys()
         ):  # vertex ai
-            return "content_filter"
+            return mapped_finish_reason[finish_reason]
         else:
             return "stop"
 
-    def _process_candidates(self, _candidates, model_response, litellm_params):
+    def _process_candidates(
+        self, _candidates, model_response, standard_optional_params: dict
+    ):
         """Helper method to process candidates and extract metadata"""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            is_function_call,
+        )
+
         grounding_metadata: List[dict] = []
         safety_ratings: List = []
         citation_metadata: List = []
@@ -872,9 +921,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 functions, tools = self._transform_parts(
                     parts=candidate["content"]["parts"],
                     index=candidate.get("index", idx),
-                    is_function_call=litellm_params.get(
-                        "litellm_param_is_function_call"
-                    ),
+                    is_function_call=is_function_call(standard_optional_params),
                 )
 
             if "logprobsResult" in candidate:
@@ -973,7 +1020,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     safety_ratings,
                     citation_metadata,
                 ) = self._process_candidates(
-                    _candidates, model_response, litellm_params
+                    _candidates, model_response, logging_obj.optional_params
                 )
 
             usage = self._calculate_usage(completion_response=completion_response)
@@ -1586,8 +1633,9 @@ class ModelResponseIterator:
                     )
 
             if gemini_chunk and "finishReason" in gemini_chunk:
-                finish_reason = map_finish_reason(
-                    finish_reason=gemini_chunk["finishReason"]
+                finish_reason = VertexGeminiConfig()._check_finish_reason(
+                    chat_completion_message=None,
+                    finish_reason=gemini_chunk["finishReason"],
                 )
                 ## DO NOT SET 'is_finished' = True
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
@@ -1603,6 +1651,11 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
+                    completion_tokens_details={
+                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                            "thoughtsTokenCount", 0
+                        )
+                    },
                 )
 
             returned_chunk = GenericStreamingChunk(

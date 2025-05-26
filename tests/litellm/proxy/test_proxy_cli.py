@@ -1,22 +1,12 @@
-import importlib
-import json
 import os
-import socket
-import subprocess
 import sys
-from unittest.mock import MagicMock, mock_open, patch
-
-import click
-import httpx
+from unittest.mock import MagicMock, patch
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import litellm
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
@@ -165,3 +155,91 @@ class TestProxyInitializationHelpers:
         # Test on Linux
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
+
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_database_url_construction_with_special_characters(self):
+        # Setup environment variables with special characters that need escaping
+        test_env = {
+            "DATABASE_HOST": "localhost:5432",
+            "DATABASE_USERNAME": "user@with+special",
+            "DATABASE_PASSWORD": "pass&word!@#$%",
+            "DATABASE_NAME": "db_name/test"
+        }
+
+        with patch.dict(os.environ, test_env):
+            # Call the relevant function - we'll need to extract the database URL construction logic
+            # This is simulating what happens in the run_server function when database_url is None
+            from litellm.proxy.proxy_cli import append_query_params
+            import urllib.parse
+
+            database_host = os.environ["DATABASE_HOST"]
+            database_username = os.environ["DATABASE_USERNAME"]
+            database_password = os.environ["DATABASE_PASSWORD"]
+            database_name = os.environ["DATABASE_NAME"]
+
+            # Test the URL encoding part
+            database_username_enc = urllib.parse.quote_plus(database_username)
+            database_password_enc = urllib.parse.quote_plus(database_password)
+            database_name_enc = urllib.parse.quote_plus(database_name)
+
+            # Construct DATABASE_URL from the provided variables
+            database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+
+            # Assert the correct URL was constructed with properly escaped characters
+            expected_url = "postgresql://user%40with%2Bspecial:pass%26word%21%40%23%24%25@localhost:5432/db_name%2Ftest"
+            assert database_url == expected_url
+
+            # Test appending query parameters
+            params = {
+                "connection_limit": 10,
+                "pool_timeout": 60
+            }
+            modified_url = append_query_params(database_url, params)
+            assert "connection_limit=10" in modified_url
+            assert "pool_timeout=60" in modified_url
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_skip_server_startup(self, mock_print, mock_uvicorn_run):
+        """Test that the skip_server_startup flag prevents server startup when True"""
+        from click.testing import CliRunner
+        from litellm.proxy.proxy_cli import run_server
+        
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+        
+        with patch.dict('sys.modules', {
+                'proxy_server': MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config
+                )
+            }), \
+            patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args") as mock_get_args:
+            
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app", 
+                "host": "localhost", 
+                "port": 8000
+            }
+            
+            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
+            
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_not_called()
+            mock_print.assert_any_call("LiteLLM: Setup complete. Skipping server startup as requested.")
+            
+            mock_uvicorn_run.reset_mock()
+            mock_print.reset_mock()
+            
+            result = runner.invoke(run_server, ["--local"])
+            
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_called_once()
+

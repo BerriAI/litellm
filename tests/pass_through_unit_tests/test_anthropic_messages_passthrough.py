@@ -677,3 +677,66 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                 for param_name, param_value in test_params.items():
                     assert call_args[param_name] == param_value, f"Parameter {param_name} was not passed correctly"
 
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_bedrock_dynamic_region():
+    """
+    Test that when aws_region_name is provided, it is used in request url
+    """
+    # Mock the HTTP response
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_bedrock_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "This is a mock response"}],
+        "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+    # Create a mock client with AsyncMock for the post method
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    # Patch necessary AWS components
+    with unittest.mock.patch('botocore.auth.SigV4Auth.add_auth'), \
+         unittest.mock.patch.object(BaseAWSLLM, 'get_credentials') as mock_get_credentials:
+        
+        # Setup mock credentials
+        mock_credentials = unittest.mock.MagicMock()
+        mock_credentials.access_key = "test_access_key"
+        mock_credentials.secret_key = "test_secret_key"
+        mock_credentials.token = "test_session_token"
+        mock_get_credentials.return_value = mock_credentials
+        
+        # Test with specific region
+        test_region = "us-east-1"
+        
+        # Call anthropic.messages.acreate with aws_region_name
+        response = await litellm.anthropic.messages.acreate(
+            messages=[{"role": "user", "content": "Hello, test region"}],
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            max_tokens=100,
+            aws_region_name=test_region,
+            client=mock_client,
+        )
+        
+        # Verify response
+        assert response == mock_response.json.return_value
+        
+        # Verify the post method was called with the correct URL containing the region
+        mock_client.post.assert_called_once()
+        call_args = mock_client.post.call_args
+        
+        # Check that the URL contains the correct region
+        url = call_args.kwargs.get('url', '')
+        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url, f"URL does not contain the correct region. URL: {url}"
+        
+        # Verify get_credentials was called with the correct region
+        mock_get_credentials.assert_called_once()
+        credentials_args = mock_get_credentials.call_args.kwargs
+        assert credentials_args.get('aws_region_name') == test_region
+

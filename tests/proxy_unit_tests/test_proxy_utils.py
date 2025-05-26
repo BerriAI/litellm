@@ -470,23 +470,15 @@ def test_reading_openai_org_id_from_headers():
 
 
 @pytest.mark.parametrize(
-    "headers, expected_data",
+    "headers, general_settings, expected_data",
     [
-        ({"OpenAI-Organization": "test_org_id"}, {"organization": "test_org_id"}),
-        ({"openai-organization": "test_org_id"}, {"organization": "test_org_id"}),
-        ({}, {}),
-        (
-            {
-                "OpenAI-Organization": "test_org_id",
-                "Authorization": "Bearer test_token",
-            },
-            {
-                "organization": "test_org_id",
-            },
-        ),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"x-openwebui-user-id": "ishaan3"}, {"user_header_name":"X-OpenWebUI-User-Id"}, "ishaan3"),
+        ({"X-OpenWebUI-User-Id": "ishaan3"}, {}, None),
+        ({}, None, None),
     ],
 )
-def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
+def test_add_litellm_data_for_backend_llm_call(headers, general_settings, expected_data):
     import json
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy._types import UserAPIKeyAuth
@@ -495,10 +487,9 @@ def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
         api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
     )
 
-    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+    data = LiteLLMProxyRequestSetup.get_user_from_headers(
         headers=headers,
-        user_api_key_dict=user_api_key_dict,
-        general_settings=None,
+        general_settings=general_settings,
     )
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -555,6 +546,53 @@ def test_update_internal_user_params():
         == litellm.default_internal_user_params["budget_duration"]
     )
 
+
+def test_update_internal_new_user_params_with_no_initial_role_set():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
+    assert (
+        updated_data_json["max_budget"]
+        == litellm.default_internal_user_params["max_budget"]
+    )
+    assert (
+        updated_data_json["budget_duration"]
+        == litellm.default_internal_user_params["budget_duration"]
+    )
+
+def test_update_internal_new_user_params_with_user_defined_values():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_new_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+        "user_role": "proxy_admin",
+    }
+
+    data = NewUserRequest(user_email="krrish3@berri.ai", max_budget=1000, budget_duration="1mo")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_new_user_params(data_json, data)
+    assert updated_data_json["user_email"] == "krrish3@berri.ai"
+    assert updated_data_json["user_role"] == "proxy_admin"
+    assert updated_data_json["max_budget"] == 1000
+    assert updated_data_json["budget_duration"] == "1mo"
+    
 
 @pytest.mark.asyncio
 async def test_proxy_config_update_from_db():
@@ -964,6 +1002,35 @@ def test_update_config_fields():
     )
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
+
+def test_update_config_fields_default_internal_user_params(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None)
+
+
+    args = {
+        "current_config": {},
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "default_internal_user_params": {
+                "user_role": "proxy_admin",
+                "max_budget": 1000,
+                "budget_duration": "1mo",
+            },
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    assert litellm.default_internal_user_params == {
+        "user_role": "proxy_admin",
+        "max_budget": 1000,
+        "budget_duration": "1mo",
+    }
+
+    monkeypatch.setattr(litellm, "default_internal_user_params", None) # reset to default
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 import asyncio
-from typing import List, cast
 from copy import deepcopy
+from typing import List, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -315,3 +315,63 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+
+def test_streaming_chunk_includes_reasoning_tokens():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Simulate a streaming chunk as would be received from Gemini
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 12,
+            "thoughtsTokenCount": 3,
+        },
+    }
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    streaming_chunk = iterator.chunk_parser(chunk)
+    assert streaming_chunk["usage"] is not None
+    assert streaming_chunk["usage"]["prompt_tokens"] == 5
+    assert streaming_chunk["usage"]["completion_tokens"] == 7
+    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert (
+        streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == 3
+    )
+
+
+def test_check_finish_reason():
+    config = VertexGeminiConfig()
+    finish_reason_mappings = config.get_finish_reason_mapping()
+    for k, v in finish_reason_mappings.items():
+        assert (
+            config._check_finish_reason(chat_completion_message=None, finish_reason=k)
+            == v
+        )
+
+
+def test_vertex_ai_usage_metadata_response_token_count():
+    """For Gemini Live API"""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "responseTokenCount": 74,
+        "totalTokenCount": 131,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "responseTokensDetails": [{"modality": "TEXT", "tokenCount": 74}],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+    assert result.prompt_tokens == 57
+    assert result.completion_tokens == 74
+    assert result.total_tokens == 131
+    assert result.prompt_tokens_details.text_tokens == 57
+    assert result.prompt_tokens_details.audio_tokens is None
+    assert result.prompt_tokens_details.cached_tokens is None
+    assert result.completion_tokens_details.text_tokens == 74
