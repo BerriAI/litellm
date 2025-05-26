@@ -6684,6 +6684,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIImageEditConfig()
+        if LlmProviders.AZURE == provider:
+            from litellm.llms.azure.image_edit.transformation import (
+                AzureImageEditConfig,
+            )
+
+            return AzureImageEditConfig()
         return None
 
 
