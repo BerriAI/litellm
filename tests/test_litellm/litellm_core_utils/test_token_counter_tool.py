@@ -10,8 +10,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 # Use the same token_counter as the main test.
-from test_token_counter import token_counter
-from test_token_counter_tool_data import *
+from tests.test_litellm.litellm_core_utils.test_token_counter import token_counter
+from tests.test_litellm.litellm_core_utils.test_token_counter_tool_data import *
 
 
 @pytest.mark.parametrize(
