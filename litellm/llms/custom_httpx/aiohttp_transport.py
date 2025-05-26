@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import typing
-from typing import Callable, Union
+from typing import Callable, Dict, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -10,7 +10,7 @@ from aiohttp.client import ClientResponse, ClientSession
 
 from litellm._logging import verbose_logger
 
-AIOHTTP_EXC_MAP: dict[type[Exception], type[Exception]] = {
+AIOHTTP_EXC_MAP: Dict = {
     # Order matters here, most specific exception first
     # Timeout related exceptions
     aiohttp.ServerTimeoutError: httpx.TimeoutException,
