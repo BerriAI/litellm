@@ -5,7 +5,7 @@ import asyncio
 import base64
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
@@ -628,7 +628,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
-        print(f"response: {response}, type: {type(response)}")
         if isinstance(response, LiteLLMBatch):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -692,7 +691,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             """
             For listing files, filter for the ones created by the user
             """
-            print("INSIDE ASYNC CURSOR PAGE BLOCK")
             ## check if file object
             if hasattr(response, "data") and isinstance(response.data, list):
                 if all(

@@ -494,7 +494,7 @@ class AsyncHTTPHandler:
         # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
         #########################################################
         if (
-            litellm.use_aiohttp_transport
+            AsyncHTTPHandler._should_use_aiohttp_transport()
             and AsyncHTTPHandler.aiohttp_transport_exists()
         ):
             return AsyncHTTPHandler._create_aiohttp_transport(
@@ -505,6 +505,24 @@ class AsyncHTTPHandler:
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _should_use_aiohttp_transport() -> bool:
+        """
+        This is feature flagged for now and is opt in as we roll out to all users.
+
+        Controlled by either
+        - litellm.use_aiohttp_transport or os.getenv("USE_AIOHTTP_TRANSPORT") = "True"
+        """
+        from litellm.secret_managers.main import str_to_bool
+
+        if (
+            str_to_bool(os.getenv("USE_AIOHTTP_TRANSPORT", "False"))
+            or litellm.use_aiohttp_transport
+        ):
+            verbose_logger.debug("Using AiohttpTransport...")
+            return True
+        return False
 
     @staticmethod
     def _create_aiohttp_transport(

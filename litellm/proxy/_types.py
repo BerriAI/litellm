@@ -784,9 +784,11 @@ class KeyRequest(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
+    id: Optional[int] = None
     model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
+    team: Optional["LiteLLM_TeamTable"] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2169,6 +2171,10 @@ class CommonProxyErrors(str, enum.Enum):
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
     max_parallel_request_limit_reached = (
         "Crossed TPM / RPM / Max Parallel Request Limit"
+    )
+    missing_enterprise_package = "Missing litellm-enterprise package. Please install it to use this feature. Run `pip install litellm-enterprise`"
+    missing_enterprise_package_docker = (
+        "This uses the enterprise folder - only available on the Docker image."
     )
 
 

@@ -5470,6 +5470,26 @@ class Router:
                     ids.append(id)
         return ids
 
+    def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
+        """
+        Map a team model name to a team-specific model name.
+
+        Returns:
+        - team_model_name: str - the team-specific model name
+        - None: if no team-specific model name is found
+        """
+        for model in self.model_list:
+            model_team_id = model["model_info"].get("team_id")
+            model_team_public_model_name = model["model_info"].get(
+                "team_public_model_name"
+            )
+            if (
+                model_team_id == team_id
+                and model_team_public_model_name == team_model_name
+            ):
+                return model["model_name"]
+        return None
+
     def _get_all_deployments(
         self, model_name: str, model_alias: Optional[str] = None
     ) -> List[DeploymentTypedDict]:

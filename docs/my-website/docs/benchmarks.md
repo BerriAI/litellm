@@ -7,13 +7,11 @@ Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpo
 
 Use this config for testing:
 
-**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `aiohttp_openai/` provider for load testing.
-
 ```yaml
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: aiohttp_openai/any
+      model: openai/any
       api_base: https://your-fake-openai-endpoint.com/chat/completions
       api_key: "test"
 ```

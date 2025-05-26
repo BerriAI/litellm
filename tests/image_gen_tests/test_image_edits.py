@@ -145,7 +145,6 @@ async def test_openai_image_edit_with_bytesio():
         pass
 
 
-
 # @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_azure_image_edit_litellm_sdk():

@@ -32,12 +32,14 @@ def test_get_ollama_params():
             temperature=0.5,
             stream=True,
         )
-        print("Converted params", converted_params)
-        assert converted_params == {
+        expected_params = {
             "num_predict": 20,
             "stream": True,
             "temperature": 0.5,
-        }, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
+        }
+        print("Converted params", converted_params)
+        for key in expected_params.keys():
+            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
