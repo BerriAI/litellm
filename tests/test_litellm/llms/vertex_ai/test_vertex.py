@@ -2,9 +2,7 @@ import base64
 import json
 import os
 import sys
-import traceback
 
-import numpy as np
 from dotenv import load_dotenv
 
 import litellm.litellm_core_utils
