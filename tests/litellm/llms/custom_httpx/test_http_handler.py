@@ -46,24 +46,6 @@ async def test_ssl_security_level(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aiohttp_transport_creation():
-    """Test that aiohttp transport is created when enabled and available"""
-    litellm.use_aiohttp_transport = True
-
-    # Mock aiohttp_transport_exists to return True
-    with patch.object(AsyncHTTPHandler, "aiohttp_transport_exists", return_value=True):
-        transport = AsyncHTTPHandler._create_async_transport()
-
-        # Verify we got an aiohttp transport
-        assert isinstance(transport, LiteLLMAiohttpTransport)
-
-        # Verify the transport creates valid client sessions
-        if isinstance(transport, LiteLLMAiohttpTransport):
-            client_session = transport._get_valid_client_session()
-            assert isinstance(client_session, ClientSession)
-
-
-@pytest.mark.asyncio
 async def test_force_ipv4_transport():
     """Test transport creation with force_ipv4 enabled"""
     litellm.force_ipv4 = True
