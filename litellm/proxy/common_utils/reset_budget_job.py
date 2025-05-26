@@ -513,6 +513,7 @@ class ResetBudgetJob:
     ) -> Optional[LiteLLM_BudgetTableFull]:
         try:
             if budget.budget_duration is not None:
+                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
                 duration_s = duration_in_seconds(duration=budget.budget_duration)
 
                 # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account
