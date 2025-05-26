@@ -7,6 +7,7 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 
 
 def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[], str]:
+def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[], str]:
     """
     Get Azure AD token provider based on Service Principal with Secret workflow.
 
@@ -14,6 +15,11 @@ def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[
     See Also:
         https://learn.microsoft.com/en-us/python/api/overview/azure/identity-readme?view=azure-python#service-principal-with-secret;
         https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.clientsecretcredential?view=azure-python.
+
+    Args:
+        azure_scope (str, optional): The Azure scope to request token for.
+                                    Defaults to environment variable AZURE_SCOPE or
+                                    "https://cognitiveservices.azure.com/.default".
 
     Args:
         azure_scope (str, optional): The Azure scope to request token for.
