@@ -377,6 +377,198 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
+        # Generate large test payload if enabled
+        self._generate_large_test_payload()
+
+    def _generate_large_test_payload(self):
+        """
+        Generate a large test payload (~34MB) for testing metrics endpoint performance.
+
+        This method creates thousands of fake metrics with various label combinations
+        to simulate a large production environment for testing purposes.
+        """
+        from litellm.constants import (
+            PROMETHEUS_GENERATE_LARGE_TEST_PAYLOAD,
+            PROMETHEUS_TEST_PAYLOAD_SIZE_MB,
+        )
+
+        if not PROMETHEUS_GENERATE_LARGE_TEST_PAYLOAD:
+            return
+
+        verbose_logger.info(
+            f"🧪 Generating large test payload (~{PROMETHEUS_TEST_PAYLOAD_SIZE_MB}MB) for Prometheus metrics testing..."
+        )
+
+        try:
+            # Calculate approximate number of metrics needed for target size
+            # Each metric line is roughly 200-300 bytes, so for 34MB we need ~120k-170k metrics
+            target_size_bytes = PROMETHEUS_TEST_PAYLOAD_SIZE_MB * 1024 * 1024
+            estimated_bytes_per_metric = 250
+            target_metrics_count = target_size_bytes // estimated_bytes_per_metric
+
+            # Generate test data for various metrics
+            self._generate_test_request_metrics(target_metrics_count // 4)
+            self._generate_test_spend_metrics(target_metrics_count // 4)
+            self._generate_test_token_metrics(target_metrics_count // 4)
+            self._generate_test_deployment_metrics(target_metrics_count // 4)
+
+            verbose_logger.info(
+                f"✅ Successfully generated large test payload with ~{target_metrics_count} metrics"
+            )
+
+        except Exception as e:
+            verbose_logger.error(f"❌ Error generating large test payload: {str(e)}")
+
+    def _generate_test_request_metrics(self, count: int):
+        """Generate test data for request metrics"""
+        import random
+        import string
+
+        models = ["gpt-4", "gpt-3.5-turbo", "claude-3", "gemini-pro", "llama-2-70b"]
+        providers = ["openai", "anthropic", "google", "meta", "azure"]
+        teams = [f"team_{i}" for i in range(100)]
+        users = [f"user_{i}" for i in range(500)]
+
+        for i in range(count):
+            # Generate random labels
+            model = random.choice(models)
+            team = random.choice(teams)
+            user = random.choice(users)
+            api_key = "sk-" + "".join(
+                random.choices(string.ascii_letters + string.digits, k=32)
+            )
+            api_key_alias = f"key_alias_{i % 1000}"
+            end_user = f"end_user_{i % 2000}"
+
+            # Increment various request metrics
+            self.litellm_proxy_total_requests_metric.labels(
+                end_user=end_user,
+                hashed_api_key=api_key,
+                api_key_alias=api_key_alias,
+                requested_model=model,
+                team=team,
+                team_alias=f"{team}_alias",
+                user=user,
+                user_email=f"{user}@example.com",
+                status_code="200",
+                route="/chat/completions",
+            ).inc(random.randint(1, 100))
+
+    def _generate_test_spend_metrics(self, count: int):
+        """Generate test data for spend metrics"""
+        import random
+
+        models = ["gpt-4", "gpt-3.5-turbo", "claude-3", "gemini-pro", "llama-2-70b"]
+        teams = [f"team_{i}" for i in range(100)]
+        users = [f"user_{i}" for i in range(100)]
+
+        for i in range(count):
+            model = random.choice(models)
+            team = random.choice(teams)
+            user = random.choice(users)
+            api_key = f"sk-test-{i}"
+            api_key_alias = f"key_alias_{i % 1000}"
+            end_user = f"end_user_{i % 2000}"
+
+            # Add spend data
+            spend_amount = random.uniform(0.001, 10.0)
+            self.litellm_spend_metric.labels(
+                end_user,
+                api_key,
+                api_key_alias,
+                model,
+                team,
+                f"{team}_alias",
+                user,
+            ).inc(spend_amount)
+
+    def _generate_test_token_metrics(self, count: int):
+        """Generate test data for token metrics"""
+        import random
+
+        models = ["gpt-4", "gpt-3.5-turbo", "claude-3", "gemini-pro", "llama-2-70b"]
+        teams = [f"team_{i}" for i in range(100)]
+        users = [f"user_{i}" for i in range(100)]
+
+        for i in range(count):
+            model = random.choice(models)
+            team = random.choice(teams)
+            user = random.choice(users)
+            api_key = f"sk-test-{i}"
+            api_key_alias = f"key_alias_{i % 1000}"
+            end_user = f"end_user_{i % 2000}"
+
+            # Add token data
+            input_tokens = random.randint(10, 1000)
+            output_tokens = random.randint(10, 500)
+            total_tokens = input_tokens + output_tokens
+
+            self.litellm_tokens_metric.labels(
+                end_user,
+                api_key,
+                api_key_alias,
+                model,
+                team,
+                f"{team}_alias",
+                user,
+            ).inc(total_tokens)
+
+    def _generate_test_deployment_metrics(self, count: int):
+        """Generate test data for deployment metrics"""
+        import random
+
+        models = ["gpt-4", "gpt-3.5-turbo", "claude-3", "gemini-pro", "llama-2-70b"]
+        providers = ["openai", "anthropic", "google", "meta", "azure"]
+        api_bases = [
+            "https://api.openai.com/v1",
+            "https://api.anthropic.com/v1",
+            "https://generativelanguage.googleapis.com/v1",
+            "https://api.meta.com/v1",
+            "https://test.openai.azure.com/",
+        ]
+
+        for i in range(count):
+            model = random.choice(models)
+            provider = random.choice(providers)
+            api_base = random.choice(api_bases)
+            model_id = f"model_{i % 1000}"
+            api_key = f"sk-test-{i}"
+            api_key_alias = f"key_alias_{i % 1000}"
+            team = f"team_{i % 100}"
+
+            # Success responses
+            self.litellm_deployment_success_responses.labels(
+                litellm_model_name=model,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=provider,
+                requested_model=model,
+                hashed_api_key=api_key,
+                api_key_alias=api_key_alias,
+                team=team,
+                team_alias=f"{team}_alias",
+            ).inc(random.randint(1, 1000))
+
+            # Total requests
+            self.litellm_deployment_total_requests.labels(
+                litellm_model_name=model,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=provider,
+                requested_model=model,
+                hashed_api_key=api_key,
+                api_key_alias=api_key_alias,
+                team=team,
+                team_alias=f"{team}_alias",
+            ).inc(random.randint(1, 1000))
+
+            # Set deployment state
+            self.litellm_deployment_state.labels(
+                model, model_id, api_base, provider
+            ).set(
+                random.choice([0, 1])
+            )  # 0 = healthy, 1 = partial outage
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
         from litellm.types.utils import StandardLoggingPayload

@@ -1,4 +1,21 @@
 model_list:
-  - model_name: openai/*
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/*
+      model: openai/fake
+      api_key: any_key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+  - model_name: fake-openai-endpoint-1
+    litellm_params:
+      model: openai/fake
+      api_key: any_key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  
+  - model_name: fake-openai-endpoint-2
+    litellm_params:
+      model: openai/fake
+      api_key: any_key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["prometheus"]
