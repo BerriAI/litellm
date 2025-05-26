@@ -102,7 +102,7 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
 class AiohttpTransport(httpx.AsyncBaseTransport):
     def __init__(
-        self, client: ClientSession | typing.Callable[[], ClientSession]
+        self, client: Union[ClientSession, Callable[[], ClientSession]]
     ) -> None:
         self.client = client
 
