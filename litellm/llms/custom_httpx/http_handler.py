@@ -490,8 +490,7 @@ class AsyncHTTPHandler:
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         #########################################################
-        # AIOHTTP TRANSPORT is used by default
-        # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
+        # AIOHTTP TRANSPORT is off by default
         #########################################################
         if AsyncHTTPHandler._should_use_aiohttp_transport():
             return AsyncHTTPHandler._create_aiohttp_transport(
