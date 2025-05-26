@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from messages_with_counts import (
+from tests.litellm.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
