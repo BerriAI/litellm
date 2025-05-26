@@ -1187,10 +1187,8 @@ def completion(  # type: ignore # noqa: PLR0915
             special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
-        )
-        processed_non_default_params = add_provider_specific_params_to_optional_params(
-            optional_params=processed_non_default_params,
-            passed_params=non_default_params,
+            remove_sensitive_keys=True,
+            add_provider_specific_params=True,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
