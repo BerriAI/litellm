@@ -92,6 +92,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.VLLMConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
         return litellm.DeepSeekChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "sap-claude":
+        return litellm.SAPConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere":
         return litellm.CohereConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat":

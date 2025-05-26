@@ -2163,6 +2163,8 @@ GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    SAP = "sap"
+    SAP_CLAUDE = "sap-claude"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"

@@ -3475,6 +3475,16 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider ==  "sap-claude":
+        optional_params = litellm.SAPConverseConfig().map_openai_params(non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepseek":
         optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6302,6 +6312,10 @@ class ProviderConfigManager:
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
             return litellm.openaiOSeriesConfig
+        elif litellm.LlmProviders.SAP == provider:
+            return litellm.SAPChatConfig()
+        elif litellm.LlmProviders.SAP_CLAUDE == provider:
+            return litellm.SAPConverseConfig()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:

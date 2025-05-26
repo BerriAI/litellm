@@ -152,6 +152,7 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+            supported_params.append("tools")
         return supported_params
 
     def map_tool_choice_values(

@@ -143,6 +143,7 @@ from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
+from .llms.sap.chat.handler import SAPOpenAILikeChatCompletion
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
@@ -217,6 +218,7 @@ openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
+sap_chat_completions = SAPOpenAILikeChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -1752,6 +1754,50 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 stream=stream,
             )
+        elif (custom_llm_provider == "sap" or custom_llm_provider == "sap-claude"):
+            api_key = (
+                    api_key
+                    or litellm.anthropic_key
+                    or litellm.api_key
+                    or os.environ.get("ANTHROPIC_API_KEY")
+            )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            # call /messages
+            # default route for all anthropic models
+            api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret("SAP_AI_CORE_BASE_URL")
+            )
+
+            response = sap_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                acompletion=acompletion,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=api_key,
+                logging_obj=logging,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+            )
+            if optional_params.get("stream", False) or acompletion is True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+            response = response
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"

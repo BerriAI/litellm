@@ -1,3 +1,4 @@
+import ast
 import json
 from abc import abstractmethod
 from typing import List, Optional, Union, cast
@@ -45,12 +46,19 @@ class BaseModelResponseIterator:
         stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
             str_line
         )
-        try:
-            if stripped_chunk is not None:
+
+        if stripped_chunk is not None and stripped_chunk != '':
+            try:
+                # First try standard JSON parsing
                 stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
+            except json.JSONDecodeError:
+                try:
+                    # If JSON parsing fails, try ast.literal_eval
+                    stripped_json_chunk = ast.literal_eval(stripped_chunk)
+                except (ValueError, SyntaxError):
+                    # If both fail, set to None
+                    stripped_json_chunk = None
+        else:
             stripped_json_chunk = None
 
         if "[DONE]" in str_line:
