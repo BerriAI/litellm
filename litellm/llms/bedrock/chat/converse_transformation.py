@@ -191,8 +191,11 @@ class AmazonConverseConfig(BaseConfig):
     def get_supported_document_types(self) -> List[str]:
         return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
 
+    def get_supported_video_types(self) -> List[str]:
+        return ["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
+
     def get_all_supported_content_types(self) -> List[str]:
-        return self.get_supported_image_types() + self.get_supported_document_types()
+        return self.get_supported_image_types() + self.get_supported_document_types() + self.get_supported_video_types()
 
     def _create_json_tool_call_for_response_format(
         self,
