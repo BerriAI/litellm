@@ -1,5 +1,4 @@
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
-
 import httpx
 
 import litellm
@@ -10,6 +9,9 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
+from litellm.llms.azure.common_utils import (
+    get_azure_api_key_or_token
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -18,16 +20,34 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def validate_environment(
         self,
         headers: dict,
         model: str,
+        litellm_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
+        
+        auth_response = get_azure_api_key_or_token(
+            litellm_params=litellm_params,
+            api_key=api_key,
+        )
+        api_key = auth_response.api_key
+        azure_ad_token_provider = auth_response.azure_ad_token_provider
+        azure_ad_token = auth_response.azure_ad_token
+
+        if azure_ad_token_provider:
+            azure_ad_token = azure_ad_token_provider()
+        elif azure_ad_token is not None:
+            if isinstance(azure_ad_token, str):
+                azure_ad_token = azure_ad_token
+            else:
+                azure_ad_token = azure_ad_token()
+
         api_key = (
-            api_key
+            azure_ad_token
+            or api_key
             or litellm.api_key
             or litellm.azure_key
             or get_secret_str("AZURE_OPENAI_API_KEY")

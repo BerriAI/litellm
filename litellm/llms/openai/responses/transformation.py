@@ -93,6 +93,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
+        litellm_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
         api_key = (

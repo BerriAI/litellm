@@ -148,10 +148,14 @@ class TestOpenAIResponsesAPIConfig:
         """Test that validate_environment correctly sets the Authorization header"""
         # Test with provided API key
         headers = {}
+        litellm_params = {}
         api_key = "test_api_key"
 
         result = self.config.validate_environment(
-            headers=headers, model=self.model, api_key=api_key
+            headers=headers, 
+            model=self.model, 
+            api_key=api_key, 
+            litellm_params=litellm_params
         )
 
         assert "Authorization" in result
@@ -161,7 +165,11 @@ class TestOpenAIResponsesAPIConfig:
         headers = {}
 
         with patch("litellm.api_key", "litellm_api_key"):
-            result = self.config.validate_environment(headers=headers, model=self.model)
+            result = self.config.validate_environment(
+                headers=headers, 
+                model=self.model,
+                litellm_params=litellm_params
+            )
 
             assert "Authorization" in result
             assert result["Authorization"] == "Bearer litellm_api_key"
@@ -172,7 +180,9 @@ class TestOpenAIResponsesAPIConfig:
         with patch("litellm.openai_key", "openai_key"):
             with patch("litellm.api_key", None):
                 result = self.config.validate_environment(
-                    headers=headers, model=self.model
+                    headers=headers, 
+                    model=self.model,
+                    litellm_params=litellm_params
                 )
 
                 assert "Authorization" in result
@@ -190,7 +200,9 @@ class TestOpenAIResponsesAPIConfig:
                     return_value="env_api_key",
                 ):
                     result = self.config.validate_environment(
-                        headers=headers, model=self.model
+                        headers=headers, 
+                        model=self.model,
+                        litellm_params=litellm_params
                     )
 
                     assert "Authorization" in result

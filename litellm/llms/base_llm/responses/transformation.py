@@ -66,6 +66,7 @@ class BaseResponsesAPIConfig(ABC):
         self,
         headers: dict,
         model: str,
+        litellm_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
         return {}
