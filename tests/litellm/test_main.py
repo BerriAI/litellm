@@ -2,13 +2,16 @@ import json
 import os
 import sys
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -140,7 +143,6 @@ def test_completion_missing_role(openai_api_response):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
-
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -175,7 +177,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                 response = await acompletion(**args, client=client)
             print(response)
         except Exception as e:
-            print(e)
+            pass
 
         mock_client.assert_called()
 
@@ -185,6 +187,11 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = mock_client.call_args.kwargs["data"]
         else:
             json_str = json.dumps(mock_client.call_args.kwargs["json"])
+
+        if isinstance(json_str, bytes):
+            json_str = json_str.decode("utf-8")
+
+        print(f"type of json_str: {type(json_str)}")
         assert "png" in json_str
         assert "jpeg" not in json_str
 
@@ -259,3 +266,166 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
+
+
+@pytest.fixture(autouse=True)
+def set_openrouter_api_key():
+    original_api_key = os.environ.get("OPENROUTER_API_KEY")
+    os.environ["OPENROUTER_API_KEY"] = "fake-key-for-testing"
+    yield
+    if original_api_key is not None:
+        os.environ["OPENROUTER_API_KEY"] = original_api_key
+    else:
+        del os.environ["OPENROUTER_API_KEY"]
+
+
+@pytest.mark.asyncio
+async def test_extra_body_with_fallback(
+    respx_mock: respx.MockRouter, set_openrouter_api_key
+):
+    """
+    test regression for https://github.com/BerriAI/litellm/issues/8425.
+
+    This was perhaps a wider issue with the acompletion function not passing kwargs such as extra_body correctly when fallbacks are specified.
+    """
+
+    # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.use_aiohttp_transport = False
+    # Set up test parameters
+    model = "openrouter/deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hello, world!"}]
+    extra_body = {
+        "provider": {
+            "order": ["DeepSeek"],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+        }
+    }
+    fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
+
+    respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello from mocked response!",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+        }
+    )
+
+    response = await litellm.acompletion(
+        model=model,
+        messages=messages,
+        extra_body=extra_body,
+        fallbacks=fallbacks,
+        api_key="fake-openrouter-api-key",
+    )
+
+    # Get the request from the mock
+    request: httpx.Request = respx_mock.calls[0].request
+    request_body = request.read()
+    request_body = json.loads(request_body)
+
+    # Verify basic parameters
+    assert request_body["model"] == "deepseek/deepseek-chat"
+    assert request_body["messages"] == messages
+
+    # Verify the extra_body parameters remain under the provider key
+    assert request_body["provider"]["order"] == ["DeepSeek"]
+    assert request_body["provider"]["allow_fallbacks"] is False
+    assert request_body["provider"]["require_parameters"] is True
+
+    # Verify the response
+    assert response is not None
+    assert response.choices[0].message.content == "Hello from mocked response!"
+
+
+@pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
+@pytest.mark.asyncio
+async def test_openai_env_base(
+    respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
+):
+    "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    litellm.use_aiohttp_transport = (
+        False  # since this uses respx, we need to set use_aiohttp_transport to False
+    )
+
+    expected_base_url = "http://localhost:12345/v1"
+
+    # Assign the environment variable based on env_base, and use a fake API key.
+    monkeypatch.setenv(env_base, expected_base_url)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
+
+    model = "gpt-4o"
+    messages = [{"role": "user", "content": "Hello, how are you?"}]
+
+    respx_mock.post(f"{expected_base_url}/chat/completions").respond(
+        json={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello from mocked response!",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+        }
+    )
+
+    response = await litellm.acompletion(model=model, messages=messages)
+
+    # verify we had a response
+    assert response.choices[0].message.content == "Hello from mocked response!"
+
+
+def build_database_url(username, password, host, dbname):
+    username_enc = urllib.parse.quote_plus(username)
+    password_enc = urllib.parse.quote_plus(password)
+    dbname_enc = urllib.parse.quote_plus(dbname)
+    return f"postgresql://{username_enc}:{password_enc}@{host}/{dbname_enc}"
+
+
+def test_build_database_url():
+    url = build_database_url("user@name", "p@ss:word", "localhost", "db/name")
+    assert url == "postgresql://user%40name:p%40ss%3Aword@localhost/db%2Fname"
+
+
+def test_bedrock_llama():
+    litellm._turn_on_debug()
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    model = "bedrock/invoke/us.meta.llama4-scout-17b-instruct-v1:0"
+
+    request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": model,
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+        },
+    )
+    print(request)
+
+    assert (
+        request["raw_request_body"]["prompt"]
+        == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+    )

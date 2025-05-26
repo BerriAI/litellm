@@ -22,6 +22,7 @@ import {
   ThunderboltOutlined,
   LockOutlined,
   ToolOutlined,
+  TagsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
 
@@ -56,16 +57,14 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
     { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
     { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
-    { key: "4", page: "usage", label: "Usage", icon: <BarChartOutlined /> },
+    { key: "12", page: "new_usage", label: "Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
     { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
     { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
-    
-
-    
+    { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
     { 
       key: "experimental", 
       page: "experimental",
@@ -74,9 +73,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       children: [
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
-        { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-        { key: "12", page: "new_usage", label: "New Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
+        { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
         { key: "18", page: "mcp-tools", label: "MCP Tools", icon: <ToolOutlined />, roles: all_admin_roles },
+        { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
+        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
+        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
       ]
     },
     {

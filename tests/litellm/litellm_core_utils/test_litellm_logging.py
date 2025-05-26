@@ -32,3 +32,13 @@ def test_get_masked_api_base(logging_obj):
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
     assert type(masked_api_base) == str
+
+
+def test_use_custom_pricing_for_model():
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "custom_llm_provider": "azure",
+        "input_cost_per_pixel": 10,
+    }
+    assert use_custom_pricing_for_model(litellm_params) == True

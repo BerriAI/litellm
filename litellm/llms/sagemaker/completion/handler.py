@@ -96,6 +96,7 @@ class SagemakerLLM(BaseAWSLLM):
         model: str,
         data: dict,
         messages: List[AllMessageValues],
+        litellm_params: dict,
         optional_params: dict,
         aws_region_name: str,
         extra_headers: Optional[dict] = None,
@@ -122,6 +123,7 @@ class SagemakerLLM(BaseAWSLLM):
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
         request = AWSRequest(
             method="POST", url=api_base, data=encoded_data, headers=headers
@@ -198,6 +200,7 @@ class SagemakerLLM(BaseAWSLLM):
                     data=data,
                     messages=messages,
                     optional_params=optional_params,
+                    litellm_params=litellm_params,
                     credentials=credentials,
                     aws_region_name=aws_region_name,
                 )
@@ -274,6 +277,7 @@ class SagemakerLLM(BaseAWSLLM):
             "model": model,
             "data": _data,
             "optional_params": optional_params,
+            "litellm_params": litellm_params,
             "credentials": credentials,
             "aws_region_name": aws_region_name,
             "messages": messages,
@@ -426,6 +430,7 @@ class SagemakerLLM(BaseAWSLLM):
             "model": model,
             "data": data,
             "optional_params": optional_params,
+            "litellm_params": litellm_params,
             "credentials": credentials,
             "aws_region_name": aws_region_name,
             "messages": messages,
@@ -496,6 +501,7 @@ class SagemakerLLM(BaseAWSLLM):
             "model": model,
             "data": data,
             "optional_params": optional_params,
+            "litellm_params": litellm_params,
             "credentials": credentials,
             "aws_region_name": aws_region_name,
             "messages": messages,

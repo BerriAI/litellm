@@ -15,6 +15,7 @@ import httpx
 
 import litellm
 from litellm import get_secret_str
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -63,16 +64,17 @@ async def acreate_file(
         loop = asyncio.get_event_loop()
         kwargs["acreate_file"] = True
 
-        # Use a partial function to pass your keyword arguments
-        func = partial(
-            create_file,
-            file,
-            purpose,
-            custom_llm_provider,
-            extra_headers,
-            extra_body,
+        call_args = {
+            "file": file,
+            "purpose": purpose,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "extra_body": extra_body,
             **kwargs,
-        )
+        }
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_file, **call_args)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
@@ -92,7 +94,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -101,6 +103,8 @@ def create_file(
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
     LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+
+    Specify either provider_list or custom_llm_provider.
     """
     try:
         _is_async = kwargs.pop("acreate_file", False) is True
@@ -120,7 +124,7 @@ def create_file(
         if (
             timeout is not None
             and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
         ):
             read_timeout = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
@@ -161,6 +165,7 @@ def create_file(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -340,6 +345,7 @@ def file_retrieve(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -470,9 +476,11 @@ def file_delete(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
+        client = kwargs.get("client")
 
         if (
             timeout is not None
@@ -491,6 +499,7 @@ def file_delete(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -546,6 +555,8 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_id=file_id,
+                client=client,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -642,6 +653,7 @@ def file_list(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -732,11 +744,13 @@ async def afile_content(
     try:
         loop = asyncio.get_event_loop()
         kwargs["afile_content"] = True
+        model = kwargs.pop("model", None)
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             file_content,
             file_id,
+            model,
             custom_llm_provider,
             extra_headers,
             extra_body,
@@ -759,7 +773,10 @@ async def afile_content(
 
 def file_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Optional[
+        Union[Literal["openai", "azure", "vertex_ai"], str]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -771,14 +788,24 @@ def file_content(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        client = kwargs.get("client")
         # set timeout for 10 minutes by default
+
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
 
         if (
             timeout is not None
             and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
         ):
             read_timeout = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
@@ -794,11 +821,13 @@ def file_content(
         )
 
         _is_async = kwargs.pop("afile_content", False) is True
+
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -855,6 +884,8 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_content_request=_file_content_request,
+                client=client,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise litellm.exceptions.BadRequestError(

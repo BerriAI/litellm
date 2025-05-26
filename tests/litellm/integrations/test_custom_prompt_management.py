@@ -30,9 +30,10 @@ class TestCustomPromptManagement(CustomPromptManagement):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str],
     ) -> Tuple[str, List[AllMessageValues], dict]:
         print(
             "TestCustomPromptManagement: running get_chat_completion_prompt for prompt_id: ",

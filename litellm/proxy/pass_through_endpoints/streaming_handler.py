@@ -8,6 +8,7 @@ import httpx
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -17,7 +18,6 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from .success_handler import PassThroughEndpointLogging
-from .types import EndpointType
 
 
 class PassThroughStreamingHandler:

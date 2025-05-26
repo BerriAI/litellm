@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    Litellm_EntityType,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -71,6 +73,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "email",
             "braintrust",
             "datadog",
+            "generic_api",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
@@ -108,6 +111,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "generic_api",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -119,6 +123,7 @@ async def health_services_endpoint(  # noqa: PLR0915
         if (
             service == "openmeter"
             or service == "braintrust"
+            or service == "generic_api"
             or (service in litellm.success_callback and service != "langfuse")
         ):
             _ = await litellm.acompletion(
@@ -168,6 +173,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 user_id=user_api_key_dict.user_id,
                 key_alias=user_api_key_dict.key_alias,
                 team_id=user_api_key_dict.team_id,
+                event_group=Litellm_EntityType.KEY,
             )
             await proxy_logging_obj.budget_alerts(
                 type="user_budget",
@@ -251,7 +257,7 @@ async def health_services_endpoint(  # noqa: PLR0915
         if service == "email":
             webhook_event = WebhookEvent(
                 event="key_created",
-                event_group="key",
+                event_group=Litellm_EntityType.KEY,
                 event_message="Test Email Alert",
                 token=user_api_key_dict.token or "",
                 key_alias="Email Test key (This is only a test alert key. DO NOT USE THIS IN PRODUCTION.)",
@@ -542,6 +548,7 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 **db_health_status,
             }
         else:
@@ -551,6 +558,7 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")

@@ -449,3 +449,19 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
         )
 
         assert response._hidden_params["response_cost"] == 120
+
+
+def test_litellm_gateway_from_sdk_with_thinking_param():
+    try: 
+        response = litellm.completion(
+            model="litellm_proxy/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            messages=[{"role": "user", "content": "Hello world"}],
+            api_base="http://0.0.0.0:4000",
+            api_key="sk-PIp1h0RekR",
+            # client=openai_client,
+            thinking={"type": "enabled", "max_budget": 100},
+        )
+        pytest.fail("Expected an error to be raised")
+    except Exception as e:
+        assert "Connection error." in str(e)
+    

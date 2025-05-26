@@ -6,6 +6,7 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+import os
 from typing import Optional
 
 import httpx
@@ -41,6 +42,84 @@ def create_request_copy(request: Request):
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
+
+
+async def llm_passthrough_factory_proxy_route(
+    custom_llm_provider: str,
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Factory function for creating pass-through endpoints for LLM providers.
+    """
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        provider=LlmProviders(custom_llm_provider),
+        model=None,
+    )
+    if provider_config is None:
+        raise HTTPException(
+            status_code=404, detail=f"Provider {custom_llm_provider} not found"
+        )
+    base_target_url = provider_config.get_api_base()
+
+    if base_target_url is None:
+        raise HTTPException(
+            status_code=404, detail=f"Provider {custom_llm_provider} api base not found"
+        )
+
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    provider_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=custom_llm_provider,
+        region_name=None,
+    )
+
+    auth_headers = provider_config.validate_environment(
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=provider_api_key,
+        api_base=base_target_url,
+    )
+
+    ## check for streaming
+    is_streaming_request = False
+    # anthropic is streaming when 'stream' = True is in the body
+    if request.method == "POST":
+        _request_body = await request.json()
+        if _request_body.get("stream"):
+            is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers=auth_headers,
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        stream=is_streaming_request,  # type: ignore
+    )
+
+    return received_value
 
 
 @router.api_route(
@@ -151,6 +230,84 @@ async def cohere_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "Bearer {}".format(cohere_api_key)},
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        stream=is_streaming_request,  # type: ignore
+    )
+
+    return received_value
+
+
+@router.api_route(
+    "/vllm/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["VLLM Pass-through", "pass-through"],
+)
+async def vllm_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/vllm)
+    """
+    return await llm_passthrough_factory_proxy_route(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider="vllm",
+    )
+
+
+@router.api_route(
+    "/mistral/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Mistral Pass-through", "pass-through"],
+)
+async def mistral_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    """
+    base_target_url = os.getenv("MISTRAL_API_BASE") or "https://api.mistral.ai"
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    mistral_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="mistral",
+        region_name=None,
+    )
+
+    ## check for streaming
+    is_streaming_request = False
+    # anthropic is streaming when 'stream' = True is in the body
+    if request.method == "POST":
+        _request_body = await request.json()
+        if _request_body.get("stream"):
+            is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": "Bearer {}".format(mistral_api_key)},
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -421,26 +578,70 @@ async def azure_proxy_route(
     )
 
 
-@router.api_route(
-    "/vertex-ai/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["Vertex AI Pass-through", "pass-through"],
-    include_in_schema=False,
-)
-@router.api_route(
-    "/vertex_ai/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["Vertex AI Pass-through", "pass-through"],
-)
-async def vertex_proxy_route(
+from abc import ABC, abstractmethod
+
+
+class BaseVertexAIPassThroughHandler(ABC):
+    @staticmethod
+    @abstractmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        pass
+
+
+class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
+    @staticmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        return "https://discoveryengine.googleapis.com/"
+
+    @staticmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        return base_target_url
+
+
+class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
+    @staticmethod
+    def get_default_base_target_url(vertex_location: Optional[str]) -> str:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+
+    @staticmethod
+    def update_base_target_url_with_credential_location(
+        base_target_url: str, vertex_location: Optional[str]
+    ) -> str:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/"
+
+
+def get_vertex_pass_through_handler(
+    call_type: Literal["discovery", "aiplatform"]
+) -> BaseVertexAIPassThroughHandler:
+    if call_type == "discovery":
+        return VertexAIDiscoveryPassThroughHandler()
+    elif call_type == "aiplatform":
+        return VertexAIPassThroughHandler()
+    else:
+        raise ValueError(f"Invalid call type: {call_type}")
+
+
+async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ):
     """
-    Call LiteLLM proxy via Vertex AI SDK.
+    Base function for Vertex AI passthrough routes.
+    Handles common logic for all Vertex AI services.
 
-    [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+    Default base_target_url is `https://{vertex_location}-aiplatform.googleapis.com/`
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -456,11 +657,23 @@ async def vertex_proxy_route(
         request=request,
         api_key=api_key_to_use,
     )
+
+    if user_api_key_dict is None:
+        api_key_to_use = get_litellm_virtual_key(request=request)
+        user_api_key_dict = await user_api_key_auth(
+            request=request,
+            api_key=api_key_to_use,
+        )
+
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
         location=vertex_location,
+    )
+
+    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(
+        vertex_location
     )
 
     headers_passed_through = False
@@ -471,16 +684,12 @@ async def vertex_proxy_route(
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers
         )
-        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
         headers.pop("content-length", None)
         headers.pop("host", None)
     else:
         vertex_project = vertex_credentials.vertex_project
         vertex_location = vertex_credentials.vertex_location
         vertex_credentials_str = vertex_credentials.vertex_credentials
-
-        # Construct base URL for the target endpoint
-        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
         _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
             credentials=vertex_credentials_str,
@@ -503,6 +712,13 @@ async def vertex_proxy_route(
         headers = {
             "Authorization": f"Bearer {auth_header}",
         }
+
+        base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
+            base_target_url, vertex_location
+        )
+
+    if base_target_url is None:
+        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
     request_route = encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
@@ -548,6 +764,66 @@ async def vertex_proxy_route(
         raise e
 
     return received_value
+
+
+@router.api_route(
+    "/vertex_ai/discovery/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
+)
+async def vertex_discovery_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+):
+    """
+    Call any vertex discovery endpoint using the proxy.
+
+    Just use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`
+
+    Target url: `https://discoveryengine.googleapis.com`
+    """
+
+    discovery_handler = get_vertex_pass_through_handler(call_type="discovery")
+    return await _base_vertex_proxy_route(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        get_vertex_pass_through_handler=discovery_handler,
+    )
+
+
+@router.api_route(
+    "/vertex-ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
+    include_in_schema=False,
+)
+@router.api_route(
+    "/vertex_ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
+)
+async def vertex_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Call LiteLLM proxy via Vertex AI SDK.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+    """
+    ai_platform_handler = get_vertex_pass_through_handler(call_type="aiplatform")
+
+    return await _base_vertex_proxy_route(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        get_vertex_pass_through_handler=ai_platform_handler,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 @router.api_route(

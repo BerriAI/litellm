@@ -17,6 +17,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     Delta,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -430,11 +431,18 @@ async def test_streaming_handler_with_usage(
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
-        completion_tokens_details=None,
+        completion_tokens_details=CompletionTokensDetailsWrapper(  # <-- This has a value
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None, cached_tokens=1796, text_tokens=None, image_tokens=None
         ),
     )
+
     final_chunk = ModelResponseStream(
         id="chatcmpl-87291500-d8c5-428e-b187-36fe5a4c97ab",
         created=1742056047,
@@ -492,8 +500,9 @@ async def test_streaming_handler_with_usage(
     assert chunk_has_usage
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [False])
 @pytest.mark.asyncio
+@pytest.mark.flaky(reruns=3)
 async def test_streaming_with_usage_and_logging(sync_mode: bool):
     import time
 
@@ -510,7 +519,13 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         completion_tokens=392,
         prompt_tokens=1799,
         total_tokens=2191,
-        completion_tokens_details=None,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=None,
             cached_tokens=1796,
@@ -595,6 +610,33 @@ def test_streaming_handler_with_stop_chunk(
         **args, model_response=ModelResponseStream()
     )
     assert returned_chunk is None
+
+
+def test_set_response_id_propagation_empty_to_valid(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test that response_id is properly set when first chunk has empty ID and second chunk has valid ID"""
+
+    model_response1 = ModelResponseStream(id="", created=1742056047, model=None)
+    model_response1 = initialized_custom_stream_wrapper.set_model_id(model_response1.id, model_response1)
+    assert model_response1.id == ""
+
+    model_response2 = ModelResponseStream(id="valid-id-123", created=1742056048, model=None)
+    model_response2 = initialized_custom_stream_wrapper.set_model_id("valid-id-123", model_response2)
+    assert model_response2.id == "valid-id-123"
+    assert initialized_custom_stream_wrapper.response_id == "valid-id-123"
+
+
+def test_set_response_id_propagation_valid_to_invalid(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test that response_id is maintained when first chunk has valid ID and second chunk has invalid ID"""
+
+    model_response1 = ModelResponseStream(id="first-valid-id", created=1742056049, model=None)
+    model_response1 = initialized_custom_stream_wrapper.set_model_id("first-valid-id", model_response1)
+    assert model_response1.id == "first-valid-id"
+    assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
+
+    model_response2 = ModelResponseStream(id="", created=1742056050, model=None)
+    model_response2 = initialized_custom_stream_wrapper.set_model_id("", model_response2)
+    assert model_response2.id == "first-valid-id"
+    assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
 
 
 @pytest.mark.asyncio

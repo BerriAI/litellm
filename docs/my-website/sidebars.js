@@ -18,6 +18,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
+    
     {
       type: "category",
       label: "LiteLLM Proxy Server",
@@ -53,7 +54,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling"],
+          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
         },
         {
           type: "link",
@@ -61,6 +62,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/management_cli",
         {
           type: "category",
           label: "Making LLM Requests",
@@ -69,6 +71,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/model_discovery",
           ],
         },
         {
@@ -101,9 +104,17 @@ const sidebars = {
             "proxy/admin_ui_sso",
             "proxy/self_serve",
             "proxy/public_teams",
+            "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
-            "proxy/ui_logs"
+            {
+              type: "category",
+              label: "UI Logs",
+              items: [
+                "proxy/ui_logs",
+                "proxy/ui_logs_sessions"
+              ]
+            }
           ],
         },
         {
@@ -172,103 +183,6 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Supported Models & Providers",
-      link: {
-        type: "generated-index",
-        title: "Providers",
-        description:
-          "Learn how to deploy + call models from different providers on LiteLLM",
-        slug: "/providers",
-      },
-      items: [
-        "providers/openai",
-        "providers/text_completion_openai",
-        "providers/openai_compatible",
-        "providers/azure",
-        "providers/azure_ai",
-        "providers/aiml",
-        "providers/vertex",
-        "providers/gemini",
-        "providers/anthropic",
-        "providers/aws_sagemaker",
-        "providers/bedrock",
-        "providers/litellm_proxy",
-        "providers/mistral",
-        "providers/codestral",
-        "providers/cohere",
-        "providers/anyscale",
-        "providers/huggingface",
-        "providers/databricks",
-        "providers/deepgram",
-        "providers/watsonx",
-        "providers/predibase",
-        "providers/nvidia_nim",
-        "providers/xai",
-        "providers/lm_studio",
-        "providers/cerebras",
-        "providers/volcano",
-        "providers/triton-inference-server",
-        "providers/ollama",
-        "providers/perplexity",
-        "providers/friendliai",
-        "providers/galadriel",
-        "providers/topaz",
-        "providers/groq",
-        "providers/github",
-        "providers/deepseek",
-        "providers/fireworks_ai",
-        "providers/clarifai",
-        "providers/vllm",
-        "providers/infinity",
-        "providers/xinference",
-        "providers/cloudflare_workers",
-        "providers/deepinfra",
-        "providers/ai21",
-        "providers/nlp_cloud",
-        "providers/replicate",
-        "providers/togetherai",
-        "providers/voyage",
-        "providers/jina_ai",
-        "providers/aleph_alpha",
-        "providers/baseten",
-        "providers/openrouter",
-        "providers/sambanova",
-        "providers/custom_llm_server",
-        "providers/petals",
-        "providers/snowflake"
-      ],
-    },
-    {
-      type: "category",
-      label: "Guides",
-      items: [
-        "exception_mapping",
-        "completion/provider_specific_params",
-        "guides/finetuned_models",
-        "guides/security_settings",
-        "completion/audio",
-        "completion/web_search",
-        "completion/document_understanding",
-        "completion/vision",
-        "completion/json_mode",
-        "reasoning_content",
-        "completion/prompt_caching",
-        "completion/predict_outputs",
-        "completion/prefix",
-        "completion/drop_params",
-        "completion/prompt_formatting",
-        "completion/stream",
-        "completion/message_trimming",
-        "completion/function_call",
-        "completion/model_alias",
-        "completion/batching",
-        "completion/mock_requests",
-        "completion/reliable_completions",
-
-      ]
-    },
-    {
-      type: "category",
       label: "Supported Endpoints",
       link: {
         type: "generated-index",
@@ -303,6 +217,7 @@ const sidebars = {
           label: "/images",
           items: [
             "image_generation",
+            "image_edits",
             "image_variations",
           ]
         },
@@ -322,6 +237,8 @@ const sidebars = {
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
+            "pass_through/vllm",
+            "pass_through/mistral",
             "pass_through/openai_passthrough",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
@@ -332,13 +249,170 @@ const sidebars = {
         },
         "rerank",
         "assistants",
-        "files_endpoints",
-        "batches",
+
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
+        {
+          type: "category",
+          label: "/batches",
+          items: [
+            "batches",
+            "proxy/managed_batches",
+          ]
+        },
         "realtime",
-        "fine_tuning",
+        {
+          type: "category",
+          label: "/fine_tuning",
+          items: [
+            "fine_tuning",
+            "proxy/managed_finetuning",
+          ]
+        },
         "moderation",
+        "apply_guardrail",
       ],
     },
+    {
+      type: "category",
+      label: "Supported Models & Providers",
+      link: {
+        type: "generated-index",
+        title: "Providers",
+        description:
+          "Learn how to deploy + call models from different providers on LiteLLM",
+        slug: "/providers",
+      },
+      items: [
+        {
+          type: "category",
+          label: "OpenAI",
+          items: [
+            "providers/openai",
+            "providers/openai/responses_api",
+            "providers/openai/text_to_speech",
+          ]
+        },
+        "providers/text_completion_openai",
+        "providers/openai_compatible",
+        {
+          type: "category",
+          label: "Azure OpenAI",
+          items: [
+            "providers/azure/azure",
+            "providers/azure/azure_embedding",
+          ]
+        },
+        "providers/azure_ai",
+        "providers/aiml",
+        "providers/vertex",
+        {
+          type: "category",
+          label: "Google AI Studio",
+          items: [
+            "providers/gemini",
+            "providers/google_ai_studio/files",
+            "providers/google_ai_studio/realtime",
+          ]
+        },
+        "providers/anthropic",
+        "providers/aws_sagemaker",
+        {
+          type: "category",
+          label: "Bedrock",
+          items: [
+            "providers/bedrock",
+            "providers/bedrock_vector_store",
+          ]
+        },
+        "providers/litellm_proxy",
+        "providers/meta_llama",
+        "providers/mistral",
+        "providers/codestral",
+        "providers/cohere",
+        "providers/anyscale",
+        "providers/huggingface",
+        "providers/databricks",
+        "providers/deepgram",
+        "providers/watsonx",
+        "providers/predibase",
+        "providers/nvidia_nim",
+        { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
+        "providers/xai",
+        "providers/lm_studio",
+        "providers/cerebras",
+        "providers/volcano",
+        "providers/triton-inference-server",
+        "providers/ollama",
+        "providers/perplexity",
+        "providers/friendliai",
+        "providers/galadriel",
+        "providers/topaz",
+        "providers/groq",
+        "providers/github",
+        "providers/deepseek",
+        "providers/fireworks_ai",
+        "providers/clarifai",
+        "providers/vllm",
+        "providers/llamafile",
+        "providers/infinity",
+        "providers/xinference",
+        "providers/cloudflare_workers",
+        "providers/deepinfra",
+        "providers/ai21",
+        "providers/nlp_cloud",
+        "providers/replicate",
+        "providers/togetherai",
+        "providers/novita",
+        "providers/voyage",
+        "providers/jina_ai",
+        "providers/aleph_alpha",
+        "providers/baseten",
+        "providers/openrouter",
+        "providers/sambanova",
+        "providers/custom_llm_server",
+        "providers/petals",
+        "providers/snowflake",
+        "providers/featherless_ai"
+      ],
+    },
+    {
+      type: "category",
+      label: "Guides",
+      items: [
+        "exception_mapping",
+        "completion/provider_specific_params",
+        "guides/finetuned_models",
+        "guides/security_settings",
+        "completion/audio",
+        "completion/web_search",
+        "completion/document_understanding",
+        "completion/vision",
+        "completion/json_mode",
+        "reasoning_content",
+        "completion/prompt_caching",
+        "completion/predict_outputs",
+        "completion/knowledgebase",
+        "completion/prefix",
+        "completion/drop_params",
+        "completion/prompt_formatting",
+        "completion/stream",
+        "completion/message_trimming",
+        "completion/function_call",
+        "completion/model_alias",
+        "completion/batching",
+        "completion/mock_requests",
+        "completion/reliable_completions",
+
+      ]
+    },
+    
     {
       type: "category",
       label: "Routing, Loadbalancing & Fallbacks",
@@ -391,9 +465,11 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
-        "observability/lunary_integration",
-        "observability/mlflow",
+        "observability/agentops_integration",
         "observability/langfuse_integration",
+        "observability/lunary_integration",
+        "observability/deepeval_integration",
+        "observability/mlflow",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/literalai_integration",
@@ -427,12 +503,17 @@ const sidebars = {
       label: "Tutorials",
       items: [
         "tutorials/openweb_ui",
+        "tutorials/openai_codex",
+        "tutorials/msft_sso",
+        "tutorials/prompt_caching",
+        "tutorials/tag_management",
         'tutorials/litellm_proxy_aporia',
+        "tutorials/gemini_realtime_with_audio",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-
+            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",
@@ -500,9 +581,9 @@ const sidebars = {
             "projects/LiteLLM Proxy",
             "projects/llm_cord",
             "projects/pgai",
+            "projects/GPTLocalhost",
           ],
         },
-        "proxy/pii_masking",
         "extras/code_quality",
         "rules",
         "proxy/team_based_routing",

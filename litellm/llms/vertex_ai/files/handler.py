@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Coroutine, Optional, Union
 
 import httpx
@@ -11,9 +12,9 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import CreateFileRequest, OpenAIFileObject
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
-from .transformation import VertexAIFilesTransformation
+from .transformation import VertexAIJsonlFilesTransformation
 
-vertex_ai_files_transformation = VertexAIFilesTransformation()
+vertex_ai_files_transformation = VertexAIJsonlFilesTransformation()
 
 
 class VertexAIFilesHandler(GCSBucketBase):
@@ -92,5 +93,15 @@ class VertexAIFilesHandler(GCSBucketBase):
                 timeout=timeout,
                 max_retries=max_retries,
             )
-
-        return None  # type: ignore
+        else:
+            return asyncio.run(
+                self.async_create_file(
+                    create_file_data=create_file_data,
+                    api_base=api_base,
+                    vertex_credentials=vertex_credentials,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                )
+            )

@@ -180,6 +180,12 @@ async def list_organization(session, i):
         if status != 200:
             raise Exception(f"Request {i} did not return a 200 status code: {status}")
 
+        # Assert that budget info is returned for each organization
+        for org in response_json:
+            assert "litellm_budget_table" in org, "Missing budget info in organization response"
+            # Optionally also check that it's not null
+            assert org["litellm_budget_table"] is not None, "Budget info is None"
+
         return response_json
 
 

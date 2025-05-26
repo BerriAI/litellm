@@ -5,6 +5,7 @@ IGNORE_FUNCTIONS = [
     "_format_type",
     "_remove_additional_properties",
     "_remove_strict_from_schema",
+    "filter_schema_fields",
     "text_completion",
     "_check_for_os_environ_vars",
     "clean_message",
@@ -15,6 +16,12 @@ IGNORE_FUNCTIONS = [
     "_transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
+    "_sanitize_request_body_for_spend_logs_payload", # testing added for circular reference
+    "_sanitize_value", # testing added for circular reference
+    "set_schema_property_ordering", # testing added for infinite recursion
+    "process_items", # testing added for infinite recursion + max depth set.
+    "_can_object_call_model", # max depth set.
+    "encode_unserializable_types" # max depth set.
 ]
 
 

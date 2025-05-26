@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, Grid, Text, Title, Accordion, AccordionHeader, AccordionBody } from '@tremor/react';
 import { AreaChart, BarChart } from '@tremor/react';
-import { SpendMetrics, DailyData, ModelActivityData } from './usage/types';
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from './usage/types';
 import { Collapse } from 'antd';
 
 interface ActivityMetricsProps {
@@ -79,6 +79,21 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             stack
           />
         </Card>
+        
+        <Card>
+          <Title>Prompt Caching Metrics</Title>
+          <div className="mb-2">
+            <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
+            <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+          </div>
+          <AreaChart
+            data={metrics.daily_data}
+            index="date"
+            categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+            colors={["cyan", "purple"]}
+            valueFormatter={(number: number) => number.toLocaleString()}
+          />
+        </Card>
       </Grid>
     </div>
   );
@@ -97,6 +112,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
     total_successful_requests: 0,
     total_tokens: 0,
     total_spend: 0,
+    total_cache_read_input_tokens: 0,
+    total_cache_creation_input_tokens: 0,
     daily_data: {} as Record<string, {
       prompt_tokens: number;
       completion_tokens: number;
@@ -105,6 +122,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
       spend: number;
       successful_requests: number;
       failed_requests: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
     }>
   };
 
@@ -114,6 +133,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
     totalMetrics.total_successful_requests += model.total_successful_requests;
     totalMetrics.total_tokens += model.total_tokens;
     totalMetrics.total_spend += model.total_spend;
+    totalMetrics.total_cache_read_input_tokens += model.total_cache_read_input_tokens || 0;
+    totalMetrics.total_cache_creation_input_tokens += model.total_cache_creation_input_tokens || 0;
 
     // Aggregate daily data
     model.daily_data.forEach(day => {
@@ -125,7 +146,9 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
           api_requests: 0,
           spend: 0,
           successful_requests: 0,
-          failed_requests: 0
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
         };
       }
       totalMetrics.daily_data[day.date].prompt_tokens += day.metrics.prompt_tokens;
@@ -135,6 +158,8 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
       totalMetrics.daily_data[day.date].spend += day.metrics.spend;
       totalMetrics.daily_data[day.date].successful_requests += day.metrics.successful_requests;
       totalMetrics.daily_data[day.date].failed_requests += day.metrics.failed_requests;
+      totalMetrics.daily_data[day.date].cache_read_input_tokens += day.metrics.cache_read_input_tokens || 0;
+      totalMetrics.daily_data[day.date].cache_creation_input_tokens += day.metrics.cache_creation_input_tokens || 0;
     });
   });
 
@@ -199,7 +224,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
             key={modelName} 
             header={
               <div className="flex justify-between items-center w-full">
-                <Title>{modelName || 'Unknown Model'}</Title>
+                <Title>{modelMetrics[modelName].label || 'Unknown Item'}</Title>
                 <div className="flex space-x-4 text-sm text-gray-500">
                   <span>${modelMetrics[modelName].total_spend.toFixed(2)}</span>
                   <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
@@ -218,14 +243,24 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
   );
 };
 
+// Helper function to format key label
+const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string => {
+  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+  const teamId = modelData.metadata.team_id;
+  return teamId ? `${keyAlias} (team_id: ${teamId})` : keyAlias;
+};
+
 // Process data function
-export const processActivityData = (dailyActivity: { results: DailyData[] }): Record<string, ModelActivityData> => {
+export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
   dailyActivity.results.forEach((day) => {
-    Object.entries(day.breakdown.models || {}).forEach(([model, modelData]) => {
+    Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
+          label: key === 'api_keys' 
+            ? formatKeyLabel(modelData as KeyMetricWithMetadata, model)
+            : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,
@@ -233,6 +268,8 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
           prompt_tokens: 0,
           completion_tokens: 0,
           total_spend: 0,
+          total_cache_read_input_tokens: 0,
+          total_cache_creation_input_tokens: 0,
           daily_data: []
         };
       }
@@ -245,6 +282,8 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
       modelMetrics[model].total_spend += modelData.metrics.spend;
       modelMetrics[model].total_successful_requests += modelData.metrics.successful_requests;
       modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
+      modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
+      modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -256,7 +295,9 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }): Re
           api_requests: modelData.metrics.api_requests,
           spend: modelData.metrics.spend,
           successful_requests: modelData.metrics.successful_requests,
-          failed_requests: modelData.metrics.failed_requests
+          failed_requests: modelData.metrics.failed_requests,
+          cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
+          cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0
         }
       });
     });

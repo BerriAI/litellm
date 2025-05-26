@@ -55,6 +55,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (model dependent) | |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  | ✅ |  |  | ✅ |  | ✅ | ✅ |  |  |  |
+|Sambanova| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |  |  | ✅ |  | ✅ | ✅ |  |  |  |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
@@ -62,6 +63,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
 |ClarifAI| ✅ | ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 |Github| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ (model dependent)|✅ (model dependent)| | |
+|Novita AI| ✅ | ✅ |  | ✅ | ✅ | ✅ |  | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |  |  |  |  |  |  |  |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 

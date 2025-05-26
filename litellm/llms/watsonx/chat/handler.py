@@ -49,6 +49,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             messages=messages,
             optional_params=optional_params,
             api_key=api_key,
+            litellm_params=litellm_params,
         )
 
         ## UPDATE PAYLOAD (optional params)

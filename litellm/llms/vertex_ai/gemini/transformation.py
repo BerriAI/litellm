@@ -12,7 +12,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _get_image_mime_type_from_url,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
@@ -42,6 +46,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
+from litellm.types.utils import GenericImageParsingChunk
 
 from ..common_utils import (
     _check_text_in_content,
@@ -99,62 +104,6 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         raise e
 
 
-def _get_image_mime_type_from_url(url: str) -> Optional[str]:
-    """
-    Get mime type for common image URLs
-    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
-
-    Supported by Gemini:
-     application/pdf
-    audio/mpeg
-    audio/mp3
-    audio/wav
-    image/png
-    image/jpeg
-    image/webp
-    text/plain
-    video/mov
-    video/mpeg
-    video/mp4
-    video/mpg
-    video/avi
-    video/wmv
-    video/mpegps
-    video/flv
-    """
-    url = url.lower()
-
-    # Map file extensions to mime types
-    mime_types = {
-        # Images
-        (".jpg", ".jpeg"): "image/jpeg",
-        (".png",): "image/png",
-        (".webp",): "image/webp",
-        # Videos
-        (".mp4",): "video/mp4",
-        (".mov",): "video/mov",
-        (".mpeg", ".mpg"): "video/mpeg",
-        (".avi",): "video/avi",
-        (".wmv",): "video/wmv",
-        (".mpegps",): "video/mpegps",
-        (".flv",): "video/flv",
-        # Audio
-        (".mp3",): "audio/mp3",
-        (".wav",): "audio/wav",
-        (".mpeg",): "audio/mpeg",
-        # Documents
-        (".pdf",): "application/pdf",
-        (".txt",): "text/plain",
-    }
-
-    # Check each extension group against the URL
-    for extensions, mime_type in mime_types.items():
-        if any(url.endswith(ext) for ext in extensions):
-            return mime_type
-
-    return None
-
-
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
 ) -> List[ContentType]:
@@ -207,34 +156,44 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
-                            if audio_element["input_audio"].get("data") is not None:
-                                _part = PartType(
-                                    inline_data=BlobType(
-                                        data=audio_element["input_audio"]["data"],
-                                        mime_type="audio/{}".format(
-                                            audio_element["input_audio"]["format"]
-                                        ),
+                            audio_data = audio_element["input_audio"].get("data")
+                            audio_format = audio_element["input_audio"].get("format")
+                            if audio_data is not None and audio_format is not None:
+                                audio_format_modified = (
+                                    "audio/" + audio_format
+                                    if audio_format.startswith("audio/") is False
+                                    else audio_format
+                                )  # Gemini expects audio/wav, audio/mp3, etc.
+                                openai_image_str = (
+                                    convert_generic_image_chunk_to_openai_image_obj(
+                                        image_chunk=GenericImageParsingChunk(
+                                            type="base64",
+                                            media_type=audio_format_modified,
+                                            data=audio_data,
+                                        )
                                     )
+                                )
+                                _part = _process_gemini_image(
+                                    image_url=openai_image_str,
+                                    format=audio_format_modified,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_id = file_element["file"].get("file_id")
                             format = file_element["file"].get("format")
-
-                            if not file_id:
-                                continue
-                            mime_type = format or _get_image_mime_type_from_url(file_id)
-
-                            if mime_type is not None:
-                                _part = PartType(
-                                    file_data=FileDataType(
-                                        file_uri=file_id,
-                                        mime_type=mime_type,
-                                    )
+                            file_data = file_element["file"].get("file_data")
+                            passed_file = file_id or file_data
+                            if passed_file is None:
+                                raise Exception(
+                                    "Unknown file type. Please pass in a file_id or file_data"
+                                )
+                            try:
+                                _part = _process_gemini_image(
+                                    image_url=passed_file, format=format
                                 )
                                 _parts.append(_part)
-                            else:
+                            except Exception:
                                 raise Exception(
                                     "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
                                         file_id, msg_i, element_idx
@@ -275,6 +234,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 _message_content = assistant_msg.get("content", None)
+                reasoning_content = assistant_msg.get("reasoning_content", None)
+                if reasoning_content is not None:
+                    assistant_content.append(
+                        PartType(thought=True, text=reasoning_content)
+                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -282,6 +246,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+
                     assistant_content.extend(_parts)
                 elif (
                     _message_content is not None

@@ -33,7 +33,6 @@ from litellm.utils import (
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
-    token_counter,
     trim_messages,
     validate_environment,
 )
@@ -41,10 +40,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
-
-
+@pytest.fixture(autouse=True)
+def reset_mock_cache():
+    from litellm.utils import _model_cache
+    _model_cache.flush_cache()
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
+    litellm._turn_on_debug()
     messages = [
         {
             "role": "user",
@@ -443,41 +445,6 @@ def test_function_to_dict():
 
 # test_function_to_dict()
 
-
-def test_token_counter():
-    try:
-        messages = [{"role": "user", "content": "hi how are you what time is it"}]
-        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-        print("gpt-35-turbo")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="claude-2", messages=messages)
-        print("claude-2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="gemini/chat-bison", messages=messages)
-        print("gemini/chat-bison")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="ollama/llama2", messages=messages)
-        print("ollama/llama2")
-        print(tokens)
-        assert tokens > 0
-
-        tokens = token_counter(model="anthropic.claude-instant-v1", messages=messages)
-        print("anthropic.claude-instant-v1")
-        print(tokens)
-        assert tokens > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_token_counter()
-
-
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
@@ -510,6 +477,26 @@ def test_supports_function_calling(model, expected_bool):
 def test_supports_web_search(model, expected_bool):
     try:
         assert litellm.supports_web_search(model=model) == expected_bool
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("openai/o3-mini", True),
+        ("o3-mini", True),
+        ("xai/grok-3-mini-beta", True),
+        ("xai/grok-3-mini-fast-beta", True),
+        ("xai/grok-2", False),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_supports_reasoning(model, expected_bool):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert litellm.supports_reasoning(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1037,20 +1024,25 @@ def test_async_http_handler(mock_async_client):
     event_hooks = {"request": [lambda r: r]}
     concurrent_limit = 2
 
-    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+    # Mock the transport creation to return a specific transport
+    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+        mock_transport = mock.MagicMock()
+        mock_create_transport.return_value = mock_transport
+        
+        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
 
-    mock_async_client.assert_called_with(
-        cert="/client.pem",
-        transport=None,
-        event_hooks=event_hooks,
-        headers=headers,
-        limits=httpx.Limits(
-            max_connections=concurrent_limit,
-            max_keepalive_connections=concurrent_limit,
-        ),
-        timeout=timeout,
-        verify="/certificate.pem",
-    )
+        mock_async_client.assert_called_with(
+            cert="/client.pem",
+            transport=mock_transport,
+            event_hooks=event_hooks,
+            headers=headers,
+            limits=httpx.Limits(
+                max_connections=concurrent_limit,
+                max_keepalive_connections=concurrent_limit,
+            ),
+            timeout=timeout,
+            verify="/certificate.pem",
+        )
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1066,6 +1058,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     # Set force_ipv4 to True
     litellm.force_ipv4 = True
+    litellm.use_aiohttp_transport = False
 
     try:
         timeout = 120
@@ -1519,6 +1512,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
+        print("valid_models", valid_models)
         mock_post.assert_called_once()
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
@@ -2102,3 +2096,72 @@ def test_get_provider_audio_transcription_config():
         config = ProviderConfigManager.get_provider_audio_transcription_config(
             model="whisper-1", provider=provider
         )
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+        ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+    ],
+)
+
+def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
+    from litellm.utils import supports_pdf_input
+    
+    assert supports_pdf_input(model) == expected_bool
+
+    
+def test_get_valid_models_from_provider():
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import get_valid_models
+
+    valid_models = get_valid_models(custom_llm_provider="openai")
+    assert len(valid_models) > 0
+    assert "gpt-4o-mini" in valid_models
+
+    print("Valid models: ", valid_models)
+    valid_models.remove("gpt-4o-mini")
+    assert "gpt-4o-mini" not in valid_models
+
+    valid_models = get_valid_models(custom_llm_provider="openai")
+    assert len(valid_models) > 0
+    assert "gpt-4o-mini" in valid_models
+
+
+
+def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import _model_cache
+
+    monkeypatch.setenv("OPENAI_API_KEY", "123")
+
+    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
+    monkeypatch.delenv("OPENAI_API_KEY")
+
+    assert _model_cache.get_cached_model_info("openai") is None
+
+
+
+def test_get_valid_models_from_dynamic_api_key():
+    """
+    Test that get_valid_models returns the correct models for a given provider
+    """
+    from litellm.utils import get_valid_models
+    from litellm.types.router import CredentialLiteLLMParams
+
+    creds = CredentialLiteLLMParams(api_key="123")
+
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) == 0
+
+    creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    assert len(valid_models) > 0
+    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+
+    

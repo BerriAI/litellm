@@ -81,3 +81,48 @@ async def test_async_post_call_failure_hook():
         assert metadata["status"] == "failure"
         assert "error_information" in metadata
         assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_non_llm_route():
+    # Setup
+    logger = _ProxyDBLogger()
+
+    # Mock user_api_key_dict with a non-LLM route
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        key_alias="test_alias",
+        user_email="test@example.com",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        team_alias="test_team_alias",
+        end_user_id="test_end_user_id",
+        request_route="/custom/route",  # Non-LLM route
+    )
+
+    # Mock request data
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"original_key": "original_value"},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    # Mock exception
+    original_exception = Exception("Test exception")
+
+    # Mock update_database function
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        # Call the method
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Assert that update_database was NOT called for non-LLM routes
+        mock_update_database.assert_not_called()

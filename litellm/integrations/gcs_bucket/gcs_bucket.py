@@ -121,6 +121,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
                 kwargs
             )
+
             headers = await self.construct_request_headers(
                 vertex_instance=gcs_logging_config["vertex_instance"],
                 service_account_json=gcs_logging_config["path_service_account"],

@@ -39,7 +39,7 @@ client = openai.AzureOpenAI(
 )
 try:
     response = client.chat.completions.create(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         messages=[
             {
                 "role": "user",

@@ -1,13 +1,15 @@
-from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
+    OpenAIFilesPurpose,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -15,10 +17,15 @@ from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router as _Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
+    Span = Any
+    Router = _Router
 else:
     LiteLLMLoggingObj = Any
+    Span = Any
+    Router = Any
 
 
 class BaseFilesConfig(BaseConfig):
@@ -33,23 +40,22 @@ class BaseFilesConfig(BaseConfig):
     ) -> List[OpenAICreateFileRequestOptionalParams]:
         pass
 
-    def get_complete_url(
+    def get_complete_file_url(
         self,
         api_base: Optional[str],
         api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        """
-        OPTIONAL
-
-        Get the complete url for the request
-
-        Some providers need `model` in `api_base`
-        """
-        return api_base or ""
+        data: CreateFileRequest,
+    ):
+        return self.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
 
     @abstractmethod
     def transform_create_file_request(
@@ -58,7 +64,7 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict:
+    ) -> Union[dict, str, bytes]:
         pass
 
     @abstractmethod
@@ -100,3 +106,53 @@ class BaseFilesConfig(BaseConfig):
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
         )
+
+
+class BaseFileEndpoints(ABC):
+    @abstractmethod
+    async def acreate_file(
+        self,
+        create_file_request: CreateFileRequest,
+        llm_router: Router,
+        target_model_names_list: List[str],
+        litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_retrieve(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_list(
+        self,
+        purpose: Optional[OpenAIFilesPurpose],
+        litellm_parent_otel_span: Optional[Span],
+        **data: Dict,
+    ) -> List[OpenAIFileObject]:
+        pass
+
+    @abstractmethod
+    async def afile_delete(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_content(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
+    ) -> str:
+        pass

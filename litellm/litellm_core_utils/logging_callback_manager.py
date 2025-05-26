@@ -260,4 +260,18 @@ class LoggingCallbackManager:
         """
         Get all custom loggers that are instances of the given class type
         """
-        return [c for c in self._get_all_callbacks() if isinstance(c, callback_type)]
+        # ensure we don't have duplicate instances
+        all_callbacks = []
+        for callback in self._get_all_callbacks():
+            if isinstance(callback, callback_type) and callback not in all_callbacks:
+                all_callbacks.append(callback)
+        return all_callbacks
+
+    def callback_is_active(self, callback_type: Type[CustomLogger]) -> bool:
+        """
+        Returns True if any of the active callbacks are of the given type
+        """
+        return any(
+            isinstance(callback, callback_type)
+            for callback in self._get_all_callbacks()
+        )

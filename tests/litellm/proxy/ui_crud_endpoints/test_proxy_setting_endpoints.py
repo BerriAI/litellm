@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 
 client = TestClient(app)
 
@@ -25,7 +26,14 @@ def mock_proxy_config(monkeypatch):
                 "max_budget": 100.0,
                 "budget_duration": "30d",
                 "models": ["gpt-3.5-turbo", "gpt-4"],
-            }
+            },
+            "default_team_params": {
+                "models": ["gpt-3.5-turbo"],
+                "max_budget": 50.0,
+                "budget_duration": "14d",
+                "tpm_limit": 100,
+                "rpm_limit": 10,
+            },
         }
     }
 
@@ -135,6 +143,79 @@ class TestProxySettingEndpoints:
         ]
         assert updated_config["user_role"] == new_settings["user_role"]
         assert updated_config["max_budget"] == new_settings["max_budget"]
+
+        # Verify save_config was called exactly once
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_get_default_team_settings(self, mock_proxy_config, mock_auth):
+        """Test getting the default team settings"""
+        response = client.get("/get/default_team_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check structure of response
+        assert "values" in data
+        assert "schema" in data
+
+        # Check values match our mock config
+        values = data["values"]
+        mock_params = mock_proxy_config["config"]["litellm_settings"][
+            "default_team_params"
+        ]
+        assert values["models"] == mock_params["models"]
+        assert values["max_budget"] == mock_params["max_budget"]
+        assert values["budget_duration"] == mock_params["budget_duration"]
+        assert values["tpm_limit"] == mock_params["tpm_limit"]
+        assert values["rpm_limit"] == mock_params["rpm_limit"]
+
+        # Check schema contains descriptions
+        assert "properties" in data["schema"]
+        assert "models" in data["schema"]["properties"]
+        assert "description" in data["schema"]["properties"]["models"]
+
+    def test_update_default_team_settings(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating the default team settings"""
+        # Mock litellm.default_team_params
+        import litellm
+
+        monkeypatch.setattr(litellm, "default_team_params", {})
+
+        # New settings to update
+        new_settings = {
+            "models": ["gpt-4", "claude-3"],
+            "max_budget": 150.0,
+            "budget_duration": "30d",
+            "tpm_limit": 200,
+            "rpm_limit": 20,
+        }
+
+        response = client.patch("/update/default_team_settings", json=new_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert data["status"] == "success"
+        assert "settings" in data
+
+        # Verify settings were updated
+        settings = data["settings"]
+        assert settings["models"] == new_settings["models"]
+        assert settings["max_budget"] == new_settings["max_budget"]
+        assert settings["budget_duration"] == new_settings["budget_duration"]
+        assert settings["tpm_limit"] == new_settings["tpm_limit"]
+        assert settings["rpm_limit"] == new_settings["rpm_limit"]
+
+        # Verify the config was updated
+        updated_config = mock_proxy_config["config"]["litellm_settings"][
+            "default_team_params"
+        ]
+        assert updated_config["models"] == new_settings["models"]
+        assert updated_config["max_budget"] == new_settings["max_budget"]
+        assert updated_config["tpm_limit"] == new_settings["tpm_limit"]
 
         # Verify save_config was called exactly once
         assert mock_proxy_config["save_call_count"]() == 1

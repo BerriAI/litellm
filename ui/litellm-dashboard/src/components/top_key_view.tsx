@@ -141,7 +141,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
                   <div className="space-y-1.5">
                     <div className="text-sm">
                       <span className="text-gray-300">Key: </span>
-                      <span className="font-mono text-gray-100">{item?.key?.slice(0, 10)}...</span>
+                      <span className="font-mono text-gray-100">{item?.api_key?.slice(0, 10)}...</span>
                     </div>
                     <div className="text-sm">
                       <span className="text-gray-300">Spend: </span>

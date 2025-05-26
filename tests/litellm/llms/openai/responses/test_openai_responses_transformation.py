@@ -201,13 +201,19 @@ class TestOpenAIResponsesAPIConfig:
         # Test with provided API base
         api_base = "https://custom-openai.example.com/v1"
 
-        result = self.config.get_complete_url(api_base=api_base, model=self.model)
+        result = self.config.get_complete_url(
+            api_base=api_base,
+            litellm_params={},
+        )
 
         assert result == "https://custom-openai.example.com/v1/responses"
 
         # Test with litellm.api_base
         with patch("litellm.api_base", "https://litellm-api-base.example.com/v1"):
-            result = self.config.get_complete_url(api_base=None, model=self.model)
+            result = self.config.get_complete_url(
+                api_base=None,
+                litellm_params={},
+            )
 
             assert result == "https://litellm-api-base.example.com/v1/responses"
 
@@ -217,7 +223,10 @@ class TestOpenAIResponsesAPIConfig:
                 "litellm.llms.openai.responses.transformation.get_secret_str",
                 return_value="https://env-api-base.example.com/v1",
             ):
-                result = self.config.get_complete_url(api_base=None, model=self.model)
+                result = self.config.get_complete_url(
+                    api_base=None,
+                    litellm_params={},
+                )
 
                 assert result == "https://env-api-base.example.com/v1/responses"
 
@@ -227,13 +236,38 @@ class TestOpenAIResponsesAPIConfig:
                 "litellm.llms.openai.responses.transformation.get_secret_str",
                 return_value=None,
             ):
-                result = self.config.get_complete_url(api_base=None, model=self.model)
+                result = self.config.get_complete_url(
+                    api_base=None,
+                    litellm_params={},
+                )
 
                 assert result == "https://api.openai.com/v1/responses"
 
         # Test with trailing slash in API base
         api_base = "https://custom-openai.example.com/v1/"
 
-        result = self.config.get_complete_url(api_base=api_base, model=self.model)
+        result = self.config.get_complete_url(
+            api_base=api_base,
+            litellm_params={},
+        )
 
         assert result == "https://custom-openai.example.com/v1/responses"
+
+    def test_get_event_model_class_generic_event(self):
+        """Test that get_event_model_class returns the correct event model class"""
+        from litellm.types.llms.openai import GenericEvent
+
+        event_type = "test"
+        result = self.config.get_event_model_class(event_type)
+        assert result == GenericEvent
+
+    def test_transform_streaming_response_generic_event(self):
+        """Test that transform_streaming_response returns the correct event model class"""
+        from litellm.types.llms.openai import GenericEvent
+
+        chunk = {"type": "test", "test": "test"}
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+        assert isinstance(result, GenericEvent)
+        assert result.type == "test"

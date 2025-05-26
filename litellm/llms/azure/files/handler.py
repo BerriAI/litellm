@@ -28,11 +28,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         self,
         create_file_data: CreateFileRequest,
         openai_client: AsyncAzureOpenAI,
-    ) -> FileObject:
+    ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
         response = await openai_client.files.create(**create_file_data)
         verbose_logger.debug("create_file_response=%s", response)
-        return response
+        return OpenAIFileObject(**response.model_dump())
 
     def create_file(
         self,
@@ -66,7 +66,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.acreate_file(  # type: ignore
+            return self.acreate_file(
                 create_file_data=create_file_data, openai_client=openai_client
             )
         response = cast(AzureOpenAI, openai_client).files.create(**create_file_data)

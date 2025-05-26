@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from .utils import ModelResponse, ProviderSpecificModelInfo
 
@@ -95,16 +96,18 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
 
-    base_model: Optional[
-        str
-    ] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    )
     tier: Optional[Literal["free", "paid"]] = None
 
     """
@@ -161,7 +164,17 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class GenericLiteLLMParams(CredentialLiteLLMParams):
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+
+
+class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -169,24 +182,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
-    timeout: Optional[
-        Union[float, str, httpx.Timeout]
-    ] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[
-        Union[float, str]
-    ] = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
+    stream_timeout: Optional[Union[float, str]] = (
+        None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    litellm_credential_name: Optional[str] = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
-
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
 
     max_file_size_mb: Optional[float] = None
 
@@ -194,6 +202,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
+    use_litellm_proxy: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -236,6 +245,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # Dynamic param to force using litellm proxy
+        use_litellm_proxy: Optional[bool] = False,
         # This will merge the reasoning content in the choices
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
@@ -249,9 +260,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         # We need to keep max_retries in args since it's a parameter of GenericLiteLLMParams
-        args[
-            "max_retries"
-        ] = max_retries  # Put max_retries back in args after popping it
+        args["max_retries"] = (
+            max_retries  # Put max_retries back in args after popping it
+        )
         super().__init__(**args, **params)
 
     def __contains__(self, key):
@@ -306,6 +317,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         max_file_size_mb: Optional[float] = None,
         # will use deployment on pass-through endpoints if True
         use_in_pass_through: Optional[bool] = False,
+        use_litellm_proxy: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -558,6 +570,7 @@ class ModelGroupInfo(BaseModel):
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
+    supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -702,4 +715,17 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+    ]
+]
+
+
+class LiteLLM_RouterFileObject(TypedDict, total=False):
+    """
+    Tracking the litellm params hash, used for mapping the file id to the right model
+    """
+
+    litellm_params_sensitive_credential_hash: str
+    file_object: OpenAIFileObject

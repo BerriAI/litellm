@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -10,8 +10,11 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
+    ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
@@ -31,6 +34,8 @@ class BaseResponsesAPIStreamingIterator:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         self.response = response
         self.model = model
@@ -40,7 +45,11 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = datetime.now()
 
-    def _process_chunk(self, chunk):
+        # set request kwargs
+        self.litellm_metadata = litellm_metadata
+        self.custom_llm_provider = custom_llm_provider
+
+    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -68,6 +77,17 @@ class BaseResponsesAPIStreamingIterator:
                         logging_obj=self.logging_obj,
                     )
                 )
+
+                # if "response" in parsed_chunk, then encode litellm specific information like custom_llm_provider
+                response_object = getattr(openai_responses_api_chunk, "response", None)
+                if response_object:
+                    response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                        responses_api_response=response_object,
+                        litellm_metadata=self.litellm_metadata,
+                        custom_llm_provider=self.custom_llm_provider,
+                    )
+                    setattr(openai_responses_api_chunk, "response", response)
+
                 # Store the completed response
                 if (
                     openai_responses_api_chunk
@@ -100,8 +120,17 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
-        super().__init__(response, model, responses_api_provider_config, logging_obj)
+        super().__init__(
+            response,
+            model,
+            responses_api_provider_config,
+            logging_obj,
+            litellm_metadata,
+            custom_llm_provider,
+        )
         self.stream_iterator = response.aiter_lines()
 
     def __aiter__(self):
@@ -161,8 +190,17 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
-        super().__init__(response, model, responses_api_provider_config, logging_obj)
+        super().__init__(
+            response,
+            model,
+            responses_api_provider_config,
+            logging_obj,
+            litellm_metadata,
+            custom_llm_provider,
+        )
         self.stream_iterator = response.iter_lines()
 
     def __iter__(self):
@@ -212,8 +250,13 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
 class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
-    mock iterator - some models like o1-pro do not support streaming, we need to fake a stream
+    Mock iterator—fake a stream by slicing the full response text into
+    5 char deltas, then emit a completed event.
+
+    Models like o1-pro don't support streaming, so we fake it.
     """
+
+    CHUNK_SIZE = 5
 
     def __init__(
         self,
@@ -221,50 +264,74 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
-        self.raw_http_response = response
         super().__init__(
             response=response,
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             logging_obj=logging_obj,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
         )
-        self.is_done = False
+
+        # one-time transform
+        transformed = (
+            self.responses_api_provider_config.transform_response_api_response(
+                model=self.model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        )
+        full_text = self._collect_text(transformed)
+
+        # build a list of 5‑char delta events
+        deltas = [
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                delta=full_text[i : i + self.CHUNK_SIZE],
+                item_id=transformed.id,
+                output_index=0,
+                content_index=0,
+            )
+            for i in range(0, len(full_text), self.CHUNK_SIZE)
+        ]
+
+        # append the completed event
+        self._events = deltas + [
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=transformed,
+            )
+        ]
+        self._idx = 0
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
-        if self.is_done:
+        if self._idx >= len(self._events):
             raise StopAsyncIteration
-        self.is_done = True
-        transformed_response = (
-            self.responses_api_provider_config.transform_response_api_response(
-                model=self.model,
-                raw_response=self.raw_http_response,
-                logging_obj=self.logging_obj,
-            )
-        )
-        return ResponseCompletedEvent(
-            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-            response=transformed_response,
-        )
+        evt = self._events[self._idx]
+        self._idx += 1
+        return evt
 
     def __iter__(self):
         return self
 
     def __next__(self) -> ResponsesAPIStreamingResponse:
-        if self.is_done:
+        if self._idx >= len(self._events):
             raise StopIteration
-        self.is_done = True
-        transformed_response = (
-            self.responses_api_provider_config.transform_response_api_response(
-                model=self.model,
-                raw_response=self.raw_http_response,
-                logging_obj=self.logging_obj,
-            )
-        )
-        return ResponseCompletedEvent(
-            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-            response=transformed_response,
-        )
+        evt = self._events[self._idx]
+        self._idx += 1
+        return evt
+
+    def _collect_text(self, resp: ResponsesAPIResponse) -> str:
+        out = ""
+        for out_item in resp.output:
+            item_type = getattr(out_item, "type", None)
+            if item_type == "message":
+                for c in getattr(out_item, "content", []):
+                    out += c.text
+        return out

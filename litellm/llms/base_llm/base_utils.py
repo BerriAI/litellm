@@ -3,6 +3,7 @@ Utility functions for base LLM classes.
 """
 
 import copy
+import json
 from abc import ABC, abstractmethod
 from typing import List, Optional, Type, Union
 
@@ -10,8 +11,8 @@ from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ProviderSpecificModelInfo
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.utils import Message, ProviderSpecificModelInfo
 
 
 class BaseLLMModelInfo(ABC):
@@ -43,6 +44,19 @@ class BaseLLMModelInfo(ABC):
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         pass
 
+    @abstractmethod
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        pass
+
     @staticmethod
     @abstractmethod
     def get_base_model(model: str) -> Optional[str]:
@@ -53,6 +67,32 @@ class BaseLLMModelInfo(ABC):
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
         pass
+
+
+def _convert_tool_response_to_message(
+    tool_calls: List[ChatCompletionToolCallChunk],
+) -> Optional[Message]:
+    """
+    In JSON mode, Anthropic API returns JSON schema as a tool call, we need to convert it to a message to follow the OpenAI format
+
+    """
+    ## HANDLE JSON MODE - anthropic returns single function call
+    json_mode_content_str: Optional[str] = tool_calls[0]["function"].get("arguments")
+    try:
+        if json_mode_content_str is not None:
+            args = json.loads(json_mode_content_str)
+            if isinstance(args, dict) and (values := args.get("values")) is not None:
+                _message = Message(content=json.dumps(values))
+                return _message
+            else:
+                # a lot of the times the `values` key is not present in the tool response
+                # relevant issue: https://github.com/BerriAI/litellm/issues/6741
+                _message = Message(content=json.dumps(args))
+                return _message
+    except json.JSONDecodeError:
+        # json decode error does occur, return the original tool response str
+        return Message(content=json_mode_content_str)
+    return None
 
 
 def _dict_to_response_format_helper(

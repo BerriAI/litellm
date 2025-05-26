@@ -288,6 +288,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            litellm_params=litellm_params,
         )
 
         thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore

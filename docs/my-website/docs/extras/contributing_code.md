@@ -4,19 +4,22 @@
 
 Here are the core requirements for any PR submitted to LiteLLM
 
-
+- [ ] Sign the Contributor License Agreement (CLA) - [see details](#contributor-license-agreement-cla)
 - [ ] Add testing, **Adding at least 1 test is a hard requirement** - [see details](#2-adding-testing-to-your-pr)
 - [ ] Ensure your PR passes the following tests:
-    - [ ] [Unit Tests](#3-running-unit-tests)
-    - [ ] [Formatting / Linting Tests](#35-running-linting-tests)
+  - [ ] [Unit Tests](#3-running-unit-tests)
+  - [ ] [Formatting / Linting Tests](#35-running-linting-tests)
 - [ ] Keep scope as isolated as possible. As a general rule, your changes should address 1 specific problem at a time
 
+## **Contributor License Agreement (CLA)**
 
+Before contributing code to LiteLLM, you must sign our [Contributor License Agreement (CLA)](<(https://cla-assistant.io/BerriAI/litellm)>). This is a legal requirement for all contributions to be merged into the main repository. The CLA helps protect both you and the project by clearly defining the terms under which your contributions are made.
+
+**Important:** We strongly recommend reviewing and signing the CLA before starting work on your contribution to avoid any delays in the PR process. You can find the CLA [here](https://cla-assistant.io/BerriAI/litellm) and sign it through our CLA management system when you submit your first PR.
 
 ## Quick start
 
 ## 1. Setup your local dev environment
-
 
 Here's how to modify the repo locally:
 
@@ -71,9 +74,9 @@ LiteLLM uses mypy for linting. On ci/cd we also run `black` for formatting.
 - push your fork to your GitHub repo
 - submit a PR from there
 
-
 ## Advanced
-### Building LiteLLM Docker Image 
+
+### Building LiteLLM Docker Image
 
 Some people might want to build the LiteLLM docker image themselves. Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
 
