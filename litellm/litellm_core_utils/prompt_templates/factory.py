@@ -2255,7 +2255,6 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
-from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
@@ -2268,6 +2267,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
+from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
 
 def _parse_content_type(content_type: str) -> str:
@@ -2363,6 +2363,9 @@ class BedrockImageProcessor:
 
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
+        supported_image_and_video_formats: List[str] = (
+            supported_video_formats + supported_image_formats
+        )
 
         if is_document:
             potential_extensions = mimetypes.guess_all_extensions(mime_type)
@@ -2380,9 +2383,12 @@ class BedrockImageProcessor:
             # Use first valid extension instead of provided image_format
             return valid_extensions[0]
         else:
-            if image_format not in supported_video_formats and image_format not in supported_image_formats:
+            #########################################################
+            # Check if image_format is an image or video
+            #########################################################
+            if image_format not in supported_image_and_video_formats:
                 raise ValueError(
-                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
 
@@ -2399,7 +2405,10 @@ class BedrockImageProcessor:
         supported_video_formats = (
             litellm.AmazonConverseConfig().get_supported_video_types()
         )
-        is_video = any(image_format.startswith(video_type) for video_type in supported_video_formats)
+        is_video = any(
+            image_format.startswith(video_type)
+            for video_type in supported_video_formats
+        )
 
         if is_document:
             return BedrockContentBlock(
