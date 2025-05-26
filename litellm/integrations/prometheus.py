@@ -1990,15 +1990,16 @@ class PrometheusLogger(CustomLogger):
     def _mount_metrics_endpoint(premium_user: bool):
         """
         Mount the Prometheus metrics endpoint with optional authentication.
+        Uses thread pool executor to offload metrics generation from main thread.
 
         Args:
             premium_user (bool): Whether the user is a premium user
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
         """
-        from prometheus_client import make_asgi_app
+        from fastapi import Response
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
         from litellm._logging import verbose_proxy_logger
+        from litellm.litellm_core_utils.thread_pool_executor import executor
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import app
 
@@ -2007,13 +2008,26 @@ class PrometheusLogger(CustomLogger):
                 f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
 
-        # Create metrics ASGI app
-        metrics_app = make_asgi_app()
+        def _generate_metrics() -> bytes:
+            """Generate prometheus metrics in thread pool to avoid blocking main thread"""
+            return generate_latest()
 
-        # Mount the metrics app to the app
-        app.mount("/metrics", metrics_app)
+        @app.get("/metrics")
+        async def metrics_endpoint():
+            """
+            Custom metrics endpoint that offloads metrics generation to thread pool.
+            This prevents flooding /metrics from impacting main thread performance.
+            """
+            import asyncio
+
+            # Offload metrics generation to thread pool
+            loop = asyncio.get_event_loop()
+            metrics_data = await loop.run_in_executor(executor, _generate_metrics)
+
+            return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
+
         verbose_proxy_logger.debug(
-            "Starting Prometheus Metrics on /metrics (no authentication)"
+            "Starting Prometheus Metrics on /metrics (thread pool executor enabled)"
         )
 
 
