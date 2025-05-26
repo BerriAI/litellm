@@ -32,6 +32,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
     def get_complete_url(
         self,
+        model: str,
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
@@ -42,14 +43,13 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         - api_base: Base URL, e.g.,
             "https://litellm8397336933.openai.azure.com"
             OR
-            "https://litellm8397336933.openai.azure.com/openai/images/edits?api-version=2024-05-01-preview"
-        - model: Model name.
-        - optional_params: Additional query parameters, including "api_version".
-        - stream: If streaming is required (optional).
+            "https://litellm8397336933.openai.azure.com/openai/deployments/<deployment_name>/images/edits?api-version=2024-05-01-preview"
+        - model: Model name (deployment name).
+        - litellm_params: Additional query parameters, including "api_version".
 
         Returns:
         - A complete URL string, e.g.,
-        "https://litellm8397336933.openai.azure.com/openai/images/edits?api-version=2024-05-01-preview"
+        "https://litellm8397336933.openai.azure.com/openai/deployments/<deployment_name>/images/edits?api-version=2024-05-01-preview"
         """
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         if api_base is None:
@@ -68,11 +68,11 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
-        # Add the path to the base URL
-        if "/openai/deployments/images/edits" not in api_base:
+        # Add the path to the base URL using the model as deployment name
+        if "/openai/deployments/" not in api_base:
             new_url = _add_path_to_api_base(
                 api_base=api_base,
-                ending_path=f"/openai/deployments/Dalle3/images/edits",
+                ending_path=f"/openai/deployments/{model}/images/edits",
             )
         else:
             new_url = api_base
