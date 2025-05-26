@@ -12,8 +12,7 @@ import litellm.litellm_core_utils.prompt_templates
 import litellm.litellm_core_utils.prompt_templates.factory
 
 load_dotenv()
-import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -21,10 +20,8 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import get_optional_params
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
-from litellm.types.llms.vertex_ai import PartType, BlobType
-import httpx
+from litellm.types.llms.vertex_ai import BlobType
 
 
 def encode_image_to_base64(image_path):
@@ -1146,7 +1143,7 @@ def test_process_gemini_image():
     from litellm.llms.vertex_ai.gemini.transformation import (
         _process_gemini_image,
     )
-    from litellm.types.llms.vertex_ai import PartType, FileDataType, BlobType
+    from litellm.types.llms.vertex_ai import FileDataType
 
     # Test GCS URI
     gcs_result = _process_gemini_image("gs://bucket/image.png")
@@ -1271,10 +1268,6 @@ def test_vertex_embedding_url(model, expected_url):
 
 import pytest
 from unittest.mock import Mock, patch
-from typing import Dict, Any
-
-# Import your actual module here
-# from your_module import _process_gemini_image, PartType, FileDataType, BlobType
 
 
 # Add these fixtures below existing fixtures
