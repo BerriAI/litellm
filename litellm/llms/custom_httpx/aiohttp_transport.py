@@ -16,8 +16,6 @@ AIOHTTP_EXC_MAP: dict[type[Exception], type[Exception]] = {
     aiohttp.ServerTimeoutError: httpx.TimeoutException,
     aiohttp.ConnectionTimeoutError: httpx.ConnectTimeout,
     aiohttp.SocketTimeoutError: httpx.ReadTimeout,
-    # DNS related exceptions
-    aiohttp.ClientConnectorDNSError: httpx.ConnectError,
     # Proxy related exceptions
     aiohttp.ClientProxyConnectionError: httpx.ProxyError,
     # SSL related exceptions
@@ -25,7 +23,6 @@ AIOHTTP_EXC_MAP: dict[type[Exception], type[Exception]] = {
     aiohttp.ClientSSLError: httpx.ProtocolError,
     aiohttp.ServerFingerprintMismatch: httpx.ProtocolError,
     # Network related exceptions
-    aiohttp.ClientConnectionResetError: httpx.ConnectError,
     aiohttp.ClientConnectorError: httpx.ConnectError,
     aiohttp.ClientOSError: httpx.ConnectError,
     aiohttp.ClientConnectorError: httpx.ConnectError,
