@@ -73,11 +73,11 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
 )
+from litellm.proxy.image_endpoints import image_generation
 from litellm.proxy.management_endpoints.customer_endpoints import (
     new_end_user,
 )

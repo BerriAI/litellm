@@ -20,7 +20,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    DEFAULT_IN_MEMORY_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MAX_RECURSE_DEPTH,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -697,8 +701,14 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                new_user_params: Dict[str, Any] = {
+                    "user_id": user_id,
+                }
+                if litellm.default_internal_user_params is not None:
+                    new_user_params.update(litellm.default_internal_user_params)
+
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id},
+                    data=new_user_params,
                     include={"organization_memberships": True},
                 )
             else:
@@ -720,7 +730,11 @@ async def get_user_object(
         response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+        await user_api_key_cache.async_set_cache(
+            key=user_id,
+            value=response_dict,
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
 
         # save to db access time
         _update_last_db_access_time(
@@ -742,7 +756,9 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    await user_api_key_cache.async_set_cache(key=key, value=value)
+    await user_api_key_cache.async_set_cache(
+        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+    )
 
 
 async def _cache_team_object(
@@ -856,7 +872,6 @@ async def _get_team_object_from_user_api_key_cache(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    # save to db access time
     # save to db access time
     _update_last_db_access_time(
         key=db_access_time_key,

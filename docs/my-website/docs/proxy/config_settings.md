@@ -293,6 +293,7 @@ router_settings:
 | cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
 | optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
+| ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
 
 
 ### environment variables - Reference
@@ -349,7 +350,9 @@ router_settings:
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
 | CONFIG_FILE_PATH | File path for configuration file
+| CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
+| CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | DATABASE_HOST | Hostname for the database server
 | DATABASE_NAME | Name of the database
 | DATABASE_PASSWORD | Password for the database user
@@ -384,6 +387,7 @@ router_settings:
 | DEFAULT_IMAGE_TOKEN_COUNT | Default token count for images. Default is 250
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
 | DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
+| DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL | Default time-to-live in seconds for management objects (User, Team, Key, Organization) in memory cache. Default is 60 seconds.
 | DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
 | DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
@@ -505,6 +509,7 @@ router_settings:
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
+| LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
@@ -513,6 +518,7 @@ router_settings:
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
+| LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
@@ -526,7 +532,9 @@ router_settings:
 | MAX_TILE_HEIGHT | Maximum height for image tiles. Default is 512
 | MAX_TILE_WIDTH | Maximum width for image tiles. Default is 512
 | MAX_TOKEN_TRIMMING_ATTEMPTS | Maximum number of attempts to trim a token message. Default is 10
+| MAXIMUM_TRACEBACK_LINES_TO_LOG | Maximum number of lines to log in traceback in LiteLLM Logs UI. Default is 100
 | MAX_RETRY_DELAY | Maximum delay in seconds for retrying requests. Default is 8.0
+| MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 20. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API
@@ -633,6 +641,7 @@ router_settings:
 | UPSTREAM_LANGFUSE_PUBLIC_KEY | Public key for upstream Langfuse authentication
 | UPSTREAM_LANGFUSE_RELEASE | Release version identifier for upstream Langfuse
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
+| USE_AIOHTTP_TRANSPORT | Flag to enable aiohttp transport. This is a feature flag for the new aiohttp transport. **Default is False**
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
 | WEBHOOK_URL | URL for receiving webhooks from external services

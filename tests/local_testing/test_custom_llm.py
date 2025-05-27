@@ -44,7 +44,7 @@ from litellm import (
     image_generation,
 )
 from litellm.utils import ModelResponseIterator
-from litellm.types.utils import ImageResponse, ImageObject
+from litellm.types.utils import ImageResponse, ImageObject, EmbeddingResponse
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -257,6 +257,53 @@ class MyCustomLLM(CustomLLM):
             response_ms=1000,
         )
 
+    def embedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
+        aembedding=None,
+    ) -> EmbeddingResponse:
+        model_response.model = model
+
+        model_response.data = [
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2, 0.3],
+                "index": i,
+            }
+            for i, _ in enumerate(input)
+        ]
+
+        return model_response
+
+    async def aembedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
+    ) -> EmbeddingResponse:
+        model_response.model = model
+
+        model_response.data = [
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2, 0.3],
+                "index": i,
+            }
+            for i, _ in enumerate(input)
+        ]
+
+        return model_response
+
 
 def test_get_llm_provider():
     """"""
@@ -452,3 +499,36 @@ def test_get_supported_openai_params():
 
     response = get_supported_openai_params(model="my-custom-llm/my-fake-model")
     assert response is not None
+
+def test_simple_embedding():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = litellm.embedding(
+        model="custom_llm/my-fake-model",
+        input=["good morning from litellm", "good night from litellm"]
+    )
+
+    assert resp.data[1] == {
+        "object": "embedding",
+        "embedding": [0.1, 0.2, 0.3],
+        "index": 1,
+    }
+
+@pytest.mark.asyncio
+async def test_simple_aembedding():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.aembedding(
+        model="custom_llm/my-fake-model",
+        input=["good morning from litellm", "good night from litellm"]
+    )
+
+    assert resp.data[1] == {
+        "object": "embedding",
+        "embedding": [0.1, 0.2, 0.3],
+        "index": 1,
+    }

@@ -173,7 +173,9 @@ export function ToolTestPanel({
                   />
                 </div>
               </div>
-            ) : (
+            ) : schema.properties === undefined ? (
+              <p className="text-xs">None</p>
+            ): (
               Object.entries(schema.properties).map(([key, prop]) => (
                 <div key={key} className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
