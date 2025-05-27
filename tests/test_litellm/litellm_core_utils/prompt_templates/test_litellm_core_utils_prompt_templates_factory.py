@@ -7,6 +7,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
+    BedrockImageProcessor,
     ollama_pt,
 )
 
@@ -80,6 +81,32 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
         result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"]
         == "This is a test thinking block"
     )
+
+
+def test_bedrock_validate_format_image_or_video():
+    """Test the _validate_format method for images, videos, and documents"""
+
+    # Test valid image formats
+    valid_image_formats = ["png", "jpeg", "gif", "webp"]
+    for format in valid_image_formats:
+        result = BedrockImageProcessor._validate_format(f"image/{format}", format)
+        assert result == format, f"Expected {format}, got {result}"
+
+    # Test valid video formats
+    valid_video_formats = [
+        "mp4",
+        "mov",
+        "mkv",
+        "webm",
+        "flv",
+        "mpeg",
+        "mpg",
+        "wmv",
+        "3gp",
+    ]
+    for format in valid_video_formats:
+        result = BedrockImageProcessor._validate_format(f"video/{format}", format)
+        assert result == format, f"Expected {format}, got {result}"
 
 
 # def test_ollama_pt_consecutive_system_messages():

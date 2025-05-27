@@ -36,6 +36,14 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
+BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
+
+
+class VideoBlock(TypedDict):
+    format: Union[BedrockVideoTypes, str]
+    source: SourceBlock
+
+
 BedrockDocumentTypes = Literal[
     "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
 ]
@@ -85,6 +93,7 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    video: VideoBlock
     document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
