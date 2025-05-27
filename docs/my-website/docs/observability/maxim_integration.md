@@ -3,7 +3,7 @@ title: "Maxim - Agent Observability"
 description: "Maxim AI streamlines AI application development and deployment by applying traditional software best practices to non-deterministic AI workflows. An end to end Agent Simulation, Evaluation & Observability platform which help teams maintain quality, reliability, and speed throughout the AI application lifecycle."
 ---
 
-![docs/my-website/img/maxim-litellm.png]()
+![docs/my-website/img/maxim-litellm.png](https://github.com/akmadan/litellm/blob/litellm_maxim_observability/docs/my-website/img/maxim-litellm.png)
 
 You can integrate Maxim as an observability platform either using Maxim SDK or via LiteLLM Proxy
 
@@ -96,7 +96,7 @@ To quickly get started, please check this [Google Colab Notebook](https://colab.
 
 Check the quick demo of what we just learnt —
 
-![maxim-litellm-gif.gif](docs/my-website/img/maxim-litellm-gif.gif)
+![maxim-litellm-gif.gif]([docs/my-website/img/maxim-litellm-gif.gif](https://github.com/akmadan/litellm/blob/litellm_maxim_observability/docs/my-website/img/maxim-litellm-gif.gif))
 
 ## Integrate using **LiteLLM Proxy: One-Line Integration**
 
