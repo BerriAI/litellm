@@ -356,7 +356,7 @@ model LiteLLM_AuditLog {
 // Track daily user spend metrics per model and key
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
-  user_id             String
+  user_id             String? 
   date                String
   api_key             String   
   model               String   
@@ -383,7 +383,7 @@ model LiteLLM_DailyUserSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
-  team_id             String
+  team_id             String?
   date                String
   api_key             String   
   model               String   
@@ -410,7 +410,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
-  tag                 String   
+  tag                 String?   
   date                String
   api_key             String   
   model               String   
