@@ -135,6 +135,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def get_complete_url(
         self,
+        model: str,
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:

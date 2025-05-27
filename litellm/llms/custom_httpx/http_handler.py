@@ -490,13 +490,9 @@ class AsyncHTTPHandler:
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         #########################################################
-        # AIOHTTP TRANSPORT is used by default
-        # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
+        # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if (
-            AsyncHTTPHandler._should_use_aiohttp_transport()
-            and AsyncHTTPHandler.aiohttp_transport_exists()
-        ):
+        if AsyncHTTPHandler._should_use_aiohttp_transport():
             return AsyncHTTPHandler._create_aiohttp_transport(
                 ssl_context=ssl_context, ssl_verify=ssl_verify
             )
@@ -537,12 +533,19 @@ class AsyncHTTPHandler:
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        verbose_logger.debug("Creating AiohttpTransport...")
+        #########################################################
+        # If ssl_verify is None, set it to True
+        # TCP Connector does not allow ssl_verify to be None
+        # by default aiohttp sets ssl_verify to True
+        #########################################################
+        if ssl_verify is None:
+            ssl_verify = True
 
+        verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(
-                    verify_ssl=ssl_verify or True,
+                    verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
                 )
@@ -561,22 +564,6 @@ class AsyncHTTPHandler:
             return AsyncHTTPTransport(local_address="0.0.0.0")
         else:
             return None
-
-    @staticmethod
-    def aiohttp_transport_exists() -> bool:
-        """
-        Returns True if `httpx-aiohttp` is installed.
-
-        `httpx-aiohttp` only supports python 3.9+
-
-        For users on python 3.8, we will use `httpx.AsyncClient` instead of `httpx-aiohttp`.
-        """
-        try:
-            import importlib.util
-
-            return importlib.util.find_spec("httpx_aiohttp") is not None
-        except Exception:
-            return False
 
 
 class HTTPHandler:
