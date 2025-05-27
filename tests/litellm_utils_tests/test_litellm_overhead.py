@@ -136,8 +136,10 @@ async def test_text_acompletion_codestral_emits_overhead_time_ms():
     # assert overhead is in the response
     assert response._hidden_params.get("litellm_overhead_time_ms") is not None
 
-    # assert response_ms is in the response
+    # assert response_ms is in the response and in hidden params
     assert response._response_ms is not None
+    assert response._hidden_params.get("_response_ms") is not None
+    assert response._response_ms == response._hidden_params.get("_response_ms")
 
     print("total response time ms=", response._response_ms)
     print("total litellm overhead time ms=", response._hidden_params.get("litellm_overhead_time_ms"))

@@ -64,8 +64,9 @@ class ResponseMetadata:
             self._hidden_params.update(new_params)
         elif isinstance(self._hidden_params, HiddenParams):
             # For HiddenParams object, set attributes individually
-            for key, value in new_params.items():
-                setattr(self._hidden_params, key, value)
+            dict_params = dict(self._hidden_params)
+            dict_params.update(new_params)
+            self._hidden_params = HiddenParams(**dict_params)
 
     def _get_value_from_hidden_params(self, key: str) -> Optional[Any]:
         """Get value from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""
