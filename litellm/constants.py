@@ -231,6 +231,7 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "morph",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -341,6 +342,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.morphllm.com/v1",
 ]
 
 
@@ -372,6 +374,7 @@ openai_compatible_providers: List = [
     "lm_studio",
     "galadriel",
     "novita",
+    "morph",
     "meta_llama",
     "featherless_ai",
     "nscale",
@@ -540,6 +543,12 @@ featherless_ai_models: List = [
     "mistralai/Mistral-Small-24B-Instruct-2501",
     "mistralai/Mistral-Nemo-Instruct-2407",
     "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+]
+
+morph_models: List = [
+    "morph-v2",
+    "morph-embedding-v2",
+    "morph-rerank-v2",
 ]
 
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
