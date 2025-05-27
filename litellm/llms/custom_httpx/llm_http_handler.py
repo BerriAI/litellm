@@ -2166,6 +2166,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = image_edit_provider_config.get_complete_url(
+            model=model,
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
@@ -2250,6 +2251,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = image_edit_provider_config.get_complete_url(
+            model=model,
             api_base=litellm_params.api_base,
             litellm_params=dict(litellm_params),
         )
