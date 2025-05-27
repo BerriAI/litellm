@@ -257,7 +257,7 @@ async def test_azure_image_edit_litellm_sdk():
 
 
 @pytest.mark.asyncio
-async def test_openai_image_edit_with_custom_logger():
+async def test_openai_image_edit_cost_tracking():
     """Test OpenAI image edit cost tracking with custom logger"""
     from litellm import image_edit, aimage_edit
     test_custom_logger = TestCustomLogger()
@@ -326,6 +326,85 @@ async def test_openai_image_edit_with_custom_logger():
         # check model
         assert test_custom_logger.standard_logging_payload["model"] == "gpt-image-1"
         assert test_custom_logger.standard_logging_payload["custom_llm_provider"] == "openai"
+
+        # check response_cost
+        assert test_custom_logger.standard_logging_payload["response_cost"] is not None
+        assert test_custom_logger.standard_logging_payload["response_cost"] > 0
+
+
+
+
+@pytest.mark.asyncio
+async def test_azure_image_edit_cost_tracking():
+    """Test Azure image edit cost tracking with custom logger"""
+    from litellm import image_edit, aimage_edit
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Mock response for Azure image edit
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ]
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        
+        prompt = """
+        Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
+        """
+        
+        # Set up test environment variables
+        
+        result = await aimage_edit(
+            prompt=prompt,
+            model="azure/CUSTOM_AZURE_DEPLOYMENT_NAME",
+            base_model="azure/gpt-image-1",
+            image=TEST_IMAGES,
+        )
+        
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        
+
+        # Validate the response meets expected schema
+        ImageResponse.model_validate(result)
+        
+        if isinstance(result, ImageResponse) and result.data:
+            image_base64 = result.data[0].b64_json
+            if image_base64:
+                image_bytes = base64.b64decode(image_base64)
+
+                # Save the image to a file
+                with open("test_image_edit.png", "wb") as f:
+                    f.write(image_bytes)
+        
+
+        await asyncio.sleep(3)
+        print("standard logging payload", json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str))
+
+        # check model
+        assert test_custom_logger.standard_logging_payload["model"] == "CUSTOM_AZURE_DEPLOYMENT_NAME"
+        assert test_custom_logger.standard_logging_payload["custom_llm_provider"] == "azure"
 
         # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
