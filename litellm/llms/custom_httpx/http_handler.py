@@ -533,12 +533,19 @@ class AsyncHTTPHandler:
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        verbose_logger.debug("Creating AiohttpTransport...")
+        #########################################################
+        # If ssl_verify is None, set it to True
+        # TCP Connector does not allow ssl_verify to be None
+        # by default aiohttp sets ssl_verify to True
+        #########################################################
+        if ssl_verify is None:
+            ssl_verify = True
 
+        verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(
-                    verify_ssl=ssl_verify or True,
+                    verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
                 )
