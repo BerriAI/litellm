@@ -219,6 +219,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    image_edit = "image_edit"
+    aimage_edit = "aimage_edit"
     moderation = "moderation"
     amoderation = "amoderation"
     atranscription = "atranscription"
@@ -283,6 +285,8 @@ CallTypesLiteral = Literal[
     "text_completion",
     "image_generation",
     "aimage_generation",
+    "image_edit",
+    "aimage_edit",
     "moderation",
     "amoderation",
     "atranscription",
