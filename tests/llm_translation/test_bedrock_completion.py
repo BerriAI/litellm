@@ -91,6 +91,28 @@ def test_completion_bedrock_claude_completion_auth():
 
 # test_completion_bedrock_claude_completion_auth()
 
+def test_completion_bedrock_claude_completion_max_tokens():
+    try:
+        litellm._turn_on_debug()
+        response = completion(
+            model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            messages=messages,
+            max_completion_tokens=10,
+            temperature=1,
+            thinking={
+                "type": "enabled",
+                "budget_tokens": 1024
+            }
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_completion_bedrock_guardrails(streaming):
