@@ -1156,9 +1156,8 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider == "cached_response" and isinstance(
-                chunk, ModelResponseStream
-            ):
+            elif self.custom_llm_provider == "cached_response":
+                chunk = cast(ModelResponseStream, chunk)
                 response_obj = {
                     "text": chunk.choices[0].delta.content,
                     "is_finished": True,
