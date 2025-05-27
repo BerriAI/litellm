@@ -1581,6 +1581,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     def __init__(
         self,
         created: Optional[int] = None,
@@ -1588,6 +1590,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: Optional[ImageUsage] = None,
         hidden_params: Optional[dict] = None,
+        **kwargs,
     ):
         if response_ms:
             _response_ms = response_ms
