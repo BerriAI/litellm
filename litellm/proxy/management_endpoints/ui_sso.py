@@ -356,7 +356,6 @@ async def get_user_info_from_db(
     alternate_user_id: Optional[str] = None,
 ) -> Optional[Union[LiteLLM_UserTable, NewUserResponse]]:
     try:
-
         potential_user_ids = []
         if alternate_user_id is not None:
             potential_user_ids.append(alternate_user_id)
@@ -387,7 +386,7 @@ async def get_user_info_from_db(
             )
             if user_info is not None:
                 break
-                
+
         verbose_proxy_logger.debug(
             f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
         )
@@ -937,6 +936,20 @@ class SSOAuthenticationHandler:
         return False
 
     @staticmethod
+    def combine_valid_url_parts(
+        base_url: str,
+        additional_path: str,
+    ) -> str:
+        """
+        Combines a base URL with an additional path, ensuring the path is valid
+        """
+        if additional_path.startswith("/"):
+            additional_path = additional_path[1:]
+        if base_url.endswith("/"):
+            return base_url + additional_path
+        return base_url + "/" + additional_path
+
+    @staticmethod
     def get_redirect_url_for_sso(
         request: Request,
         sso_callback_route: str,
@@ -944,7 +957,14 @@ class SSOAuthenticationHandler:
         """
         Get the redirect URL for SSO
         """
+        from litellm.proxy.proxy_server import server_root_path
+
         redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
+        if server_root_path:
+            redirect_url = SSOAuthenticationHandler.combine_valid_url_parts(
+                base_url=redirect_url, additional_path=server_root_path
+            )
+
         if redirect_url.endswith("/"):
             redirect_url += sso_callback_route
         else:

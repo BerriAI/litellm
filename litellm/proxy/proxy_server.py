@@ -755,8 +755,6 @@ try:
         verbose_proxy_logger.info(  # noqa
             f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
         )  # noqa
-        if os.getenv("PROXY_BASE_URL") is None:
-            os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
