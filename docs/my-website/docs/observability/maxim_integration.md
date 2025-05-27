@@ -96,7 +96,7 @@ To quickly get started, please check this [Google Colab Notebook](https://colab.
 
 Check the quick demo of what we just learnt —
 
-![maxim-litellm-gif.gif]([docs/my-website/img/maxim-litellm-gif.gif](https://github.com/akmadan/litellm/blob/litellm_maxim_observability/docs/my-website/img/maxim-litellm-gif.gif))
+![maxim-litellm-gif.gif](https://github.com/akmadan/litellm/blob/litellm_maxim_observability/docs/my-website/img/maxim-litellm-gif.gif)
 
 ## Integrate using **LiteLLM Proxy: One-Line Integration**
 
