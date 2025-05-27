@@ -58,7 +58,13 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    response = await client.post(
+        api_base,
+        headers=headers,
+        data=data,
+        stream=True,
+        logging_obj=logging_obj,
+    )
 
     if response.status_code != 200:
         raise TextCompletionCodestralError(
@@ -357,7 +363,11 @@ class CodestralTextCompletion:
         )
         try:
             response = await async_handler.post(
-                api_base, headers=headers, data=json.dumps(data)
+                api_base,
+                headers=headers,
+                data=json.dumps(data),
+                logging_obj=logging_obj,
+                timeout=timeout,
             )
         except httpx.HTTPStatusError as e:
             raise TextCompletionCodestralError(

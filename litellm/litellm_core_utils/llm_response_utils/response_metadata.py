@@ -8,6 +8,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     HiddenParams,
     ModelResponse,
+    TextCompletionResponse,
     TranscriptionResponse,
 )
 
@@ -30,6 +31,7 @@ class ResponseMetadata:
             isinstance(self.result, ModelResponse)
             or isinstance(self.result, EmbeddingResponse)
             or isinstance(self.result, TranscriptionResponse)
+            or isinstance(self.result, TextCompletionResponse)
         )
 
     def set_hidden_params(
