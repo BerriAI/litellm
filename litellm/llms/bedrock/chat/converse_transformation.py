@@ -374,7 +374,8 @@ class AmazonConverseConfig(BaseConfig):
         from litellm.constants import DEFAULT_MAX_TOKENS
 
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and "maxTokens" not in non_default_params:
+        is_max_tokens_in_request = self.is_max_tokens_in_request(non_default_params)
+        if is_thinking_enabled and not is_max_tokens_in_request:
             thinking_token_budget = cast(dict, optional_params["thinking"]).get(
                 "budget_tokens", None
             )
