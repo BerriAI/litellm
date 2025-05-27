@@ -22,6 +22,7 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
     { value: EndpointType.CHAT, label: '/v1/chat/completions' },
     { value: EndpointType.RESPONSES, label: '/v1/responses' },
     { value: EndpointType.IMAGE, label: '/v1/images/generations' },
+    { value: EndpointType.IMAGE_EDITS, label: '/v1/images/edits' },
   ];
 
   return (
