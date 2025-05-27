@@ -931,7 +931,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Run enterprise tests

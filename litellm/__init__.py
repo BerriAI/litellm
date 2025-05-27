@@ -929,11 +929,10 @@ from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
-
+from .llms.ollama.chat.transformation import OllamaChatConfig
 from .llms.ollama.completion.transformation import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.ollama_chat import OllamaChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
