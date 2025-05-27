@@ -174,6 +174,7 @@ class TestFeatherlessAIConfig:
         # only returns the headers, but we can verify it doesn't raise an exception
         # which would happen if api_base handling was incorrect
 
+    @pytest.mark.respx()
     def test_featherless_ai_completion_mock(self, respx_mock):
         """
         Mock test for Featherless AI completion using the model format from docs.
