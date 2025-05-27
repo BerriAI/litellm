@@ -85,7 +85,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.ollama_chat import OllamaChatConfig
+    from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 
     assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params(
         model="llama3"
