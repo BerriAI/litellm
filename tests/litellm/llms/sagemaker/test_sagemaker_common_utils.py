@@ -11,6 +11,7 @@ from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 
+
 @pytest.mark.asyncio
 async def test_aiter_bytes_unicode_decode_error():
     """
@@ -97,6 +98,7 @@ async def test_aiter_bytes_valid_chunk_followed_by_unicode_error():
         assert len(chunks) == 1
         assert chunks[0]["text"] == "hello"  # Verify the content of the valid chunk
 
+
 class TestSagemakerTransform:
     def setup_method(self):
         self.config = SagemakerConfig()
@@ -105,7 +107,11 @@ class TestSagemakerTransform:
 
     def test_map_mistral_params(self):
         """Test that parameters are correctly mapped"""
-        test_params = {"temperature": 0.7, "max_tokens": 200, "max_completion_tokens": 256}
+        test_params = {
+            "temperature": 0.7,
+            "max_tokens": 200,
+            "max_completion_tokens": 256,
+        }
 
         result = self.config.map_openai_params(
             non_default_params=test_params,
@@ -119,7 +125,10 @@ class TestSagemakerTransform:
 
     def test_mistral_max_tokens_backward_compat(self):
         """Test that parameters are correctly mapped"""
-        test_params = {"temperature": 0.7, "max_tokens": 200,}
+        test_params = {
+            "temperature": 0.7,
+            "max_tokens": 200,
+        }
 
         result = self.config.map_openai_params(
             non_default_params=test_params,
