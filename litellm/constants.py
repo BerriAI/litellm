@@ -153,6 +153,9 @@ FIREWORKS_AI_16_B = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
+MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
+    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 20)
+)
 
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
@@ -278,6 +281,46 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
 ]
+
+DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
+    "functions": None,
+    "function_call": None,
+    "temperature": None,
+    "top_p": None,
+    "n": None,
+    "stream": None,
+    "stream_options": None,
+    "stop": None,
+    "max_tokens": None,
+    "max_completion_tokens": None,
+    "modalities": None,
+    "prediction": None,
+    "audio": None,
+    "presence_penalty": None,
+    "frequency_penalty": None,
+    "logit_bias": None,
+    "user": None,
+    "model": None,
+    "custom_llm_provider": "",
+    "response_format": None,
+    "seed": None,
+    "tools": None,
+    "tool_choice": None,
+    "max_retries": None,
+    "logprobs": None,
+    "top_logprobs": None,
+    "extra_headers": None,
+    "api_version": None,
+    "parallel_tool_calls": None,
+    "drop_params": None,
+    "allowed_openai_params": None,
+    "additional_drop_params": None,
+    "messages": None,
+    "reasoning_effort": None,
+    "thinking": None,
+    "web_search_options": None,
+}
+
 
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
@@ -668,4 +711,9 @@ DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(
     os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
+)
+LITELLM_SETTINGS_SAFE_DB_OVERRIDES = ["default_internal_user_params"]
+SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
+DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
+    os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )

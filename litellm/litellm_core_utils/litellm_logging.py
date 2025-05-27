@@ -52,6 +52,7 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -198,6 +199,7 @@ s3Logger = None
 greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
+deepevalLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -1723,7 +1725,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-
                     if (
                         isinstance(callback, CustomLogger)
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2671,7 +2672,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -2955,6 +2956,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
+        
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
+                    return callback  # type: ignore
+            deepeval_logger = DeepEvalLogger()
+            _in_memory_loggers.append(deepeval_logger)
+            return deepeval_logger  # type: ignore
+        
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:
                 raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -3123,6 +3133,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "deepeval":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DeepEvalLogger):
                     return callback
         elif logging_integration == "langsmith":
             for callback in _in_memory_loggers:
