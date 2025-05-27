@@ -320,7 +320,7 @@ async def test_openai_image_edit_cost_tracking():
                     f.write(image_bytes)
         
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         print("standard logging payload", json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str))
 
         # check model
@@ -399,7 +399,7 @@ async def test_azure_image_edit_cost_tracking():
                     f.write(image_bytes)
         
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
         print("standard logging payload", json.dumps(test_custom_logger.standard_logging_payload, indent=4, default=str))
 
         # check model
