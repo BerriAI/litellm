@@ -204,7 +204,7 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
-    organization_id String? // deprecated param, as user can be part of multiple organizations. Check LiteLLM_OrganizationMembership instead.
+    organization_id String?
     object_permission_id String?
     created_at      DateTime?               @default(now()) @map("created_at")
     created_by String?
@@ -356,7 +356,7 @@ model LiteLLM_AuditLog {
 // Track daily user spend metrics per model and key
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
-  user_id             String
+  user_id             String? 
   date                String
   api_key             String   
   model               String   
@@ -383,7 +383,7 @@ model LiteLLM_DailyUserSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
-  team_id             String
+  team_id             String?
   date                String
   api_key             String   
   model               String   
@@ -410,7 +410,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
-  tag                 String   
+  tag                 String?   
   date                String
   api_key             String   
   model               String   
@@ -463,9 +463,9 @@ model LiteLLM_ManagedFileTable {
   @@index([unified_file_id])
 }
 
-model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use managed files
+model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the 
   id String @id @default(uuid())
-  unified_object_id String @unique // The base64 encoded unified object ID
+  unified_object_id String @unique // The base64 encoded unified file ID
   model_object_id String @unique // the id returned by the backend API provider 
   file_object Json // Stores the OpenAIFileObject
   file_purpose String // either 'batch' or 'fine-tune' 
