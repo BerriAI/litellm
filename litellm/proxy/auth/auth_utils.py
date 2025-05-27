@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union, Dict
 
 from fastapi import HTTPException, Request, status
 
@@ -9,26 +9,13 @@ from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
-
-
-def _get_request_ip_address(
-    request: Request, use_x_forwarded_for: Optional[bool] = False
-) -> Optional[str]:
-    client_ip = None
-    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
-        client_ip = request.headers["x-forwarded-for"]
-    elif request.client is not None:
-        client_ip = request.client.host
-    else:
-        client_ip = ""
-
-    return client_ip
+from litellm.proxy.ip_helper import get_client_ip_address
+import litellm.proxy.proxy_server
 
 
 def _check_valid_ip(
     allowed_ips: Optional[List[str]],
     request: Request,
-    use_x_forwarded_for: Optional[bool] = False,
 ) -> Tuple[bool, Optional[str]]:
     """
     Returns if ip is allowed or not
@@ -36,10 +23,9 @@ def _check_valid_ip(
     if allowed_ips is None:  # if not set, assume true
         return True, None
 
-    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = _get_request_ip_address(
-        request=request, use_x_forwarded_for=use_x_forwarded_for
-    )
+    # Get client_ip using the new centralized function
+    # The decision to use XFF is now handled within get_client_ip_address based on general_settings
+    client_ip = get_client_ip_address(request=request, general_settings=litellm.proxy.proxy_server.general_settings or {})
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
@@ -157,7 +143,7 @@ def is_request_body_safe(
                 request_body=request_body
             )
         ):
-            if general_settings.get("allow_client_side_credentials") is True:
+            if litellm.proxy.proxy_server.general_settings.get("allow_client_side_credentials") is True:
                 return True
             elif (
                 _allow_model_level_clientside_configurable_parameters(
@@ -195,16 +181,14 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
-
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
 
     # Check 2. Request body is safe
     is_request_body_safe(
         request_body=request_data,
-        general_settings=general_settings,
-        llm_router=llm_router,
+        general_settings=litellm.proxy.proxy_server.general_settings,
+        llm_router=litellm.proxy.proxy_server.llm_router,
         model=request_data.get(
             "model", ""
         ),  # [TODO] use model passed in url as well (azure openai routes)
@@ -212,8 +196,7 @@ async def pre_db_read_auth_checks(
 
     # Check 3. Check if IP address is allowed
     is_valid_ip, passed_in_ip = _check_valid_ip(
-        allowed_ips=general_settings.get("allowed_ips", None),
-        use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        allowed_ips=litellm.proxy.proxy_server.general_settings.get("allowed_ips", None),
         request=request,
     )
 
@@ -224,9 +207,9 @@ async def pre_db_read_auth_checks(
         )
 
     # Check 4. Check if request route is an allowed route on the proxy
-    if "allowed_routes" in general_settings:
-        _allowed_routes = general_settings["allowed_routes"]
-        if premium_user is not True:
+    if "allowed_routes" in litellm.proxy.proxy_server.general_settings:
+        _allowed_routes = litellm.proxy.proxy_server.general_settings["allowed_routes"]
+        if litellm.proxy.proxy_server.premium_user is not True:
             verbose_proxy_logger.error(
                 f"Trying to set allowed_routes. This is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
             )
@@ -262,23 +245,17 @@ def route_in_additonal_public_routes(current_route: str):
     """
 
     # check if user is premium_user - if not do nothing
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    try:
-        if premium_user is not True:
-            return False
-        # check if this is defined on the config
-        if general_settings is None:
-            return False
-
-        routes_defined = general_settings.get("public_routes", [])
-        if current_route in routes_defined:
-            return True
-
+    if litellm.proxy.proxy_server.premium_user is not True:
         return False
-    except Exception as e:
-        verbose_proxy_logger.error(f"route_in_additonal_public_routes: {str(e)}")
+    # check if this is defined on the config
+    if litellm.proxy.proxy_server.general_settings is None:
         return False
+
+    routes_defined = litellm.proxy.proxy_server.general_settings.get("public_routes", [])
+    if current_route in routes_defined:
+        return True
+
+    return False
 
 
 def get_request_route(request: Request) -> str:
@@ -317,13 +294,11 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         ProxyException: If the request size is too large
 
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    max_request_size_mb = general_settings.get("max_request_size_mb", None)
+    max_request_size_mb = litellm.proxy.proxy_server.general_settings.get("max_request_size_mb", None)
 
     if max_request_size_mb is not None:
         # Check if premium user
-        if premium_user is not True:
+        if litellm.proxy.proxy_server.premium_user is not True:
             verbose_proxy_logger.warning(
                 f"using max_request_size_mb - not checking -  this is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
             )
@@ -382,12 +357,10 @@ async def check_response_size_is_safe(response: Any) -> bool:
 
     """
 
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    max_response_size_mb = general_settings.get("max_response_size_mb", None)
+    max_response_size_mb = litellm.proxy.proxy_server.general_settings.get("max_response_size_mb", None)
     if max_response_size_mb is not None:
         # Check if premium user
-        if premium_user is not True:
+        if litellm.proxy.proxy_server.premium_user is not True:
             verbose_proxy_logger.warning(
                 f"using max_response_size_mb - not checking -  this is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
             )
@@ -426,7 +399,6 @@ def get_key_model_rpm_limit(
             if "rpm_limit" in budget and budget["rpm_limit"] is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
         return model_rpm_limit
-
     return None
 
 
@@ -439,7 +411,6 @@ def get_key_model_tpm_limit(
     elif user_api_key_dict.model_max_budget:
         if "tpm_limit" in user_api_key_dict.model_max_budget:
             return user_api_key_dict.model_max_budget["tpm_limit"]
-
     return None
 
 
@@ -452,7 +423,6 @@ def is_pass_through_provider_route(route: str) -> bool:
     for prefix in PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES:
         if prefix in route:
             return True
-
     return False
 
 
@@ -461,18 +431,17 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
     Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on provider pass through routes
     ex /vertex-ai/{endpoint} routes
+
     Run virtual key auth if the following is try:
     - User is premium_user
     - User has enabled litellm_setting.use_client_credentials_pass_through_routes
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    if premium_user is not True:
+    if litellm.proxy.proxy_server.premium_user is not True:
         return False
 
     # premium use has opted into using client credentials
     if (
-        general_settings.get("use_client_credentials_pass_through_routes", False)
+        litellm.proxy.proxy_server.litellm_settings.get("use_client_credentials_pass_through_routes", False)
         is True
     ):
         return False
@@ -481,9 +450,10 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     return True
 
 
-def _has_user_setup_sso():
+def _has_user_setup_sso() -> bool:
     """
     Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
+
     Returns a boolean indicating whether SSO has been set up.
     """
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -500,6 +470,11 @@ def _has_user_setup_sso():
 
 
 def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
+    """
+    Helper to get end_user_id from request body.
+
+    Used by the UI to map requests to end users.
+    """
     # openai - check 'user'
     if "user" in request_body and request_body["user"] is not None:
         return str(request_body["user"])
@@ -516,6 +491,11 @@ def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
 def get_model_from_request(
     request_data: dict, route: str
 ) -> Optional[Union[str, List[str]]]:
+    """
+    Helper to get model from request data.
+
+    Used by the UI to map requests to models.
+    """
     # First try to get model from request_data
     model = request_data.get("model") or request_data.get("target_model_names")
 

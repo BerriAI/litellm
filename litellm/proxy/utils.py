@@ -2009,9 +2009,7 @@ class PrismaClient:
                 if "members_with_roles" in db_data and isinstance(
                     db_data["members_with_roles"], list
                 ):
-                    db_data["members_with_roles"] = json.dumps(
-                        db_data["members_with_roles"]
-                    )
+                    db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
                 if "members_with_roles" in update_key_values and isinstance(
                     update_key_values["members_with_roles"], list
                 ):

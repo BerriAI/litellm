@@ -27,6 +27,8 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy.ip_helper import get_client_ip_address
+import litellm.proxy.proxy_server
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -506,8 +508,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user
-
     safe_add_api_version_from_query_params(data, request)
 
     _headers = clean_headers(
@@ -597,7 +597,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict.api_key
     )  # this is just the hashed token. [TODO]: replace variable name in repo.
 
-    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
+    data[_metadata_variable_name]["user_api_key_end_user_max_budget"] = getattr(
         user_api_key_dict, "end_user_max_budget", None
     )
 
@@ -677,30 +677,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
-    if premium_user is True:
+    if litellm.proxy.proxy_server.premium_user is True: 
         # Only set the IP Address for Enterprise Users
-
-        # logic for tracking IP Address
-        if (
-            general_settings is not None
-            and general_settings.get("use_x_forwarded_for") is True
-            and request is not None
-            and hasattr(request, "headers")
-            and "x-forwarded-for" in request.headers
-        ):
-            requester_ip_address = request.headers["x-forwarded-for"]
-        elif (
-            request is not None
-            and hasattr(request, "client")
-            and hasattr(request.client, "host")
-            and request.client is not None
-        ):
-            requester_ip_address = request.client.host
-    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
+        requester_ip_address = get_client_ip_address(request=request, general_settings=litellm.proxy.proxy_server.general_settings or {})
+            
+    # This assignment happens regardless, but requester_ip_address is "" if not premium_user and use_x_forwarded_for is False
+    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address # requester_ip_address will be "" if not premium_user
 
     # Check if using tag based routing
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
-        llm_router=llm_router,
+        llm_router=litellm.proxy.proxy_server.llm_router,
         headers=dict(request.headers),
         data=data,
     )
@@ -745,7 +731,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         request_body=data,
         general_settings=general_settings,
         user_api_key_dict=user_api_key_dict,
-        premium_user=premium_user,
+        premium_user=litellm.proxy.proxy_server.premium_user,
     )
 
     end_time = time.time()

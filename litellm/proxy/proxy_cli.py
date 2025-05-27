@@ -775,6 +775,15 @@ def run_server(  # noqa: PLR0915
             port=port,
             log_config=log_config,
         )
+        import litellm.proxy.proxy_server # Updated import
+
+        uvicorn_trusted_ips_config = litellm.proxy.proxy_server.general_settings.get("trusted_proxies") # Updated access
+        if uvicorn_trusted_ips_config:
+            if isinstance(uvicorn_trusted_ips_config, list):
+                uvicorn_args["forwarded_allow_ips"] = ",".join(uvicorn_trusted_ips_config)
+            elif isinstance(uvicorn_trusted_ips_config, str):
+                uvicorn_args["forwarded_allow_ips"] = uvicorn_trusted_ips_config
+
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -787,6 +796,17 @@ def run_server(  # noqa: PLR0915
             if loop_type:
                 uvicorn_args["loop"] = loop_type
 
+            if litellm.proxy.proxy_server.premium_user is True: # Updated access
+                # if premium user, print the config file path
+                if user_config_file_path is not None:
+                    click.secho(
+                        f"\nLiteLLM: Using config file at {user_config_file_path}\n",
+                        fg="green",
+                    )
+
+            if litellm.proxy.proxy_server.general_settings.get("background_health_checks", False) is True: # Updated access
+                # run health checks in background
+                asyncio.create_task(_run_background_health_check())
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,

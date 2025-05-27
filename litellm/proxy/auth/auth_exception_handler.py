@@ -10,8 +10,10 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import UserAPIKeyAuth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.ip_helper import get_client_ip_address
+import litellm.proxy.proxy_server
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -46,18 +48,12 @@ class UserAPIKeyAuthExceptionHandler:
         Raises:
             - Orignal Exception in all other cases
         """
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            litellm_proxy_admin_name,
-            proxy_logging_obj,
-        )
-
         if (
             PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
             and PrismaDBExceptionHandler.is_database_connection_error(e)
         ):
             # log this as a DB failure on prometheus
-            proxy_logging_obj.service_logging_obj.service_failure_hook(
+            litellm.proxy.proxy_server.proxy_logging_obj.service_logging_obj.service_failure_hook(
                 service=ServiceTypes.DB,
                 call_type="get_key_object",
                 error=e,
@@ -67,14 +63,14 @@ class UserAPIKeyAuthExceptionHandler:
             return UserAPIKeyAuth(
                 key_name="failed-to-connect-to-db",
                 token="failed-to-connect-to-db",
-                user_id=litellm_proxy_admin_name,
+                user_id=litellm.proxy.proxy_server.litellm_proxy_admin_name,
                 request_route=route,
             )
         else:
             # raise the exception to the caller
-            requester_ip = _get_request_ip_address(
+            requester_ip = get_client_ip_address(
                 request=request,
-                use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+                general_settings=litellm.proxy.proxy_server.general_settings or {},
             )
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
@@ -91,7 +87,7 @@ class UserAPIKeyAuthExceptionHandler:
                 request_route=route,
             )
             asyncio.create_task(
-                proxy_logging_obj.post_call_failure_hook(
+                litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook(
                     request_data=request_data,
                     original_exception=e,
                     user_api_key_dict=user_api_key_dict,
