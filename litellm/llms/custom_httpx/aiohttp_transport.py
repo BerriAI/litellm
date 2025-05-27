@@ -25,9 +25,7 @@ AIOHTTP_EXC_MAP: Dict = {
     # Network related exceptions
     aiohttp.ClientConnectorError: httpx.ConnectError,
     aiohttp.ClientOSError: httpx.ConnectError,
-    aiohttp.ClientConnectorError: httpx.ConnectError,
     aiohttp.ClientPayloadError: httpx.ReadError,
-    aiohttp.ClientProxyConnectionError: httpx.ProxyError,
     # Connection disconnection exceptions
     aiohttp.ServerDisconnectedError: httpx.ReadError,
     # Response related exceptions
