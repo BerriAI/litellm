@@ -30,8 +30,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
     GenericStreamingChunk,
@@ -407,3 +407,93 @@ class OllamaChatConfig(BaseConfig):
         return OllamaError(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return OllamaChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            """
+            Expected chunk format:
+            {
+                "model": "llama3.1",
+                "created_at": "2025-05-24T02:12:05.859654Z",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "function": {
+                            "name": "get_latest_album_ratings",
+                            "arguments": {
+                                "artist_name": "Taylor Swift"
+                            }
+                        }
+                    }]
+                },
+                "done_reason": "stop",
+                "done": true,
+                ...
+            }
+
+            Need to:
+            - convert 'message' to 'delta'
+            - return finish_reason when done is true
+            - return usage when done is true
+
+            """
+            from litellm.types.utils import Delta, StreamingChoices
+
+            delta = Delta(
+                content=chunk["message"].get("content", ""),
+                tool_calls=chunk["message"].get("tool_calls"),
+            )
+
+            if chunk["done"] is True:
+                finish_reason = chunk.get("done_reason", "stop")
+                choices = [
+                    StreamingChoices(
+                        delta=delta,
+                        finish_reason=finish_reason,
+                    )
+                ]
+            else:
+                choices = [
+                    StreamingChoices(
+                        delta=delta,
+                    )
+                ]
+
+            usage = ChatCompletionUsageBlock(
+                prompt_tokens=chunk.get("prompt_eval_count", 0),
+                completion_tokens=chunk.get("eval_count", 0),
+                total_tokens=chunk.get("prompt_eval_count", 0)
+                + chunk.get("eval_count", 0),
+            )
+
+            return ModelResponseStream(
+                id=str(uuid.uuid4()),
+                object="chat.completion.chunk",
+                created=int(time.time()),  # ollama created_at is in UTC
+                usage=usage,
+                model=chunk["model"],
+                choices=choices,
+            )
+        except KeyError as e:
+            raise OllamaError(
+                message=f"KeyError: {e}, Got unexpected response from Ollama: {chunk}",
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception as e:
+            raise e
