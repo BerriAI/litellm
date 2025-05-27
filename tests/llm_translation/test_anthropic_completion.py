@@ -482,13 +482,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
 
-    def test_multilingual_requests(self):
-        """
-        Anthropic API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
 
     def test_tool_call_and_json_response_format(self):
         """
@@ -1223,16 +1216,27 @@ async def test_anthropic_api_max_completion_tokens(model: str):
             "model": model.split("/")[-1],
         }
 
-def test_anthropic_websearch():
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        # {
+        #     "tools": [{
+        #         "type": "web_search_20250305",
+        #         "name": "web_search",
+        #         "max_uses": 5
+        #     }]
+        # },
+        {
+            "web_search_options": {} 
+        }
+    ]
+)
+def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-3-5-sonnet-latest",
-        "messages": [{"role": "user", "content": "What is the capital of France?"}],
-        "tools": [{
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }]
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        **optional_params
     }
 
     try:
@@ -1241,6 +1245,9 @@ def test_anthropic_websearch():
         print(e)
 
     assert response is not None
+
+    print(f"response: {response}\n")
+    assert response.usage.server_tool_use.web_search_requests == 1
 
 
 def test_anthropic_text_editor():

@@ -1,0 +1,52 @@
+# https://docs.litellm.ai/ llms.txt
+
+- [LiteLLM Overview](https://docs.litellm.ai/): Access and manage 100+ LLMs with LiteLLM tools.
+- [Completion Function Guide](https://docs.litellm.ai/completion/input): Guide for using completion function with various models.
+- [Litellm Completion Function](https://docs.litellm.ai/completion/output): Learn about the litellm completion function and its output.
+- [AI Completion Models](https://docs.litellm.ai/completion/supported): Explore various AI completion models and their requirements.
+- [Contact Litellm](https://docs.litellm.ai/contact): Get in touch with Litellm for support and inquiries.
+- [Contributing to Documentation](https://docs.litellm.ai/contributing): Guide for contributing to Litellm documentation and setup.
+- [Supported Embedding Models](https://docs.litellm.ai/embedding/supported_embedding): Overview of supported embedding models and their requirements.
+- [Docusaurus Setup Guide](https://docs.litellm.ai/intro): Quickly learn to set up a Docusaurus site.
+- [Callbacks for Data Output](https://docs.litellm.ai/observability/callbacks): Learn to use callbacks for data output integration.
+- [Helicone Integration Guide](https://docs.litellm.ai/observability/helicone_integration): Integrate Helicone for logging and proxying LLM requests.
+- [Supabase Integration Guide](https://docs.litellm.ai/observability/supabase_integration): Learn to integrate Supabase for logging LLM requests.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes): Explore the latest features and improvements in LiteLLM releases.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes/archive): Comprehensive release notes for LiteLLM updates and features.
+- [LiteLLM Release Tags](https://docs.litellm.ai/release_notes/tags): Explore various tags related to LiteLLM release notes.
+- [LiteLLM Admin UI Updates](https://docs.litellm.ai/release_notes/tags/admin-ui): Explore LiteLLM's admin UI updates and new features.
+- [Alerting Features Updates](https://docs.litellm.ai/release_notes/tags/alerting): Latest updates on alerting features and improvements.
+- [LiteLLM Azure Storage Updates](https://docs.litellm.ai/release_notes/tags/azure-storage): Updates on LiteLLM Stable release and Azure Storage support.
+- [Batch Processing Updates](https://docs.litellm.ai/release_notes/tags/batch): Updates on models, improvements, and integrations for batch processing.
+- [Batches API Features](https://docs.litellm.ai/release_notes/tags/batches): Explore cost tracking, guardrails, and team management features.
+- [Budgets and Rate Limits](https://docs.litellm.ai/release_notes/tags/budgets-rate-limits): Manage budgets and rate limits for LiteLLM keys effectively.
+- [Claude 3.7 Sonnet Release](https://docs.litellm.ai/release_notes/tags/claude-3-7-sonnet): Release notes for Claude 3.7 Sonnet with updates.
+- [Cost Tracking Features](https://docs.litellm.ai/release_notes/tags/cost-tracking): Explore cost tracking features, SCIM integration, and API updates.
+- [Credential Management Updates](https://docs.litellm.ai/release_notes/tags/credential-management): Latest updates on credential management and LLM features.
+- [Custom Auth Features](https://docs.litellm.ai/release_notes/tags/custom-auth): Explore custom authentication features for team management and cost tracking.
+- [LiteLLM v1.65.0 Release](https://docs.litellm.ai/release_notes/tags/custom-prompt-management): New features and improvements in LiteLLM v1.65.0 release.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes/tags/db-schema): Explore LiteLLM's latest updates and improvements in models.
+- [Deepgram Release Notes](https://docs.litellm.ai/release_notes/tags/deepgram): Deepgram integration with speech, vision, and admin features.
+- [Dependency Upgrades](https://docs.litellm.ai/release_notes/tags/dependency-upgrades): Dependency upgrades and new model support for LiteLLM.
+- [Docker Image Release Notes](https://docs.litellm.ai/release_notes/tags/docker-image): LiteLLM Docker image updates for security and migration.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes/tags/fallbacks): Updates on LiteLLM Stable release and new features.
+- [Finetuning Updates and Improvements](https://docs.litellm.ai/release_notes/tags/finetuning): Explore finetuning updates, model improvements, and integrations.
+- [Fireworks AI Updates](https://docs.litellm.ai/release_notes/tags/fireworks-ai): New features and updates for Fireworks AI models and tools.
+- [Guardrails and Logging Updates](https://docs.litellm.ai/release_notes/tags/guardrails): Explore new guardrail features, logging, and model updates.
+- [LLM Features and Updates](https://docs.litellm.ai/release_notes/tags/humanloop): Updates on models, integrations, and improvements in LLM features.
+- [Key Management Overview](https://docs.litellm.ai/release_notes/tags/key-management): Manage keys, budgets, logging, and guardrails effectively.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes/tags/langfuse): Explore new models, improvements, and integrations in LiteLLM.
+- [LLM Translation Updates](https://docs.litellm.ai/release_notes/tags/llm-translation): Latest LLM translation updates and UI improvements released.
+- [LiteLLM Logging Updates](https://docs.litellm.ai/release_notes/tags/logging): Explore LiteLLM logging updates, features, and improvements.
+- [Management Endpoints Updates](https://docs.litellm.ai/release_notes/tags/management-endpoints): Updates on management endpoints for team model handling.
+- [MCP Support Updates](https://docs.litellm.ai/release_notes/tags/mcp): MCP support and usage analytics enhancements in LiteLLM.
+- [LiteLLM New Features](https://docs.litellm.ai/release_notes/tags/new-models): Explore new features, models, and updates for LiteLLM.
+- [Prometheus Integration Updates](https://docs.litellm.ai/release_notes/tags/prometheus): Explore new features and improvements in Prometheus integration.
+- [Prompt Management Updates](https://docs.litellm.ai/release_notes/tags/prompt-management): Explore prompt management updates, model improvements, and integrations.
+- [LLM Translation Updates](https://docs.litellm.ai/release_notes/tags/reasoning-content): Release notes detailing LLM translation and UI improvements.
+- [Release Notes Overview](https://docs.litellm.ai/release_notes/tags/rerank): Latest release notes on LLM translation and UI improvements.
+- [Responses API Release Notes](https://docs.litellm.ai/release_notes/tags/responses-api): Explore the latest updates and features of the Responses API.
+- [Secret Management Updates](https://docs.litellm.ai/release_notes/tags/secret-management): Enhancements in secret management, alerting, and model updates.
+- [LiteLLM Security Updates](https://docs.litellm.ai/release_notes/tags/security): Security updates and features for LiteLLM deployment and management.
+- [Session Management Updates](https://docs.litellm.ai/release_notes/tags/session-management): Enhancements in session management and user handling features.
+- [LiteLLM Release Notes](https://docs.litellm.ai/release_notes/tags/snowflake): Latest updates on LiteLLM features and improvements.

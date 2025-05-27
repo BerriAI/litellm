@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
+- `claude-3.7` (`claude-3-7-sonnet-20250219`)
 - `claude-3.5` (`claude-3-5-sonnet-20240620`)
 - `claude-3` (`claude-3-haiku-20240307`, `claude-3-opus-20240229`, `claude-3-sonnet-20240229`)
 - `claude-2`
@@ -64,7 +66,7 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-3-opus-20240229", messages=messages)
+response = completion(model="claude-opus-4-20250514", messages=messages)
 print(response)
 ```
 
@@ -80,7 +82,7 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-3-opus-20240229", messages=messages, stream=True)
+response = completion(model="claude-opus-4-20250514", messages=messages, stream=True)
 for chunk in response:
     print(chunk["choices"][0]["delta"]["content"])  # same as openai format
 ```
@@ -102,9 +104,9 @@ export ANTHROPIC_API_KEY="your-api-key"
 
 ```yaml
 model_list:
-  - model_name: claude-3 ### RECEIVED MODEL NAME ###
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: claude-3-opus-20240229 ### MODEL NAME sent to `litellm.completion()` ###
+      model: claude-opus-4-20250514 ### MODEL NAME sent to `litellm.completion()` ###
       api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("AZURE_API_KEY_EU")
 ```
 
@@ -156,7 +158,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 <TabItem value="cli" label="cli">
 
 ```bash
-$ litellm --model claude-3-opus-20240229
+$ litellm --model claude-opus-4-20250514
 
 # Server running on http://0.0.0.0:4000
 ```
@@ -244,6 +246,9 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-5-sonnet  | `completion('claude-3-5-sonnet-20240620', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-haiku  | `completion('claude-3-haiku-20240307', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-opus  | `completion('claude-3-opus-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -847,12 +852,49 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 <TabItem value="web_search" label="Web Search">
 
 :::info
-
-Unified web search (same param across OpenAI + Anthropic) coming soon!
+Live from v1.70.1+
 :::
+
+LiteLLM maps OpenAI's `search_context_size` param to Anthropic's `max_uses` param.
+
+| OpenAI | Anthropic |
+| --- | --- |
+| Low | 1 | 
+| Medium | 5 | 
+| High | 10 | 
+
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```python
+from litellm import completion
+
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "What's the weather like today?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    web_search_options={
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
+)
+
+print(resp)
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
 
 ```python
 from litellm import completion
@@ -873,8 +915,11 @@ resp = completion(
 
 print(resp)
 ```
-
 </TabItem>
+
+</Tabs>
+</TabItem>
+
 <TabItem value="proxy" label="PROXY">
 
 1. Setup config.yaml
@@ -894,21 +939,55 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $LITELLM_KEY" \
   -d '{
     "model": "claude-3-5-sonnet-latest",
-    "messages": [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}],
-    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "web_search_options": {
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
   }'
 ```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "tools": [{
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 5
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
 </TabItem>
 </Tabs>
 
 </TabItem>
 </Tabs>
+
+
 
 ## Usage - Vision 
 

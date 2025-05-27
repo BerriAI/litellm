@@ -70,6 +70,7 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
+    ROUTE = "route"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -125,6 +126,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.ROUTE.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -137,6 +139,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.ROUTE.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -291,4 +294,7 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     fallback_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
+    ] = None
+    route: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
     ] = None

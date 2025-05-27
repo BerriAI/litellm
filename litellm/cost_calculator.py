@@ -909,6 +909,7 @@ def completion_cost(  # noqa: PLR0915
                     StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
                         model=model,
                         response_object=completion_response,
+                        usage=cost_per_token_usage_object,
                         standard_built_in_tools_params=standard_built_in_tools_params,
                         custom_llm_provider=custom_llm_provider,
                     )
