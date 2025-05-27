@@ -14,7 +14,7 @@ import httpx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk
-from litellm.utils import ImageResponse, ModelResponse
+from litellm.utils import ImageResponse, ModelResponse, EmbeddingResponse
 
 from .base import BaseLLM
 
@@ -150,6 +150,30 @@ class CustomLLM(BaseLLM):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    def embedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
+    ) -> EmbeddingResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aembedding(
+        self,
+        model: str,
+        input: list,
+        model_response: EmbeddingResponse,
+        print_verbose: Callable,
+        logging_obj: Any,
+        optional_params: dict,
+        litellm_params=None,
+    ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 

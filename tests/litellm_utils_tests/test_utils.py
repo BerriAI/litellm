@@ -1024,20 +1024,25 @@ def test_async_http_handler(mock_async_client):
     event_hooks = {"request": [lambda r: r]}
     concurrent_limit = 2
 
-    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+    # Mock the transport creation to return a specific transport
+    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+        mock_transport = mock.MagicMock()
+        mock_create_transport.return_value = mock_transport
+        
+        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
 
-    mock_async_client.assert_called_with(
-        cert="/client.pem",
-        transport=None,
-        event_hooks=event_hooks,
-        headers=headers,
-        limits=httpx.Limits(
-            max_connections=concurrent_limit,
-            max_keepalive_connections=concurrent_limit,
-        ),
-        timeout=timeout,
-        verify="/certificate.pem",
-    )
+        mock_async_client.assert_called_with(
+            cert="/client.pem",
+            transport=mock_transport,
+            event_hooks=event_hooks,
+            headers=headers,
+            limits=httpx.Limits(
+                max_connections=concurrent_limit,
+                max_keepalive_connections=concurrent_limit,
+            ),
+            timeout=timeout,
+            verify="/certificate.pem",
+        )
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1053,6 +1058,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     # Set force_ipv4 to True
     litellm.force_ipv4 = True
+    litellm.use_aiohttp_transport = False
 
     try:
         timeout = 120

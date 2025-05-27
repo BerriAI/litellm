@@ -26,7 +26,7 @@ class SambanovaConfig(OpenAIGPTConfig):
     tool_choice: Optional[str] = None
     response_format: Optional[dict] = None
     tools: Optional[list] = None
-    
+
     def __init__(
         self,
         max_tokens: Optional[int] = None,
@@ -54,8 +54,10 @@ class SambanovaConfig(OpenAIGPTConfig):
         Get the supported OpenAI params for the given model
 
         """
+        from litellm.utils import supports_function_calling
 
-        return [
+        params = [
+            "max_completion_tokens",
             "max_tokens",
             "response_format",
             "stop",
@@ -64,10 +66,14 @@ class SambanovaConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "top_k",
-            "tool_choice",
-            "tools",
-            "parallel_tool_calls"
         ]
+
+        if supports_function_calling(model, custom_llm_provider="sambanova"):
+            params.append("tools")
+            params.append("tool_choice")
+            params.append("parallel_tool_calls")
+
+        return params
 
     def map_openai_params(
         self,
