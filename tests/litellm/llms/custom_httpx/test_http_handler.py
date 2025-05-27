@@ -93,3 +93,33 @@ async def test_aiohttp_disabled_transport():
 
     # Should get None when both aiohttp is disabled and force_ipv4 is False
     assert transport is None
+
+
+@pytest.mark.asyncio
+async def test_ssl_verification_with_aiohttp_transport():
+    """
+    Test aiohttp respects ssl_verify=False
+
+    We validate that the ssl settings for a litellm transport match what a ssl verify=False aiohttp client would have.
+
+    """
+    import aiohttp
+
+    # Create a test SSL context
+    litellm.use_aiohttp_transport = True
+    litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
+
+    transport_connector = (
+        litellm_async_client.client._transport._get_valid_client_session().connector
+    )
+    print("transport_connector", transport_connector)
+    print("transport_connector._ssl", transport_connector._ssl)
+
+    aiohttp_session = aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(verify_ssl=False)
+    )
+    print("aiohttp_session", aiohttp_session)
+    print("aiohttp_session._ssl", aiohttp_session.connector._ssl)
+
+    # assert both litellm transport and aiohttp session have ssl_verify=False
+    assert transport_connector._ssl == aiohttp_session.connector._ssl
