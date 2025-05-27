@@ -1046,10 +1046,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1465,9 +1465,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1518,9 +1518,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2267,6 +2267,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
+from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
 
 def _parse_content_type(content_type: str) -> str:
@@ -2356,9 +2357,15 @@ class BedrockImageProcessor:
         supported_doc_formats = (
             litellm.AmazonConverseConfig().get_supported_document_types()
         )
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
 
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
+        supported_image_and_video_formats: List[str] = (
+            supported_video_formats + supported_image_formats
+        )
 
         if is_document:
             potential_extensions = mimetypes.guess_all_extensions(mime_type)
@@ -2376,9 +2383,12 @@ class BedrockImageProcessor:
             # Use first valid extension instead of provided image_format
             return valid_extensions[0]
         else:
-            if image_format not in supported_image_formats:
+            #########################################################
+            # Check if image_format is an image or video
+            #########################################################
+            if image_format not in supported_image_and_video_formats:
                 raise ValueError(
-                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
 
@@ -2392,6 +2402,14 @@ class BedrockImageProcessor:
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
+        is_video = any(
+            image_format.startswith(video_type)
+            for video_type in supported_video_formats
+        )
+
         if is_document:
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
@@ -2399,6 +2417,10 @@ class BedrockImageProcessor:
                     format=image_format,
                     name=f"DocumentPDFmessages_{str(uuid.uuid4())}",
                 )
+            )
+        elif is_video:
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(source=_blob, format=image_format)
             )
         else:
             return BedrockContentBlock(
@@ -3468,6 +3490,15 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
+def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+    cache_control = tool.get("cache_control", None)
+    if cache_control is not None:
+        cache_point = cache_control.get("type", "ephemeral")
+        if cache_point == "ephemeral":
+            return {"cachePoint": {"type": "default"}}
+    return None
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -3551,6 +3582,11 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         )
         tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
+
+        ## ADD CACHE POINT TOOL BLOCK ##
+        cache_point_tool_block = add_cache_point_tool_block(tool)
+        if cache_point_tool_block is not None:
+            tool_block_list.append(cache_point_tool_block)
 
     return tool_block_list
 

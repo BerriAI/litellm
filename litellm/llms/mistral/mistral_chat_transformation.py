@@ -184,7 +184,10 @@ class MistralConfig(OpenAIGPTConfig):
             if _content_block and isinstance(_content_block, list):
                 for c in _content_block:
                     if c.get("type") == "image_url":
-                        return messages
+                        if is_async:
+                            return super()._transform_messages(messages, model, True)
+                        else:
+                            return super()._transform_messages(messages, model, False)
 
         ## 2. If content is list, then convert to string
         messages = handle_messages_with_content_list_to_str_conversion(messages)

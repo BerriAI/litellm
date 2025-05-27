@@ -67,6 +67,27 @@ async def test_presidio_with_entities_config():
 
 
 @pytest.mark.asyncio
+async def test_presidio_apply_guardrail():
+    """Test for Presidio guardrail apply guardrail - requires actual Presidio API"""
+    litellm._turn_on_debug()
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
+        presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE")
+    )
+
+
+    response = await presidio_guardrail.apply_guardrail(
+        text="My credit card number is 4111-1111-1111-1111 and my email is test@example.com",
+        language="en",
+    )
+    print("response from apply guardrail for presidio: ", response)
+
+    # assert tthe default config masks the credit card and email
+    assert "4111-1111-1111-1111" not in response
+    assert "test@example.com" not in response
+
+@pytest.mark.asyncio
 async def test_presidio_with_blocked_entities():
     """Test for Presidio guardrail with blocked entities - requires actual Presidio API"""
     # Setup the guardrail with specific entities config - BLOCK for credit card
@@ -215,20 +236,24 @@ async def test_presidio_pre_call_hook_with_different_call_types(call_type):
 def test_validate_environment_missing_http(base_url):
     pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = f"{base_url}/analyze"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = f"{base_url}/anonymize"
-    pii_masking.validate_environment()
+    # Use patch.dict to temporarily modify environment variables only for this test
+    env_vars = {
+        "PRESIDIO_ANALYZER_API_BASE": f"{base_url}/analyze",
+        "PRESIDIO_ANONYMIZER_API_BASE": f"{base_url}/anonymize"
+    }
+    with patch.dict(os.environ, env_vars):
+        pii_masking.validate_environment()
 
-    expected_url = base_url
-    if not (base_url.startswith("https://") or base_url.startswith("http://")):
-        expected_url = "http://" + base_url
+        expected_url = base_url
+        if not (base_url.startswith("https://") or base_url.startswith("http://")):
+            expected_url = "http://" + base_url
 
-    assert (
-        pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
-    ), "Got={}, Expected={}".format(
-        pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
-    )
-    assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
+        assert (
+            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+        ), "Got={}, Expected={}".format(
+            pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
+        )
+        assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
 
 
 @pytest.mark.asyncio
@@ -412,6 +437,10 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
 
 
 @pytest.mark.asyncio
+@patch.dict(os.environ, {
+    "PRESIDIO_ANALYZER_API_BASE": "http://localhost:5002",
+    "PRESIDIO_ANONYMIZER_API_BASE": "http://localhost:5001"
+})
 async def test_presidio_pii_masking_logging_output_only_logged_response_guardrails_config():
     from typing import Dict, List, Optional
 
@@ -424,9 +453,8 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     )
 
     litellm.set_verbose = True
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
-
+    # Environment variables are now patched via the decorator instead of setting them directly
+    
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
         {
             "pii_masking": {

@@ -19,6 +19,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -29,6 +30,8 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -56,7 +59,12 @@ from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
-from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
+from litellm.utils import (
+    CustomStreamWrapper,
+    ImageResponse,
+    ModelResponse,
+    ProviderConfigManager,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -824,7 +832,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(request_data),
+                json=request_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1315,7 +1323,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                     stream=stream,
@@ -1343,7 +1351,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                 )
@@ -1436,7 +1444,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                     stream=stream,
@@ -1466,7 +1474,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    json=data,
                     timeout=timeout
                     or response_api_optional_request_params.get("timeout"),
                 )
@@ -1542,7 +1550,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.delete(
-                url=url, headers=headers, data=json.dumps(data), timeout=timeout
+                url=url, headers=headers, json=data, timeout=timeout
             )
 
         except Exception as e:
@@ -1626,7 +1634,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.delete(
-                url=url, headers=headers, data=json.dumps(data), timeout=timeout
+                url=url, headers=headers, json=data, timeout=timeout
             )
 
         except Exception as e:
@@ -2016,7 +2024,9 @@ class BaseLLMHTTPHandler:
     def _handle_error(
         self,
         e: Exception,
-        provider_config: Union[BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig],
+        provider_config: Union[
+            BaseConfig, BaseRerankConfig, BaseResponsesAPIConfig, BaseImageEditConfig
+        ],
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
@@ -2039,4 +2049,250 @@ class BaseLLMHTTPHandler:
             error_message=error_text,
             status_code=status_code,
             headers=error_headers,
+        )
+
+    async def async_realtime(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLoggingObj,
+        provider_config: BaseRealtimeConfig,
+        headers: dict,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        client: Optional[Any] = None,
+        timeout: Optional[float] = None,
+    ):
+        import websockets
+        from websockets.asyncio.client import ClientConnection
+
+        url = provider_config.get_complete_url(api_base, model, api_key)
+        headers = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+        )
+
+        try:
+            async with websockets.connect(  # type: ignore
+                url, extra_headers=headers
+            ) as backend_ws:
+                realtime_streaming = RealTimeStreaming(
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    provider_config,
+                    model,
+                )
+                await realtime_streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            verbose_logger.exception(f"Error connecting to backend: {e}")
+            await websocket.close(code=e.status_code, reason=str(e))
+        except Exception as e:
+            verbose_logger.exception(f"Error connecting to backend: {e}")
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(
+                    close_error
+                ):
+                    # The WebSocket is already closed or the response is completed, so we can ignore this error
+                    pass
+                else:
+                    # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )
+
+    def image_edit_handler(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        image_edit_provider_config: BaseImageEditConfig,
+        image_edit_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+        """
+
+        Handles image edit requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_image_edit_handler(
+                model=model,
+                image=image,
+                prompt=prompt,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_request_params=image_edit_optional_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
+                litellm_metadata=litellm_metadata,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = image_edit_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = image_edit_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        data, files = image_edit_provider_config.transform_image_edit_request(
+            model=model,
+            image=image,
+            prompt=prompt,
+            image_edit_optional_request_params=image_edit_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=data,
+                files=files,
+                timeout=timeout,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=image_edit_provider_config,
+            )
+
+        return image_edit_provider_config.transform_image_edit_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_image_edit_handler(
+        self,
+        model: str,
+        image: FileTypes,
+        prompt: str,
+        image_edit_provider_config: BaseImageEditConfig,
+        image_edit_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> ImageResponse:
+        """
+        Async version of the image edit handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = image_edit_provider_config.validate_environment(
+            api_key=litellm_params.api_key,
+            headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = image_edit_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        data, files = image_edit_provider_config.transform_image_edit_request(
+            model=model,
+            image=image,
+            prompt=prompt,
+            image_edit_optional_request_params=image_edit_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=data,
+                files=files,
+                timeout=timeout,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=image_edit_provider_config,
+            )
+
+        return image_edit_provider_config.transform_image_edit_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
         )
