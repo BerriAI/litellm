@@ -295,11 +295,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {info.models.map((model, index) => (
-                    <Badge key={index} color="red">
-                      {model}
-                    </Badge>
-                  ))}
+                  {info.models.length === 0 ? (
+                    <Badge color="red">All proxy models</Badge>
+                  ) : (
+                    info.models.map((model, index) => (
+                      <Badge key={index} color="red">
+                        {model}
+                      </Badge>
+                    ))
+                  )}
                 </div>
               </Card>
             </Grid>
