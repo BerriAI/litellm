@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_utils import UserAPIKeyAuth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.ip_helper import get_client_ip_address

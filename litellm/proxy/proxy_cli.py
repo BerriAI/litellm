@@ -764,6 +764,7 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
+        from litellm.proxy.proxy_server import _run_background_health_check # Add this import
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
@@ -798,9 +799,9 @@ def run_server(  # noqa: PLR0915
 
             if litellm.proxy.proxy_server.premium_user is True: # Updated access
                 # if premium user, print the config file path
-                if user_config_file_path is not None:
+                if config is not None: # Replace user_config_file_path with config
                     click.secho(
-                        f"\nLiteLLM: Using config file at {user_config_file_path}\n",
+                        f"\nLiteLLM: Using config file at {config}\n", # Replace user_config_file_path with config
                         fg="green",
                     )
 

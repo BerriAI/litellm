@@ -597,7 +597,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict.api_key
     )  # this is just the hashed token. [TODO]: replace variable name in repo.
 
-    data[_metadata_variable_name]["user_api_key_end_user_max_budget"] = getattr(
+    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
         user_api_key_dict, "end_user_max_budget", None
     )
 
