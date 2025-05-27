@@ -2226,6 +2226,7 @@ class LlmProviders(str, Enum):
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+    NEBIUS = "nebius"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     NOVITA = "novita"
