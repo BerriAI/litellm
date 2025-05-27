@@ -173,7 +173,10 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_streaming_response
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_streaming_response,
+)
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -749,17 +752,17 @@ try:
             os.rename(src, dst)
 
     if server_root_path != "":
-        print(  # noqa
-            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui"
+        verbose_proxy_logger.info(  # noqa
+            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
         )  # noqa
-        if os.getenv("PROXY_BASE_URL") is None:
-            os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
             if request.url.path.startswith("/ui"):
                 new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
                 return RedirectResponse(new_url)
+            elif request.url.path == "/sso/key/generate":
+                return RedirectResponse(f"{server_root_path}/sso/key/generate")
             return await call_next(request)
 
 except Exception:
@@ -3581,7 +3584,9 @@ async def chat_completion(  # noqa: PLR0915
             return StreamingResponse(
                 selected_data_generator,
                 media_type="text/event-stream",
-                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -3783,7 +3788,9 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 headers={},
-                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         else:
             _response = litellm.TextCompletionResponse()
@@ -5106,7 +5113,7 @@ async def run_thread(
                     request_data=data,
                 ),
                 media_type="text/event-stream",
-                headers={}, # Added empty headers dict, original call missed this argument
+                headers={},  # Added empty headers dict, original call missed this argument
             )
 
         ### ALERTING ###
