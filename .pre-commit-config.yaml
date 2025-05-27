@@ -24,9 +24,9 @@ repos:
     rev: 7.0.0  # The version of flake8 to use
     hooks:
     -  id: flake8
-       exclude: ^litellm/tests/|^litellm/proxy/tests/|^litellm/tests/litellm/|^tests/litellm/
+       exclude: ^litellm/tests/|^litellm/proxy/tests/|^litellm/tests/test_litellm/|^tests/test_litellm/
        additional_dependencies: [flake8-print]
-       files: (litellm/|litellm_proxy_extras/).*\.py
+       files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
 -   repo: https://github.com/python-poetry/poetry
     rev: 1.8.0
     hooks:

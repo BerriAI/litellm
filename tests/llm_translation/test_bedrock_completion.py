@@ -2201,14 +2201,6 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
-
     def test_prompt_caching(self):
         """
         Remove override once we have access to Bedrock prompt caching
@@ -2262,13 +2254,6 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
 
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
@@ -2284,13 +2269,6 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
     
     def test_prompt_caching(self):
         """

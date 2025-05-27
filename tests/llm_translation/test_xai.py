@@ -124,7 +124,7 @@ def test_completion_xai(stream):
             },
         ]
         response = completion(
-            model="xai/grok-beta",
+            model="xai/grok-3-mini-beta",
             messages=messages,
             stream=stream,
         )
@@ -156,7 +156,7 @@ def test_xai_message_name_filtering():
         {"role": "assistant", "content": "Hello", "name": "Jane"},
     ]
     response = completion(
-        model="xai/grok-beta",
+        model="xai/grok-3-mini-beta",
         messages=messages,
     )
     assert response is not None

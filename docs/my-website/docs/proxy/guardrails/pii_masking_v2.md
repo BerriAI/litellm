@@ -418,7 +418,7 @@ guardrails:
 
 Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the proxy 
 
-[**Example** ad-hoc recognizer](../../../../litellm/proxy/hooks/example_presidio_ad_hoc_recognize)
+[**Example** ad-hoc recognizer](https://github.com/BerriAI/litellm/blob/b69b7503db5aa039a49b7ca96ae5b34db0d25a3d/litellm/proxy/hooks/example_presidio_ad_hoc_recognizer.json)
 
 #### Define ad-hoc recognizer on your LiteLLM config.yaml 
 

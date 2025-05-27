@@ -106,6 +106,18 @@ class InMemoryCache(BaseCache):
                 # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
                 # This can occur when an object is referenced by another object, but the reference is never removed.
 
+    def allow_ttl_override(self, key: str) -> bool:
+        """
+        Check if ttl is set for a key
+        """
+        ttl_time = self.ttl_dict.get(key)
+        if ttl_time is None:  # if ttl is not set, allow override
+            return True
+        elif float(ttl_time) < time.time():  # if ttl is expired, allow override
+            return True
+        else:
+            return False
+
     def set_cache(self, key, value, **kwargs):
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
@@ -114,10 +126,11 @@ class InMemoryCache(BaseCache):
             return
 
         self.cache_dict[key] = value
-        if "ttl" in kwargs and kwargs["ttl"] is not None:
-            self.ttl_dict[key] = time.time() + kwargs["ttl"]
-        else:
-            self.ttl_dict[key] = time.time() + self.default_ttl
+        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if "ttl" in kwargs and kwargs["ttl"] is not None:
+                self.ttl_dict[key] = time.time() + kwargs["ttl"]
+            else:
+                self.ttl_dict[key] = time.time() + self.default_ttl
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -145,6 +158,7 @@ class InMemoryCache(BaseCache):
             if key in self.ttl_dict:
                 if time.time() > self.ttl_dict[key]:
                     self.cache_dict.pop(key, None)
+                    self.ttl_dict.pop(key, None)
                     return None
             original_cached_response = self.cache_dict[key]
             try:

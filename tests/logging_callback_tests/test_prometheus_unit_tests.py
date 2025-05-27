@@ -694,6 +694,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team_alias="test_team_alias",
         user_id="test_user",
         end_user_id="test_end_user",
+        request_route="/chat/completions",
     )
 
     # Call the function
@@ -714,6 +715,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         user="test_user",
         exception_status="429",
         exception_class="Openai.RateLimitError",
+        route=user_api_key_dict.request_route,
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -728,6 +730,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         user="test_user",
         status_code="429",
         user_email=None,
+        route=user_api_key_dict.request_route,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -752,6 +755,7 @@ async def test_async_post_call_success_hook(prometheus_logger):
         team_alias="test_team_alias",
         user_id="test_user",
         end_user_id="test_end_user",
+        request_route="/chat/completions",
     )
 
     response = {"choices": [{"message": {"content": "test response"}}]}
@@ -772,6 +776,7 @@ async def test_async_post_call_success_hook(prometheus_logger):
         user="test_user",
         status_code="200",
         user_email=None,
+        route=user_api_key_dict.request_route,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 

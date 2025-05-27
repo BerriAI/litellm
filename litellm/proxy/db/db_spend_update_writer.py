@@ -444,7 +444,7 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
-                
+
                 daily_tag_spend_update_transactions = (
                     await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
                 )
@@ -859,8 +859,6 @@ class DBSpendUpdateWriter:
                     async with prisma_client.db.batch_() as batcher:
                         for _, transaction in transactions_to_process.items():
                             entity_id = transaction.get(entity_id_field)
-                            if not entity_id:
-                                continue
 
                             # Construct the where clause dynamically
                             where_clause = {

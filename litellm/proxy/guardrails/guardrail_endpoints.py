@@ -144,6 +144,7 @@ async def list_guardrails_v2():
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -155,6 +156,7 @@ async def list_guardrails_v2():
         )
 
         guardrail_configs: List[GuardrailInfoResponse] = []
+        seen_guardrail_ids = set()
         for guardrail in guardrails:
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -164,8 +166,26 @@ async def list_guardrails_v2():
                     guardrail_info=guardrail.get("guardrail_info"),
                     created_at=guardrail.get("created_at"),
                     updated_at=guardrail.get("updated_at"),
+                    guardrail_definition_location="db",
                 )
             )
+            seen_guardrail_ids.add(guardrail.get("guardrail_id"))
+
+        # get guardrails initialized on litellm config.yaml
+        in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
+        for guardrail in in_memory_guardrails:
+            # only add guardrails that are not in DB guardrail list already
+            if guardrail.get("guardrail_id") not in seen_guardrail_ids:
+                guardrail_configs.append(
+                    GuardrailInfoResponse(
+                        guardrail_id=guardrail.get("guardrail_id"),
+                        guardrail_name=guardrail.get("guardrail_name"),
+                        litellm_params=dict(guardrail.get("litellm_params") or {}),
+                        guardrail_info=dict(guardrail.get("guardrail_info") or {}),
+                        guardrail_definition_location="config",
+                    )
+                )
+                seen_guardrail_ids.add(guardrail.get("guardrail_id"))
 
         return ListGuardrailsResponse(guardrails=guardrail_configs)
     except Exception as e:
@@ -291,6 +311,7 @@ async def get_guardrail(guardrail_id: str):
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
+
         if result is None:
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
@@ -605,6 +626,7 @@ async def get_guardrail_info(guardrail_id: str):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -615,6 +637,11 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
         if result is None:
+            result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
+                guardrail_id=guardrail_id
+            )
+
+        if result is None:
             raise HTTPException(
                 status_code=404, detail=f"Guardrail with ID {guardrail_id} not found"
             )
@@ -622,8 +649,8 @@ async def get_guardrail_info(guardrail_id: str):
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
             guardrail_name=result.get("guardrail_name"),
-            litellm_params=result.get("litellm_params"),
-            guardrail_info=result.get("guardrail_info"),
+            litellm_params=dict(result.get("litellm_params") or {}),
+            guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
         )

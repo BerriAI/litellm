@@ -32,12 +32,14 @@ def test_get_ollama_params():
             temperature=0.5,
             stream=True,
         )
-        print("Converted params", converted_params)
-        assert converted_params == {
+        expected_params = {
             "num_predict": 20,
             "stream": True,
             "temperature": 0.5,
-        }, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
+        }
+        print("Converted params", converted_params)
+        for key in expected_params.keys():
+            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -272,9 +274,21 @@ async def test_async_ollama_ssl_verify(stream):
         "async_httpx_clientssl_verify_Falseollama"
     )
 
-    test_client = httpx.AsyncClient(verify=False)
-    print(client)
-    assert (
-        client.client._transport._pool._ssl_context.verify_mode
-        == test_client._transport._pool._ssl_context.verify_mode
-    )
+    # check client
+    print("type of transport in client=", type(client.client._transport))
+    print("vars in transport in client=", vars(client.client._transport))
+    litellm_created_session = client.client._transport._get_valid_client_session()
+    print("litellm_created_session=", litellm_created_session)
+    # check session ssl
+    print("litellm_created_session ssl=", litellm_created_session.connector._ssl)
+
+    
+    # create aiohttp transport with ssl_verify=False
+    import aiohttp
+    aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False))
+    print("aiohttp_session ssl=", aiohttp_session.connector._ssl)
+
+    assert litellm_created_session.connector._ssl is False
+    assert litellm_created_session.connector._ssl == aiohttp_session.connector._ssl
+
+

@@ -23,10 +23,10 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: ml-ops-team
+    id: hiring-interest
     attributes:
-      label: Are you a ML Ops Team?
-      description: This helps us prioritize your requests correctly 
+      label: LiteLLM is hiring a founding backend engineer, are you interested in joining us and shipping to all our users?
+      description: If yes, apply here - https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer
       options:
         - "No"
         - "Yes"

@@ -410,7 +410,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_id="test-team",
             models=team_models,
         )
-        result = await can_team_access_model(
+        result = can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,

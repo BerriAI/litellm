@@ -1,10 +1,4 @@
 model_list:
-  - model_name: openai/gpt-4o
+  - model_name: openai/*
     litellm_params:
-      model: openai/gpt-4o
-      api_key: any_key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
-general_settings:
-  store_prompts_in_spend_logs: true
+      model: openai/*

@@ -115,26 +115,36 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const handleMemberCreate = async (values: any) => {
     try {
-      if (accessToken == null) {
-        return;
-      }
-
+      if (accessToken == null) return;
+  
       const member: Member = {
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
-      const response = await teamMemberAddCall(accessToken, teamId, member);
-
+      };
+  
+      await teamMemberAddCall(accessToken, teamId, member);
+  
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
       fetchTeamInfo();
-    } catch (error) {
-      message.error("Failed to add team member");
+    } catch (error: any) {
+      let errMsg = "Failed to add team member";
+  
+      if (error?.raw?.detail?.error?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      } else if (error?.message) {
+        errMsg = error.message;
+      }
+  
+      message.error(errMsg);
       console.error("Error adding team member:", error);
     }
   };
+  
+    
+  
 
   const handleMemberUpdate = async (values: any) => {
     try {
@@ -147,17 +157,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       }
+      message.destroy(); // Remove all existing toasts
 
-      const response = await teamMemberUpdateCall(accessToken, teamId, member);
+      await teamMemberUpdateCall(accessToken, teamId, member);
 
       message.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
       fetchTeamInfo();
-    } catch (error) {
-      message.error("Failed to update team member");
+    } catch (error: any) {
+      let errMsg = "Failed to update team member";
+      if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      } else if (error?.message) {
+        errMsg = error.message;
+      }
+      setIsEditMemberModalVisible(false);
+
+      message.destroy(); // Remove all existing toasts
+
+      message.error(errMsg);
       console.error("Error updating team member:", error);
     }
   };
+  
 
   const handleMemberDelete = async (member: Member) => {
     try {

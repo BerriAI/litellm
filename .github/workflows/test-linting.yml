@@ -22,9 +22,9 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install openai==1.68.2
+        pip install openai==1.81.0
         poetry install --with dev
-        pip install openai==1.68.2
+        pip install openai==1.81.0
 
 
 

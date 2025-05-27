@@ -1,5 +1,6 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
 import litellm
+from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
 
 
@@ -131,9 +132,15 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
 
 
 def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
-    from litellm_enterprise.enterprise_callbacks.secret_detection import (
-        _ENTERPRISE_SecretDetection,
-    )
+    try:
+        from litellm_enterprise.enterprise_callbacks.secret_detection import (
+            _ENTERPRISE_SecretDetection,
+        )
+    except ImportError:
+        raise Exception(
+            "Trying to use Secret Detection"
+            + CommonProxyErrors.missing_enterprise_package.value
+        )
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,

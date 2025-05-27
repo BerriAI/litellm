@@ -83,6 +83,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "logprobs",
             "frequency_penalty",
             "modalities",
+            "parallel_tool_calls",
         ]
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")

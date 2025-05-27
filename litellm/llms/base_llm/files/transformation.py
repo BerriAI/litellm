@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -115,6 +116,7 @@ class BaseFileEndpoints(ABC):
         llm_router: Router,
         target_model_names_list: List[str],
         litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         pass
 

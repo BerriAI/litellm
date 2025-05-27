@@ -392,4 +392,3 @@ def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, prov
     print("info", info)
     assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
     assert info["litellm_provider"] == "bedrock"
-

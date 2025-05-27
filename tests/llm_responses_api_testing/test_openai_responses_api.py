@@ -2,7 +2,7 @@ import os
 import sys
 import pytest
 import asyncio
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -579,15 +579,14 @@ async def test_openai_responses_litellm_router_no_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
+        request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4))
 
-        loaded_request_body = json.loads(request_body)
-        print("Loaded request body:", json.dumps(loaded_request_body, indent=4))
+
 
         # Assert metadata is not in the request
         assert (
-            "metadata" not in loaded_request_body
+            "metadata" not in request_body
         ), "metadata should not be in the request body"
         mock_post.assert_called_once()
 
@@ -680,13 +679,12 @@ async def test_openai_responses_litellm_router_with_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
-        loaded_request_body = json.loads(request_body)
-        print("Request body:", json.dumps(loaded_request_body, indent=4))
+        request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata matches exactly what was passed
         assert (
-            loaded_request_body["metadata"] == test_metadata
+            request_body["metadata"] == test_metadata
         ), "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
@@ -796,7 +794,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         assert request_body["model"] == "o1-pro"
         assert request_body["max_output_tokens"] == 20
 
@@ -908,7 +906,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
                 # Verify the sync request was made correctly
                 mock_sync_post.assert_called_once()
-                request_body = json.loads(mock_sync_post.call_args.kwargs["data"])
+                request_body = mock_sync_post.call_args.kwargs["json"]
                 assert request_body["model"] == "o1-pro"
                 assert request_body["max_output_tokens"] == 20
                 assert "stream" not in request_body
@@ -932,7 +930,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
             # Verify the async request was made correctly
             mock_post.assert_called_once()
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = mock_post.call_args.kwargs["json"]
             assert request_body["model"] == "o1-pro"
             assert request_body["max_output_tokens"] == 20
             assert "stream" not in request_body
@@ -1015,7 +1013,7 @@ def test_basic_computer_use_preview_tool_call():
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         
         # Validate the request structure
         assert request_body["model"] == "computer-use-preview"
@@ -1033,3 +1031,50 @@ def test_basic_computer_use_preview_tool_call():
         assert isinstance(request_body["input"], str)
         assert request_body["input"] == "Check the latest OpenAI news on bing.com."
         
+
+
+def test_mcp_tools_with_responses_api():
+    litellm._turn_on_debug()
+    MCP_TOOLS = [
+        {
+            "type": "mcp",
+            "server_label": "deepwiki",
+            "server_url": "https://mcp.deepwiki.com/mcp",
+            "allowed_tools": ["ask_question"]
+        }
+    ]
+    MODEL = "openai/gpt-4.1"
+    USER_QUERY = "What transport protocols does the 2025-03-26 version of the MCP spec (modelcontextprotocol/modelcontextprotocol) support?"
+    #########################################################
+    # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
+    response = litellm.responses(
+        model=MODEL,
+        tools=MCP_TOOLS,
+        input=USER_QUERY
+    )
+    print(response)
+
+    response = cast(ResponsesAPIResponse, response)
+
+    mcp_approval_id: Optional[str]
+    for output in response.output:
+        if output.type == "mcp_approval_request":
+            mcp_approval_id = output.id
+            break
+
+    # Step 2: Send followup with approval for the MCP call
+    response_with_mcp_call = litellm.responses(
+        model=MODEL,
+        tools=MCP_TOOLS,
+        input=[
+            {
+                "type": "mcp_approval_response",
+                "approve": True,
+                "approval_request_id": mcp_approval_id
+            }
+        ],
+        previous_response_id=response.id,
+    )
+    print(response_with_mcp_call)
+
+
