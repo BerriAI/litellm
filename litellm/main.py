@@ -127,7 +127,7 @@ from .litellm_core_utils.prompt_templates.factory import (
     stringify_json_tool_call_content,
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import baseten, maritalk, ollama_chat
+from .llms import baseten
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -2958,24 +2958,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or os.environ.get("OLLAMA_API_KEY")
                 or litellm.api_key
             )
-            ## LOGGING
-            # generator = ollama_chat.get_ollama_response(
-            #     api_base=api_base,
-            #     api_key=api_key,
-            #     model=model,
-            #     messages=messages,
-            #     optional_params=optional_params,
-            #     logging_obj=logging,
-            #     acompletion=acompletion,
-            #     model_response=model_response,
-            #     encoding=encoding,
-            #     client=client,
-            # )
-
-            # if acompletion is True or optional_params.get("stream", False) is True:
-            #     return generator
-
-            # response = generator
 
             response = base_llm_http_handler.completion(
                 model=model,
