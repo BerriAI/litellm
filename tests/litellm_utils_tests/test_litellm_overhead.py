@@ -114,3 +114,30 @@ async def test_litellm_overhead_stream(model):
     assert overhead_percent < 40
 
     pass
+
+
+@pytest.mark.asyncio
+async def test_text_acompletion_codestral_emits_overhead_time_ms():
+    import time
+    # use %time 
+    start_time = time.time()
+
+    litellm._turn_on_debug()
+    response = await litellm.atext_completion(
+        model="text-completion-codestral/codestral-2405",
+        prompt="hello",
+    )
+    print(response.choices)
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
+
+    print("response hidden params=", response._hidden_params)
+
+    # assert overhead is in the response
+    assert response._hidden_params.get("litellm_overhead_time_ms") is not None
+
+    # assert response_ms is in the response
+    assert response._response_ms is not None
+
+    print("total response time ms=", response._response_ms)
+    print("total litellm overhead time ms=", response._hidden_params.get("litellm_overhead_time_ms"))

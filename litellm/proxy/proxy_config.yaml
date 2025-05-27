@@ -1,4 +1,4 @@
 model_list:
-  - model_name: openai/*
+  - model_name: text-completion-codestral/*
     litellm_params:
-      model: openai/*
+      model: text-completion-codestral/*
