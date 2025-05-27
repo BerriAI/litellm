@@ -257,7 +257,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     <div style={{ width: "100%" }} className="p-8">
       {all_admin_roles.includes(userRole || "") ?
       <Text className="text-sm text-gray-500 mb-4">
-        Note: If you see key/model-level inconsistencies between Global View and Team Usage, it's because the Global View was missing spend when user_id = null, prior to v1.71.2. <a href="https://github.com/BerriAI/litellm/issues/10876" className="text-blue-500 hover:text-blue-700 ml-1">Learn more here</a>.
+        Note: If you see key/model-level inconsistencies between Global View and Team Usage, it&apos;s because the Global View was missing spend when user_id = null, prior to v1.71.2. <a href="https://github.com/BerriAI/litellm/issues/10876" className="text-blue-500 hover:text-blue-700 ml-1">Learn more here</a>.
       </Text>
       : null}
       <TabGroup>
