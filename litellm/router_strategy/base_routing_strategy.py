@@ -124,10 +124,10 @@ class BaseRoutingStrategy(ABC):
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
-            verbose_router_logger.debug(
-                "Pushing Redis Increment Pipeline for queue: %s",
-                self.redis_increment_operation_queue,
-            )
+            # verbose_router_logger.debug(
+            #     "Pushing Redis Increment Pipeline for queue: %s",
+            #     self.redis_increment_operation_queue,
+            # )
             if len(self.redis_increment_operation_queue) > 0:
                 await self.dual_cache.redis_cache.async_increment_pipeline(
                     increment_list=self.redis_increment_operation_queue,
@@ -207,9 +207,9 @@ class BaseRoutingStrategy(ABC):
                         await self.dual_cache.in_memory_cache.async_set_cache(
                             key=key, value=float(value)
                         )
-                        verbose_router_logger.debug(
-                            f"Updated in-memory cache for {key}: {value}"
-                        )
+                        # verbose_router_logger.debug(
+                        #     f"Updated in-memory cache for {key}: {value}"
+                        # )
 
             self.reset_in_memory_keys_to_update()
         except Exception as e:
