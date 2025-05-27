@@ -16,33 +16,17 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
-)
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_to_ollama_image,
-    custom_prompt,
-    ollama_pt,
-)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import (
-    GenericStreamingChunk,
-    ModelInfoBase,
-    ModelResponse,
-    ModelResponseStream,
-    ProviderField,
-    StreamingChoices,
-)
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
-from ..common_utils import OllamaError, _convert_image
+from ..common_utils import OllamaError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
