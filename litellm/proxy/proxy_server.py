@@ -173,7 +173,10 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_streaming_response
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_streaming_response,
+)
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -749,17 +752,17 @@ try:
             os.rename(src, dst)
 
     if server_root_path != "":
-        print(  # noqa
-            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui"
+        verbose_proxy_logger.info(  # noqa
+            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
         )  # noqa
-        if os.getenv("PROXY_BASE_URL") is None:
-            os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
             if request.url.path.startswith("/ui"):
                 new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
                 return RedirectResponse(new_url)
+            elif request.url.path == "/sso/key/generate":
+                return RedirectResponse(f"{server_root_path}/sso/key/generate")
             return await call_next(request)
 
 except Exception:
@@ -3581,7 +3584,9 @@ async def chat_completion(  # noqa: PLR0915
             return StreamingResponse(
                 selected_data_generator,
                 media_type="text/event-stream",
-                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -3638,117 +3643,25 @@ async def completion(  # noqa: PLR0915
     data = {}
     try:
         data = await _read_request_body(request=request)
-
-        data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or data.get("model", None)
-        )
-        if user_model:
-            data["model"] = user_model
-
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        return await base_llm_response_processor.base_process_llm_request(
             request=request,
-            general_settings=general_settings,
+            fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        # override with user settings, these are params passed via cli
-        if user_temperature:
-            data["temperature"] = user_temperature
-        if user_request_timeout:
-            data["request_timeout"] = user_request_timeout
-        if user_max_tokens:
-            data["max_tokens"] = user_max_tokens
-        if user_api_base:
-            data["api_base"] = user_api_base
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
-        )
-
-        ### ROUTE THE REQUESTs ###
-        llm_call = await route_request(
-            data=data,
             route_type="atext_completion",
+            proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
             user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
-
-        # Await the llm_response task
-        response = await llm_call
-
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-
-        verbose_proxy_logger.debug("final response: %s", response)
-        if (
-            "stream" in data and data["stream"] is True
-        ):  # use generate_responses to stream responses
-            custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                hidden_params=hidden_params,
-                request_data=data,
-            )
-            selected_data_generator = select_data_generator(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-            )
-
-            return await create_streaming_response(
-                generator=selected_data_generator,
-                media_type="text/event-stream",
-                headers=custom_headers,
-            )
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response  # type: ignore
-        )
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-        await check_response_size_is_safe(response=response)
-        return response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -3783,7 +3696,9 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 headers={},
-                status_code=e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST,
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         else:
             _response = litellm.TextCompletionResponse()
@@ -5106,7 +5021,7 @@ async def run_thread(
                     request_data=data,
                 ),
                 media_type="text/event-stream",
-                headers={}, # Added empty headers dict, original call missed this argument
+                headers={},  # Added empty headers dict, original call missed this argument
             )
 
         ### ALERTING ###

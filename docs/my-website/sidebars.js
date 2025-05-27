@@ -379,7 +379,8 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/featherless_ai"
+        "providers/featherless_ai",
+        "providers/nebius"
       ],
     },
     {

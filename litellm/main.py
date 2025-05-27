@@ -1187,10 +1187,8 @@ def completion(  # type: ignore # noqa: PLR0915
             special_params=non_default_params,
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
-        )
-        processed_non_default_params = add_provider_specific_params_to_optional_params(
-            optional_params=processed_non_default_params,
-            passed_params=non_default_params,
+            remove_sensitive_keys=True,
+            add_provider_specific_params=True,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
@@ -1777,6 +1775,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nebius"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -3921,6 +3920,27 @@ def embedding(  # noqa: PLR0915
             api_key = (
                 api_key or litellm.api_key or get_secret_str("FIREWORKS_AI_API_KEY")
             )
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "nebius":
+            api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("NEBIUS_API_BASE")
+                or "api.studio.nebius.ai/v1"
+            )
+
             response = openai_chat_completions.embedding(
                 model=model,
                 input=input,
