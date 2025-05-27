@@ -115,7 +115,7 @@ This release brings improvements to our Presidio PII Integration. As a Proxy Adm
     - [`/messages`](../../docs/anthropic_unified)
         - allow using dynamic AWS Params - [PR](https://github.com/BerriAI/litellm/pull/10769)
 - **[Nvidia NIM](../../docs/providers/nvidia_nim)**
-    - [`/chat/completion`](../../docs/providers/nvidia_nim#usage---litellm-proxy-server) [NEED DOCS ON SUPPORTED PARAMS]
+    - [`/chat/completion`](../../docs/providers/nvidia_nim#usage---litellm-proxy-server)
         - Add tools, tool_choice, parallel_tool_calls support - [PR](https://github.com/BerriAI/litellm/pull/10763)
 - **[Novita AI](../../docs/providers/novita)**
     - New Provider added for `/chat/completion` routes - [PR](https://github.com/BerriAI/litellm/pull/9527)

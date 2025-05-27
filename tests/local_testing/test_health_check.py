@@ -180,6 +180,22 @@ async def test_audio_speech_health_check():
 
 
 @pytest.mark.asyncio
+async def test_audio_speech_health_check_with_another_voice():
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/tts-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "health_check_voice": "en-US-JennyNeural",
+        },
+        mode="audio_speech",
+        prompt="Hey",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+@pytest.mark.asyncio
 async def test_audio_transcription_health_check():
     litellm.set_verbose = True
     response = await litellm.ahealth_check(

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -547,6 +548,7 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 **db_health_status,
             }
         else:
@@ -556,6 +558,7 @@ async def health_readiness():
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
+                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
