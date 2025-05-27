@@ -2678,6 +2678,8 @@ def pre_process_non_default_params(
     custom_llm_provider: str,
     additional_drop_params: Optional[List[str]],
     model: str,
+    remove_sensitive_keys: bool = False,
+    add_provider_specific_params: bool = False,
 ) -> dict:
     """
     Pre-process non-default params to a standardized format
@@ -2759,7 +2761,30 @@ def pre_process_non_default_params(
                 ):
                     new_parameters.pop("additionalProperties", None)
                 tool_function["parameters"] = new_parameters
+
+    if add_provider_specific_params:
+        non_default_params = add_provider_specific_params_to_optional_params(
+            optional_params=non_default_params,
+            passed_params=passed_params,
+        )
+
+    if remove_sensitive_keys:
+        non_default_params = remove_sensitive_keys_from_dict(non_default_params)
     return non_default_params
+
+
+def remove_sensitive_keys_from_dict(d: dict) -> dict:
+    """
+    Remove sensitive keys from a dictionary
+    """
+    sensitive_key_phrases = ["key", "secret", "access", "credential"]
+    remove_keys = []
+    for key in d.keys():
+        if any(phrase in key.lower() for phrase in sensitive_key_phrases):
+            remove_keys.append(key)
+    for key in remove_keys:
+        d.pop(key)
+    return d
 
 
 def pre_process_optional_params(
