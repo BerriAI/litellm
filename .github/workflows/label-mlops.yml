@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check if ML Ops Team is selected
-        uses: actions-ecosystem/action-add-labels@v1
+        uses: actions-ecosystem/action-add-labels@18f1af5e3544586314bbe15c0273249c770b2daf  # v1
         if: contains(github.event.issue.body, '### Are you a ML Ops Team?') && contains(github.event.issue.body, 'Yes')
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

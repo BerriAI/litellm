@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 8
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
 
     - name: Thank You Message
       run: |
@@ -18,12 +18,12 @@ jobs:
         echo "Your PR is being tested now. We appreciate your help in making LiteLLM better!" >> $GITHUB_STEP_SUMMARY
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: '3.12'
 
     - name: Install Poetry
-      uses: snok/install-poetry@v1
+      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
 
     - name: Install dependencies
       run: |

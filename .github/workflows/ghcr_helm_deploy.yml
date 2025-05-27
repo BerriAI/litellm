@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -33,7 +33,7 @@ jobs:
 
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        uses: WyriHaximus/github-action-get-previous-tag@385a2a0b6abf6c2efeb95adfac83d96d6f968e0c  # v1.3.0
 
       - name: Get last published chart version
         id: current_version
@@ -45,7 +45,7 @@ jobs:
       # Automatically update the helm chart version one "patch" level
       - name: Bump release version
         id: bump_version
-        uses: christian-draeger/increment-semantic-version@1.1.0
+        uses: christian-draeger/increment-semantic-version@4ac542a8ebf91f4edc224cbe3a19cc086826ae77  # 1.1.0
         with:
           current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
           version-fragment: 'bug'
