@@ -13274,5 +13274,133 @@
         "max_output_tokens": 4096,
         "litellm_provider": "featherless_ai",
         "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-V3-0324": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-V3-0324-fast": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-R1": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "nebius",
+        "supports_function_calling": false,
+        "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-R1-fast": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "nebius",
+        "supports_function_calling": false,
+        "mode": "chat"
+    },
+    "nebius/meta-llama/Llama-3.3-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen3-235B-A22B": {
+        "max_tokens": 40000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen3-30B-A3B": {
+        "max_tokens": 40000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen3-30B-A3B-fast": {
+        "max_tokens": 40000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen3-32B": {
+        "max_tokens": 40000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen2.5-VL-72B-Instruct": {
+        "max_tokens": 32000,
+        "max_input_tokens": 24000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000075,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat"
+    },
+    "nebius/google/gemma-3-27b-it-fast": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat"
+    },
+    "nebius/BAAI/bge-en-icl": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "nebius",
+        "mode": "embedding"
+    },
+    "nebius/BAAI/bge-multilingual-gemma2": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "nebius",
+        "mode": "embedding"
     }
 }

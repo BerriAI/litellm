@@ -231,12 +231,14 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
     "hosted_vllm",
+    "nebius",
 ]
 
 
@@ -321,7 +323,6 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "web_search_options": None,
 }
 
-
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
@@ -341,6 +342,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.studio.nebius.ai/v1",
 ]
 
 
@@ -375,6 +377,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -384,6 +387,7 @@ openai_text_completion_compatible_providers: List = (
         "meta_llama",
         "llamafile",
         "featherless_ai",
+        "nebius",
     ]
 )
 _openai_like_providers: List = [
@@ -540,6 +544,27 @@ featherless_ai_models: List = [
     "mistralai/Mistral-Small-24B-Instruct-2501",
     "mistralai/Mistral-Nemo-Instruct-2407",
     "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+]
+
+nebius_models: List = [
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-30B-A3B-fast",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-14B",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/DeepSeek-V3-0324-fast",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-fast",
+    "meta-llama/Llama-3.3-70B-Instruct-fast",
+    "Qwen/Qwen2.5-32B-Instruct-fast",
+    "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+]
+
+nebius_embedding_models: List = [
+    "BAAI/bge-en-icl",
+    "BAAI/bge-multilingual-gemma2",
+    "intfloat/e5-mistral-7b-instruct",
 ]
 
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
