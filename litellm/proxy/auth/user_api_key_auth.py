@@ -39,6 +39,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
+    abbreviate_api_key,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -724,8 +725,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ## Check DB
-        if isinstance(
-            api_key, str
+        if (
+            isinstance(api_key, str) and valid_token is None
         ):  # if generated token, make sure it starts with sk-.
             assert api_key.startswith(
                 "sk-"
@@ -751,17 +752,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
+        abbreviated_api_key = abbreviate_api_key(api_key=api_key)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
 
         if valid_token is None:
-            valid_token = await get_key_object(
-                hashed_token=api_key,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                valid_token = await get_key_object(
+                    hashed_token=api_key,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except ProxyException as e:
+                if e.code == 401 or e.code == "401":
+                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                        abbreviated_api_key, api_key
+                    )
+                raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")
@@ -774,13 +783,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token = _update_key_budget_with_temp_budget_increase(
                 valid_token
             )  # updating it here, allows all downstream reporting / checks to use the updated budget
-
-        if valid_token is None:
-            raise Exception(
-                "Invalid proxy server token passed. Received API Key (hashed)={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
-                    api_key
-                )
-            )
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}

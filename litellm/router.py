@@ -255,6 +255,7 @@ class Router:
         router_general_settings: Optional[
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
+        ignore_invalid_deployments: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -287,6 +288,7 @@ class Router:
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
+            ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -327,6 +329,7 @@ class Router:
         from litellm._service_logger import ServiceLogging
 
         self.set_verbose = set_verbose
+        self.ignore_invalid_deployments = ignore_invalid_deployments
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -502,6 +505,7 @@ class Router:
             }
         }
         """
+
         ### ROUTING SETUP ###
         self.routing_strategy_init(
             routing_strategy=routing_strategy,
@@ -766,6 +770,9 @@ class Router:
         )
         self.afile_list = self.factory_function(
             litellm.afile_list, call_type="alist_files"
+        )
+        self.aimage_edit = self.factory_function(
+            litellm.aimage_edit, call_type="aimage_edit"
         )
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
@@ -3189,6 +3196,7 @@ class Router:
             "alist_fine_tuning_jobs",
             "aretrieve_fine_tuning_job",
             "alist_files",
+            "aimage_edit",
         ] = "assistants",
     ):
         """
@@ -3242,6 +3250,7 @@ class Router:
                 "alist_fine_tuning_jobs",
                 "aretrieve_fine_tuning_job",
                 "alist_files",
+                "aimage_edit",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4467,52 +4476,63 @@ class Router:
         - Deployment: The deployment object
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
-        deployment = Deployment(
-            **deployment_info,
-            model_name=_model_name,
-            litellm_params=LiteLLM_Params(**_litellm_params),
-            model_info=_model_info,
-        )
+        try:
+            deployment = Deployment(
+                **deployment_info,
+                model_name=_model_name,
+                litellm_params=LiteLLM_Params(**_litellm_params),
+                model_info=_model_info,
+            )
+            for field in CustomPricingLiteLLMParams.model_fields.keys():
+                if deployment.litellm_params.get(field) is not None:
+                    _model_info[field] = deployment.litellm_params[field]
 
-        for field in CustomPricingLiteLLMParams.model_fields.keys():
-            if deployment.litellm_params.get(field) is not None:
-                _model_info[field] = deployment.litellm_params[field]
+            ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+            model_id = deployment.model_info.id
+            if model_id is not None:
+                litellm.register_model(
+                    model_cost={
+                        model_id: _model_info,
+                    }
+                )
 
-        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-        model_id = deployment.model_info.id
-        if model_id is not None:
+            ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+            _model_name = deployment.litellm_params.model
+            if deployment.litellm_params.custom_llm_provider is not None:
+                _model_name = (
+                    deployment.litellm_params.custom_llm_provider + "/" + _model_name
+                )
+
             litellm.register_model(
                 model_cost={
-                    model_id: _model_info,
+                    _model_name: _model_info,
                 }
             )
 
-        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
-        _model_name = deployment.litellm_params.model
-        if deployment.litellm_params.custom_llm_provider is not None:
-            _model_name = (
-                deployment.litellm_params.custom_llm_provider + "/" + _model_name
-            )
+            ## Check if LLM Deployment is allowed for this deployment
+            if (
+                self.deployment_is_active_for_environment(deployment=deployment)
+                is not True
+            ):
+                verbose_router_logger.warning(
+                    f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
+                )
+                return None
 
-        litellm.register_model(
-            model_cost={
-                _model_name: _model_info,
-            }
-        )
+            deployment = self._add_deployment(deployment=deployment)
 
-        ## Check if LLM Deployment is allowed for this deployment
-        if self.deployment_is_active_for_environment(deployment=deployment) is not True:
-            verbose_router_logger.warning(
-                f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
-            )
-            return None
+            model = deployment.to_json(exclude_none=True)
 
-        deployment = self._add_deployment(deployment=deployment)
-
-        model = deployment.to_json(exclude_none=True)
-
-        self.model_list.append(model)
-        return deployment
+            self.model_list.append(model)
+            return deployment
+        except Exception as e:
+            if self.ignore_invalid_deployments:
+                verbose_router_logger.exception(
+                    f"Error creating deployment: {e}, ignoring and continuing with other deployments."
+                )
+                return None
+            else:
+                raise e
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -4760,12 +4780,11 @@ class Router:
 
         # add to model list
         _deployment = deployment.to_json(exclude_none=True)
-        self.model_list.append(_deployment)
-
         # initialize client
         self._add_deployment(deployment=deployment)
 
         # add to model names
+        self.model_list.append(_deployment)
         self.model_names.append(deployment.model_name)
         return deployment
 
@@ -4778,31 +4797,40 @@ class Router:
         Returns:
         - The added/updated deployment
         """
-        # check if deployment already exists
-        _deployment_model_id = deployment.model_info.id or ""
+        try:
+            # check if deployment already exists
+            _deployment_model_id = deployment.model_info.id or ""
 
-        _deployment_on_router: Optional[Deployment] = self.get_deployment(
-            model_id=_deployment_model_id
-        )
-        if _deployment_on_router is not None:
-            # deployment with this model_id exists on the router
-            if deployment.litellm_params == _deployment_on_router.litellm_params:
-                # No need to update
+            _deployment_on_router: Optional[Deployment] = self.get_deployment(
+                model_id=_deployment_model_id
+            )
+            if _deployment_on_router is not None:
+                # deployment with this model_id exists on the router
+                if deployment.litellm_params == _deployment_on_router.litellm_params:
+                    # No need to update
+                    return None
+
+                # if there is a new litellm param -> then update the deployment
+                # remove the previous deployment
+                removal_idx: Optional[int] = None
+                for idx, model in enumerate(self.model_list):
+                    if model["model_info"]["id"] == deployment.model_info.id:
+                        removal_idx = idx
+
+                if removal_idx is not None:
+                    self.model_list.pop(removal_idx)
+
+            # if the model_id is not in router
+            self.add_deployment(deployment=deployment)
+            return deployment
+        except Exception as e:
+            if self.ignore_invalid_deployments:
+                verbose_router_logger.warning(
+                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                )
                 return None
-
-            # if there is a new litellm param -> then update the deployment
-            # remove the previous deployment
-            removal_idx: Optional[int] = None
-            for idx, model in enumerate(self.model_list):
-                if model["model_info"]["id"] == deployment.model_info.id:
-                    removal_idx = idx
-
-            if removal_idx is not None:
-                self.model_list.pop(removal_idx)
-
-        # if the model_id is not in router
-        self.add_deployment(deployment=deployment)
-        return deployment
+            else:
+                raise e
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
         """
@@ -5441,6 +5469,26 @@ class Router:
                 elif model_name is None:
                     ids.append(id)
         return ids
+
+    def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
+        """
+        Map a team model name to a team-specific model name.
+
+        Returns:
+        - team_model_name: str - the team-specific model name
+        - None: if no team-specific model name is found
+        """
+        for model in self.model_list:
+            model_team_id = model["model_info"].get("team_id")
+            model_team_public_model_name = model["model_info"].get(
+                "team_public_model_name"
+            )
+            if (
+                model_team_id == team_id
+                and model_team_public_model_name == team_model_name
+            ):
+                return model["model_name"]
+        return None
 
     def _get_all_deployments(
         self, model_name: str, model_alias: Optional[str] = None
