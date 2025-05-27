@@ -1137,7 +1137,7 @@ def default_image_cost_calculator(
 
     # Try model with quality first, fall back to base model name
     cost_info: Optional[dict] = None
-    models_to_check = [
+    models_to_check: List[Optional[str]] = [
         model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
@@ -1146,9 +1146,9 @@ def default_image_cost_calculator(
         model,
         model_name_without_custom_llm_provider,
     ]
-    for model in models_to_check:
-        if model in litellm.model_cost:
-            cost_info = litellm.model_cost[model]
+    for _model in models_to_check:
+        if _model is not None and _model in litellm.model_cost:
+            cost_info = litellm.model_cost[_model]
             break
     if cost_info is None:
         raise Exception(
@@ -1364,6 +1364,8 @@ def handle_realtime_stream_cost_calculation(
 
     for model_name in potential_model_names:
         try:
+            if model_name is None:
+                continue
             _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
                 model=model_name,
                 usage=combined_usage_object,
