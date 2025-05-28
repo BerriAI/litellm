@@ -73,6 +73,7 @@ class MCPServerManager:
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
             new_server = MCPServer(
+                server_id=str(uuid.uuid4()),
                 name=server_name,
                 url=server_config["url"],
                 # TODO: utility fn the default values
@@ -107,6 +108,7 @@ class MCPServerManager:
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             new_server = MCPServer(
+                server_id=mcp_server.server_id,
                 name=mcp_server.alias or mcp_server.server_id,
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
@@ -244,6 +246,15 @@ class MCPServerManager:
         # ensure the global_mcp_server_manager is up to date with the db
         for server in db_mcp_servers:
             self.add_update_server(server)
+
+    def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
+        """
+        Get the MCP Server from the server id
+        """
+        for server in self.get_registry().values():
+            if server.server_id == server_id:
+                return server
+        return None
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()

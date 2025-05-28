@@ -6,7 +6,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Union
 
 from anyio import BrokenResourceError
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, ValidationError
 
@@ -245,6 +245,9 @@ if MCP_AVAILABLE:
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
+        server_id: Optional[str] = Query(
+            None, description="The server id to list tools for"
+        ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> List[ListMCPToolsRestAPIResponseObject]:
         """
@@ -275,6 +278,8 @@ if MCP_AVAILABLE:
         """
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
         for server in global_mcp_server_manager.get_registry().values():
+            if server_id and server.server_id != server_id:
+                continue
             try:
                 tools = await global_mcp_server_manager._get_tools_from_server(server)
                 for tool in tools:

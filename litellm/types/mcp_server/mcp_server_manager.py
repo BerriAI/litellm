@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
-from litellm.proxy._types import MCPAuthType, MCPTransportType, MCPSpecVersionType
+from litellm.proxy._types import MCPAuthType, MCPSpecVersionType, MCPTransportType
 
 
 class MCPInfo(TypedDict, total=False):
@@ -13,6 +13,7 @@ class MCPInfo(TypedDict, total=False):
 
 
 class MCPServer(BaseModel):
+    server_id: str
     name: str
     url: str
     # TODO: alter the types to be the Literal explicit
