@@ -2,6 +2,7 @@
 Chat provider mapping chat completion requests to /responses API and back to chat format
 """
 import httpx
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from openai.types.responses.response_create_params import ResponseCreateParamsBase
@@ -10,6 +11,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.utils import ModelResponse, Choices, Usage
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 
 class ChatConfig(BaseConfig):
@@ -18,8 +20,10 @@ class ChatConfig(BaseConfig):
     Transforms chat completion requests into Responses API requests and vice versa.
     """
     def get_supported_openai_params(self, model: str) -> List[str]:  # noqa: U100
-        # Support standard OpenAI chat parameters
-        return OPENAI_CHAT_COMPLETION_PARAMS  # type: ignore
+        # Support standard OpenAI chat parameters plus responses API specific ones
+        base_params = list(OPENAI_CHAT_COMPLETION_PARAMS)
+        responses_specific_params = ["previous_response_id", "instructions"]
+        return base_params + responses_specific_params
 
     def validate_environment(
         self,
@@ -45,32 +49,119 @@ class ChatConfig(BaseConfig):
         model: str,
         messages: List[Dict[str, Any]],
         optional_params: Dict[str, Any],
-        litellm_params: Dict[str, Any],  # noqa: U100
+        litellm_params: Dict[str, Any],
         headers: Dict[str, Any],  # noqa: U100
     ) -> Dict[str, Any]:
-        # Build Responses API request
-        # Convert chat messages to Responses API input
+        # Convert chat completion messages back to responses API input format
         input_items: List[Any] = []
+        
+        # Process messages to extract system instructions and convert to responses format
+        instructions = None
+        converted_messages = []
+        
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content", "")
-            # wrap text content
-            input_items.append({
-                "type": "message",
-                "role": role,
-                "content": [{"type": "text", "text": content}],
-            })
-        # start with required fields
-        data: Dict[str, Any] = {"model": model, "input": input_items}
-        # map optional params: rename max_tokens or max_completion_tokens -> max_output_tokens
+            tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
+            
+            if role == "system":
+                # Extract system message as instructions
+                instructions = content
+            elif role == "tool":
+                # Convert tool message to function call output format
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": content
+                })
+            elif role == "assistant" and tool_calls:
+                # Convert assistant message with tool calls
+                if content:  # If there's text content, add it first
+                    input_items.append({
+                        "type": "message",
+                        "role": role,
+                        "content": self._convert_content_to_responses_format(content)
+                    })
+                # Note: Tool calls will be handled by the responses API directly
+                # We don't need to convert them back to input format here
+            else:
+                # Regular user/assistant message
+                input_items.append({
+                    "type": "message", 
+                    "role": role,
+                    "content": self._convert_content_to_responses_format(content)
+                })
+        
+        # Build responses API request using the reverse transformation logic
+        responses_api_request = ResponsesAPIOptionalRequestParams()
+        
+        # Set instructions if we found a system message
+        if instructions:
+            responses_api_request["instructions"] = instructions
+            
+        # Map optional parameters
         for key, value in optional_params.items():
             if value is None:
                 continue
             if key in ("max_tokens", "max_completion_tokens"):
-                data["max_output_tokens"] = value
-            else:
-                data[key] = value
-        return dict(ResponseCreateParamsBase(**data))
+                responses_api_request["max_output_tokens"] = value
+            elif key == "tools":
+                # Convert chat completion tools to responses API tools format
+                responses_api_request["tools"] = self._convert_tools_to_responses_format(value)
+            elif key in ["temperature", "top_p", "tool_choice", "parallel_tool_calls", "user", "stream"]:
+                responses_api_request[key] = value
+            elif key == "metadata":
+                responses_api_request["metadata"] = value
+            elif key == "previous_response_id":
+                # Support for responses API session management
+                responses_api_request["previous_response_id"] = value
+        
+        # Get stream parameter from litellm_params if not in optional_params
+        stream = optional_params.get("stream") or litellm_params.get("stream", False)
+        
+        # Handle session management if previous_response_id is provided
+        previous_response_id = optional_params.get("previous_response_id")
+        if previous_response_id:
+            # Use the existing session handler for responses API
+            try:
+                # This will extend the messages with previous session context
+                session_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                    model=model,
+                    input=input_items,
+                    responses_api_request=responses_api_request,
+                    custom_llm_provider="openai",
+                    stream=stream,
+                    **litellm_params
+                )
+                
+                # Note: Session handling for async contexts would use:
+                # await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                #     previous_response_id=previous_response_id,
+                #     litellm_completion_request=session_request
+                # )
+                
+            except Exception as e:
+                # If session handling fails, continue without it but log the error
+                print(f"Warning: Session handling failed for previous_response_id {previous_response_id}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Convert back to responses API format for the actual request
+        request_data = {
+            "model": model,
+            "input": input_items,
+        }
+        
+        # Add non-None values from responses_api_request
+        for key, value in responses_api_request.items():
+            if value is not None:
+                if key == "instructions" and instructions:
+                    request_data["instructions"] = instructions
+                else:
+                    request_data[key] = value
+                    
+        return request_data
 
     def transform_response(
         self,
@@ -78,7 +169,7 @@ class ChatConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,  # noqa: U100
         logging_obj: Any,  # noqa: U100
-        request_data: Dict[str, Any],  # noqa: U100
+        request_data: Dict[str, Any],
         messages: List[Any],  # noqa: U100
         optional_params: Dict[str, Any],  # noqa: U100
         litellm_params: Dict[str, Any],  # noqa: U100
@@ -89,26 +180,95 @@ class ChatConfig(BaseConfig):
         # Parse Responses API response and convert to chat ModelResponse
         try:
             resp_json = raw_response.json()
-        except Exception:
+        except Exception as e:
+            print(f"Error parsing JSON response from responses API: {e}")
+            print(f"Raw response text: {raw_response.text}")
+            import traceback
+            traceback.print_exc()
             raise httpx.HTTPError(f"Invalid JSON from responses API: {raw_response.text}")
-        resp_obj = ResponsesAPIResponse(**resp_json)
-        # transform output items to chat messages
-        chat_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_outputs_to_chat_completion_messages(resp_obj)
-        # build choices: each message as separate choice
-        choices: List[Dict[str, Any]] = []
-        for idx, msg in enumerate(chat_messages):
-            choices.append({"index": idx, "message": msg, "finish_reason": getattr(resp_obj, "status", "completed")})
-        # build usage
-        usage = Usage(
-            prompt_tokens=getattr(resp_obj.usage, "input_tokens", 0),
-            completion_tokens=getattr(resp_obj.usage, "output_tokens", 0),
-            total_tokens=getattr(resp_obj.usage, "total_tokens", 0),
+        
+        # Use the existing transformation logic to convert responses API to chat completion
+        input_param = request_data.get("input", [])
+        responses_api_request = ResponsesAPIOptionalRequestParams(
+            instructions=request_data.get("instructions"),
+            tools=request_data.get("tools"),
+            tool_choice=request_data.get("tool_choice"),
+            temperature=request_data.get("temperature"),
+            top_p=request_data.get("top_p"),
+            max_output_tokens=request_data.get("max_output_tokens"),
+            parallel_tool_calls=request_data.get("parallel_tool_calls"),
+            user=request_data.get("user"),
+            metadata=request_data.get("metadata", {})
         )
+        
+        # Transform the responses API response to chat completion format
+        chat_completion_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input=input_param,
+            responses_api_request=responses_api_request,
+            chat_completion_response=resp_json
+        )
+        
+        # Build proper ModelResponse from the responses API response
+        choices = []
+        
+        # Process output items to build choices
+        for output_item in chat_completion_response.output:
+            if hasattr(output_item, 'type') and output_item.type == "message":
+                # Extract content from the message
+                content = ""
+                if hasattr(output_item, 'content') and output_item.content:
+                    for content_item in output_item.content:
+                        if hasattr(content_item, 'text'):
+                            content += content_item.text
+                
+                message = {
+                    "role": getattr(output_item, "role", "assistant"),
+                    "content": content
+                }
+                
+                # Add tool calls if present
+                tool_calls = []
+                for output in chat_completion_response.output:
+                    if hasattr(output, 'type') and output.type == "function_call":
+                        tool_calls.append({
+                            "id": getattr(output, "call_id", getattr(output, "id", "")),
+                            "type": "function",
+                            "function": {
+                                "name": getattr(output, "name", ""),
+                                "arguments": getattr(output, "arguments", "")
+                            }
+                        })
+                
+                if tool_calls:
+                    message["tool_calls"] = tool_calls
+                
+                choices.append({
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": self._map_responses_status_to_finish_reason(chat_completion_response.status)
+                })
+                break  # Only process the first message for now
+        
+        # If no message found, create a default one
+        if not choices:
+            choices.append({
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "stop"
+            })
+        
+        # Build usage from the responses API response
+        usage = Usage(
+            prompt_tokens=getattr(chat_completion_response.usage, "input_tokens", 0),
+            completion_tokens=getattr(chat_completion_response.usage, "output_tokens", 0),
+            total_tokens=getattr(chat_completion_response.usage, "total_tokens", 0),
+        )
+        
         return ModelResponse(
-            id=resp_obj.id,
+            id=chat_completion_response.id,
             choices=choices,
-            created=resp_obj.created_at,
-            model=resp_obj.model,
+            created=chat_completion_response.created_at,
+            model=chat_completion_response.model,
             usage=usage,
         )
 
@@ -118,7 +278,117 @@ class ChatConfig(BaseConfig):
         parsed_chunk: dict,
         logging_obj: Any,  # noqa: U100
     ) -> Any:
-        # For streaming, pass through the parsed chunk
+        # Transform responses API streaming chunk to chat completion format
+        if not parsed_chunk:
+            return parsed_chunk
+            
+        # Handle different event types from responses API
+        event_type = parsed_chunk.get("type")
+        
+        if event_type == "response.created":
+            # Initial response creation event
+            return {
+                "id": parsed_chunk.get("response", {}).get("id"),
+                "object": "chat.completion.chunk",
+                "created": parsed_chunk.get("response", {}).get("created_at"),
+                "model": parsed_chunk.get("response", {}).get("model"),
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": None
+                }]
+            }
+        elif event_type == "response.output_item.added":
+            # New output item added
+            output_item = parsed_chunk.get("output_item", {})
+            if output_item.get("type") == "message":
+                return {
+                    "id": parsed_chunk.get("response_id"),
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": output_item.get("role", "assistant")},
+                        "finish_reason": None
+                    }]
+                }
+        elif event_type == "response.content_part.added":
+            # Content part added to output
+            content_part = parsed_chunk.get("part", {})
+            if content_part.get("type") == "text":
+                return {
+                    "id": parsed_chunk.get("response_id"),
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": content_part.get("text", "")},
+                        "finish_reason": None
+                    }]
+                }
+        elif event_type == "response.content_part.done":
+            # Content part completed
+            return {
+                "id": parsed_chunk.get("response_id"),
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": None
+                }]
+            }
+        elif event_type == "response.output_item.done":
+            # Output item completed
+            output_item = parsed_chunk.get("output_item", {})
+            finish_reason = "stop"  # Default finish reason
+            
+            if output_item.get("type") == "message":
+                status = output_item.get("status")
+                finish_reason = self._map_responses_status_to_finish_reason(status)
+            
+            return {
+                "id": parsed_chunk.get("response_id"),
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": finish_reason
+                }]
+            }
+        elif event_type == "response.done":
+            # Response completed - include usage if available
+            response = parsed_chunk.get("response", {})
+            usage_data = response.get("usage", {})
+            
+            chunk = {
+                "id": response.get("id"),
+                "object": "chat.completion.chunk",
+                "created": response.get("created_at", int(time.time())),
+                "model": response.get("model", model),
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": None
+                }]
+            }
+            
+            # Add usage information if available
+            if usage_data:
+                chunk["usage"] = {
+                    "prompt_tokens": usage_data.get("input_tokens", 0),
+                    "completion_tokens": usage_data.get("output_tokens", 0),
+                    "total_tokens": usage_data.get("total_tokens", 0)
+                }
+            
+            return chunk
+        
+        # For any unhandled event types, return the original chunk
         return parsed_chunk
     
     def map_openai_params(
@@ -146,3 +416,53 @@ class ChatConfig(BaseConfig):
             message=error_message,
             headers=headers,
         )
+    
+    def _convert_content_to_responses_format(self, content: Union[str, List[Any]]) -> List[Dict[str, Any]]:
+        """Convert chat completion content to responses API format"""
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            result = []
+            for item in content:
+                if isinstance(item, str):
+                    result.append({"type": "text", "text": item})
+                elif isinstance(item, dict):
+                    # Handle multimodal content
+                    if item.get("type") == "text":
+                        result.append({"type": "text", "text": item.get("text", "")})
+                    elif item.get("type") == "image_url":
+                        result.append({"type": "image_url", "image_url": item.get("image_url", {})})
+                    else:
+                        # Pass through other types
+                        result.append(item)
+            return result
+        else:
+            return [{"type": "text", "text": str(content)}]
+    
+    def _convert_tools_to_responses_format(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert chat completion tools to responses API tools format"""
+        responses_tools = []
+        for tool in tools:
+            if tool.get("type") == "function":
+                function = tool.get("function", {})
+                responses_tools.append({
+                    "name": function.get("name", ""),
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {}),
+                    "strict": function.get("strict", False)
+                })
+        return responses_tools
+    
+    def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
+        """Map responses API status to chat completion finish_reason"""
+        if not status:
+            return "stop"
+        
+        status_mapping = {
+            "completed": "stop",
+            "incomplete": "length", 
+            "failed": "stop",
+            "cancelled": "stop"
+        }
+        
+        return status_mapping.get(status, "stop")
