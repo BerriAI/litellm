@@ -261,6 +261,7 @@ async def test_openai_image_edit_cost_tracking():
     """Test OpenAI image edit cost tracking with custom logger"""
     from litellm import image_edit, aimage_edit
     test_custom_logger = TestCustomLogger()
+    litellm.logging_callback_manager._reset_all_callbacks()
     litellm.callbacks = [test_custom_logger]
     
     # Mock response for Azure image edit
@@ -339,6 +340,7 @@ async def test_azure_image_edit_cost_tracking():
     """Test Azure image edit cost tracking with custom logger"""
     from litellm import image_edit, aimage_edit
     test_custom_logger = TestCustomLogger()
+    litellm.logging_callback_manager._reset_all_callbacks()
     litellm.callbacks = [test_custom_logger]
     
     # Mock response for Azure image edit
