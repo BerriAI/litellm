@@ -101,6 +101,7 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        mounts: Optional[Dict[str, httpx.AsyncBaseTransport]] = None, # Added mounts parameter
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -109,6 +110,7 @@ class AsyncHTTPHandler:
             concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
+            mounts=mounts # Pass mounts to create_client
         )
         self.client_alias = client_alias
 
@@ -118,6 +120,7 @@ class AsyncHTTPHandler:
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
+        mounts: Optional[Dict[str, httpx.AsyncBaseTransport]] = None, # mounts parameter
     ) -> httpx.AsyncClient:
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
@@ -150,11 +153,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-        # Get proxy mounts from litellm.utils
-        _, async_proxy_mounts = litellm.utils.create_proxy_transport_and_mounts()
-
+        # If mounts are provided, use them. Otherwise, httpx will use its default behavior (including env proxies).
+        # We removed the direct call to litellm.utils.create_proxy_transport_and_mounts() here to avoid circular import.
+        # The expectation is that litellm/__init__.py will prepare and pass the mounts.
         return httpx.AsyncClient(
-            mounts=async_proxy_mounts, # Apply proxy mounts
+            mounts=mounts, # Use mounts if provided
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -571,6 +574,7 @@ class HTTPHandler:
         concurrent_limit=1000,
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
+        mounts: Optional[Dict[str, httpx.BaseTransport]] = None, # mounts parameter
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -586,12 +590,10 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
-            # Get proxy mounts from litellm.utils
-            sync_proxy_mounts, _ = litellm.utils.create_proxy_transport_and_mounts()
-
-            # Create a client with a connection pool
+            # If mounts are provided, use them. Otherwise, httpx will use its default behavior.
+            # The expectation is that litellm/__init__.py will prepare and pass the mounts.
             self.client = httpx.Client(
-                mounts=sync_proxy_mounts, # Apply proxy mounts
+                mounts=mounts, # Use mounts if provided
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,

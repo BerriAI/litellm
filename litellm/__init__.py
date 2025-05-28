@@ -304,10 +304,16 @@ priority_reservation: Optional[Dict[str, float]] = None
 ######## Networking Settings ########
 use_aiohttp_transport: bool = True
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
+
+# Import utils here after it's defined, and create mounts
+# This import is deferred to avoid circular dependency issues at the top level
+from . import utils as litellm_utils # Use an alias to avoid conflict if 'utils' is a global var
+sync_proxy_mounts, async_proxy_mounts = litellm_utils.create_proxy_transport_and_mounts()
+
 module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
+    timeout=request_timeout, client_alias="module level aclient", mounts=async_proxy_mounts
 )
-module_level_client = HTTPHandler(timeout=request_timeout)
+module_level_client = HTTPHandler(timeout=request_timeout, mounts=sync_proxy_mounts)
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
