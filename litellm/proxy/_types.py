@@ -659,6 +659,17 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
+    mcp_servers: Optional[List[str]] = None
+    vector_stores: Optional[List[str]] = None
+
+
+class LiteLLM_ObjectPermissionTable(LiteLLM_ObjectPermissionBase):
+    """Represents a LiteLLM_ObjectPermissionTable record"""
+
+    object_permission_id: Optional[str] = None
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -689,6 +700,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -1172,13 +1184,6 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
                         f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                     )
         return values
-
-
-class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
-    """Represents a LiteLLM_ObjectPermissionTable record"""
-
-    object_permission_id: str
-    mcp_servers: List[str]
 
 
 class LiteLLM_TeamTable(TeamBase):
