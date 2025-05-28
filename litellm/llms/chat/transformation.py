@@ -144,6 +144,11 @@ class ChatConfig(BaseConfig):
         
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
+        print(f"Chat provider: Stream parameter: {stream}")
+        
+        # Ensure stream is properly set in the request
+        if stream:
+            responses_api_request["stream"] = True
         
         # Handle session management if previous_response_id is provided
         previous_response_id = optional_params.get("previous_response_id")
@@ -195,7 +200,10 @@ class ChatConfig(BaseConfig):
                     request_data["instructions"] = instructions
                 else:
                     request_data[key] = value
-                    
+        
+        print(f"Chat provider: Final request data keys: {list(request_data.keys())}")
+        print(f"Chat provider: Stream in request: {request_data.get('stream', False)}")
+        
         return request_data
 
     def transform_response(
@@ -314,15 +322,23 @@ class ChatConfig(BaseConfig):
         logging_obj: Any,  # noqa: U100
     ) -> Any:
         # Transform responses API streaming chunk to chat completion format
+        print(f"Chat provider: transform_streaming_response called with chunk: {parsed_chunk}")
+        
         if not parsed_chunk:
+            print("Chat provider: Empty parsed_chunk, returning None")
+            return None
+        
+        if not isinstance(parsed_chunk, dict):
+            print(f"Chat provider: Invalid chunk type {type(parsed_chunk)}, returning as-is")
             return parsed_chunk
             
         # Handle different event types from responses API
         event_type = parsed_chunk.get("type")
+        print(f"Chat provider: Processing event type: {event_type}")
         
         if event_type == "response.created":
             # Initial response creation event
-            return {
+            chunk = {
                 "id": parsed_chunk.get("response", {}).get("id"),
                 "object": "chat.completion.chunk",
                 "created": parsed_chunk.get("response", {}).get("created_at"),
@@ -333,6 +349,8 @@ class ChatConfig(BaseConfig):
                     "finish_reason": None
                 }]
             }
+            print(f"Chat provider: response.created -> {chunk}")
+            return chunk
         elif event_type == "response.output_item.added":
             # New output item added
             output_item = parsed_chunk.get("output_item", {})
@@ -352,7 +370,7 @@ class ChatConfig(BaseConfig):
             # Content part added to output
             content_part = parsed_chunk.get("part", {})
             if content_part.get("type") == "text":
-                return {
+                chunk = {
                     "id": parsed_chunk.get("response_id"),
                     "object": "chat.completion.chunk",
                     "created": int(time.time()),
@@ -363,6 +381,11 @@ class ChatConfig(BaseConfig):
                         "finish_reason": None
                     }]
                 }
+                print(f"Chat provider: content_part.added -> {chunk}")
+                return chunk
+            else:
+                print(f"Chat provider: content_part.added with non-text type {content_part.get('type')}, skipping")
+                return None
         elif event_type == "response.content_part.done":
             # Content part completed
             return {
@@ -423,8 +446,21 @@ class ChatConfig(BaseConfig):
             
             return chunk
         
-        # For any unhandled event types, return the original chunk
-        return parsed_chunk
+        # For any unhandled event types, create a minimal valid chunk or skip
+        print(f"Chat provider: Unhandled event type '{event_type}', creating empty chunk")
+        
+        # Return a minimal valid chunk for unknown events
+        return {
+            "id": parsed_chunk.get("response_id") or parsed_chunk.get("id") or "unknown",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": None
+            }]
+        }
     
     def map_openai_params(
         self,
