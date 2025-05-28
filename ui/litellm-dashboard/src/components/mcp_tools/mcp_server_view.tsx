@@ -86,6 +86,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {/* Tool Panel */}
           <TabPanel>
             <MCPToolsViewer
+              serverId={mcpServer.server_id}
               accessToken={accessToken}
               userRole={userRole}
               userID={userID}

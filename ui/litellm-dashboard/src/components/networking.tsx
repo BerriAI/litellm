@@ -4559,12 +4559,12 @@ export const deleteMCPServer = async (
   }
 };
 
-export const listMCPTools = async (accessToken: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list`
-      : `/mcp/tools/list`;
+      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
+      : `/mcp/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     

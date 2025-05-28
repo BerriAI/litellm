@@ -34,6 +34,7 @@ function DataTableWrapper({
 }
 
 const MCPToolsViewer = ({
+  serverId,
   accessToken,
   userRole,
   userID,
@@ -48,7 +49,7 @@ const MCPToolsViewer = ({
     queryKey: ['mcpTools'],
     queryFn: () => {
       if (!accessToken) throw new Error('Access Token required');
-      return listMCPTools(accessToken);
+      return listMCPTools(accessToken, serverId);
     },
     enabled: !!accessToken,
   });

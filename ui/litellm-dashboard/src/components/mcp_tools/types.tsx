@@ -87,6 +87,7 @@ export interface InputSchemaProperty {
   
   // Props for the main component
   export interface MCPToolsViewerProps {
+    serverId: string;
     accessToken: string | null;
     userRole: string | null;
     userID: string | null;
