@@ -219,6 +219,8 @@ class CallTypes(Enum):
     text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
+    image_edit = "image_edit"
+    aimage_edit = "aimage_edit"
     moderation = "moderation"
     amoderation = "amoderation"
     atranscription = "atranscription"
@@ -283,6 +285,8 @@ CallTypesLiteral = Literal[
     "text_completion",
     "image_generation",
     "aimage_generation",
+    "image_edit",
+    "aimage_edit",
     "moderation",
     "amoderation",
     "atranscription",
@@ -1600,6 +1604,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     def __init__(
         self,
         created: Optional[int] = None,
@@ -1607,6 +1613,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: Optional[ImageUsage] = None,
         hidden_params: Optional[dict] = None,
+        **kwargs,
     ):
         if response_ms:
             _response_ms = response_ms
