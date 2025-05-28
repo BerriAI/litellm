@@ -40,8 +40,11 @@ class ChatConfig(BaseConfig):
         api_base: Optional[str],
         **kwargs,
     ) -> str:
+        # Default to OpenAI if no api_base provided
         if not api_base:
-            raise ValueError("api_base is required for chat via responses API")
+            api_base = "https://api.openai.com/v1"
+            print(f"Warning: No api_base provided for chat provider, defaulting to: {api_base}")
+        
         return api_base.rstrip("/") + "/responses"
 
     def transform_request(
