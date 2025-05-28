@@ -119,6 +119,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "generic_api",
     "resend_email",
     "smtp_email",
+    "deepeval",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -127,28 +128,29 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
 ] = []
+initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
-gcs_pub_sub_use_v1: Optional[bool] = (
-    False  # if you want to use v1 gcs pubsub logged payload
-)
-generic_api_use_v1: Optional[bool] = (
-    False  # if you want to use v1 generic api logged payload
-)
+gcs_pub_sub_use_v1: Optional[
+    bool
+] = False  # if you want to use v1 gcs pubsub logged payload
+generic_api_use_v1: Optional[
+    bool
+] = False  # if you want to use v1 generic api logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
+_async_input_callback: List[
+    Union[str, Callable, CustomLogger]
+] = []  # internal variable - async custom callbacks are routed here.
+_async_success_callback: List[
+    Union[str, Callable, CustomLogger]
+] = []  # internal variable - async custom callbacks are routed here.
+_async_failure_callback: List[
+    Union[str, Callable, CustomLogger]
+] = []  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
@@ -156,18 +158,18 @@ log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
 filter_invalid_headers: Optional[bool] = False
-add_user_information_to_llm_headers: Optional[bool] = (
-    None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
-)
+add_user_information_to_llm_headers: Optional[
+    bool
+] = None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ### end of callbacks #############
 
-email: Optional[str] = (
-    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-token: Optional[str] = (
-    None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
+email: Optional[
+    str
+] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+token: Optional[
+    str
+] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
@@ -203,6 +205,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+nebius_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -249,24 +252,20 @@ enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
-caching: bool = (
-    False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-caching_with_models: bool = (
-    False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-cache: Optional[Cache] = (
-    None  # cache object <- use this - https://docs.litellm.ai/docs/caching
-)
+caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+cache: Optional[
+    Cache
+] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
-budget_duration: Optional[str] = (
-    None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-)
+budget_duration: Optional[
+    str
+] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 default_soft_budget: float = (
     DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
 )
@@ -275,15 +274,11 @@ forward_traceparent_to_llm_provider: bool = False
 
 _current_cost = 0.0  # private variable, used if max budget is set
 error_logs: Dict = {}
-add_function_to_prompt: bool = (
-    False  # if function calling not supported by api, append function call details to system prompt
-)
+add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
-model_cost_map_url: str = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-)
+model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -303,12 +298,15 @@ tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
-force_ipv4: bool = (
-    False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-)
+
+
+######## Networking Settings ########
+use_aiohttp_transport: bool = True
+force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
 )
@@ -322,13 +320,13 @@ fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
-num_retries_per_request: Optional[int] = (
-    None  # for the request overall (incl. fallbacks + model retries)
-)
+num_retries_per_request: Optional[
+    int
+] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[Any] = (
-    None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
-)
+secret_manager_client: Optional[
+    Any
+] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional[KeyManagementSystem] = None
 _key_management_settings: KeyManagementSettings = KeyManagementSettings()
@@ -366,6 +364,8 @@ project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-opus-4-20250514-v1:0",
+    "anthropic.claude-sonnet-4-20250514-v1:0",
     "anthropic.claude-3-7-sonnet-20250219-v1:0",
     "anthropic.claude-3-5-haiku-20241022-v1:0",
     "anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -449,6 +449,9 @@ assemblyai_models: List = []
 snowflake_models: List = []
 llama_models: List = []
 nscale_models: List = []
+nebius_models: List = []
+nebius_embedding_models: List = []
+
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -605,6 +608,10 @@ def add_known_models():
             sambanova_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
+        elif value.get("litellm_provider") == "nebius-chat-models":
+            nebius_models.append(key)
+        elif value.get("litellm_provider") == "nebius-embedding-models":
+            nebius_embedding_models.append(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.append(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -750,6 +757,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
     "novita": novita_models,
+    "nebius": nebius_models + nebius_embedding_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -788,6 +796,7 @@ all_embedding_models = (
     + bedrock_embedding_models
     + vertex_embedding_models
     + fireworks_ai_embedding_models
+    + nebius_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -928,11 +937,10 @@ from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
-
+from .llms.ollama.chat.transformation import OllamaChatConfig
 from .llms.ollama.completion.transformation import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.ollama_chat import OllamaChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
@@ -1069,6 +1077,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.nebius.chat.transformation import NebiusConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
@@ -1098,6 +1107,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .images.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
@@ -1124,10 +1134,10 @@ from .types.llms.custom_llm import CustomLLMItem
 from .types.utils import GenericStreamingChunk
 
 custom_provider_map: List[CustomLLMItem] = []
-_custom_providers: List[str] = (
-    []
-)  # internal helper util, used to track names of custom providers
-disable_hf_tokenizer_download: Optional[bool] = (
-    None  # disable huggingface tokenizer download. Defaults to openai clk100
-)
+_custom_providers: List[
+    str
+] = []  # internal helper util, used to track names of custom providers
+disable_hf_tokenizer_download: Optional[
+    bool
+] = None  # disable huggingface tokenizer download. Defaults to openai clk100
 global_disable_no_log_param: bool = False

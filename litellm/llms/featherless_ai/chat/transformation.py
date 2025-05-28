@@ -26,7 +26,6 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     tool_choice: Optional[str] = None
     tools: Optional[list] = None
 
-
     def __init__(
         self,
         frequency_penalty: Optional[int] = None,
@@ -66,9 +65,6 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             "stop",
             "temperature",
             "top_p",
-            "response_format",
-            "tool_choice",
-            "tools"
         ]
 
     def map_openai_params(
@@ -125,8 +121,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     ) -> dict:
         if not api_key:
             raise ValueError("Missing Featherless AI API Key")
-        
+
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
-        
+
         return headers

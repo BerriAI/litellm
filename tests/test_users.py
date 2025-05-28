@@ -5,9 +5,9 @@ import asyncio
 import aiohttp
 import time
 from openai import AsyncOpenAI
-from test_team import list_teams
+from tests.test_team import list_teams
 from typing import Optional
-from test_keys import generate_key
+from tests.test_keys import generate_key
 from fastapi import HTTPException
 
 

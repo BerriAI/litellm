@@ -235,6 +235,7 @@ class InMemoryGuardrailHandler:
         Returns a Guardrail object if the guardrail is initialized successfully
         """
         guardrail_id = guardrail.get("guardrail_id") or str(uuid.uuid4())
+        guardrail["guardrail_id"] = guardrail_id
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             verbose_proxy_logger.debug(
                 "guardrail_id already exists in IN_MEMORY_GUARDRAILS"
@@ -273,7 +274,7 @@ class InMemoryGuardrailHandler:
         if initializer:
             custom_guardrail_callback = initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
-            self.initialize_custom_guardrail(
+            custom_guardrail_callback = self.initialize_custom_guardrail(
                 guardrail=guardrail,
                 guardrail_type=guardrail_type,
                 litellm_params=litellm_params,
@@ -288,8 +289,6 @@ class InMemoryGuardrailHandler:
             litellm_params=litellm_params,
         )
 
-        guardrail_id = parsed_guardrail.get("guardrail_id") or str(uuid.uuid4())
-
         # store references to the guardrail in memory
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = parsed_guardrail
         self.guardrail_id_to_custom_guardrail[guardrail_id] = custom_guardrail_callback
@@ -302,7 +301,7 @@ class InMemoryGuardrailHandler:
         guardrail_type: str,
         litellm_params: LitellmParams,
         config_file_path: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[CustomGuardrail]:
         """
         Initialize a Custom Guardrail from a python file
 
@@ -348,6 +347,8 @@ class InMemoryGuardrailHandler:
         )
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 
+        return _guardrail_callback
+
     def update_in_memory_guardrail(
         self, guardrail_id: str, guardrail: Guardrail
     ) -> None:
@@ -375,6 +376,18 @@ class InMemoryGuardrailHandler:
         Delete a guardrail in memory
         """
         self.IN_MEMORY_GUARDRAILS.pop(guardrail_id, None)
+
+    def list_in_memory_guardrails(self) -> List[Guardrail]:
+        """
+        List all guardrails in memory
+        """
+        return list(self.IN_MEMORY_GUARDRAILS.values())
+
+    def get_guardrail_by_id(self, guardrail_id: str) -> Optional[Guardrail]:
+        """
+        Get a guardrail by its ID from memory
+        """
+        return self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
 
 
 ########################################################

@@ -110,6 +110,15 @@ class BaseConfig(ABC):
             or non_default_params.get("reasoning_effort") is not None
         )
 
+    def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
+        """
+        OpenAI spec allows max_tokens or max_completion_tokens to be specified.
+        """
+        return (
+            "max_tokens" in non_default_params
+            or "max_completion_tokens" in non_default_params
+        )
+
     def update_optional_params_with_thinking_tokens(
         self, non_default_params: dict, optional_params: dict
     ):

@@ -219,6 +219,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "logprobs",
             "top_logprobs",
             "modalities",
+            "parallel_tool_calls",
         ]
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
@@ -455,9 +456,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and value
             ):
                 optional_params["tools"] = self._map_function(value=value)
-                optional_params["litellm_param_is_function_call"] = (
-                    True if param == "functions" else False
-                )
             elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -466,6 +464,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            elif param == "parallel_tool_calls":
+                if value is False:
+                    tools = non_default_params.get("tools", non_default_params.get("functions"))
+                    num_function_declarations = len(tools) if isinstance(tools, list) else 0
+                    if num_function_declarations > 1:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                "`parallel_tool_calls=False` is not supported when multiple tools are "
+                                "provided for Gemini. Specify a single tool, or set "
+                                "`parallel_tool_calls=True`."
+                            ),
+                            status_code=400,
+                        )
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
@@ -880,8 +891,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return "stop"
 
-    def _process_candidates(self, _candidates, model_response, litellm_params):
+    def _process_candidates(
+        self, _candidates, model_response, standard_optional_params: dict
+    ):
         """Helper method to process candidates and extract metadata"""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            is_function_call,
+        )
+
         grounding_metadata: List[dict] = []
         safety_ratings: List = []
         citation_metadata: List = []
@@ -918,9 +935,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 functions, tools = self._transform_parts(
                     parts=candidate["content"]["parts"],
                     index=candidate.get("index", idx),
-                    is_function_call=litellm_params.get(
-                        "litellm_param_is_function_call"
-                    ),
+                    is_function_call=is_function_call(standard_optional_params),
                 )
 
             if "logprobsResult" in candidate:
@@ -1019,7 +1034,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     safety_ratings,
                     citation_metadata,
                 ) = self._process_candidates(
-                    _candidates, model_response, litellm_params
+                    _candidates, model_response, logging_obj.optional_params
                 )
 
             usage = self._calculate_usage(completion_response=completion_response)
