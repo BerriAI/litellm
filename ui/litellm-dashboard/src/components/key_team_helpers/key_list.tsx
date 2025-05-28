@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { keyListCall, Organization } from '../networking';
+import { keyListCall, Member, Organization } from '../networking';
 import { Setter } from '@/types';
 
 export interface Team {
@@ -12,6 +12,8 @@ export interface Team {
     rpm_limit: number | null;
     organization_id: string;
     created_at: string;
+    keys: KeyResponse[];
+    members_with_roles: Member[];
 }
 
 export interface KeyResponse {
