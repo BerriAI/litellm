@@ -454,25 +454,54 @@ class ChatConfig(BaseConfig):
     
     def _convert_content_to_responses_format(self, content: Union[str, List[Any]]) -> List[Dict[str, Any]]:
         """Convert chat completion content to responses API format"""
+        print(f"Chat provider: Converting content to responses format - input type: {type(content)}")
+        
         if isinstance(content, str):
-            return [{"type": "text", "text": content}]
+            result = [{"type": "input_text", "text": content}]
+            print(f"Chat provider: String content -> {result}")
+            return result
         elif isinstance(content, list):
             result = []
-            for item in content:
+            for i, item in enumerate(content):
+                print(f"Chat provider: Processing content item {i}: {type(item)} = {item}")
                 if isinstance(item, str):
-                    result.append({"type": "text", "text": item})
+                    converted = {"type": "input_text", "text": item}
+                    result.append(converted)
+                    print(f"Chat provider:   -> {converted}")
                 elif isinstance(item, dict):
                     # Handle multimodal content
-                    if item.get("type") == "text":
-                        result.append({"type": "text", "text": item.get("text", "")})
-                    elif item.get("type") == "image_url":
-                        result.append({"type": "image_url", "image_url": item.get("image_url", {})})
+                    original_type = item.get("type")
+                    if original_type == "text":
+                        converted = {"type": "input_text", "text": item.get("text", "")}
+                        result.append(converted)
+                        print(f"Chat provider:   text -> {converted}")
+                    elif original_type == "image_url":
+                        # Map to responses API image format
+                        converted = {"type": "input_image", "image_url": item.get("image_url", {})}
+                        result.append(converted)
+                        print(f"Chat provider:   image_url -> {converted}")
                     else:
-                        # Pass through other types
-                        result.append(item)
+                        # Try to map other types to responses API format
+                        item_type = original_type or "input_text"
+                        if item_type == "image":
+                            converted = {"type": "input_image", **item}
+                            result.append(converted)
+                            print(f"Chat provider:   image -> {converted}")
+                        elif item_type in ["input_text", "input_image", "output_text", "refusal", "input_file", "computer_screenshot", "summary_text"]:
+                            # Already in responses API format
+                            result.append(item)
+                            print(f"Chat provider:   passthrough -> {item}")
+                        else:
+                            # Default to input_text for unknown types
+                            converted = {"type": "input_text", "text": str(item.get("text", item))}
+                            result.append(converted)
+                            print(f"Chat provider:   unknown({original_type}) -> {converted}")
+            print(f"Chat provider: Final converted content: {result}")
             return result
         else:
-            return [{"type": "text", "text": str(content)}]
+            result = [{"type": "input_text", "text": str(content)}]
+            print(f"Chat provider: Other content type -> {result}")
+            return result
     
     def _convert_tools_to_responses_format(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert chat completion tools to responses API tools format"""

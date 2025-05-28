@@ -81,6 +81,51 @@ def test_model_processing():
         traceback.print_exc()
         return False
 
+def test_content_format():
+    """Test content format conversion"""
+    print("\n🧪 Testing content format conversion...")
+    
+    try:
+        from litellm.llms.chat.transformation import ChatConfig
+        
+        config = ChatConfig()
+        
+        # Test cases for content conversion
+        test_cases = [
+            # Simple string
+            ("Hello world", [{"type": "input_text", "text": "Hello world"}]),
+            
+            # Chat completion format with text type
+            ([{"type": "text", "text": "Hello"}], [{"type": "input_text", "text": "Hello"}]),
+            
+            # Image URL format
+            ([{"type": "image_url", "image_url": {"url": "http://example.com/img.jpg"}}], 
+             [{"type": "input_image", "image_url": {"url": "http://example.com/img.jpg"}}]),
+            
+            # Mixed content
+            ([{"type": "text", "text": "Look at this:"}, {"type": "image_url", "image_url": {"url": "test.jpg"}}],
+             [{"type": "input_text", "text": "Look at this:"}, {"type": "input_image", "image_url": {"url": "test.jpg"}}])
+        ]
+        
+        for i, (input_content, expected_output) in enumerate(test_cases):
+            print(f"\n  Test {i+1}: {type(input_content)} input")
+            result = config._convert_content_to_responses_format(input_content)
+            
+            if result == expected_output:
+                print(f"  ✅ Conversion correct")
+            else:
+                print(f"  ❌ Conversion failed")
+                print(f"    Expected: {expected_output}")
+                print(f"    Got:      {result}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Content format test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def test_config_parsing():
     """Test configuration format"""
     print("\n🧪 Testing configuration format...")
@@ -130,6 +175,7 @@ def main():
     tests = [
         ("Environment Validation", test_validate_environment),
         ("Model Processing", test_model_processing),
+        ("Content Format", test_content_format),
         ("Config Analysis", test_config_parsing),
     ]
     
@@ -142,7 +188,8 @@ def main():
     print("  ✅ Added proper Authorization header handling")
     print("  ✅ Added fallback to OPENAI_API_KEY environment variable")
     print("  ✅ Added model name processing to strip 'chat/' prefix")
-    print("  ✅ Added debug logging to trace authentication flow")
+    print("  ✅ Fixed content format: 'text' -> 'input_text' for Responses API")
+    print("  ✅ Added debug logging to trace authentication and content conversion")
     
     print("\n📝 To test your config:")
     print("  1. Make sure your API key is correct")
