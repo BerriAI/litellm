@@ -57,6 +57,7 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -324,6 +325,13 @@ const Teams: React.FC<TeamProps> = ({
         }
 
         message.info("Creating Team");
+        // Transform allowed_vector_store_ids into object_permission
+        if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+          formValues.object_permission = {
+            vector_stores: formValues.allowed_vector_store_ids
+          };
+          delete formValues.allowed_vector_store_ids;
+        }
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -1063,6 +1071,26 @@ const Teams: React.FC<TeamProps> = ({
                               style={{ width: '100%' }}
                               placeholder="Select or enter guardrails"
                               options={guardrailsList.map(name => ({ value: name, label: name }))}
+                            />
+                          </Form.Item>
+                          <Form.Item 
+                            label={
+                              <span>
+                                Allowed Vector Stores{' '}
+                                <Tooltip title="Select which vector stores this team can access by default. Leave empty for access to all vector stores">
+                                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                                </Tooltip>
+                              </span>
+                            }
+                            name="allowed_vector_store_ids"
+                            className="mt-8"
+                            help="Select vector stores this team can access. Leave empty for access to all vector stores"
+                          >
+                            <VectorStoreSelector
+                              onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                              value={form.getFieldValue('allowed_vector_store_ids')}
+                              accessToken={accessToken || ''}
+                              placeholder="Select vector stores (optional)"
                             />
                           </Form.Item>
                         </AccordionBody>

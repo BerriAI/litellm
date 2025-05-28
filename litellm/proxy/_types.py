@@ -659,6 +659,11 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
+    mcp_servers: Optional[List[str]] = None
+    vector_stores: Optional[List[str]] = None
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -689,6 +694,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -1110,6 +1116,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1261,6 +1268,12 @@ class LiteLLM_TeamTable(TeamBase):
     updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission_id: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+
     model_config = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="before")
@@ -1337,6 +1350,11 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
@@ -1619,6 +1637,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1761,6 +1780,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1789,6 +1809,12 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     updated_by: str
     users: Optional[List[LiteLLM_UserTable]] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+    #########################################################
+    # Object Permission - MCP, Vector Stores etc.
+    #########################################################
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission_id: Optional[str] = None
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
