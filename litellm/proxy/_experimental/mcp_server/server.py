@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Union
 from anyio import BrokenResourceError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from prisma.models import LiteLLM_MCPServerTable
 from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger

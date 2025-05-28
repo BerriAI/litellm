@@ -13,31 +13,31 @@ Endpoints here:
 
 from typing import Iterable, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
-from prisma.models import LiteLLM_MCPServerTable
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import (
-    LITELLM_PROXY_ADMIN_NAME,
-)
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
-    update_mcp_server,
     delete_mcp_server,
     get_all_mcp_servers,
     get_all_mcp_servers_for_user,
     get_mcp_server,
+    update_mcp_server,
+)
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
 )
 from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
     LitellmUserRoles,
     NewMCPServerRequest,
-    UpdateMCPServerRequest,
     SpecialMCPServerName,
+    UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
@@ -56,7 +56,9 @@ def get_prisma_client_or_throw(message: str):
     return prisma_client
 
 
-def does_mcp_server_exist(mcp_server_records: Iterable[LiteLLM_MCPServerTable], mcp_server_id: str) -> bool:
+def does_mcp_server_exist(
+    mcp_server_records: Iterable[LiteLLM_MCPServerTable], mcp_server_id: str
+) -> bool:
     """
     Check if the mcp server with the given id exists in the iterable of mcp servers
     """
@@ -83,7 +85,9 @@ async def fetch_all_mcp_servers(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
-    prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+    prisma_client = get_prisma_client_or_throw(
+        "Database not connected. Connect a database to your proxy"
+    )
 
     # perform authz check to filter the mcp servers user has access to
     if _user_has_admin_view(user_api_key_dict):
@@ -112,7 +116,9 @@ async def fetch_mcp_server(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
-    prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+    prisma_client = get_prisma_client_or_throw(
+        "Database not connected. Connect a database to your proxy"
+    )
 
     # check to see if server exists for all users
     mcp_server = await get_mcp_server(prisma_client, server_id)
@@ -127,7 +133,9 @@ async def fetch_mcp_server(
         return mcp_server
 
     # Perform authz check to filter the mcp servers user has access to
-    mcp_server_records = await get_all_mcp_servers_for_user(prisma_client, user_api_key_dict)
+    mcp_server_records = await get_all_mcp_servers_for_user(
+        prisma_client, user_api_key_dict
+    )
     exists = does_mcp_server_exist(mcp_server_records, server_id)
 
     if exists:
@@ -140,6 +148,7 @@ async def fetch_mcp_server(
                 "error": f"User does not have permission to view mcp server with id {server_id}. You can only view mcp servers that you have access to."
             },
         )
+
 
 @router.post(
     "/server",
@@ -160,7 +169,9 @@ async def add_mcp_server(
     """
     Allow users to add a new external mcp server.
     """
-    prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+    prisma_client = get_prisma_client_or_throw(
+        "Database not connected. Connect a database to your proxy"
+    )
 
     # AuthZ - restrict only proxy admins to create mcp servers
     if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -176,7 +187,9 @@ async def add_mcp_server(
         if mcp_server is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."},
+                detail={
+                    "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
+                },
             )
     elif (
         SpecialMCPServerName.all_team_servers == payload.server_id
@@ -184,7 +197,9 @@ async def add_mcp_server(
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": f"MCP Server with id {payload.server_id} is special and cannot be used."},
+            detail={
+                "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
+            },
         )
 
     # TODO: audit log for create
@@ -192,7 +207,9 @@ async def add_mcp_server(
     # Attempt to create the mcp server
     try:
         new_mcp_server = await create_mcp_server(
-            prisma_client, payload, touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+            prisma_client,
+            payload,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
         global_mcp_server_manager.add_update_server(new_mcp_server)
     except Exception as e:
@@ -267,6 +284,7 @@ async def remove_mcp_server(
 
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
+
 @router.put(
     "/server",
     description="Allows deleting mcp serves in the db",
@@ -309,12 +327,18 @@ async def edit_mcp_server(
         )
 
     # try to update the mcp server
-    mcp_server_record_updated = await update_mcp_server(prisma_client, payload, touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME)
+    mcp_server_record_updated = await update_mcp_server(
+        prisma_client,
+        payload,
+        touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+    )
 
     if mcp_server_record_updated is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
+            detail={
+                "error": f"MCP Server not found, passed server_id={payload.server_id}"
+            },
         )
     global_mcp_server_manager.add_update_server(mcp_server_record_updated)
 

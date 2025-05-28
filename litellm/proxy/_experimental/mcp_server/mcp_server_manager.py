@@ -15,10 +15,10 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
-from prisma.models import LiteLLM_MCPServerTable
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
     MCPAuthType,
     MCPSpecVersion,
     MCPSpecVersionType,
