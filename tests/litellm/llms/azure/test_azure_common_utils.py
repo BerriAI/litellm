@@ -908,16 +908,6 @@ def test_AzureAuthResponse_with_correct_value():
     assert response.azure_ad_token_provider is None
     assert response.azure_ad_token == fake_token
 
-    azure_ad_token = lambda: fake_token
-    response = AzureAuthResponse(
-        azure_ad_token=azure_ad_token
-    )
-
-    assert response.api_key is None
-    assert response.azure_ad_token_provider is None
-    assert isinstance(response.azure_ad_token, Callable)
-    assert response.azure_ad_token() == fake_token
-
 def test_AzureAuthResponse_with_incorrect_value():
     with pytest.raises(ValidationError):
         response = AzureAuthResponse(

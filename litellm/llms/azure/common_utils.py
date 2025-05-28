@@ -46,12 +46,11 @@ class AzureAuthResponse(BaseModel):
     Attributes:
         api_key: The API key for Azure OpenAI, if provided. Can be None.
         azure_ad_token_provider: A callable that provides an Azure AD token. Can be None.
-        azure_ad_token: The Azure AD token, if available. Can be None, a string token,
-                       or a callable that returns a token.
+        azure_ad_token: The Azure AD token, if available. Can be None.
     """
     api_key: Optional[str] = None
     azure_ad_token_provider: Optional[Callable[[], str]] = None
-    azure_ad_token: Union[None, str, Callable[[], str]] = None
+    azure_ad_token: Optional[str] = None
 
 
 def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
@@ -340,7 +339,7 @@ def get_azure_api_key_or_token(
             "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
         )
         try:
-            azure_ad_token = get_azure_ad_token_provider()
+            azure_ad_token_provider = get_azure_ad_token_provider()
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
     
