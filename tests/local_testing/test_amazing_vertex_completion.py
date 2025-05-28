@@ -3143,6 +3143,7 @@ async def test_vertexai_model_garden_model_completion(
     Using OpenAI compatible models from Vertex Model Garden
     """
     litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True
 
