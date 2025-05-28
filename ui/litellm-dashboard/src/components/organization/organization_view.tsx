@@ -226,11 +226,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                {orgData.models.map((model, index) => (
+                {orgData.models.length === 0 ? (
+                  <Badge color="red">All proxy models</Badge>
+                ) : (
+                  orgData.models.map((model, index) => (
                     <Badge key={index} color="red">
-                    {model}
+                      {model}
                     </Badge>
-                ))}
+                  ))
+                )}
                 </div>
             </Card>
             <Card>

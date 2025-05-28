@@ -11,6 +11,8 @@ import {
   RefreshIcon,
   StatusOnlineIcon,
   TrashIcon,
+  ChevronDownIcon,
+  ChevronRightIcon
 } from "@heroicons/react/outline";
 import {
   Button as Button2,
@@ -26,7 +28,7 @@ import { fetchAvailableModelsForTeamOrKey, getModelDisplayName, unfurlWildcardMo
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
-import TeamInfoView from "@/components/team/team_info";
+import TeamInfoView, { TeamData } from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
 import {
@@ -55,8 +57,8 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
-import type { Team } from "./key_team_helpers/key_list";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -96,6 +98,15 @@ import {
   v2TeamListCall
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+
+interface TeamInfo {
+  members_with_roles: Member[];
+}
+
+interface PerTeamInfo {
+  keys: KeyResponse[];
+  team_info: TeamInfo;
+}
 
 const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
   let tempModelsToPick = [];
@@ -165,13 +176,11 @@ const Teams: React.FC<TeamProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
-  
-
-
-  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
+  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, PerTeamInfo>>({});
 
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -203,26 +212,24 @@ const Teams: React.FC<TeamProps> = ({
   }, [accessToken]);
 
   useEffect(() => {
-    const fetchTeamInfo = async () => {
-      if (!teams || !accessToken) return;
+    const fetchTeamInfo = () => {
+      if (!teams) return;
       
-      const teamInfoPromises = teams.map(async (team) => {
-        try {
-          const info = await teamInfoCall(accessToken, team.team_id);
-          return { [team.team_id]: info };
-        } catch (error) {
-          console.error(`Error fetching info for team ${team.team_id}:`, error);
-          return { [team.team_id]: null };
-        }
-      });
-
-      const results = await Promise.all(teamInfoPromises);
-      const newPerTeamInfo = results.reduce((acc, curr) => ({ ...acc, ...curr }), {});
+      const newPerTeamInfo = teams.reduce((acc, team) => {
+        acc[team.team_id] = {
+          keys: team.keys || [],
+          team_info: {
+            members_with_roles: team.members_with_roles || []
+          }
+        };
+        return acc;
+      }, {} as Record<string, PerTeamInfo>);
+      
       setPerTeamInfo(newPerTeamInfo);
     };
 
     fetchTeamInfo();
-  }, [teams, accessToken]);
+  }, [teams]);
 
   const handleOk = () => {
     setIsTeamModalVisible(false);
@@ -701,48 +708,97 @@ const Teams: React.FC<TeamProps> = ({
                             whiteSpace: "pre-wrap",
                             overflow: "hidden",
                           }}
+                          className={team.models.length > 3 ? "px-0" : ""}
                         >
-                          {Array.isArray(team.models) ? (
-                            <div
-                              style={{
-                                display: "flex",
-                                flexDirection: "column",
-                              }}
-                            >
-                              {team.models.length === 0 ? (
-                                <Badge size={"xs"} className="mb-1" color="red">
-                                  <Text>All Proxy Models</Text>
-                                </Badge>
-                              ) : (
-                                team.models.map(
-                                  (model: string, index: number) =>
-                                    model === "all-proxy-models" ? (
-                                      <Badge
-                                        key={index}
-                                        size={"xs"}
-                                        className="mb-1"
-                                        color="red"
-                                      >
-                                        <Text>All Proxy Models</Text>
-                                      </Badge>
-                                    ) : (
-                                      <Badge
-                                        key={index}
-                                        size={"xs"}
-                                        className="mb-1"
-                                        color="blue"
-                                      >
-                                        <Text>
-                                          {model.length > 30
-                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                            : getModelDisplayName(model)}
-                                        </Text>
-                                      </Badge>
-                                    )
-                                )
-                              )}
-                            </div>
-                          ) : null}
+                          <div className="flex flex-col">
+                            {Array.isArray(team.models) ? (
+                              <div className="flex flex-col">
+                                {team.models.length === 0 ? (
+                                  <Badge size={"xs"} className="mb-1" color="red">
+                                    <Text>All Proxy Models</Text>
+                                  </Badge>
+                                ) : (
+                                  <>
+                                    <div className="flex items-start">
+                                      {team.models.length > 3 && (
+                                        <div>
+                                          <Icon
+                                            icon={expandedAccordions[team.team_id] ? ChevronDownIcon : ChevronRightIcon}
+                                            className="cursor-pointer"
+                                            size="xs"
+                                            onClick={() => {
+                                              setExpandedAccordions(prev => ({
+                                                ...prev,
+                                                [team.team_id]: !prev[team.team_id]
+                                              }));
+                                            }}
+                                          />
+                                        </div>
+                                      )}
+                                      <div className="flex flex-wrap gap-1">
+                                        {team.models.slice(0, 3).map((model: string, index: number) => (
+                                          model === "all-proxy-models" ? (
+                                            <Badge
+                                              key={index}
+                                              size={"xs"}
+                                              color="red"
+                                            >
+                                              <Text>All Proxy Models</Text>
+                                            </Badge>
+                                          ) : (
+                                            <Badge
+                                              key={index}
+                                              size={"xs"}
+                                              color="blue"
+                                            >
+                                              <Text>
+                                                {model.length > 30
+                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                  : getModelDisplayName(model)}
+                                              </Text>
+                                            </Badge>
+                                          )
+                                        ))}
+                                        {team.models.length > 3 && !expandedAccordions[team.team_id] && (
+                                          <Badge size={"xs"} color="gray" className="cursor-pointer">
+                                            <Text>+{team.models.length - 3} {team.models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                                          </Badge>
+                                        )}
+                                        {expandedAccordions[team.team_id] && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {team.models.slice(3).map((model: string, index: number) => (
+                                          model === "all-proxy-models" ? (
+                                            <Badge
+                                              key={index + 3}
+                                              size={"xs"}
+                                              color="red"
+                                            >
+                                              <Text>All Proxy Models</Text>
+                                            </Badge>
+                                          ) : (
+                                            <Badge
+                                              key={index + 3}
+                                              size={"xs"}
+                                              color="blue"
+                                            >
+                                              <Text>
+                                                {model.length > 30
+                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                  : getModelDisplayName(model)}
+                                              </Text>
+                                            </Badge>
+                                          )
+                                        ))}
+                                      </div>
+                                    )}
+                                      </div>
+                                    </div>
+                                    
+                                  </>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
                         </TableCell>
 
                         <TableCell>
