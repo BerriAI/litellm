@@ -5,8 +5,6 @@ Mock prometheus unit tests, these don't rely on LLM API calls
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
-
 import pytest
 from fastapi.testclient import TestClient
 
