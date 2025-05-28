@@ -1259,20 +1259,20 @@ def test_get_end_user_id_for_cost_tracking(
 
 
 @pytest.mark.parametrize(
-    "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
+    "litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
-        ({}, False, None),
-        ({"user_api_key_end_user_id": "123"}, False, "123"),
-        ({"user_api_key_end_user_id": "123"}, True, None),
+        ({}, True, None),
+        ({"user_api_key_end_user_id": "123"}, True, "123"),
+        ({"user_api_key_end_user_id": "123"}, False, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(
-    litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id
+    litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.disable_end_user_cost_tracking_prometheus_only = (
-        disable_end_user_cost_tracking_prometheus_only
+    litellm.enable_end_user_cost_tracking_prometheus_only = (
+        enable_end_user_cost_tracking_prometheus_only
     )
     assert (
         get_end_user_id_for_cost_tracking(

@@ -6764,11 +6764,14 @@ def get_end_user_id_for_cost_tracking(
     )
     if litellm.disable_end_user_cost_tracking:
         return None
-    if (
-        service_type == "prometheus"
-        and litellm.disable_end_user_cost_tracking_prometheus_only
-    ):
-        return None
+
+    #######################################
+    # By default we don't track end_user on prometheus since we don't want to increase cardinality
+    # by default litellm.enable_end_user_cost_tracking_prometheus_only is None, so we don't track end_user on prometheus
+    #######################################
+    if service_type == "prometheus":
+        if litellm.enable_end_user_cost_tracking_prometheus_only is not True:
+            return None
     return end_user_id
 
 
