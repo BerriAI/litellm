@@ -1,0 +1,19 @@
+# Simple test configuration for chat provider
+model_list:
+  - model_name: "gpt-4o-chat"
+    litellm_params:
+      model: "chat/gpt-4o"
+      custom_llm_provider: "chat"
+      api_key: "sk-your-key-here"  # Replace with actual key
+
+  - model_name: "gpt-4o-mini-chat"  
+    litellm_params:
+      model: "chat/gpt-4o-mini"
+      custom_llm_provider: "chat"
+      api_key: "sk-your-key-here"  # Replace with actual key
+
+general_settings:
+  master_key: "sk-test-123"
+
+litellm_settings:
+  set_verbose: true

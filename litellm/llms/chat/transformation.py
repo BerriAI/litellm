@@ -32,7 +32,29 @@ class ChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        # No additional env validation for responses proxy
+        # Ensure proper authentication headers for OpenAI Responses API
+        print(f"Chat provider validate_environment: model={model}, api_key={'***' if api_key else None}, headers_auth={'present' if headers.get('Authorization') else 'missing'}")
+        
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            print(f"Chat provider: Set Authorization header from provided api_key")
+        elif not headers.get("Authorization"):
+            # Try to get API key from environment or other sources
+            import os
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                headers["Authorization"] = f"Bearer {openai_key}"
+                print(f"Chat provider: Set Authorization header from OPENAI_API_KEY environment variable")
+            else:
+                print("Warning: No API key found for chat provider. Set OPENAI_API_KEY or provide api_key in config.")
+        else:
+            print(f"Chat provider: Using existing Authorization header")
+        
+        # Ensure proper content type
+        if "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+            
+        print(f"Chat provider final headers: {list(headers.keys())}")
         return headers
 
     def get_complete_url(
@@ -151,10 +173,20 @@ class ChatConfig(BaseConfig):
                 traceback.print_exc()
         
         # Convert back to responses API format for the actual request
+        # Strip chat/ prefix if present for the underlying API call
+        api_model = model
+        if model.startswith("chat/"):
+            api_model = model[5:]  # Remove "chat/" prefix
+            print(f"Chat provider: Stripped chat/ prefix from model: {model} -> {api_model}")
+        else:
+            print(f"Chat provider: Using model as-is: {api_model}")
+        
         request_data = {
-            "model": model,
+            "model": api_model,
             "input": input_items,
         }
+        
+        print(f"Chat provider: Final request model={api_model}, input_items={len(input_items)}")
         
         # Add non-None values from responses_api_request
         for key, value in responses_api_request.items():
