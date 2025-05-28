@@ -44,6 +44,7 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex partner models"""
+
     api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
     if partner == VertexPartnerProvider.llama:
         return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
@@ -140,6 +141,10 @@ class VertexAIPartnerModels(VertexBase):
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
 
+            custom_api_base: Optional[str] = None
+            if api_base is not None:
+                custom_api_base = api_base
+
             api_base = self.get_api_base(
                 api_base=api_base, vertex_location=vertex_location
             )
@@ -158,7 +163,7 @@ class VertexAIPartnerModels(VertexBase):
                 endpoint = ""
 
             _, api_base = self._check_custom_proxy(
-                api_base=api_base,
+                api_base=custom_api_base,
                 custom_llm_provider="vertex_ai",
                 gemini_api_key=None,
                 endpoint=endpoint,
