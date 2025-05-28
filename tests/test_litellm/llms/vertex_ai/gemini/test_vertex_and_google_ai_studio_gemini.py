@@ -377,6 +377,22 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.completion_tokens_details.text_tokens == 74
 
 
+def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
+    """
+    If budget_tokens is 0, do not set includeThoughts to True
+    """
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 0}
+    assert "includeThoughts" not in v._map_thinking_param(thinking_param=thinking_param)
+
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 100}
+    assert v._map_thinking_param(thinking_param=thinking_param) == {
+        "includeThoughts": True,
+        "thinkingBudget": 100,
+    }
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     tools = v._map_function(value=[{"code_execution": {}}])
@@ -430,3 +446,4 @@ def test_vertex_ai_map_tool_with_anyof():
     ] == {
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+
