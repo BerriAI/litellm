@@ -471,7 +471,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
-                if value is False:
+                if value is False and not (
+                    drop_params or litellm.drop_params
+                ):  # if drop params is True, then we should just ignore this
                     tools = non_default_params.get(
                         "tools", non_default_params.get("functions")
                     )
@@ -483,10 +485,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             message=(
                                 "`parallel_tool_calls=False` is not supported when multiple tools are "
                                 "provided for Gemini. Specify a single tool, or set "
-                                "`parallel_tool_calls=True`."
+                                "`parallel_tool_calls=True`. If you want to drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` in the requst - https://docs.litellm.ai/docs/completion/drop_params"
                             ),
                             status_code=400,
                         )
+                else:
+                    optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
