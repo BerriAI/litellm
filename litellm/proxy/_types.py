@@ -1551,6 +1551,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1693,6 +1694,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1721,6 +1723,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     updated_by: str
     users: Optional[List[LiteLLM_UserTable]] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
