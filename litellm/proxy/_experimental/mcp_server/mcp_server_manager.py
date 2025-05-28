@@ -8,17 +8,25 @@ This is a Proxy
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
 import uuid
+from typing import Any, Dict, List, Optional, cast
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.types import CallToolResult, Tool as MCPTool
+from mcp.types import CallToolResult
+from mcp.types import Tool as MCPTool
 from prisma.models import LiteLLM_MCPServerTable
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import MCPSpecVersion, MCPTransport
+from litellm.proxy._types import (
+    MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+
 
 class MCPServerManager:
     def __init__(self):
@@ -47,6 +55,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+
     def get_registry(self) -> Dict[str, MCPServer]:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
@@ -91,24 +100,27 @@ class MCPServerManager:
             del self.registry[mcp_server.server_id]
             verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_id}")
         else:
-            verbose_logger.warning(f"Server ID {mcp_server.server_id} not found in registry")
-    
+            verbose_logger.warning(
+                f"Server ID {mcp_server.server_id} not found in registry"
+            )
+
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             new_server = MCPServer(
                 name=mcp_server.alias or mcp_server.server_id,
                 url=mcp_server.url,
-                transport=mcp_server.transport,
-                spec_version=mcp_server.spec_version,
-                auth_type=mcp_server.auth_type,
+                transport=cast(MCPTransportType, mcp_server.transport),
+                spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
+                auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=MCPInfo(
                     server_name=mcp_server.alias or mcp_server.server_id,
                     description=mcp_server.description,
                 ),
             )
             self.registry[mcp_server.server_id] = new_server
-            verbose_logger.debug(f"Added MCP Server: {mcp_server.alias or mcp_server.server_id}")
-
+            verbose_logger.debug(
+                f"Added MCP Server: {mcp_server.alias or mcp_server.server_id}"
+            )
 
     async def list_tools(self) -> List[MCPTool]:
         """
@@ -121,8 +133,13 @@ class MCPServerManager:
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
         for _, server in self.get_registry().items():
-            tools = await self._get_tools_from_server(server)
-            list_tools_result.extend(tools)
+            try:
+                tools = await self._get_tools_from_server(server)
+                list_tools_result.extend(tools)
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error listing tools from server {server.name}: {str(e)}"
+                )
 
         return list_tools_result
 
@@ -150,7 +167,9 @@ class MCPServerManager:
 
                     # Update tool to server mapping
                     for tool in tools_result.tools:
-                        self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+                        self.tool_name_to_mcp_server_name_mapping[
+                            tool.name
+                        ] = server.name
 
                     return tools_result.tools
         elif server.transport == MCPTransport.http:
@@ -159,7 +178,7 @@ class MCPServerManager:
         else:
             # TODO: throw error on transport found or skip
             return []
-        
+
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
         On startup, initialize the tool name to MCP server name mapping
@@ -199,7 +218,7 @@ class MCPServerManager:
             # TODO: implement http transport
             raise NotImplementedError("HTTP transport is not implemented yet")
         else:
-            return CallToolResult(content = [], isError=True)
+            return CallToolResult(content=[], isError=True)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
@@ -210,6 +229,21 @@ class MCPServerManager:
                 if server.name == self.tool_name_to_mcp_server_name_mapping[tool_name]:
                     return server
         return None
+
+    async def _add_mcp_servers_from_db_to_in_memory_registry(self):
+        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_prisma_client_or_throw,
+        )
+
+        # perform authz check to filter the mcp servers user has access to
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        # ensure the global_mcp_server_manager is up to date with the db
+        for server in db_mcp_servers:
+            self.add_update_server(server)
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()

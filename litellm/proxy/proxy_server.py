@@ -240,6 +240,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+    router as mcp_management_router,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
     _add_team_model_to_db,
@@ -248,7 +251,6 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
 )
-from litellm.proxy.management_endpoints.mcp_management_endpoints import router as mcp_management_router
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -2727,6 +2729,7 @@ class ProxyConfig:
         """
         await self._init_guardrails_in_db(prisma_client=prisma_client)
         await self._init_vector_stores_in_db(prisma_client=prisma_client)
+        await self._init_mcp_servers_in_db()
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
@@ -2778,6 +2781,20 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_mcp_servers_in_db(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        try:
+            await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
                     str(e)
                 )
             )
