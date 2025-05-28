@@ -84,7 +84,7 @@ def _get_vertex_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            if vertex_location== "global":
+            if vertex_location == "global":
                 url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
@@ -212,6 +212,18 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
+def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    Filter out other fields in the same dict.
+
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test"} -> {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    """
+    if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
+        return {"anyOf": schema_dict["anyOf"]}
+    return schema_dict
+
+
 def process_items(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
@@ -277,6 +289,7 @@ def filter_schema_fields(
         return schema_dict
 
     result = {}
+    schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
             continue

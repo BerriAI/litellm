@@ -391,3 +391,42 @@ def test_vertex_ai_map_tools():
     print(new_tools)
 
     assert tools == new_tools
+
+
+def test_vertex_ai_map_tool_with_anyof():
+    """
+    Related issue: https://github.com/BerriAI/litellm/issues/11164
+
+    Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    """
+    v = VertexGeminiConfig()
+    value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "git_create_branch",
+                "description": "Creates a new branch from an optional base branch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"title": "Repo Path", "type": "string"},
+                        "branch_name": {"title": "Branch Name", "type": "string"},
+                        "base_branch": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "default": None,
+                            "title": "Base Branch",
+                        },
+                    },
+                    "required": ["repo_path", "branch_name"],
+                    "title": "GitCreateBranch",
+                },
+            },
+        }
+    ]
+    tools = v._map_function(value=value)
+
+    assert tools[0]["function_declarations"][0]["parameters"]["properties"][
+        "base_branch"
+    ] == {
+        "anyOf": [{"type": "string", "nullable": True}]
+    }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
