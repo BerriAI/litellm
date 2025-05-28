@@ -265,6 +265,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.metadata = JSON.stringify(metadata);
       }
 
+      // Transform allowed_vector_store_ids into object_permission format
+      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+        formValues.object_permission = {
+          vector_stores: formValues.allowed_vector_store_ids
+        };
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_vector_store_ids;
+      }
+
       const response = await keyCreateCall(accessToken, userID, formValues);
 
       console.log("key create Response:", response);
