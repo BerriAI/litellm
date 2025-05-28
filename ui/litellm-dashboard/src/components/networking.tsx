@@ -8,11 +8,25 @@ import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 
-const isLocal = process.env.NODE_ENV === "development";
-export const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
+const stripStringFirstIf = (str: string, char: string): string => {
+  if (str.startsWith(char)) {
+    return str.slice(1);
+  }
+  return str;
 }
+
+export const getProxyUrl = (): string => {
+  const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal) {
+    return "http://localhost:4000";
+  } else if (process.env.PROXY_BASE_URL === undefined) {
+      return "/";
+  } else {
+    return `/${stripStringFirstIf(process.env.PROXY_BASE_URL, "/")}`;
+  }
+
+}
+export const proxyBaseUrl = getProxyUrl();
 
 export const DEFAULT_ORGANIZATION = "default_organization";
 
