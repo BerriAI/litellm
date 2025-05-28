@@ -14,6 +14,8 @@ export interface FilterState {
   'Key Alias': string;
   [key: string]: string;
   'User ID': string;
+  'Sort By': string;
+  'Sort Order': string;
 }
 
 
@@ -33,7 +35,9 @@ export function useFilterLogic({
     'Team ID': '',
     'Organization ID': '',
     'Key Alias': '',
-    'User ID': ''
+    'User ID': '',
+    'Sort By': 'created_at',
+    'Sort Order': 'desc'
   }
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
@@ -59,7 +63,9 @@ export function useFilterLogic({
           filters["User ID"] || null,
           filters["Key Hash"] || null,
           1, // Reset to first page when searching
-          defaultPageSize
+          defaultPageSize,
+          filters["Sort By"] || null,
+          filters["Sort Order"] || null
         );
         
         // Only update state if this is the most recent search
@@ -157,7 +163,9 @@ export function useFilterLogic({
       'Team ID': newFilters['Team ID'] || '',
       'Organization ID': newFilters['Organization ID'] || '',
       'Key Alias': newFilters['Key Alias'] || '',
-      'User ID': newFilters['User ID'] || ''
+      'User ID': newFilters['User ID'] || '',
+      'Sort By': newFilters['Sort By'] || 'created_at',
+      'Sort Order': newFilters['Sort Order'] || 'desc'
     });
 
     // Fetch keys based on new filters

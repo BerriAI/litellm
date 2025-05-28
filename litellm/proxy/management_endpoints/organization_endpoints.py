@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
@@ -103,10 +104,17 @@ async def new_organization(
     ```
     """
 
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+    )
 
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     if (
         user_api_key_dict.user_role is None
@@ -118,6 +126,22 @@ async def new_organization(
                 "error": f"Only admins can create orgs. Your role is = {user_api_key_dict.user_role}"
             },
         )
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
+
+    user_object_correct_type: Optional[LiteLLM_UserTable] = None
+
+    if user_api_key_dict.user_id is not None:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        except Exception:
+            pass
 
     if data.budget_id is None:
         """
@@ -157,14 +181,11 @@ async def new_organization(
                     "error": "User not allowed to give access to all models. Select models you want org to have access to."
                 },
             )
+
         for m in data.models:
-            if m not in user_api_key_dict.models:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"User not allowed to give access to model={m}. Models you have access to = {user_api_key_dict.models}"
-                    },
-                )
+            await can_user_call_model(
+                m, llm_router=llm_router, user_object=user_object_correct_type
+            )
 
     organization_row = LiteLLM_OrganizationTable(
         **data.json(exclude_none=True),
@@ -320,7 +341,7 @@ async def list_organization(
     # if proxy admin - get all orgs
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         response = await prisma_client.db.litellm_organizationtable.find_many(
-            include={"members": True, "teams": True}
+            include={"litellm_budget_table": True, "members": True, "teams": True}
         )
     # if internal user - get orgs they are a member of
     else:
@@ -335,7 +356,7 @@ async def list_organization(
                     "in": [membership.organization_id for membership in org_memberships]
                 }
             },
-            include={"members": True, "teams": True},
+            include={"litellm_budget_table": True, "members": True, "teams": True},
         )
 
         response = org_objects

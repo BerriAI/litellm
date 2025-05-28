@@ -41,6 +41,8 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_base_url: Optional[str] = None,
         **kwargs,
     ):
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
         self.default_credentials = self.get_credentials_from_env(
             langsmith_api_key=langsmith_api_key,
             langsmith_project=langsmith_project,
@@ -61,13 +63,11 @@ class LangsmithLogger(CustomBatchLogger):
         _batch_size = (
             os.getenv("LANGSMITH_BATCH_SIZE", None) or litellm.langsmith_batch_size
         )
+
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
         asyncio.create_task(self.periodic_flush())
-        self.flush_lock = asyncio.Lock()
-
-        super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def get_credentials_from_env(
         self,

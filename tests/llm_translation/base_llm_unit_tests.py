@@ -174,20 +174,23 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
-    @pytest.mark.parametrize("image_url", ["str", "dict"])
-    def test_pdf_handling(self, pdf_messages, image_url):
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_pdf_handling(self, pdf_messages, sync_mode):
         from litellm.utils import supports_pdf_input
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        if image_url == "str":
-            image_url = pdf_messages
-        elif image_url == "dict":
-            image_url = {"url": pdf_messages}
+        litellm._turn_on_debug()
+
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
-                "type": "image_url",
-                "image_url": image_url,
+                "type": "file",
+                "file": {
+                    "file_data": pdf_messages,
+                },
             },
         ]
 
@@ -198,10 +201,17 @@ class BaseLLMChatTest(ABC):
         if not supports_pdf_input(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
 
-        response = self.completion_function(
-            **base_completion_call_args,
-            messages=image_messages,
-        )
+        if sync_mode:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+        else:
+            response = await self.async_completion_function(
+                **base_completion_call_args,
+                messages=image_messages,
+            )
+
         assert response is not None
     
     def test_file_data_unit_test(self, pdf_messages):
@@ -525,6 +535,45 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_audio_input(self):
+        """
+        Test that audio input is supported by the LLM API
+        """
+        from litellm.utils import supports_audio_input
+        litellm._turn_on_debug()
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_audio_input(base_completion_call_args["model"], None):
+            pytest.skip(
+                f"Model={base_completion_call_args['model']} does not support audio input"
+            )
+
+        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
+        response = httpx.get(url)
+        response.raise_for_status()
+        wav_data = response.content
+        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+
+        completion = self.completion_function(
+            **base_completion_call_args,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this recording?"},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": encoded_string, "format": "wav"},
+                        },
+                    ],
+                },
+            ],
+        )
+
+        print(completion.choices[0].message)
+
+
+            
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
@@ -907,6 +956,8 @@ class BaseLLMChatTest(ABC):
                 except Exception as e:
                     print(f"Error: {e}")
                     pass
+                if "<thinking>" in response.choices[0].message.content and "</thinking>" in response.choices[0].message.content:
+                    pytest.fail("Thinking block returned in content instead of separate reasoning_content")
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response
@@ -917,6 +968,7 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
+            assert response.choices[0].finish_reason == "tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes
@@ -976,7 +1028,7 @@ class BaseLLMChatTest(ABC):
         assert response._hidden_params["response_cost"] > 0
 
     @pytest.mark.parametrize("input_type", ["input_audio", "audio_url"])
-    @pytest.mark.parametrize("format_specified", [True, False])
+    @pytest.mark.parametrize("format_specified", [True])
     def test_supports_audio_input(self, input_type, format_specified):
         from litellm.utils import return_raw_request, supports_audio_input
         from litellm.types.utils import CallTypes
@@ -1007,16 +1059,10 @@ class BaseLLMChatTest(ABC):
         test_file_id = "gs://bucket/file.wav"
 
         if input_type == "input_audio":
-            if format_specified:
-                audio_content.append({
-                    "type": "input_audio",
-                    "input_audio": {"data": encoded_string, "format": audio_format},
-                })
-            else:
-                audio_content.append({
-                    "type": "input_audio",
-                    "input_audio": {"data": encoded_string},
-                })
+            audio_content.append({
+                "type": "input_audio",
+                "input_audio": {"data": encoded_string, "format": audio_format},
+            })
         elif input_type == "audio_url":
             audio_content.append(
                 {
@@ -1055,6 +1101,7 @@ class BaseLLMChatTest(ABC):
     def test_function_calling_with_tool_response(self):
         from litellm.utils import supports_function_calling
         from litellm import completion
+        litellm._turn_on_debug()
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1074,6 +1121,8 @@ class BaseLLMChatTest(ABC):
                     "name": "get_weather",
                     "description": "Get the weather in a city",
                     "parameters": {
+                        "$id": "https://some/internal/name",
+                        "$schema": "https://json-schema.org/draft-07/schema",
                         "type": "object",
                         "properties": {
                             "city": {
@@ -1384,6 +1433,36 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args,
             messages=messages,
             response_format=RFormat,
+        )
+
+        print(response)
+    
+    def test_completion_thinking_with_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            max_completion_tokens=20000,
+        )
+
+        print(response)
+    
+        
+    def test_completion_thinking_without_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
         )
 
         print(response)

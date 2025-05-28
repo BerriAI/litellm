@@ -34,6 +34,7 @@ import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import MCPToolsViewer from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
+import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from '@/lib/cva.config';
 
@@ -341,6 +342,7 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   searchParams={searchParams}
                   accessToken={accessToken}
+                  userID={userID}
                   showSSOBanner={showSSOBanner}
                   premiumUser={premiumUser}
                   proxySettings={proxySettings}
@@ -357,7 +359,7 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} />
+                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
               ): page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ): page == "general-settings" ? (
@@ -404,6 +406,12 @@ export default function CreateKeyPage() {
                 />
               ) : page == "tag-management" ? (
                 <TagManagement
+                  accessToken={accessToken}
+                  userRole={userRole}
+                  userID={userID}
+                />
+              ) : page == "vector-stores" ? (
+                <VectorStoreManagement
                   accessToken={accessToken}
                   userRole={userRole}
                   userID={userID}

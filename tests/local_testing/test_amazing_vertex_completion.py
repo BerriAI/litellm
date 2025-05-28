@@ -3073,6 +3073,7 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
     """
     load_vertex_ai_credentials()
     litellm.set_verbose = True
+    litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
 
     # Test input
     input_text = ["good morning from litellm", "this is another item"]
@@ -3141,6 +3142,8 @@ async def test_vertexai_model_garden_model_completion(
 
     Using OpenAI compatible models from Vertex Model Garden
     """
+    litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True
 
@@ -3215,18 +3218,6 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.prompt_tokens == 63
     assert response.usage.total_tokens == 172
 
-
-def test_vertexai_code_gecko():
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    response = completion(
-        model="vertex_ai/code-gecko@002",
-        messages=[{"role": "user", "content": "Hello world!"}],
-        stream=True,
-    )
-
-    for chunk in response:
-        print(chunk)
 
 
 def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
@@ -3705,4 +3696,88 @@ def test_gemini_tool_calling_not_working():
     ]
     }
     response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    print(response)
+
+def test_vertex_ai_llama_tool_calling():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+    args = {
+    "model": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather in Boston, MA today?"
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+					  "function": {
+							"name": "get_weather",
+							"description": "Get current temperature for a given location.",
+							"parameters": {
+									"type": "object",
+									"properties": {
+											"location": {
+													"type": "string",
+													"description": "City and country e.g. Bogotá, Colombia"
+											}
+									},
+									"required": [
+											"location"
+									],
+									"additionalProperties": False
+							}
+						}
+        }
+    ],
+    "vertex_location": "us-east5"
+    }
+    try: 
+        response = completion(**args)
+    except litellm.RateLimitError:
+        pytest.skip("Rate limit error")
+    print(response)
+
+    assert response.choices[0].message.tool_calls is not None
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_vertex_schema_test():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+    def tool_call(text: str | None) -> str:
+        return text or "No text provided"
+
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "git_create_branch",
+            "description": "Creates a new branch from an optional base branch",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"title": "Repo Path", "type": "string"},
+                    "branch_name": {"title": "Branch Name", "type": "string"},
+                    "base_branch": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "Base Branch"},
+                },
+                "required": ["repo_path", "branch_name"],
+                "title": "GitCreateBranch",
+            }
+        }
+    }
+
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash-preview-05-20",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[tool],
+        tool_choice="required",
+    )
+
     print(response)

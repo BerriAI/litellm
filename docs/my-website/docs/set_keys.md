@@ -44,7 +44,7 @@ os.environ['AZURE_API_VERSION'] = "2023-05-15" # [OPTIONAL]
 os.environ['AZURE_API_TYPE'] = "azure" # [OPTIONAL]
 
 # for openai
-os.environ['OPENAI_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
+os.environ['OPENAI_BASE_URL'] = "https://your_host/v1"
 ```
 
 ### Setting Project, Location, Token

@@ -13,7 +13,9 @@ export async function makeOpenAIResponsesRequest(
   onReasoningContent?: (content: string) => void,
   onTimingData?: (timeToFirstToken: number) => void,
   onUsageData?: (usage: TokenUsage) => void,
-  traceId?: string
+  traceId?: string,
+  vector_store_ids?: string[],
+  guardrails?: string[]
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -60,6 +62,8 @@ export async function makeOpenAIResponsesRequest(
       input: formattedInput,
       stream: true,
       litellm_trace_id: traceId,
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
     }, { signal });
 
     for await (const event of response) {

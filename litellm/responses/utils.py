@@ -79,6 +79,14 @@ class ResponsesAPIRequestUtils:
         filtered_params = {
             k: v for k, v in params.items() if k in valid_keys and v is not None
         }
+
+        # decode previous_response_id if it's a litellm encoded id
+        if "previous_response_id" in filtered_params:
+            decoded_previous_response_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+                filtered_params["previous_response_id"]
+            )
+            filtered_params["previous_response_id"] = decoded_previous_response_id
+
         return cast(ResponsesAPIOptionalRequestParams, filtered_params)
 
     @staticmethod
@@ -185,6 +193,30 @@ class ResponsesAPIRequestUtils:
             ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
         )
         return decoded_response_id.get("model_id") or None
+
+    @staticmethod
+    def decode_previous_response_id_to_original_previous_response_id(
+        previous_response_id: str,
+    ) -> str:
+        """
+        Decode the previous_response_id to the original previous_response_id
+
+        Why?
+            - LiteLLM encodes the `custom_llm_provider` and `model_id` into the `previous_response_id` this helps with maintaining session consistency when load balancing multiple deployments of the same model.
+            - We cannot send the litellm encoded b64 to the upstream llm api, hence we decode it to the original `previous_response_id`
+
+        Args:
+            previous_response_id: The previous_response_id to decode
+
+        Returns:
+            The original previous_response_id
+        """
+        decoded_response_id = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                previous_response_id
+            )
+        )
+        return decoded_response_id.get("response_id", previous_response_id)
 
 
 class ResponseAPILoggingUtils:

@@ -131,6 +131,9 @@ const useKeyList = ({
             }
             setIsLoading(true);
 
+            const page = typeof params.page === 'number' ? params.page : 1;
+            const pageSize = typeof params.pageSize === 'number' ? params.pageSize : 100;
+
             const data = await keyListCall(
                 accessToken,
                 null,
@@ -138,8 +141,8 @@ const useKeyList = ({
                 null,
                 null,
                 null,
-                1,
-                50,
+                page,
+                pageSize,
             );
             console.log("data", data);
             setKeyData(data);

@@ -233,6 +233,16 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 ))}
                 </div>
             </Card>
+            <Card>
+                <Text>Teams</Text>
+                <div className="mt-2 flex flex-wrap gap-2">
+                {orgData.teams?.map((team, index) => (
+                    <Badge key={index} color="red">
+                    {team.team_id}
+                    </Badge>
+                ))}
+                </div>
+            </Card>
             </Grid>
           </TabPanel>
 

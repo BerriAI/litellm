@@ -17,8 +17,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     _generic_cost_per_character,
     generic_cost_per_token,
+    select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -72,7 +74,6 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
-    PassthroughCallTypes,
     StandardBuiltInToolsParams,
     Usage,
 )
@@ -226,34 +227,50 @@ def cost_per_token(  # noqa: PLR0915
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
-        if prompt_characters is None:
-            raise ValueError(
-                "prompt_characters must be provided for tts calls. prompt_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
-                    prompt_characters,
-                    model,
-                    custom_llm_provider,
-                    call_type,
-                )
-            )
-        prompt_cost, completion_cost = _generic_cost_per_character(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=0,
-            custom_prompt_cost=None,
-            custom_completion_cost=0,
+        speech_model_info = litellm.get_model_info(
+            model=model_without_prefix, custom_llm_provider=custom_llm_provider
         )
-        if prompt_cost is None or completion_cost is None:
-            raise ValueError(
-                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
-                    prompt_cost,
-                    completion_cost,
-                    model_without_prefix,
-                    custom_llm_provider,
-                    prompt_characters,
-                    completion_characters,
+        cost_metric = select_cost_metric_for_model(speech_model_info)
+        prompt_cost: float = 0.0
+        completion_cost: float = 0.0
+        if cost_metric == "cost_per_character":
+            if prompt_characters is None:
+                raise ValueError(
+                    "prompt_characters must be provided for tts calls. prompt_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
+                        prompt_characters,
+                        model,
+                        custom_llm_provider,
+                        call_type,
+                    )
                 )
+            _prompt_cost, _completion_cost = _generic_cost_per_character(
+                model=model_without_prefix,
+                custom_llm_provider=custom_llm_provider,
+                prompt_characters=prompt_characters,
+                completion_characters=0,
+                custom_prompt_cost=None,
+                custom_completion_cost=0,
             )
+            if _prompt_cost is None or _completion_cost is None:
+                raise ValueError(
+                    "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
+                        _prompt_cost,
+                        _completion_cost,
+                        model_without_prefix,
+                        custom_llm_provider,
+                        prompt_characters,
+                        completion_characters,
+                    )
+                )
+            prompt_cost = _prompt_cost
+            completion_cost = _completion_cost
+        elif cost_metric == "cost_per_token":
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=model_without_prefix,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+            )
+
         return prompt_cost, completion_cost
     elif call_type == "arerank" or call_type == "rerank":
         return rerank_cost(
@@ -644,9 +661,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -729,12 +746,7 @@ def completion_cost(  # noqa: PLR0915
                                 str(e)
                             )
                         )
-                if (
-                    call_type == CallTypes.image_generation.value
-                    or call_type == CallTypes.aimage_generation.value
-                    or call_type
-                    == PassthroughCallTypes.passthrough_image_generation.value
-                ):
+                if CostCalculatorUtils._call_type_has_image_response(call_type):
                     ### IMAGE GENERATION COST CALCULATION ###
                     if custom_llm_provider == "vertex_ai":
                         if isinstance(completion_response, ImageResponse):
@@ -892,6 +904,7 @@ def completion_cost(  # noqa: PLR0915
                     StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
                         model=model,
                         response_object=completion_response,
+                        usage=cost_per_token_usage_object,
                         standard_built_in_tools_params=standard_built_in_tools_params,
                         custom_llm_provider=custom_llm_provider,
                     )
@@ -1096,9 +1109,13 @@ def default_image_cost_calculator(
 
     # Build model names for cost lookup
     base_model_name = f"{size_str}/{model}"
-    if custom_llm_provider and model.startswith(custom_llm_provider):
+    model_name_without_custom_llm_provider: Optional[str] = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(
+            f"{custom_llm_provider}/", ""
+        )
         base_model_name = (
-            f"{custom_llm_provider}/{size_str}/{model.replace(custom_llm_provider, '')}"
+            f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
         )
     model_name_with_quality = (
         f"{quality}/{base_model_name}" if quality else base_model_name
@@ -1120,17 +1137,18 @@ def default_image_cost_calculator(
 
     # Try model with quality first, fall back to base model name
     cost_info: Optional[dict] = None
-    models_to_check = [
+    models_to_check: List[Optional[str]] = [
         model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
+        model_name_without_custom_llm_provider,
     ]
-    for model in models_to_check:
-        if model in litellm.model_cost:
-            cost_info = litellm.model_cost[model]
+    for _model in models_to_check:
+        if _model is not None and _model in litellm.model_cost:
+            cost_info = litellm.model_cost[_model]
             break
     if cost_info is None:
         raise Exception(
@@ -1335,9 +1353,9 @@ def handle_realtime_stream_cost_calculation(
     potential_model_names = []
     for result in results:
         if result["type"] == "session.created":
-            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"][
-                "model"
-            ]
+            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)[
+                "session"
+            ].get("model", None)
             potential_model_names.append(received_model)
 
     potential_model_names.append(litellm_model_name)
@@ -1346,6 +1364,8 @@ def handle_realtime_stream_cost_calculation(
 
     for model_name in potential_model_names:
         try:
+            if model_name is None:
+                continue
             _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
                 model=model_name,
                 usage=combined_usage_object,

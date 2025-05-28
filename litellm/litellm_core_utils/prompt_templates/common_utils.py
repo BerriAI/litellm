@@ -12,6 +12,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
+    ChatCompletionResponseMessage,
+    ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import (
@@ -97,7 +99,9 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> str:
+def convert_content_list_to_str(
+    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -342,14 +346,14 @@ def get_format_from_file_id(file_id: Optional[str]) -> Optional[str]:
     unified_file_id = litellm_proxy:{};unified_id,{}
     If not a unified file id, returns 'file' as default format
     """
-    from litellm.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        convert_b64_uid_to_unified_uid,
+    )
 
     if not file_id:
         return None
     try:
-        transformed_file_id = (
-            _PROXY_LiteLLMManagedFiles._convert_b64_uid_to_unified_uid(file_id)
-        )
+        transformed_file_id = convert_b64_uid_to_unified_uid(file_id)
         if transformed_file_id.startswith(
             SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value
         ):
@@ -556,3 +560,25 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
             return mime_type
 
     return None
+
+
+def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:
+    """
+    Get tool call names from tools
+    """
+    tool_call_names: List[str] = []
+    for tool in tools:
+        if tool.get("type") == "function":
+            tool_call_name = tool.get("function", {}).get("name")
+            if tool_call_name:
+                tool_call_names.append(tool_call_name)
+    return tool_call_names
+
+
+def is_function_call(optional_params: dict) -> bool:
+    """
+    Checks if the optional params contain the function call
+    """
+    if "functions" in optional_params and optional_params.get("functions"):
+        return True
+    return False

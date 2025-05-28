@@ -255,7 +255,9 @@ def _parse_content_for_reasoning(
     if not message_text:
         return None, message_text
 
-    reasoning_match = re.match(r"<think>(.*?)</think>(.*)", message_text, re.DOTALL)
+    reasoning_match = re.match(
+        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+    )
 
     if reasoning_match:
         return reasoning_match.group(1), reasoning_match.group(2)
@@ -273,12 +275,14 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     Returns:
         tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
     """
+    message_content = message.get("content")
     if "reasoning_content" in message:
         return message["reasoning_content"], message["content"]
     elif "reasoning" in message:
         return message["reasoning"], message["content"]
-    else:
-        return _parse_content_for_reasoning(message.get("content"))
+    elif isinstance(message_content, str):
+        return _parse_content_for_reasoning(message_content)
+    return None, message_content
 
 
 class LiteLLMResponseObjectHandler:
@@ -509,9 +513,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,

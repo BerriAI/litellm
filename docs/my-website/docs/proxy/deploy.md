@@ -1049,3 +1049,25 @@ export DATABASE_SCHEMA="schema-name" # skip to use the default "public" schema
 litellm --config /path/to/config.yaml --iam_token_db_auth
 ```
 
+### ✨ Blocking web crawlers
+
+Note: This is an [enterprise only feature](https://docs.litellm.ai/docs/enterprise).
+
+To block web crawlers from indexing the proxy server endpoints, set the `block_robots` setting to `true` in your `litellm_config.yaml` file.
+
+```yaml showLineNumbers title="litellm_config.yaml"
+general_settings:
+  block_robots: true
+```
+
+#### How it works
+
+When this is enabled, the `/robots.txt` endpoint will return a 200 status code with the following content:
+
+```shell showLineNumbers title="robots.txt"
+User-agent: *
+Disallow: /
+```
+
+
+

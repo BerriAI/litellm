@@ -20,6 +20,7 @@ import {
   ExclamationCircleOutlined,
   PlusCircleOutlined
 } from "@ant-design/icons";
+import { parseErrorMessage } from "./shared/errorUtils";
 
 interface SCIMConfigProps {
   accessToken: string | null;
@@ -67,9 +68,9 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
       const response = await keyCreateCall(accessToken, userID, formData);
       setTokenData(response);
       message.success("SCIM token created successfully");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating SCIM token:", error);
-      message.error("Failed to create SCIM token");
+      message.error("Failed to create SCIM token: " + parseErrorMessage(error));
     } finally {
       setIsCreatingToken(false);
     }

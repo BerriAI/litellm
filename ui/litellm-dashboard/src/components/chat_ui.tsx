@@ -24,9 +24,10 @@ import {
 } from "@tremor/react";
 import { v4 as uuidv4 } from 'uuid';
 
-import { message, Select, Spin, Typography, Tooltip, Input } from "antd";
+import { message, Select, Spin, Typography, Tooltip, Input, Upload } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
+import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
 import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
@@ -34,6 +35,8 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import EndpointSelector from "./chat_ui/EndpointSelector";
 import TagSelector from "./tag_management/TagSelector";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import GuardrailSelector from "./guardrails/GuardrailSelector";
 import { determineEndpointType } from "./chat_ui/EndpointUtils";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
@@ -47,10 +50,16 @@ import {
   UserOutlined,
   DeleteOutlined,
   LoadingOutlined,
-  TagsOutlined
+  TagsOutlined,
+  DatabaseOutlined,
+  InfoCircleOutlined,
+  SafetyOutlined,
+  UploadOutlined,
+  PictureOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
+const { Dragger } = Upload;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -83,7 +92,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
   const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -281,8 +294,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
+  const handleImageUpload = (file: File) => {
+    setUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveImage = () => {
+    if (imagePreviewUrl) {
+      URL.revokeObjectURL(imagePreviewUrl);
+    }
+    setUploadedImage(null);
+    setImagePreviewUrl(null);
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
+
+    // For image edits, require both image and prompt
+    if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
+      message.error("Please upload an image for editing");
+      return;
+    }
 
     if (!token || !userRole || !userID) {
       return;
@@ -328,7 +362,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateReasoningContent,
             updateTimingData,
             updateUsageData,
-            traceId
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -340,6 +376,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal
           );
+        } else if (endpointType === EndpointType.IMAGE_EDITS) {
+          // For image edits
+          if (uploadedImage) {
+            await makeOpenAIImageEditsRequest(
+              uploadedImage,
+              inputMessage,
+              (imageUrl, model) => updateImageUI(imageUrl, model),
+              selectedModel,
+              effectiveApiKey,
+              selectedTags,
+              signal
+            );
+          }
         } else if (endpointType === EndpointType.RESPONSES) {
           // Create chat history for API call - strip out model field and isImage field
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -354,7 +403,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateReasoningContent,
             updateTimingData,
             updateUsageData,
-            traceId
+            traceId,
+            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
           );
         }
       }
@@ -363,11 +414,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("Request was cancelled");
       } else {
         console.error("Error fetching response", error);
-        updateTextUI("assistant", "Error fetching response");
+        updateTextUI("assistant", "Error fetching response:" + error);
       }
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
+      // Clear image after successful request for image edits
+      if (endpointType === EndpointType.IMAGE_EDITS) {
+        handleRemoveImage();
+      }
     }
 
     setInputMessage("");
@@ -376,6 +431,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
+    handleRemoveImage(); // Clear any uploaded images
     message.success("Chat history cleared.");
   };
 
@@ -503,6 +559,48 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <DatabaseOutlined className="mr-2" /> Vector Store
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select vector store(s) to use for this LLM API call. You can set up your vector store <a href="?page=vector-stores" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <VectorStoreSelector
+                  value={selectedVectorStores}
+                  onChange={setSelectedVectorStores}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SafetyOutlined className="mr-2" /> Guardrails
+                  <Tooltip 
+                    className="ml-1"
+                    title={
+                        <span>
+                          Select guardrail(s) to use for this LLM API call. You can set up your guardrails <a href="?page=guardrails" style={{ color: '#1890ff' }}>here</a>.
+                        </span>
+                      }>
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                </Text>
+                <GuardrailSelector
+                  value={selectedGuardrails}
+                  onChange={setSelectedGuardrails}
+                  className="mb-4"
+                  accessToken={accessToken || ""}
+                />
+              </div>
               
               <Button
                 onClick={clearChatHistory}
@@ -622,6 +720,42 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
           
           <div className="p-4 border-t border-gray-200 bg-white">
+            {/* Image Upload Section for Image Edits */}
+            {endpointType === EndpointType.IMAGE_EDITS && (
+              <div className="mb-4">
+                {!uploadedImage ? (
+                  <Dragger
+                    beforeUpload={handleImageUpload}
+                    accept="image/*"
+                    showUploadList={false}
+                    className="border-dashed border-2 border-gray-300 rounded-lg p-4"
+                  >
+                    <p className="ant-upload-drag-icon">
+                      <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
+                    </p>
+                    <p className="ant-upload-text text-sm">Click or drag image to upload</p>
+                    <p className="ant-upload-hint text-xs text-gray-500">
+                      Support for PNG, JPG, JPEG formats
+                    </p>
+                  </Dragger>
+                ) : (
+                  <div className="relative inline-block">
+                    <img 
+                      src={imagePreviewUrl || ''} 
+                      alt="Upload preview" 
+                      className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
+                    />
+                    <button
+                      className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
+                      onClick={handleRemoveImage}
+                    >
+                      <DeleteOutlined />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            
             <div className="flex items-center">
               <TextArea
                 value={inputMessage}
@@ -630,6 +764,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 placeholder={
                   endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES
                     ? "Type your message... (Shift+Enter for new line)" 
+                    : endpointType === EndpointType.IMAGE_EDITS
+                    ? "Describe how you want to edit the image..."
                     : "Describe the image you want to generate..."
                 }
                 disabled={isLoading}
@@ -651,7 +787,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   className="ml-2 text-white"
                   icon={endpointType === EndpointType.CHAT ? SendOutlined : RobotOutlined}
                 >
-                  {endpointType === EndpointType.CHAT ? "Send" : "Generate"}
+                  {endpointType === EndpointType.CHAT ? "Send" : 
+                   endpointType === EndpointType.IMAGE_EDITS ? "Edit" : "Generate"}
                 </Button>
               )}
             </div>

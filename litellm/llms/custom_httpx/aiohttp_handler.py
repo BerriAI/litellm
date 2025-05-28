@@ -102,7 +102,7 @@ class BaseLLMAIOHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: Optional[Union[float, httpx.Timeout]],
         litellm_params: dict,
         stream: bool = False,
         files: Optional[dict] = None,

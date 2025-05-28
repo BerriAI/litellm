@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | Google AI Studio is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `gemini/` |
-| Provider Doc | [Google AI Studio ↗](https://ai.google.dev/aistudio) |
+| Provider Doc | [Google AI Studio ↗](https://aistudio.google.com/) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
 | Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
 | Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
