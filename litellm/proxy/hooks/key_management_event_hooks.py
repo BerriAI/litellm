@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    CommonProxyErrors,
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyRequest,
@@ -309,14 +310,27 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_created_email(response: dict):
-        from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-            BaseEmailLogger,
-        )
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
+            )
+        except ImportError:
+            raise Exception(
+                "Trying to use Email Hooks"
+                + CommonProxyErrors.missing_enterprise_package.value
+            )
 
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
-        from litellm.types.enterprise.enterprise_callbacks.send_emails import (
-            SendKeyCreatedEmailEvent,
-        )
+
+        try:
+            from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+                SendKeyCreatedEmailEvent,
+            )
+        except ImportError:
+            raise Exception(
+                "Trying to use Email Hooks"
+                + CommonProxyErrors.missing_enterprise_package.value
+            )
 
         event = SendKeyCreatedEmailEvent(
             virtual_key=response.get("key", ""),

@@ -23,7 +23,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import UserObjectCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -645,12 +644,7 @@ async def user_update(
             
     
     """
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.model_dump(exclude_unset=True)
@@ -733,15 +727,6 @@ async def user_update(
 
                 user_row_litellm_typed = LiteLLM_UserTable(
                     **user_row.model_dump(exclude_none=True)
-                )
-
-                ## UPDATE CACHE ##
-                user_object_cache = UserObjectCache(
-                    user_api_key_cache=user_api_key_cache,
-                    internal_usage_cache=proxy_logging_obj.internal_usage_cache,
-                )
-                await user_object_cache.update_user_object(
-                    user_id=response["user_id"], user_object=user_row_litellm_typed
                 )
 
                 asyncio.create_task(

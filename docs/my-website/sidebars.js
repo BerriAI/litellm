@@ -217,6 +217,7 @@ const sidebars = {
           label: "/images",
           items: [
             "image_generation",
+            "image_edits",
             "image_variations",
           ]
         },
@@ -266,7 +267,14 @@ const sidebars = {
           ]
         },
         "realtime",
-        "fine_tuning",
+        {
+          type: "category",
+          label: "/fine_tuning",
+          items: [
+            "fine_tuning",
+            "proxy/managed_finetuning",
+          ]
+        },
         "moderation",
         "apply_guardrail",
       ],
@@ -371,7 +379,8 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
-        "providers/featherless_ai"
+        "providers/featherless_ai",
+        "providers/nebius"
       ],
     },
     {

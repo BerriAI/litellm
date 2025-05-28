@@ -101,6 +101,7 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        mounts: Optional[Dict[str, httpx.AsyncBaseTransport]] = None, # Added mounts parameter
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -109,6 +110,7 @@ class AsyncHTTPHandler:
             concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
+            mounts=mounts # Pass mounts to create_client
         )
         self.client_alias = client_alias
 
@@ -118,6 +120,7 @@ class AsyncHTTPHandler:
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
+        mounts: Optional[Dict[str, httpx.AsyncBaseTransport]] = None, # mounts parameter
     ) -> httpx.AsyncClient:
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
@@ -150,14 +153,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-
-        transport = AsyncHTTPHandler._create_async_transport(
-            ssl_context=ssl_verify if isinstance(ssl_verify, ssl.SSLContext) else None,
-            ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
-        )
-
+        # If mounts are provided, use them. Otherwise, httpx will use its default behavior (including env proxies).
+        # We removed the direct call to litellm.utils.create_proxy_transport_and_mounts() here to avoid circular import.
+        # The expectation is that litellm/__init__.py will prepare and pass the mounts.
         return httpx.AsyncClient(
-            transport=transport,
+            mounts=mounts, # Use mounts if provided
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -490,13 +490,9 @@ class AsyncHTTPHandler:
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         #########################################################
-        # AIOHTTP TRANSPORT is used by default
-        # httpx_aiohttp is included in litellm docker images and pip when python 3.9+ is used
+        # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if (
-            litellm.use_aiohttp_transport
-            and AsyncHTTPHandler.aiohttp_transport_exists()
-        ):
+        if AsyncHTTPHandler._should_use_aiohttp_transport():
             return AsyncHTTPHandler._create_aiohttp_transport(
                 ssl_context=ssl_context, ssl_verify=ssl_verify
             )
@@ -505,6 +501,24 @@ class AsyncHTTPHandler:
         # HTTPX TRANSPORT is used when aiohttp is not installed
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
+
+    @staticmethod
+    def _should_use_aiohttp_transport() -> bool:
+        """
+        This is feature flagged for now and is opt in as we roll out to all users.
+
+        Controlled by either
+        - litellm.use_aiohttp_transport or os.getenv("USE_AIOHTTP_TRANSPORT") = "True"
+        """
+        from litellm.secret_managers.main import str_to_bool
+
+        if (
+            str_to_bool(os.getenv("USE_AIOHTTP_TRANSPORT", "False"))
+            or litellm.use_aiohttp_transport
+        ):
+            verbose_logger.debug("Using AiohttpTransport...")
+            return True
+        return False
 
     @staticmethod
     def _create_aiohttp_transport(
@@ -519,15 +533,23 @@ class AsyncHTTPHandler:
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
-        verbose_logger.debug("Creating AiohttpTransport...")
+        #########################################################
+        # If ssl_verify is None, set it to True
+        # TCP Connector does not allow ssl_verify to be None
+        # by default aiohttp sets ssl_verify to True
+        #########################################################
+        if ssl_verify is None:
+            ssl_verify = True
 
+        verbose_logger.debug("Creating AiohttpTransport...")
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(
-                    verify_ssl=ssl_verify or True,
+                    verify_ssl=ssl_verify,
                     ssl_context=ssl_context,
                     local_addr=("0.0.0.0", 0) if litellm.force_ipv4 else None,
-                )
+                ),
+                trust_env=True  # Explicitly tell aiohttp to use environment proxies
             ),
         )
 
@@ -544,22 +566,6 @@ class AsyncHTTPHandler:
         else:
             return None
 
-    @staticmethod
-    def aiohttp_transport_exists() -> bool:
-        """
-        Returns True if `httpx-aiohttp` is installed.
-
-        `httpx-aiohttp` only supports python 3.9+
-
-        For users on python 3.8, we will use `httpx.AsyncClient` instead of `httpx-aiohttp`.
-        """
-        try:
-            import importlib.util
-
-            return importlib.util.find_spec("httpx_aiohttp") is not None
-        except Exception:
-            return False
-
 
 class HTTPHandler:
     def __init__(
@@ -568,6 +574,7 @@ class HTTPHandler:
         concurrent_limit=1000,
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
+        mounts: Optional[Dict[str, httpx.BaseTransport]] = None, # mounts parameter
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -583,11 +590,10 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
-            transport = self._create_sync_transport()
-
-            # Create a client with a connection pool
+            # If mounts are provided, use them. Otherwise, httpx will use its default behavior.
+            # The expectation is that litellm/__init__.py will prepare and pass the mounts.
             self.client = httpx.Client(
-                transport=transport,
+                mounts=mounts, # Use mounts if provided
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,

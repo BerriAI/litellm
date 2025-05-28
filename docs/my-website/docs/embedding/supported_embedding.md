@@ -469,7 +469,7 @@ response = embedding(
 print(response)
 ```
 
-## Supported Models
+### Supported Models
 All models listed here https://docs.voyageai.com/embeddings/#models-and-specifics are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
@@ -478,7 +478,7 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01 | `embedding(model="voyage/voyage-lite-01", input)` | 
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` | 
 
-## Provider-specific Params
+### Provider-specific Params
 
 
 :::info
@@ -540,3 +540,28 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 ```
 </TabItem>
 </Tabs>
+
+## Nebius AI Studio Embedding Models
+
+### Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['NEBIUS_API_KEY'] = ""
+response = embedding(
+    model="nebius/BAAI/bge-en-icl",
+    input=["Good morning from litellm!"],
+)
+print(response)
+```
+
+### Supported Models
+All supported models can be found here: https://studio.nebius.ai/models/embedding
+
+| Model Name               | Function Call                                                   |
+|--------------------------|-----------------------------------------------------------------|
+| BAAI/bge-en-icl | `embedding(model="nebius/BAAI/bge-en-icl", input)`              | 
+| BAAI/bge-multilingual-gemma2 | `embedding(model="nebius/BAAI/bge-multilingual-gemma2", input)` | 
+| intfloat/e5-mistral-7b-instruct | `embedding(model="nebius/intfloat/e5-mistral-7b-instruct", input)`      | 
+

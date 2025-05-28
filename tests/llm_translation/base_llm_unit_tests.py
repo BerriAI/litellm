@@ -1436,6 +1436,36 @@ class BaseAnthropicChatTest(ABC):
         )
 
         print(response)
+    
+    def test_completion_thinking_with_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            max_completion_tokens=20000,
+        )
+
+        print(response)
+    
+        
+    def test_completion_thinking_without_max_tokens(self):
+        from pydantic import BaseModel
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+        )
+
+        print(response)
 
     def test_completion_with_thinking_basic(self):
         litellm._turn_on_debug()
