@@ -127,14 +127,32 @@ class MCPServerManager:
             for tool in tools:
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]):
+    async def call_tool(self, name: str, arguments: Dict[str, Any], mcp_server: Optional[str] = None):
         """
         Call a tool with the given name and arguments
+        
+        Args:
+            name: Name of the tool to call
+            arguments: Arguments to pass to the tool
+            mcp_server: Optional server name to specify which MCP server to use
         """
-        mcp_server = self._get_mcp_server_from_tool_name(name)
-        if mcp_server is None:
-            raise ValueError(f"Tool {name} not found")
-        async with sse_client(url=mcp_server.url) as (read, write):
+        # If a specific server was requested, use it
+        target_server = None
+        if mcp_server:
+            for server in self.mcp_servers:
+                if server.name == mcp_server:
+                    target_server = server
+                    break
+            if not target_server:
+                raise ValueError(f"MCP server '{mcp_server}' not found")
+        else:
+            # Use the default mapping logic
+            target_server = self._get_mcp_server_from_tool_name(name)
+            if target_server is None:
+                raise ValueError(f"Tool '{name}' not found in any registered MCP server")
+        
+        # Call the tool on the selected server
+        async with sse_client(url=target_server.url) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(name, arguments)
