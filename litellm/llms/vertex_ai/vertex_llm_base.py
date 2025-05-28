@@ -135,6 +135,16 @@ class VertexBase:
 
         return google_auth.default(scopes=scopes)
 
+    def get_api_base(
+        self, api_base: Optional[str], vertex_location: Optional[str]
+    ) -> str:
+        if api_base:
+            return api_base
+        elif vertex_location and vertex_location == "global":
+            return "https://aiplatform.googleapis.com"
+        else:
+            return f"https://{vertex_location}-aiplatform.googleapis.com"
+
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import (
             Request,  # type: ignore[import-untyped]
