@@ -245,24 +245,45 @@ class ChatConfig(BaseConfig):
         )
         
         # Transform the responses API response to chat completion format
-        chat_completion_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-            request_input=input_param,
-            responses_api_request=responses_api_request,
-            chat_completion_response=resp_json
-        )
+        print(f"Chat provider: Raw response keys: {list(resp_json.keys()) if isinstance(resp_json, dict) else 'Not a dict'}")
+        
+        try:
+            chat_completion_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input=input_param,
+                responses_api_request=responses_api_request,
+                chat_completion_response=resp_json
+            )
+            print(f"Chat provider: Transformation successful, output items: {len(getattr(chat_completion_response, 'output', []))}")
+        except Exception as e:
+            print(f"Chat provider: Transformation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Build proper ModelResponse from the responses API response
         choices = []
         
+        print(f"Chat provider: Processing {len(chat_completion_response.output)} output items")
+        
         # Process output items to build choices
-        for output_item in chat_completion_response.output:
+        for i, output_item in enumerate(chat_completion_response.output):
+            print(f"Chat provider: Output item {i}: type={getattr(output_item, 'type', 'unknown')}")
+            
             if hasattr(output_item, 'type') and output_item.type == "message":
                 # Extract content from the message
                 content = ""
                 if hasattr(output_item, 'content') and output_item.content:
-                    for content_item in output_item.content:
-                        if hasattr(content_item, 'text'):
-                            content += content_item.text
+                    print(f"Chat provider: Processing {len(output_item.content)} content items")
+                    for j, content_item in enumerate(output_item.content):
+                        print(f"Chat provider: Content item {j}: type={getattr(content_item, 'type', 'unknown')}, text={getattr(content_item, 'text', 'N/A')}")
+                        if hasattr(content_item, 'text') and content_item.text is not None:
+                            content += str(content_item.text)
+                        else:
+                            print(f"Chat provider: Skipping content item {j} - text is None or missing")
+                else:
+                    print(f"Chat provider: No content found in output item {i}")
+                
+                print(f"Chat provider: Final extracted content: '{content}'")
                 
                 message = {
                     "role": getattr(output_item, "role", "assistant"),
@@ -301,17 +322,22 @@ class ChatConfig(BaseConfig):
             })
         
         # Build usage from the responses API response
-        usage = Usage(
-            prompt_tokens=getattr(chat_completion_response.usage, "input_tokens", 0),
-            completion_tokens=getattr(chat_completion_response.usage, "output_tokens", 0),
-            total_tokens=getattr(chat_completion_response.usage, "total_tokens", 0),
-        )
+        usage_obj = getattr(chat_completion_response, "usage", None)
+        if usage_obj:
+            usage = Usage(
+                prompt_tokens=getattr(usage_obj, "input_tokens", 0),
+                completion_tokens=getattr(usage_obj, "output_tokens", 0),
+                total_tokens=getattr(usage_obj, "total_tokens", 0),
+            )
+        else:
+            print("Chat provider: No usage data found, using defaults")
+            usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         
         return ModelResponse(
-            id=chat_completion_response.id,
+            id=getattr(chat_completion_response, "id", "unknown"),
             choices=choices,
-            created=chat_completion_response.created_at,
-            model=chat_completion_response.model,
+            created=getattr(chat_completion_response, "created_at", int(time.time())),
+            model=getattr(chat_completion_response, "model", "unknown"),
             usage=usage,
         )
 
