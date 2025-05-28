@@ -375,3 +375,19 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
+
+
+def test_vertex_ai_map_tools():
+    v = VertexGeminiConfig()
+    tools = v._map_function(value=[{"code_execution": {}}])
+    assert len(tools) == 1
+    assert tools[0]["code_execution"] == {}
+    print(tools)
+
+    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    assert len(new_tools) == 1
+    print("new_tools", new_tools)
+    assert new_tools[0]["code_execution"] == {}
+    print(new_tools)
+
+    assert tools == new_tools
