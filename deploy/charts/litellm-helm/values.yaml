@@ -56,6 +56,9 @@ environmentConfigMaps: []
 service:
   type: ClusterIP
   port: 4000
+  # If service type is `LoadBalancer` you can
+  # optionally specify loadBalancerClass
+  # loadBalancerClass: tailscale
 
 ingress:
   enabled: false

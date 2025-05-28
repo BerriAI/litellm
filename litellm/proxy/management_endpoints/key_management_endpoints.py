@@ -34,6 +34,7 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
+from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -1385,7 +1386,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
             pass
         else:
-            key_data["key_name"] = f"sk-...{token[-4:]}"
+            key_data["key_name"] = abbreviate_api_key(api_key=token)
         saved_token = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
             saved_token["aliases"] = json.loads(saved_token["aliases"])

@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -172,7 +173,10 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_streaming_response,
+)
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -215,6 +219,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
@@ -396,10 +401,12 @@ except Exception:
 # Import enterprise routes
 try:
     from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
+    from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
 
     enterprise_router = _enterprise_router
+    enterprise_proxy_config: Optional[EnterpriseProxyConfig] = EnterpriseProxyConfig()
 except ImportError:
-    pass
+    enterprise_proxy_config = None
 ###################
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
@@ -746,17 +753,17 @@ try:
             os.rename(src, dst)
 
     if server_root_path != "":
-        print(  # noqa
-            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui"
+        verbose_proxy_logger.info(  # noqa
+            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui, any /sso/key/generate requests to {server_root_path}/sso/key/generate"
         )  # noqa
-        if os.getenv("PROXY_BASE_URL") is None:
-            os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
             if request.url.path.startswith("/ui"):
                 new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
                 return RedirectResponse(new_url)
+            elif request.url.path == "/sso/key/generate":
+                return RedirectResponse(f"{server_root_path}/sso/key/generate")
             return await call_next(request)
 
 except Exception:
@@ -834,7 +841,7 @@ use_background_health_checks = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
-health_check_results = {}
+health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1230,13 +1237,17 @@ async def _run_background_health_check():
     """
     global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    # make 1 deep copy of llm_model_list -> use this for all background health checks
-    _llm_model_list = copy.deepcopy(llm_model_list)
-
-    if _llm_model_list is None:
+    if (
+        health_check_interval is None
+        or not isinstance(health_check_interval, int)
+        or health_check_interval <= 0
+    ):
         return
 
     while True:
+        # make 1 deep copy of llm_model_list on every health check iteration
+        _llm_model_list = copy.deepcopy(llm_model_list) or []
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1247,10 +1258,7 @@ async def _run_background_health_check():
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
 
-        if health_check_interval is not None and isinstance(
-            health_check_interval, float
-        ):
-            await asyncio.sleep(health_check_interval)
+        await asyncio.sleep(health_check_interval)
 
 
 class StreamingCallbackError(Exception):
@@ -1864,6 +1872,9 @@ class ProxyConfig:
                     value=custom_sso, config_file_path=config_file_path
                 )
 
+            if enterprise_proxy_config is not None:
+                await enterprise_proxy_config.load_enterprise_config(general_settings)
+
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
                 await initialize_pass_through_endpoints(
@@ -1995,6 +2006,7 @@ class ProxyConfig:
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
+            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
         )  # type:ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -2321,6 +2333,7 @@ class ProxyConfig:
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
@@ -2574,13 +2587,21 @@ class ProxyConfig:
         Returns:
             dict: Updated configuration dictionary
         """
+
         if param_name == "environment_variables":
             self._decrypt_and_set_db_env_variables(db_param_value)
             return current_config
+        elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
+            for key, value in db_param_value.items():
+                if (
+                    key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+                ):  # params that are safe to override with db values
+                    setattr(litellm, key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
             current_config[param_name] = db_param_value
+
             return current_config
 
         # For dictionary values, update only non-empty values
@@ -2592,6 +2613,7 @@ class ProxyConfig:
             current_config[param_name].update(non_empty_values)
         else:
             current_config[param_name] = db_param_value
+
         return current_config
 
     async def _update_config_from_db(
@@ -3563,6 +3585,9 @@ async def chat_completion(  # noqa: PLR0915
             return StreamingResponse(
                 selected_data_generator,
                 media_type="text/event-stream",
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -3619,117 +3644,25 @@ async def completion(  # noqa: PLR0915
     data = {}
     try:
         data = await _read_request_body(request=request)
-
-        data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or data.get("model", None)
-        )
-        if user_model:
-            data["model"] = user_model
-
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        return await base_llm_response_processor.base_process_llm_request(
             request=request,
-            general_settings=general_settings,
+            fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        # override with user settings, these are params passed via cli
-        if user_temperature:
-            data["temperature"] = user_temperature
-        if user_request_timeout:
-            data["request_timeout"] = user_request_timeout
-        if user_max_tokens:
-            data["max_tokens"] = user_max_tokens
-        if user_api_base:
-            data["api_base"] = user_api_base
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
-        )
-
-        ### ROUTE THE REQUESTs ###
-        llm_call = await route_request(
-            data=data,
             route_type="atext_completion",
+            proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
             user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
-
-        # Await the llm_response task
-        response = await llm_call
-
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-
-        verbose_proxy_logger.debug("final response: %s", response)
-        if (
-            "stream" in data and data["stream"] is True
-        ):  # use generate_responses to stream responses
-            custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                hidden_params=hidden_params,
-                request_data=data,
-            )
-            selected_data_generator = select_data_generator(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                headers=custom_headers,
-            )
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response  # type: ignore
-        )
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-        await check_response_size_is_safe(response=response)
-        return response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -3764,6 +3697,9 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 headers={},
+                status_code=e.status_code
+                if hasattr(e, "status_code")
+                else status.HTTP_400_BAD_REQUEST,
             )
         else:
             _response = litellm.TextCompletionResponse()
@@ -3986,126 +3922,6 @@ async def embeddings(  # noqa: PLR0915
             message = get_error_message_str(e)
             raise ProxyException(
                 message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
-            )
-
-
-@router.post(
-    "/v1/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["images"],
-)
-@router.post(
-    "/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
-    response_class=ORJSONResponse,
-    tags=["images"],
-)
-async def image_generation(
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    global proxy_logging_obj
-    data = {}
-    try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        data["model"] = (
-            general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-
-        ### MODEL ALIAS MAPPING ###
-        # check if model name in model alias map
-        # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
-
-        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
-        )
-
-        ## ROUTE TO CORRECT ENDPOINT ##
-        llm_call = await route_request(
-            data=data,
-            route_type="aimage_generation",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
-        response = await llm_call
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-        ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-
-        return response
-    except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
-        )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -5199,13 +5015,14 @@ async def run_thread(
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            return StreamingResponse(
-                async_assistants_data_generator(
+            return await create_streaming_response(
+                generator=async_assistants_data_generator(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_data=data,
                 ),
                 media_type="text/event-stream",
+                headers={},  # Added empty headers dict, original call missed this argument
             )
 
         ### ALERTING ###
@@ -8357,6 +8174,7 @@ app.include_router(router)
 app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(rerank_router)
+app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)

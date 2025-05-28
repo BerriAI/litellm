@@ -28,6 +28,7 @@ class SupportedGuardrailIntegrations(Enum):
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
+    PANGEA = "pangea"
 
 
 class Role(Enum):
@@ -318,7 +319,6 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         description="Whether to include developer information in the response",
     )
 
-
 class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
@@ -365,6 +365,16 @@ class LitellmParams(
         description="Will mask response content if guardrail makes any changes",
     )
 
+    # pangea params
+    pangea_input_recipe: Optional[str] = Field(
+        default=None,
+        description="Recipe for input (LLM request)"
+    )
+
+    pangea_output_recipe: Optional[str] = Field(
+        default=None,
+        description="Recipe for output (LLM response)"
+    )
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]

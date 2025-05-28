@@ -141,6 +141,7 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
 STREAM_SSE_DONE_STRING: str = "[DONE]"
+STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
@@ -152,13 +153,18 @@ FIREWORKS_AI_16_B = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
+MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
+    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 20)
+)
 
+############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -225,12 +231,14 @@ LITELLM_CHAT_PROVIDERS = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
     "openai",
     "azure",
-    "hosted_vllm"
+    "hosted_vllm",
+    "nebius",
 ]
 
 
@@ -276,6 +284,45 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "web_search_options",
 ]
 
+DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
+    "functions": None,
+    "function_call": None,
+    "temperature": None,
+    "top_p": None,
+    "n": None,
+    "stream": None,
+    "stream_options": None,
+    "stop": None,
+    "max_tokens": None,
+    "max_completion_tokens": None,
+    "modalities": None,
+    "prediction": None,
+    "audio": None,
+    "presence_penalty": None,
+    "frequency_penalty": None,
+    "logit_bias": None,
+    "user": None,
+    "model": None,
+    "custom_llm_provider": "",
+    "response_format": None,
+    "seed": None,
+    "tools": None,
+    "tool_choice": None,
+    "max_retries": None,
+    "logprobs": None,
+    "top_logprobs": None,
+    "extra_headers": None,
+    "api_version": None,
+    "parallel_tool_calls": None,
+    "drop_params": None,
+    "allowed_openai_params": None,
+    "additional_drop_params": None,
+    "messages": None,
+    "reasoning_effort": None,
+    "thinking": None,
+    "web_search_options": None,
+}
+
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
@@ -295,6 +342,7 @@ openai_compatible_endpoints: List = [
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
     "inference.api.nscale.com/v1",
+    "api.studio.nebius.ai/v1",
 ]
 
 
@@ -329,6 +377,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "featherless_ai",
     "nscale",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -338,6 +387,7 @@ openai_text_completion_compatible_providers: List = (
         "meta_llama",
         "llamafile",
         "featherless_ai",
+        "nebius",
     ]
 )
 _openai_like_providers: List = [
@@ -496,6 +546,27 @@ featherless_ai_models: List = [
     "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
 ]
 
+nebius_models: List = [
+    "Qwen/Qwen3-235B-A22B",
+    "Qwen/Qwen3-30B-A3B-fast",
+    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-14B",
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/DeepSeek-V3-0324-fast",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-fast",
+    "meta-llama/Llama-3.3-70B-Instruct-fast",
+    "Qwen/Qwen2.5-32B-Instruct-fast",
+    "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+]
+
+nebius_embedding_models: List = [
+    "BAAI/bge-en-icl",
+    "BAAI/bge-multilingual-gemma2",
+    "intfloat/e5-mistral-7b-instruct",
+]
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -593,6 +664,7 @@ PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
+MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -664,4 +736,9 @@ DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(
     os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
+)
+LITELLM_SETTINGS_SAFE_DB_OVERRIDES = ["default_internal_user_params"]
+SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
+DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
+    os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )

@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
-| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Base URL | 1. Regional endpoints<br/>[https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/)<br/>2. Global endpoints (limited availability)<br/>[https://aiplatform.googleapis.com/](https://{aiplatform.googleapis.com/)|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
 
 
@@ -347,7 +347,9 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding - Web Search**
+### **Google Hosted Tools (Web Search, Code Execution, etc.)**
+
+#### **Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -422,6 +424,8 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Enterprise Web Search**
+
 You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
 
 <Tabs>
@@ -490,6 +494,53 @@ curl http://localhost:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+#### **Code Execution**
+
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+
+tools = [{"codeExecution": {}}] # 👈 ADD CODE EXECUTION
+
+response = completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-2.0-flash",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
@@ -832,7 +883,7 @@ OR
 
 You can set:
 - `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
-- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.). Some models support the global location, please see [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#supported_models)
 - `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
 
 as dynamic params for a `litellm.completion` call. 
