@@ -816,6 +816,54 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
                 pass
         return values
 
+# MCP Types
+class SpecialMCPServerName(str, enum.Enum):
+    all_team_servers = "all-team-mcpservers"
+    all_proxy_servers = "all-proxy-mcpservers"
+
+
+class MCPTransport(str, enum.Enum):
+    sse = "sse"
+    http = "http"
+
+
+class MCPSpecVersion(str, enum.Enum):
+    nov_2024 = "2024-11-05"
+    mar_2025 = "2025-03-26"
+
+
+class MCPAuth(str, enum.Enum):
+    none = "none"
+    api_key = "api_key"
+    bearer_token = "bearer_token"
+    basic = "basic"
+
+
+# MCP Literals
+MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
+MCPAuthType = Optional[Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]]
+
+
+# MCP Proxy Request Types
+class NewMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: Optional[str] = None
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
 
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
