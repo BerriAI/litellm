@@ -39,7 +39,7 @@ async def test_process_async_embedding_cached_response():
 
     mock_logging_obj = MagicMock()
     mock_logging_obj.async_success_handler = AsyncMock()
-    response = llm_caching_handler._process_async_embedding_cached_response(
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
         final_embedding_cached_response=None,
         cached_result=args["cached_result"],
         kwargs={"model": "text-embedding-ada-002", "input": "test"},
@@ -48,4 +48,7 @@ async def test_process_async_embedding_cached_response():
         model="text-embedding-ada-002",
     )
 
+    assert cache_hit
+
     print(f"response: {response}")
+    assert len(response.data) == 1
