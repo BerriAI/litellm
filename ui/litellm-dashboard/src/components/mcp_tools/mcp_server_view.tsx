@@ -65,14 +65,14 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               <Card>
                 <Text>Transport</Text>
                 <div className="mt-2">
-                  <Title>{handleTransport(mcpServer.transport)}</Title>
+                  <Title>{handleTransport(mcpServer.transport ?? undefined)}</Title>
                 </div>
               </Card>
 
               <Card>
                 <Text>Auth Type</Text>
                 <div className="mt-2">
-                  <Text>{handleAuth(mcpServer.auth_type)}</Text>
+                  <Text>{handleAuth(mcpServer.auth_type ?? undefined)}</Text>
                 </div>
               </Card>
 
