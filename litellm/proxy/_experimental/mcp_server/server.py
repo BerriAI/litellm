@@ -14,11 +14,9 @@ from pydantic import ConfigDict, ValidationError
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_TOOL_NAME_PREFIX
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers, get_all_mcp_servers_for_user
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-from litellm.proxy.management_endpoints.mcp_management_endpoints import get_prisma_client_or_throw
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
@@ -106,7 +104,9 @@ if MCP_AVAILABLE:
                     inputSchema=tool.input_schema,
                 )
             )
-        verbose_logger.debug("GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools())
+        verbose_logger.debug(
+            "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
+        )
         sse_tools: List[MCPTool] = await global_mcp_server_manager.list_tools()
         verbose_logger.debug("SSE TOOLS: %s", sse_tools)
         if sse_tools is not None:
@@ -145,21 +145,29 @@ if MCP_AVAILABLE:
         Call a specific tool with the provided arguments
         """
         if arguments is None:
-            raise HTTPException(status_code=400, detail="Request arguments are required")
+            raise HTTPException(
+                status_code=400, detail="Request arguments are required"
+            )
 
-        standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = _get_standard_logging_mcp_tool_call(
-            name=name,
-            arguments=arguments,
+        standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
+            _get_standard_logging_mcp_tool_call(
+                name=name,
+                arguments=arguments,
+            )
         )
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+            "litellm_logging_obj", None
+        )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = standard_logging_mcp_tool_call
-            litellm_logging_obj.model_call_details["model"] = (
-                f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
-            )
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = standard_logging_mcp_tool_call.get(
-                "mcp_server_name"
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details[
+                "model"
+            ] = f"{MCP_TOOL_NAME_PREFIX}: {standard_logging_mcp_tool_call.get('name') or ''}"
+            litellm_logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = standard_logging_mcp_tool_call.get("mcp_server_name")
 
         # Try managed server tool first
         if name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping:
@@ -267,23 +275,6 @@ if MCP_AVAILABLE:
             }
         ]
         """
-        # perform authz check to filter the mcp servers user has access to
-        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        
-        db_mcp_servers: List[LiteLLM_MCPServerTable] = []
-        
-        # Check the db for the mcp server list TODO: reuse same logic as in the mcp_endpoint
-        if _user_has_admin_view(user_api_key_dict):
-            db_mcp_servers = await get_all_mcp_servers(prisma_client)
-        else:
-            db_mcp_servers = await get_all_mcp_servers_for_user(
-                prisma_client,
-                user_api_key_dict,
-            )
-        # ensure the global_mcp_server_manager is up to date with the db
-        for server in db_mcp_servers:
-            global_mcp_server_manager.add_update_server(server)
-
         list_tools_result: List[ListMCPToolsRestAPIResponseObject] = []
         for server in global_mcp_server_manager.get_registry().values():
             try:
