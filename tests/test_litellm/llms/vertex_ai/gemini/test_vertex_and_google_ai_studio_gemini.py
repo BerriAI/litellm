@@ -375,3 +375,20 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
+
+
+def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
+    """
+    If budget_tokens is 0, do not set includeThoughts to True
+    """
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    v = VertexGeminiConfig()
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 0}
+    assert "includeThoughts" not in v._map_thinking_param(thinking_param=thinking_param)
+
+    thinking_param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 100}
+    assert v._map_thinking_param(thinking_param=thinking_param) == {
+        "includeThoughts": True,
+        "thinkingBudget": 100,
+    }

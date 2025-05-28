@@ -386,6 +386,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
     @staticmethod
+    def _is_thinking_budget_zero(thinking_budget: Optional[int]) -> bool:
+        return thinking_budget is not None and thinking_budget == 0
+
+    @staticmethod
     def _map_thinking_param(
         thinking_param: AnthropicThinkingParam,
     ) -> GeminiThinkingConfig:
@@ -393,7 +397,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
-        if thinking_enabled:
+        if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
+            thinking_budget
+        ):
             params["includeThoughts"] = True
         if thinking_budget is not None and isinstance(thinking_budget, int):
             params["thinkingBudget"] = thinking_budget
@@ -466,8 +472,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
                 if value is False:
-                    tools = non_default_params.get("tools", non_default_params.get("functions"))
-                    num_function_declarations = len(tools) if isinstance(tools, list) else 0
+                    tools = non_default_params.get(
+                        "tools", non_default_params.get("functions")
+                    )
+                    num_function_declarations = (
+                        len(tools) if isinstance(tools, list) else 0
+                    )
                     if num_function_declarations > 1:
                         raise litellm.utils.UnsupportedParamsError(
                             message=(
