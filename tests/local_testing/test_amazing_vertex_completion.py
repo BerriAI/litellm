@@ -3143,6 +3143,7 @@ async def test_vertexai_model_garden_model_completion(
     Using OpenAI compatible models from Vertex Model Garden
     """
     litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True
 
@@ -3743,3 +3744,40 @@ def test_vertex_ai_llama_tool_calling():
     assert response.choices[0].message.tool_calls is not None
     assert response.choices[0].finish_reason == "tool_calls"
     assert response._hidden_params["response_cost"] > 0
+
+
+def test_vertex_schema_test():
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+    def tool_call(text: str | None) -> str:
+        return text or "No text provided"
+
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "git_create_branch",
+            "description": "Creates a new branch from an optional base branch",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {"title": "Repo Path", "type": "string"},
+                    "branch_name": {"title": "Branch Name", "type": "string"},
+                    "base_branch": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "Base Branch"},
+                },
+                "required": ["repo_path", "branch_name"],
+                "title": "GitCreateBranch",
+            }
+        }
+    }
+
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash-preview-05-20",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=[tool],
+        tool_choice="required",
+    )
+
+    print(response)

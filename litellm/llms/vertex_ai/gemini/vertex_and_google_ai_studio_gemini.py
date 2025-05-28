@@ -262,6 +262,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
 
+        def get_tool_value(tool: dict, tool_name: str) -> Optional[dict]:
+            """
+            Helper function to get tool value handling both camelCase and underscore_case variants
+
+            Args:
+                tool (dict): The tool dictionary
+                tool_name (str): The base tool name (e.g. "codeExecution")
+
+            Returns:
+                Optional[dict]: The tool value if found, None otherwise
+            """
+            # Convert camelCase to underscore_case
+            underscore_name = "".join(
+                ["_" + c.lower() if c.isupper() else c for c in tool_name]
+            ).lstrip("_")
+            # Try both camelCase and underscore_case variants
+
+            if tool.get(tool_name) is not None:
+                return tool.get(tool_name)
+            elif tool.get(underscore_name) is not None:
+                return tool.get(underscore_name)
+            else:
+                return None
+
         for tool in value:
             openai_function_object: Optional[
                 ChatCompletionToolParamFunctionChunk
@@ -284,15 +308,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
-            # check if grounding
-            if tool.get("googleSearch", None) is not None:
-                googleSearch = tool["googleSearch"]
-            elif tool.get("googleSearchRetrieval", None) is not None:
-                googleSearchRetrieval = tool["googleSearchRetrieval"]
-            elif tool.get("enterpriseWebSearch", None) is not None:
-                enterpriseWebSearch = tool["enterpriseWebSearch"]
-            elif tool.get("code_execution", None) is not None:
-                code_execution = tool["code_execution"]
+            tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
+            if tool_name and (
+                tool_name == "codeExecution" or tool_name == "code_execution"
+            ):  # code_execution maintained for backwards compatibility
+                code_execution = get_tool_value(tool, "codeExecution")
+            elif tool_name and tool_name == "googleSearch":
+                googleSearch = get_tool_value(tool, "googleSearch")
+            elif tool_name and tool_name == "googleSearchRetrieval":
+                googleSearchRetrieval = get_tool_value(tool, "googleSearchRetrieval")
+            elif tool_name and tool_name == "enterpriseWebSearch":
+                enterpriseWebSearch = get_tool_value(tool, "enterpriseWebSearch")
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
