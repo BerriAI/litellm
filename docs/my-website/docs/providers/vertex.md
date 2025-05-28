@@ -347,7 +347,9 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding - Web Search**
+### **Google Hosted Tools (Web Search, Code Execution, etc.)**
+
+#### **Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -422,6 +424,8 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Enterprise Web Search**
+
 You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
 
 <Tabs>
@@ -490,6 +494,53 @@ curl http://localhost:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+#### **Code Execution**
+
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+
+tools = [{"codeExecution": {}}] # 👈 ADD CODE EXECUTION
+
+response = completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-2.0-flash",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
