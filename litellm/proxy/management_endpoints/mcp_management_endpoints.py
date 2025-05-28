@@ -21,6 +21,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 
+router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
 try:
     importlib.import_module("mcp")
@@ -51,8 +52,6 @@ if MCP_AVAILABLE:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-
-    router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
     def get_prisma_client_or_throw(message: str):
         from litellm.proxy.proxy_server import prisma_client
