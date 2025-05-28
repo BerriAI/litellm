@@ -150,14 +150,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-
-        transport = AsyncHTTPHandler._create_async_transport(
-            ssl_context=ssl_verify if isinstance(ssl_verify, ssl.SSLContext) else None,
-            ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
-        )
+        # Get proxy mounts from litellm.utils
+        _, async_proxy_mounts = litellm.utils.create_proxy_transport_and_mounts()
 
         return httpx.AsyncClient(
-            transport=transport,
+            mounts=async_proxy_mounts, # Apply proxy mounts
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -589,11 +586,12 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
-            transport = self._create_sync_transport()
+            # Get proxy mounts from litellm.utils
+            sync_proxy_mounts, _ = litellm.utils.create_proxy_transport_and_mounts()
 
             # Create a client with a connection pool
             self.client = httpx.Client(
-                transport=transport,
+                mounts=sync_proxy_mounts, # Apply proxy mounts
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,
