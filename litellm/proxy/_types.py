@@ -817,6 +817,74 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
         return values
 
 
+# MCP Types
+class SpecialMCPServerName(str, enum.Enum):
+    all_team_servers = "all-team-mcpservers"
+    all_proxy_servers = "all-proxy-mcpservers"
+
+
+class MCPTransport(str, enum.Enum):
+    sse = "sse"
+    http = "http"
+
+
+class MCPSpecVersion(str, enum.Enum):
+    nov_2024 = "2024-11-05"
+    mar_2025 = "2025-03-26"
+
+
+class MCPAuth(str, enum.Enum):
+    none = "none"
+    api_key = "api_key"
+    bearer_token = "bearer_token"
+    basic = "basic"
+
+
+# MCP Literals
+MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
+MCPAuthType = Optional[
+    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
+]
+
+
+# MCP Proxy Request Types
+class NewMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: Optional[str] = None
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    transport: MCPTransportType = MCPTransport.sse
+    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    auth_type: Optional[MCPAuthType] = None
+    url: str
+
+
+class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_MCPServerTable record"""
+
+    server_id: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    url: str
+    transport: MCPTransportType
+    spec_version: MCPSpecVersionType
+    auth_type: Optional[MCPAuthType] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
@@ -1174,6 +1242,13 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         return values
 
 
+class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_ObjectPermissionTable record"""
+
+    object_permission_id: str
+    mcp_servers: List[str]
+
+
 class LiteLLM_TeamTable(TeamBase):
     team_id: str  # type: ignore
     spend: Optional[float] = None
@@ -1182,6 +1257,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     updated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
