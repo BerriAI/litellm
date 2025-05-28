@@ -23,7 +23,7 @@ PROXY_HOOKS = {
 
 ## FEATURE FLAG HOOKS ##
 if os.getenv("EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING", "false").lower() == "true":
-    PROXY_HOOKS["max_parallel_requests"] = _PROXY_MaxParallelRequestsHandler_v2
+    PROXY_HOOKS["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v2
 
 
 ### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###

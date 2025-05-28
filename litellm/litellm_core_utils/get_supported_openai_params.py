@@ -137,6 +137,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "sambanova":
         return litellm.SambanovaConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "nebius":
+        if request_type == "chat_completion":
+            return litellm.NebiusConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":

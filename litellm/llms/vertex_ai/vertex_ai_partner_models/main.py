@@ -44,28 +44,68 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex partner models"""
+
+    api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
     if partner == VertexPartnerProvider.llama:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+        return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
     elif partner == VertexPartnerProvider.mistralai:
         if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
         else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
     elif partner == VertexPartnerProvider.ai21:
         if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
+            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
         else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
     elif partner == VertexPartnerProvider.claude:
         if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
         else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
 
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
+
+    def get_complete_url(
+        self,
+        custom_api_base: Optional[str],
+        vertex_location: Optional[str],
+        vertex_project: Optional[str],
+        project_id: str,
+        partner: VertexPartnerProvider,
+        stream: Optional[bool],
+        model: str,
+    ) -> str:
+        api_base = self.get_api_base(
+            api_base=custom_api_base, vertex_location=vertex_location
+        )
+        default_api_base = create_vertex_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+            partner=partner,  # type: ignore
+            stream=stream,
+            model=model,
+            api_base=api_base,
+        )
+
+        if len(default_api_base.split(":")) > 1:
+            endpoint = default_api_base.split(":")[-1]
+        else:
+            endpoint = ""
+
+        _, api_base = self._check_custom_proxy(
+            api_base=custom_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=None,
+            url=default_api_base,
+        )
+        return api_base
 
     def completion(
         self,
@@ -138,28 +178,17 @@ class VertexAIPartnerModels(VertexBase):
                 partner = VertexPartnerProvider.ai21
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
+            else:
+                raise ValueError(f"Unknown partner model: {model}")
 
-            default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
-                vertex_project=vertex_project or project_id,
-                partner=partner,  # type: ignore
+            api_base = self.get_complete_url(
+                custom_api_base=api_base,
+                vertex_location=vertex_location,
+                vertex_project=vertex_project,
+                project_id=project_id,
+                partner=partner,
                 stream=stream,
                 model=model,
-            )
-
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
-                api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
             )
 
             if "codestral" in model or "mistral" in model:

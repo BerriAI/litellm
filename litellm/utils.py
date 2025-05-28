@@ -1828,6 +1828,7 @@ def supports_response_schema(
         litellm.LlmProviders.PREDIBASE,
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
+        litellm.LlmProviders.NEBIUS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -2849,6 +2850,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "nebius"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -3564,6 +3566,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "nebius":
+        optional_params = litellm.NebiusConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
@@ -3979,6 +3992,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or get_secret("TOGETHERAI_API_KEY")
             or get_secret("TOGETHER_AI_TOKEN")
         )
+    # nebius
+    elif llm_provider == "nebius":
+        api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
     return api_key
 
 
@@ -5028,6 +5044,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif custom_llm_provider == "nebius":
+            if "NEBIUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NEBIUS_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5115,6 +5136,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif model in litellm.nebius_models:
+            if "NEBIUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NEBIUS_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6460,6 +6486,8 @@ class ProviderConfigManager:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
             return litellm.NovitaConfig()
+        elif litellm.LlmProviders.NEBIUS == provider:
+            return litellm.NebiusConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6736,11 +6764,14 @@ def get_end_user_id_for_cost_tracking(
     )
     if litellm.disable_end_user_cost_tracking:
         return None
-    if (
-        service_type == "prometheus"
-        and litellm.disable_end_user_cost_tracking_prometheus_only
-    ):
-        return None
+
+    #######################################
+    # By default we don't track end_user on prometheus since we don't want to increase cardinality
+    # by default litellm.enable_end_user_cost_tracking_prometheus_only is None, so we don't track end_user on prometheus
+    #######################################
+    if service_type == "prometheus":
+        if litellm.enable_end_user_cost_tracking_prometheus_only is not True:
+            return None
     return end_user_id
 
 
