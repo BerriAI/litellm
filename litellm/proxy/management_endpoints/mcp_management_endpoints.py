@@ -11,6 +11,7 @@ Endpoints here:
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 """
 
+import importlib
 from typing import Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -22,7 +23,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 
 MCP_AVAILABLE: bool = True
 try:
-    from mcp.server import Server
+    importlib.import_module("mcp")
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
