@@ -428,5 +428,5 @@ def test_vertex_ai_map_tool_with_anyof():
     assert tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
     ] == {
-        "anyOf": [{"type": "string", "nullable": True}]
+        "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"

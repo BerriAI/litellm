@@ -218,9 +218,24 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     Filter out other fields in the same dict.
 
     E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test"} -> {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+    Case 2: If additional metadata is present, try to keep it
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
     """
+    title = schema_dict.get("title", None)
+
     if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
-        return {"anyOf": schema_dict["anyOf"]}
+        any_of = schema_dict["anyOf"]
+        if (
+            title
+            and isinstance(any_of, list)
+            and all(isinstance(item, dict) for item in any_of)
+        ):
+            for item in any_of:
+                item["title"] = title
+            return {"anyOf": any_of}
+        else:
+            return schema_dict
     return schema_dict
 
 
