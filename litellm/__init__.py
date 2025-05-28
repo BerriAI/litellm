@@ -107,6 +107,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "azure_storage",
     "opik",
     "argilla",
+    "s3",
     "mlflow",
     "langfuse",
     "pagerduty",

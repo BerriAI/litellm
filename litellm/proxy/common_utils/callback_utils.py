@@ -232,6 +232,17 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
                 batch_redis_obj = _PROXY_BatchRedisRequests()
                 imported_list.append(batch_redis_obj)
+            elif isinstance(callback, str) and callback == "s3":
+                from litellm.integrations.s3 import S3Logger
+                
+                # Set s3 callback params in litellm settings
+                s3_callback_params = {}
+                if "s3_callback_params" in litellm_settings:
+                    s3_callback_params = litellm_settings["s3_callback_params"]
+                
+                litellm.s3_callback_params = s3_callback_params
+                s3_logger_obj = S3Logger()
+                imported_list.append(s3_logger_obj)
             elif isinstance(callback, str) and callback == "azure_content_safety":
                 from litellm.proxy.hooks.azure_content_safety import (
                     _PROXY_AzureContentSafety,
@@ -254,7 +265,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 imported_list.append(azure_content_safety_obj)
             else:
                 verbose_proxy_logger.debug(
-                    f"{blue_color_code} attempting to import custom calback={callback} {reset_color_code}"
+                    f"{blue_color_code} attempting to import custom callback={callback} {reset_color_code}"
                 )
                 imported_list.append(
                     get_instance_fn(
