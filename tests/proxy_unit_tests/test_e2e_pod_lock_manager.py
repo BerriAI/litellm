@@ -400,7 +400,7 @@ async def test_e2e_size_of_redis_buffer():
     for queue in initialized_queues:
         key = f"test_key_{queue.__class__.__name__}_{uuid.uuid4()}"
         new_keys_added.append(key)
-        await queue.add_update({key: {"spend": 1.0}})
+        await queue.add_update({key: {"spend": 1.0, "entity_id": "test_entity_id", "entity_type": "user", "api_key": "test_api_key", "model": "test_model", "custom_llm_provider": "test_custom_llm_provider", "date": "2025-01-01", "prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200, "response_cost": 1.0, "api_requests": 1, "successful_requests": 1, "failed_requests": 0}})
     
     print("initialized_queues=", initialized_queues)
     print("new_keys_added=", new_keys_added)
