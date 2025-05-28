@@ -236,3 +236,80 @@ async def test_update_team_permissions_success(mock_db_client, mock_admin_auth):
 
         # Clean up dependency override
         app.dependency_overrides = {}
+
+
+@pytest.mark.asyncio
+async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
+    """Ensure /team/new correctly handles `object_permission` by
+    1. Creating a record in litellm_objectpermissiontable
+    2. Passing the returned `object_permission_id` into the team insert payload
+    """
+    # --- Configure mocked prisma client ---
+    # Helper identity converters used by team logic
+    mock_db_client.jsonify_team_object = lambda db_data: db_data  # type: ignore
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+
+    # Mock DB structure under prisma_client.db
+    mock_db_client.db = MagicMock()
+
+    # 1. Mock object permission table creation
+    mock_object_perm_create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm123")
+    )
+    mock_db_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_db_client.db.litellm_objectpermissiontable.create = mock_object_perm_create
+
+    # 2. Mock model table creation (may be skipped but provided for safety)
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    # 3. Capture team table creation
+    team_create_result = MagicMock(
+        team_id="team-456",
+        object_permission_id="objperm123",
+    )
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-456",
+        "object_permission_id": "objperm123",
+    }
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+
+    # 4. Mock user table update behaviour (called for each member)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    # --- Import after mocks applied ---
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Build request objects
+    team_request = NewTeamRequest(
+        team_alias="my-team",
+        object_permission=LiteLLM_ObjectPermissionTable(vector_stores=["my-vector"]),
+    )
+
+    # Pass a dummy FastAPI Request object
+    dummy_request = MagicMock(spec=Request)
+
+    # Execute the endpoint function
+    await new_team(
+        data=team_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # --- Assertions ---
+    # 1. Object permission creation should be called exactly once
+    mock_object_perm_create.assert_awaited_once()
+
+    # 2. Team creation payload should include the generated object_permission_id
+    assert mock_team_create.call_count == 1
+    created_team_kwargs = mock_team_create.call_args.kwargs
+    assert created_team_kwargs["data"].get("object_permission_id") == "objperm123"

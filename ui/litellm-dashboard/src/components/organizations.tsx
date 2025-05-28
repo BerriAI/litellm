@@ -29,6 +29,8 @@ import { getModelDisplayName } from './key_team_helpers/fetch_available_models_t
 import { message } from 'antd';
 import OrganizationInfoView from './organization/organization_view';
 import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from './networking';
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+
 interface OrganizationsTableProps {
   organizations: Organization[];
   userRole: string;
@@ -106,6 +108,14 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       if (!accessToken) return;
 
       console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
+
+      // Transform allowed_vector_store_ids into object_permission
+      if (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) {
+        values.object_permission = {
+          vector_stores: values.allowed_vector_store_ids
+        };
+        delete values.allowed_vector_store_ids;
+      }
 
       await organizationCreateCall(accessToken, values);
       setIsOrgModalVisible(false);
@@ -212,6 +222,27 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                   </Form.Item>
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                     <NumericalInput step={1} width={400} />
+                  </Form.Item>
+
+                  <Form.Item 
+                    label={
+                      <span>
+                        Allowed Vector Stores{' '}
+                        <Tooltip title="Select which vector stores this organization can access by default. Leave empty for access to all vector stores">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="allowed_vector_store_ids"
+                    className="mt-4"
+                    help="Select vector stores this organization can access. Leave empty for access to all vector stores"
+                  >
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                      value={form.getFieldValue('allowed_vector_store_ids')}
+                      accessToken={accessToken || ''}
+                      placeholder="Select vector stores (optional)"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">  
@@ -487,6 +518,26 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                     </Form.Item>
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                       <NumericalInput step={1} width={400} />
+                    </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Allowed Vector Stores{' '}
+                          <Tooltip title="Select which vector stores this organization can access by default. Leave empty for access to all vector stores">
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="allowed_vector_store_ids"
+                      className="mt-4"
+                      help="Select vector stores this organization can access. Leave empty for access to all vector stores"
+                    >
+                      <VectorStoreSelector
+                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        value={form.getFieldValue('allowed_vector_store_ids')}
+                        accessToken={accessToken || ''}
+                        placeholder="Select vector stores (optional)"
+                      />
                     </Form.Item>
 
                     <Form.Item label="Metadata" name="metadata">  
