@@ -182,6 +182,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     ) -> httpx.Response:
         from aiohttp import ClientTimeout
         from yarl import URL as YarlURL
+        from httpx._utils import get_environment_proxies as httpx_get_environment_proxies # For reading proxy env vars
 
         timeout = request.extensions.get("timeout", {})
         sni_hostname = request.extensions.get("sni_hostname")
@@ -195,6 +196,14 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             except httpx.RequestNotRead:
                 data = request.stream  # type: ignore
                 request.headers.pop("transfer-encoding", None)  # handled by aiohttp
+            
+            # Determine proxy URL to use for aiohttp
+            current_proxies = httpx_get_environment_proxies()
+            proxy_url_to_use = None
+            if request.url.scheme == "http" and current_proxies.get("http://"):
+                proxy_url_to_use = str(current_proxies["http://"])
+            elif request.url.scheme == "https" and current_proxies.get("https://"):
+                proxy_url_to_use = str(current_proxies["https://"])
 
             response = await client_session.request(
                 method=request.method,
@@ -210,6 +219,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     connect=timeout.get("pool"),
                 ),
                 server_hostname=sni_hostname,
+                proxy=proxy_url_to_use # Explicitly pass the determined proxy URL
             ).__aenter__()
 
         return httpx.Response(
