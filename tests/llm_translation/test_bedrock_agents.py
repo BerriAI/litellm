@@ -18,7 +18,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+@pytest.mark.asyncio
 async def test_bedrock_agents():
+    litellm._turn_on_debug()
     response = litellm.completion(
             model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
             messages=[
