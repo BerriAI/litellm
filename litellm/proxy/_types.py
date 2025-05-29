@@ -1272,7 +1272,6 @@ class LiteLLM_TeamTable(TeamBase):
     # Object Permission - MCP, Vector Stores etc.
     #########################################################
     object_permission_id: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
