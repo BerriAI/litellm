@@ -68,7 +68,7 @@ async def new_organization(
     - tags: *Optional[List[str]]* - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: *Optional[str]* - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Case 1: Create new org **without** a budget_id
 
     ```bash
@@ -168,6 +168,12 @@ async def new_organization(
 
         data.budget_id = _budget.budget_id
 
+    ## Handle Object Permission - MCP, Vector Stores etc.
+    object_permission_id = await _set_object_permission(
+        data=data,
+        prisma_client=prisma_client,
+    )
+
     """
     Ensure only models that user has access to, are given to org
     """
@@ -189,6 +195,7 @@ async def new_organization(
 
     organization_row = LiteLLM_OrganizationTable(
         **data.json(exclude_none=True),
+        object_permission_id=object_permission_id,
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
     )
@@ -205,6 +212,30 @@ async def new_organization(
     )
 
     return response
+
+
+async def _set_object_permission(
+    data: NewOrganizationRequest,
+    prisma_client: Optional[PrismaClient],
+) -> Optional[str]:
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the organization.
+    - Handles permissions for vector stores and mcp servers.
+
+    Returns the object_permission_id if created, otherwise None.
+    """
+    if prisma_client is None:
+        return None
+
+    if data.object_permission is not None:
+        created_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.create(
+                data=data.object_permission.model_dump(exclude_none=True),
+            )
+        )
+        del data.object_permission
+        return created_object_permission.object_permission_id
+    return None
 
 
 @router.patch(
