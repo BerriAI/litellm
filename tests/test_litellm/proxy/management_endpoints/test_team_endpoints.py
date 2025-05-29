@@ -286,13 +286,13 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     # --- Import after mocks applied ---
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, NewTeamRequest
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Build request objects
     team_request = NewTeamRequest(
         team_alias="my-team",
-        object_permission=LiteLLM_ObjectPermissionTable(vector_stores=["my-vector"]),
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["my-vector"]),
     )
 
     # Pass a dummy FastAPI Request object
