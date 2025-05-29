@@ -11,10 +11,7 @@ ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
 
 def get_enterprise_proxy_hook(
     hook_name: Union[
-        Literal[
-            "managed_files",
-            "max_parallel_requests",
-        ],
+        Literal["managed_files",],
         str,
     ]
 ):
