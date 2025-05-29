@@ -376,6 +376,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -571,6 +572,11 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        data_json = await _set_object_permission(
+            data_json=data_json,
+            prisma_client=prisma_client,
+        )
+
         await _enforce_unique_key_alias(
             key_alias=data_json.get("key_alias", None),
             prisma_client=prisma_client,
@@ -639,6 +645,32 @@ def prepare_metadata_fields(
 
     non_default_values["metadata"] = casted_metadata
     return non_default_values
+
+
+async def _set_object_permission(
+    data_json: dict,
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the key.
+    - Handles permissions for vector stores and mcp servers.
+    """
+    if prisma_client is None:
+        return data_json
+
+    if "object_permission" in data_json:
+        created_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.create(
+                data=data_json["object_permission"],
+            )
+        )
+        data_json[
+            "object_permission_id"
+        ] = created_object_permission.object_permission_id
+
+        # delete the object_permission from the data_json
+        data_json.pop("object_permission")
+    return data_json
 
 
 def prepare_key_update_data(
@@ -742,7 +774,7 @@ async def update_key_fn(
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1273,6 +1305,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
     sso_user_id: Optional[str] = None,
+    object_permission_id: Optional[
+        str
+    ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1351,6 +1386,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
+            "object_permission_id": object_permission_id,
         }
         if teams is not None:
             user_data["teams"] = teams
@@ -1379,6 +1415,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "object_permission_id": object_permission_id,
         }
 
         if (
@@ -1451,6 +1488,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             key_data["token_id"] = getattr(create_key_response, "token", None)
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
+            )
+            key_data["object_permission"] = getattr(
+                create_key_response, "object_permission", None
             )
             key_data["created_at"] = getattr(create_key_response, "created_at", None)
             key_data["updated_at"] = getattr(create_key_response, "updated_at", None)

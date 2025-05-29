@@ -1,11 +1,112 @@
 import asyncio
-from typing import Callable, Union
+import contextlib
+import typing
+from typing import Callable, Dict, Union
 
+import aiohttp
+import aiohttp.client_exceptions
 import httpx
-from aiohttp.client import ClientSession
-from httpx_aiohttp import AiohttpTransport
+from aiohttp.client import ClientResponse, ClientSession
 
 from litellm._logging import verbose_logger
+
+AIOHTTP_EXC_MAP: Dict = {
+    # Order matters here, most specific exception first
+    # Timeout related exceptions
+    aiohttp.ServerTimeoutError: httpx.TimeoutException,
+    aiohttp.ConnectionTimeoutError: httpx.ConnectTimeout,
+    aiohttp.SocketTimeoutError: httpx.ReadTimeout,
+    # Proxy related exceptions
+    aiohttp.ClientProxyConnectionError: httpx.ProxyError,
+    # SSL related exceptions
+    aiohttp.ClientConnectorCertificateError: httpx.ProtocolError,
+    aiohttp.ClientSSLError: httpx.ProtocolError,
+    aiohttp.ServerFingerprintMismatch: httpx.ProtocolError,
+    # Network related exceptions
+    aiohttp.ClientConnectorError: httpx.ConnectError,
+    aiohttp.ClientOSError: httpx.ConnectError,
+    aiohttp.ClientPayloadError: httpx.ReadError,
+    # Connection disconnection exceptions
+    aiohttp.ServerDisconnectedError: httpx.ReadError,
+    # Response related exceptions
+    aiohttp.ClientConnectionError: httpx.NetworkError,
+    aiohttp.ClientPayloadError: httpx.ReadError,
+    aiohttp.ContentTypeError: httpx.ReadError,
+    aiohttp.TooManyRedirects: httpx.TooManyRedirects,
+    # URL related exceptions
+    aiohttp.InvalidURL: httpx.InvalidURL,
+    # Base exceptions
+    aiohttp.ClientError: httpx.RequestError,
+}
+
+# Add client_exceptions module exceptions
+try:
+    import aiohttp.client_exceptions
+
+    AIOHTTP_EXC_MAP[aiohttp.client_exceptions.ClientPayloadError] = httpx.ReadError
+except ImportError:
+    pass
+
+
+@contextlib.contextmanager
+def map_aiohttp_exceptions() -> typing.Iterator[None]:
+    try:
+        yield
+    except Exception as exc:
+        mapped_exc = None
+
+        for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
+            if not isinstance(exc, from_exc):  # type: ignore
+                continue
+            if mapped_exc is None or issubclass(to_exc, mapped_exc):
+                mapped_exc = to_exc
+
+        if mapped_exc is None:  # pragma: no cover
+            raise
+
+        message = str(exc)
+        raise mapped_exc(message) from exc
+
+
+class AiohttpResponseStream(httpx.AsyncByteStream):
+    CHUNK_SIZE = 1024 * 16
+
+    def __init__(self, aiohttp_response: ClientResponse) -> None:
+        self._aiohttp_response = aiohttp_response
+
+    async def __aiter__(self) -> typing.AsyncIterator[bytes]:
+        try:
+            with map_aiohttp_exceptions():
+                async for chunk in self._aiohttp_response.content.iter_chunked(
+                    self.CHUNK_SIZE
+                ):
+                    yield chunk
+        except aiohttp.ClientPayloadError as e:
+            # Handle incomplete transfers more gracefully
+            # Log the error but don't re-raise if we've already yielded some data
+            verbose_logger.debug(f"Transfer incomplete, but continuing: {e}")
+            # If the error is due to incomplete transfer encoding, we can still
+            # return what we've received so far, similar to how httpx handles it
+            return
+        except Exception:
+            # For other exceptions, use the normal mapping
+            with map_aiohttp_exceptions():
+                raise
+
+    async def aclose(self) -> None:
+        with map_aiohttp_exceptions():
+            await self._aiohttp_response.__aexit__(None, None, None)
+
+
+class AiohttpTransport(httpx.AsyncBaseTransport):
+    def __init__(
+        self, client: Union[ClientSession, Callable[[], ClientSession]]
+    ) -> None:
+        self.client = client
+
+    async def aclose(self) -> None:
+        if isinstance(self.client, ClientSession):
+            await self.client.close()
 
 
 class LiteLLMAiohttpTransport(AiohttpTransport):
@@ -80,10 +181,6 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         request: httpx.Request,
     ) -> httpx.Response:
         from aiohttp import ClientTimeout
-        from httpx_aiohttp.transport import (
-            AiohttpResponseStream,
-            map_aiohttp_exceptions,
-        )
         from yarl import URL as YarlURL
 
         timeout = request.extensions.get("timeout", {})

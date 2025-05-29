@@ -170,3 +170,18 @@ def initialize_guardrails_ai(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)
 
     return _guardrails_ai_callback
+
+def initialize_pangea(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.pangea import PangeaHandler
+
+    _pangea_callback = PangeaHandler(
+        guardrail_name=guardrail["guardrail_name"],
+        pangea_input_recipe=litellm_params.pangea_input_recipe,
+        pangea_output_recipe=litellm_params.pangea_output_recipe,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)
+
+    return _pangea_callback

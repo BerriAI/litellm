@@ -146,9 +146,14 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "claude-3-7" in model or "claude-sonnet-4" in model or "claude-opus-4" in model or supports_reasoning(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
+        if (
+            "claude-3-7" in model
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or supports_reasoning(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            )
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
@@ -191,8 +196,15 @@ class AmazonConverseConfig(BaseConfig):
     def get_supported_document_types(self) -> List[str]:
         return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
 
+    def get_supported_video_types(self) -> List[str]:
+        return ["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
+
     def get_all_supported_content_types(self) -> List[str]:
-        return self.get_supported_image_types() + self.get_supported_document_types()
+        return (
+            self.get_supported_image_types()
+            + self.get_supported_document_types()
+            + self.get_supported_video_types()
+        )
 
     def _create_json_tool_call_for_response_format(
         self,
@@ -348,6 +360,29 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         return optional_params
+
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict, optional_params: dict
+    ):
+        """
+        Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
+
+        Checks 'non_default_params' for 'thinking' and 'max_tokens'
+
+        if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
+        """
+        from litellm.constants import DEFAULT_MAX_TOKENS
+
+        is_thinking_enabled = self.is_thinking_enabled(optional_params)
+        is_max_tokens_in_request = self.is_max_tokens_in_request(non_default_params)
+        if is_thinking_enabled and not is_max_tokens_in_request:
+            thinking_token_budget = cast(dict, optional_params["thinking"]).get(
+                "budget_tokens", None
+            )
+            if thinking_token_budget is not None:
+                optional_params["maxTokens"] = (
+                    thinking_token_budget + DEFAULT_MAX_TOKENS
+                )
 
     @overload
     def _get_cache_point_block(

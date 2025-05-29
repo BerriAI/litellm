@@ -931,7 +931,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
           no_output_timeout: 120m
       - run:
           name: Run enterprise tests
@@ -2619,8 +2619,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v18.18.0
+            nvm use v18.18.0
             
             cd ui/litellm-dashboard
             
