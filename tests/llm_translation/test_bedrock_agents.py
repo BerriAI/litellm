@@ -39,3 +39,22 @@ async def test_bedrock_agents():
     assert len(response.choices[0].message.content) > 0
 
     pass
+
+@pytest.mark.asyncio
+async def test_bedrock_agents_with_streaming():
+    # litellm._turn_on_debug()
+    response = litellm.completion(
+        model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
+        messages=[
+            {
+                "role": "user",
+                "content": "Hi who is ishaan cto of litellm, tell me 10 things about him"
+            }
+        ],
+        stream=True,
+    )
+
+    for chunk in response:
+        print("final chunk=", chunk)
+
+    pass

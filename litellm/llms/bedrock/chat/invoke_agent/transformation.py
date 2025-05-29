@@ -26,7 +26,7 @@ from litellm.types.llms.bedrock_invoke_agents import (
     InvokeAgentUsage,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Delta, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -44,10 +44,12 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     def get_supported_openai_params(self, model: str) -> List[str]:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
+
+        Bedrock Invoke Agents has 0 OpenAI compatible params
+
+        As of May 29th, 2025 - they don't support streaming.
         """
-        return [
-            "stream",
-        ]
+        return []
 
     def map_openai_params(
         self,
@@ -59,9 +61,6 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
-        for param, value in non_default_params.items():
-            if param == "stream":
-                optional_params["stream"] = value
         return optional_params
 
     def get_complete_url(
@@ -149,6 +148,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         return {
             "inputText": query,
             "enableTrace": True,
+            **optional_params,
         }
 
     def _parse_aws_event_stream(self, raw_content: bytes) -> InvokeAgentEventList:
@@ -465,3 +465,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        return True
