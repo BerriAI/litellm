@@ -284,6 +284,12 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "web_search_options",
 ]
 
+OPENAI_TRANSCRIPTION_PARAMS = [
+    "language",
+    "response_format",
+    "timestamp_granularities",
+]
+
 DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "functions": None,
     "function_call": None,
