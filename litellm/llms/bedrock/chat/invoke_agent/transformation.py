@@ -3,17 +3,30 @@ Transformation for Bedrock Invoke Agent
 
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
-
+import base64
+import json
 import uuid
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.types.llms.bedrock_invoke_agents import (
+    InvokeAgentChunkPayload,
+    InvokeAgentEvent,
+    InvokeAgentEventHeaders,
+    InvokeAgentEventList,
+    InvokeAgentTracePayload,
+    InvokeAgentUsage,
+)
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Choices, Delta, Message, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -131,7 +144,262 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        return {}
+        # use the last message content as the query
+        query: str = convert_content_list_to_str(messages[-1])
+        return {
+            "inputText": query,
+            "enableTrace": True,
+        }
+
+    def _parse_aws_event_stream(self, raw_content: bytes) -> InvokeAgentEventList:
+        """
+        Parse AWS event stream format using boto3/botocore's built-in parser.
+        This is the same approach used in the existing AWSEventStreamDecoder.
+        """
+        try:
+            from botocore.eventstream import EventStreamBuffer
+            from botocore.parsers import EventStreamJSONParser
+        except ImportError:
+            raise ImportError("boto3/botocore is required for AWS event stream parsing")
+
+        events: InvokeAgentEventList = []
+        parser = EventStreamJSONParser()
+        event_stream_buffer = EventStreamBuffer()
+
+        # Add the entire response to the buffer
+        event_stream_buffer.add_data(raw_content)
+
+        # Process all events in the buffer
+        for event in event_stream_buffer:
+            try:
+                headers = self._extract_headers_from_event(event)
+
+                event_type = headers.get("event_type", "")
+
+                if event_type == "chunk":
+                    # Handle chunk events specially - they contain decoded content, not JSON
+                    message = self._parse_message_from_event(event, parser)
+
+                    if message:
+                        # For chunk events, create a payload with the decoded content
+                        parsed_event: InvokeAgentEvent = {
+                            "headers": headers,
+                            "payload": {
+                                "bytes": base64.b64encode(
+                                    message.encode("utf-8")
+                                ).decode("utf-8")
+                            },  # Re-encode for consistency
+                        }
+                        events.append(parsed_event)
+
+                elif event_type == "trace":
+                    # Handle trace events normally - they contain JSON
+                    message = self._parse_message_from_event(event, parser)
+
+                    if message:
+                        try:
+                            event_data = json.loads(message)
+                            parsed_event: InvokeAgentEvent = {
+                                "headers": headers,
+                                "payload": event_data,
+                            }
+                            events.append(parsed_event)
+                        except json.JSONDecodeError as e:
+                            verbose_logger.warning(
+                                f"Failed to parse trace event JSON: {e}"
+                            )
+                else:
+                    verbose_logger.debug(f"Unknown event type: {event_type}")
+
+            except Exception as e:
+                verbose_logger.error(f"Error processing event: {e}")
+                continue
+
+        return events
+
+    def _parse_message_from_event(self, event, parser) -> Optional[str]:
+        """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
+        try:
+            response_dict = event.to_response_dict()
+            verbose_logger.debug(f"Response dict: {response_dict}")
+
+            # Use the same response shape parsing as the existing decoder
+            parsed_response = parser.parse(
+                response_dict, self._get_response_stream_shape()
+            )
+            verbose_logger.debug(f"Parsed response: {parsed_response}")
+
+            if response_dict["status_code"] != 200:
+                decoded_body = response_dict["body"].decode()
+                if isinstance(decoded_body, dict):
+                    error_message = decoded_body.get("message")
+                elif isinstance(decoded_body, str):
+                    error_message = decoded_body
+                else:
+                    error_message = ""
+                exception_status = response_dict["headers"].get(":exception-type")
+                error_message = exception_status + " " + error_message
+                raise BedrockError(
+                    status_code=response_dict["status_code"],
+                    message=(
+                        json.dumps(error_message)
+                        if isinstance(error_message, dict)
+                        else error_message
+                    ),
+                )
+
+            if "chunk" in parsed_response:
+                chunk = parsed_response.get("chunk")
+                if not chunk:
+                    return None
+                return chunk.get("bytes").decode()
+            else:
+                chunk = response_dict.get("body")
+                if not chunk:
+                    return None
+                return chunk.decode()
+
+        except Exception as e:
+            verbose_logger.debug(f"Error parsing message from event: {e}")
+            return None
+
+    def _extract_headers_from_event(self, event) -> InvokeAgentEventHeaders:
+        """Extract headers from an AWS event for categorization."""
+        try:
+            response_dict = event.to_response_dict()
+            headers = response_dict.get("headers", {})
+
+            # Extract the event-type and content-type headers that we care about
+            return InvokeAgentEventHeaders(
+                event_type=headers.get(":event-type", ""),
+                content_type=headers.get(":content-type", ""),
+                message_type=headers.get(":message-type", ""),
+            )
+        except Exception as e:
+            verbose_logger.debug(f"Error extracting headers: {e}")
+            return InvokeAgentEventHeaders(
+                event_type="", content_type="", message_type=""
+            )
+
+    def _get_response_stream_shape(self):
+        """Get the response stream shape for parsing, reusing existing logic."""
+        try:
+            # Try to reuse the cached shape from the existing decoder
+            from litellm.llms.bedrock.chat.invoke_handler import (
+                get_response_stream_shape,
+            )
+
+            return get_response_stream_shape()
+        except ImportError:
+            # Fallback: create our own shape
+            try:
+                from botocore.loaders import Loader
+                from botocore.model import ServiceModel
+
+                loader = Loader()
+                bedrock_service_dict = loader.load_service_model(
+                    "bedrock-runtime", "service-2"
+                )
+                bedrock_service_model = ServiceModel(bedrock_service_dict)
+                return bedrock_service_model.shape_for("ResponseStream")
+            except Exception as e:
+                verbose_logger.warning(f"Could not load response stream shape: {e}")
+                return None
+
+    def _extract_response_content(self, events: InvokeAgentEventList) -> str:
+        """Extract the final response content from parsed events."""
+        response_parts = []
+
+        for event in events:
+            headers = event.get("headers", {})
+            payload = event.get("payload")
+
+            event_type = headers.get(
+                "event_type"
+            )  # Note: using event_type not event-type
+
+            if event_type == "chunk" and payload:
+                # Extract base64 encoded content from chunk events
+                chunk_payload: InvokeAgentChunkPayload = payload  # type: ignore
+                encoded_bytes = chunk_payload.get("bytes", "")
+                if encoded_bytes:
+                    try:
+                        decoded_content = base64.b64decode(encoded_bytes).decode(
+                            "utf-8"
+                        )
+                        response_parts.append(decoded_content)
+                    except Exception as e:
+                        verbose_logger.warning(f"Failed to decode chunk content: {e}")
+
+        return "".join(response_parts)
+
+    def _extract_usage_info(self, events: InvokeAgentEventList) -> InvokeAgentUsage:
+        """Extract token usage information from trace events."""
+        usage_info = InvokeAgentUsage()
+
+        for event in events:
+            headers = event.get("headers", {})
+            payload = event.get("payload")
+
+            event_type = headers.get(
+                "event_type"
+            )  # Note: using event_type not event-type
+
+            if event_type == "trace" and payload:
+                # Cast to trace payload for type safety
+                trace_payload: InvokeAgentTracePayload = payload  # type: ignore
+                trace_data = trace_payload.get("trace", {})
+
+                if trace_data:
+                    verbose_logger.debug(f"Trace event: {trace_data}")
+
+                    # Extract usage from pre-processing trace
+                    pre_processing = trace_data.get("preProcessingTrace", {})
+                    if pre_processing:
+                        model_output = pre_processing.get("modelInvocationOutput", {})
+                        if model_output:
+                            metadata = model_output.get("metadata", {})
+                            if (
+                                metadata
+                            ):  # Fix linter error - check if metadata is not None
+                                usage = metadata.get("usage", {})
+                                if usage:
+                                    usage_info.update(usage)
+
+        return usage_info
+
+    def _build_model_response(
+        self,
+        content: str,
+        model: str,
+        usage_info: InvokeAgentUsage,
+        model_response: ModelResponse,
+    ) -> ModelResponse:
+        """Build the final ModelResponse object."""
+
+        # Create the message content
+        message = Message(content=content, role="assistant")
+
+        # Create choices
+        choice = Choices(finish_reason="stop", index=0, message=message)
+
+        # Update model response
+        model_response.choices = [choice]
+        model_response.model = model
+
+        # Add usage information if available
+        if usage_info:
+            from litellm.types.utils import Usage
+
+            usage = Usage(
+                prompt_tokens=usage_info.get("inputTokens", 0),
+                completion_tokens=usage_info.get("outputTokens", 0),
+                total_tokens=usage_info.get("inputTokens", 0)
+                + usage_info.get("outputTokens", 0),
+            )
+            setattr(model_response, "usage", usage)
+
+        return model_response
 
     def transform_response(
         self,
@@ -147,7 +415,39 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        return model_response
+        try:
+            # Get the raw binary content
+            raw_content = raw_response.content
+            verbose_logger.debug(
+                f"Processing {len(raw_content)} bytes of AWS event stream data"
+            )
+
+            # Parse the AWS event stream format
+            events = self._parse_aws_event_stream(raw_content)
+            verbose_logger.debug(f"Parsed {len(events)} events from stream")
+
+            # Extract response content from chunk events
+            content = self._extract_response_content(events)
+
+            # Extract usage information from trace events
+            usage_info = self._extract_usage_info(events)
+
+            # Build and return the model response
+            return self._build_model_response(
+                content=content,
+                model=model,
+                usage_info=usage_info,
+                model_response=model_response,
+            )
+
+        except Exception as e:
+            verbose_logger.error(
+                f"Error processing Bedrock Invoke Agent response: {str(e)}"
+            )
+            raise BedrockError(
+                message=f"Error processing response: {str(e)}",
+                status_code=raw_response.status_code,
+            )
 
     def validate_environment(
         self,
