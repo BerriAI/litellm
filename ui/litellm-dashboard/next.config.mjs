@@ -4,4 +4,8 @@ const nextConfig = {
     basePath: process.env.UI_BASE_PATH || '/ui',
 };
 
+nextConfig.experimental = {
+    missingSuspenseWithCSRBailout: false
+}
+
 export default nextConfig;
