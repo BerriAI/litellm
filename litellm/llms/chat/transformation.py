@@ -238,6 +238,11 @@ class ChatConfig(BaseConfig):
             tool_choice=request_data.get("tool_choice"),
             temperature=request_data.get("temperature"),
             top_p=request_data.get("top_p"),
+            text=request_data.get("text"),
+            reasoning=request_data.get("reasoning"),
+            store=request_data.get("store"),
+            truncation=request_data.get("truncation"),
+            previous_response_id=request_data.get("previous_response_id"),
             max_output_tokens=request_data.get("max_output_tokens"),
             parallel_tool_calls=request_data.get("parallel_tool_calls"),
             user=request_data.get("user"),
@@ -245,8 +250,9 @@ class ChatConfig(BaseConfig):
         )
         
         # Transform the responses API response to chat completion format
-        print(f"Chat provider: Raw response keys: {list(resp_json.keys()) if isinstance(resp_json, dict) else 'Not a dict'}")
-        
+        print(f"Chat provider: Raw response from openai: {resp_json}")
+        print(f"Chat provider: responses_api_request: {responses_api_request}")
+
         try:
             chat_completion_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                 request_input=input_param,
