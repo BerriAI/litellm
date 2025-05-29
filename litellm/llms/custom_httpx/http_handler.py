@@ -156,6 +156,8 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
         )
 
+        _, async_proxy_mounts = litellm.utils.create_proxy_transport_and_mounts()
+
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
@@ -167,6 +169,7 @@ class AsyncHTTPHandler:
             verify=ssl_verify,
             cert=cert,
             headers=headers,
+            proxies=async_proxy_mounts,
         )
 
     async def close(self):
@@ -586,6 +589,7 @@ class HTTPHandler:
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+        sync_proxy_mounts, _ = litellm.utils.create_proxy_transport_and_mounts()
 
         if client is None:
             transport = self._create_sync_transport()
@@ -601,6 +605,7 @@ class HTTPHandler:
                 verify=ssl_verify,
                 cert=cert,
                 headers=headers,
+                proxies=sync_proxy_mounts,
             )
         else:
             self.client = client
