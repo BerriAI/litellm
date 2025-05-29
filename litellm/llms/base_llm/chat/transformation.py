@@ -87,6 +87,7 @@ class BaseConfig(ABC):
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
+            and not k.startswith("_is_base_class")
             and not isinstance(
                 v,
                 (

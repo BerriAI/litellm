@@ -89,6 +89,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
 
+    # Add a class variable to track if this is the base class
+    _is_base_class = True
+
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -119,6 +122,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+        self.__class__._is_base_class = False
 
     @classmethod
     def get_config(cls):
@@ -406,11 +411,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             messages=messages, model=model, is_async=True
         )
 
-        return {
-            "model": model,
-            "messages": transformed_messages,
-            **optional_params,
-        }
+        if self.__class__._is_base_class:
+            return {
+                "model": model,
+                "messages": transformed_messages,
+                **optional_params,
+            }
+        else:
+            ## allow for any object specific behaviour to be handled
+            return self.transform_request(
+                model, messages, optional_params, litellm_params, headers
+            )
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None

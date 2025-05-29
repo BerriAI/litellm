@@ -94,6 +94,7 @@ from litellm.utils import (
     get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
+    get_non_default_transcription_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
@@ -987,7 +988,6 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    standard_openai_params = get_standard_openai_params(params=args)
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
@@ -4731,8 +4731,8 @@ def transcription(
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
+    non_default_params = get_non_default_transcription_params(kwargs)
 
-    drop_params = kwargs.get("drop_params", None)
     client: Optional[
         Union[
             openai.AsyncOpenAI,
@@ -4765,7 +4765,7 @@ def transcription(
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
         custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
+        **non_default_params,
     )
     litellm_params_dict = get_litellm_params(**kwargs)
 
