@@ -1554,8 +1554,8 @@ async def test_anthropic_message_via_anthropic_messages():
         assert "max_tokens" in json_data
         assert json_data["max_tokens"] == 100
 
-        # assert mock_call.call_args.kwargs["headers"]["anthropic-version"] == "vertex-2023-10-16"
-        # assert mock_call.call_args.kwargs["headers"]["Authorization"].startswith("Bearer ")
+        assert mock_call.call_args.kwargs["headers"]["anthropic-version"] == "vertex-2023-10-16"
+        assert mock_call.call_args.kwargs["headers"]["Authorization"].startswith("Bearer ")
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
