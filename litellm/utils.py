@@ -3693,11 +3693,14 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            processed_extra_body = {
-                k: v
-                for k, v in initial_extra_body.items()
-                if k not in additional_drop_params
-            }
+            if additional_drop_params is not None:
+                processed_extra_body = {
+                    k: v
+                    for k, v in initial_extra_body.items()
+                    if k not in additional_drop_params
+                }
+            else:
+                processed_extra_body = initial_extra_body
 
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
                 extra_body=processed_extra_body
