@@ -63,7 +63,8 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
-        self.window_size = 60  # 60 seconds window
+        self.block_size = 15  # 15 seconds per block
+        self.num_blocks = 4  # Track 4 blocks (15s * 4 = 60s)
         BaseRoutingStrategy.__init__(
             self,
             dual_cache=internal_usage_cache.dual_cache,
@@ -121,11 +122,18 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     def get_key_pattern_to_sync(self) -> Optional[str]:
         return self.prefix + "::"
 
-    def _get_current_window_index(self) -> int:
-        """Get the current window index based on current time"""
+    def _get_current_block_index(self) -> int:
+        """Get the exact current block index based on current time"""
         now = datetime.now()
-        # Use timestamp divided by window size to get window index
-        return int(now.timestamp() / self.window_size)
+        return int(now.timestamp() / self.block_size)
+
+    def _get_block_indices(self) -> List[int]:
+        """
+        Returns list of block indices to check, from newest to oldest.
+        Each block is 15 seconds, and we track 4 blocks (current + 3 previous)
+        """
+        current_block = self._get_current_block_index()
+        return [current_block - i for i in range(self.num_blocks)]
 
     async def check_key_in_limits_v2(
         self,
@@ -136,50 +144,71 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_limit: Optional[int],
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
     ):
-        current_window = self._get_current_window_index()
+        current_block = self._get_current_block_index()
+        block_indices = self._get_block_indices()
 
-        # Track multiple windows
-        increment_list: List[Tuple[str, int]] = []
-        increment_value_by_group = {
-            "request_count": 1,
-            "tpm": 0,
-            "rpm": 1,
-        }
-
-        # Get values from all active windows in the last minute
+        # Track usage across all blocks
         total_requests = 0
         total_rpm = 0
         total_tpm = 0
 
-        # First, increment the current window atomically
-        for group in ["request_count", "rpm", "tpm"]:
-            key = self._get_current_usage_key(
-                user_api_key_dict=user_api_key_dict,
-                window_index=current_window,
-                model=data.get("model", None),
-                rate_limit_type=rate_limit_type,
-                group=cast(RateLimitGroups, group),
-            )
-            if key is None:
-                continue
+        increment_value_by_group = {
+            "request_count": 1,
+            "rpm": 1,
+            "tpm": 0,
+        }
 
-            # Atomically increment and get the new value
-            new_value = await self.internal_usage_cache.async_increment_cache(
-                key=key,
-                value=increment_value_by_group[group],
-                ttl=self.window_size,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+        # Check all blocks, from newest to oldest
+        for block_index in block_indices:
+            is_current_block = block_index == current_block
 
-            if new_value is not None:
-                if group == "request_count":
-                    total_requests = new_value
-                elif group == "rpm":
-                    total_rpm = new_value
-                elif group == "tpm":
-                    total_tpm = new_value
+            for group in ["request_count", "rpm", "tpm"]:
+                key = self._get_current_usage_key(
+                    user_api_key_dict=user_api_key_dict,
+                    window_index=block_index,
+                    model=data.get("model", None),
+                    rate_limit_type=rate_limit_type,
+                    group=cast(RateLimitGroups, group),
+                )
+                if key is None:
+                    continue
 
-        # Check limits
+                # Get value from cache for this block
+                block_value = await self.internal_usage_cache.async_get_cache(
+                    key=key,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+
+                if block_value is not None:
+                    if group == "request_count":
+                        total_requests += block_value
+                    elif group == "rpm":
+                        total_rpm += block_value
+                    elif group == "tpm":
+                        total_tpm += block_value
+
+            # Only increment the current block
+            if is_current_block:
+                for group in ["request_count", "rpm", "tpm"]:
+                    key = self._get_current_usage_key(
+                        user_api_key_dict=user_api_key_dict,
+                        window_index=block_index,
+                        model=data.get("model", None),
+                        rate_limit_type=rate_limit_type,
+                        group=cast(RateLimitGroups, group),
+                    )
+                    if key is None:
+                        continue
+
+                    # Atomically increment and get the new value
+                    new_value = await self.internal_usage_cache.async_increment_cache(
+                        key=key,
+                        value=increment_value_by_group[group],
+                        ttl=self.block_size * self.num_blocks,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
+
+        # Check limits with raw totals
         should_raise_error = False
         if max_parallel_requests is not None:
             should_raise_error = total_requests >= max_parallel_requests
@@ -193,17 +222,13 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current usage: max_parallel_requests: {total_requests}, current_rpm: {total_rpm}, current_tpm: {total_tpm}. Current limits: max_parallel_requests: {max_parallel_requests}, rpm_limit: {rpm_limit}, tpm_limit: {tpm_limit}."
             )
 
-        # print(
-        #     f"Allowed request to go through for {rate_limit_type} {user_api_key_dict.api_key}. Current usage: max_parallel_requests: {total_requests}, current_rpm: {total_rpm}, current_tpm: {total_tpm}. Current limits: max_parallel_requests: {max_parallel_requests}, rpm_limit: {rpm_limit}, tpm_limit: {tpm_limit}"
-        # )
-
     def time_to_next_window(self) -> float:
         """Calculate time until the next window starts"""
         now = datetime.now()
-        current_window = self._get_current_window_index()
-        next_window = current_window + 1
-        next_window_time = datetime.fromtimestamp(next_window)
-        return (next_window_time - now).total_seconds()
+        current_block = self._get_current_block_index()
+        next_block = current_block + 1
+        next_block_time = datetime.fromtimestamp(next_block)
+        return (next_block_time - now).total_seconds()
 
     def raise_rate_limit_error(
         self, additional_details: Optional[str] = None
