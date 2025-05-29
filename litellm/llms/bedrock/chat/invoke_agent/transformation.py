@@ -4,7 +4,8 @@ Transformation for Bedrock Invoke Agent
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+import uuid
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
@@ -75,12 +76,52 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             endpoint_type="agent",
         )
 
-        agentAliasID = optional_params.get("agentAliasID", None)
-        sessionID = optional_params.get("sessionID", None)
+        agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
+        session_id = self._get_session_id(optional_params)
 
-        endpoint_url = f"{endpoint_url}/agents/{model}/agentAliases/{agentAliasID}/sessions/{sessionID}/text"
+        endpoint_url = f"{endpoint_url}/agents/{agent_id}/agentAliases/{agent_alias_id}/sessions/{session_id}/text"
 
         return endpoint_url
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        return self._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
+    def _get_agent_id_and_alias_id(self, model: str) -> tuple[str, str]:
+        """
+        model = "agent/L1RT58GYRW/MFPSBCXYTW"
+        agent_id = "L1RT58GYRW"
+        agent_alias_id = "MFPSBCXYTW"
+        """
+        # Split the model string by '/' and extract components
+        parts = model.split("/")
+        if len(parts) != 3 or parts[0] != "agent":
+            raise ValueError(
+                "Invalid model format. Expected format: 'model=agent/AGENT_ID/ALIAS_ID'"
+            )
+
+        return parts[1], parts[2]  # Return (agent_id, agent_alias_id)
+
+    def _get_session_id(self, optional_params: dict) -> str:
+        """ """
+        return optional_params.get("sessionID", None) or str(uuid.uuid4())
 
     def transform_request(
         self,

@@ -569,7 +569,7 @@ class BaseAWSLLM:
         Default endpoint url is https://bedrock-runtime.{aws_region_name}.amazonaws.com
         """
         if endpoint_type == "agent":
-            return f"https://bedrock-agent.{aws_region_name}.amazonaws.com"
+            return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
         else:
             return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
