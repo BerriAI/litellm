@@ -38,6 +38,10 @@ async def test_bedrock_agents():
     # assert that the message content has a response with some length
     assert len(response.choices[0].message.content) > 0
 
+
+    # assert we were able to get the response cost
+    assert response._hidden_params["response_cost"] is not None and response._hidden_params["response_cost"] > 0
+
     pass
 
 @pytest.mark.asyncio

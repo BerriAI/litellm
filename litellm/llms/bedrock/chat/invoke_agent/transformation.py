@@ -22,6 +22,7 @@ from litellm.types.llms.bedrock_invoke_agents import (
     InvokeAgentEvent,
     InvokeAgentEventHeaders,
     InvokeAgentEventList,
+    InvokeAgentTrace,
     InvokeAgentTracePayload,
     InvokeAgentUsage,
 )
@@ -335,38 +336,89 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_usage_info(self, events: InvokeAgentEventList) -> InvokeAgentUsage:
         """Extract token usage information from trace events."""
-        usage_info = InvokeAgentUsage()
+        usage_info = InvokeAgentUsage(
+            inputTokens=0,
+            outputTokens=0,
+            model=None,
+        )
+
+        response_model: Optional[str] = None
 
         for event in events:
-            headers = event.get("headers", {})
-            payload = event.get("payload")
+            if not self._is_trace_event(event):
+                continue
 
-            event_type = headers.get(
-                "event_type"
-            )  # Note: using event_type not event-type
+            trace_data = self._get_trace_data(event)
+            if not trace_data:
+                continue
 
-            if event_type == "trace" and payload:
-                # Cast to trace payload for type safety
-                trace_payload: InvokeAgentTracePayload = payload  # type: ignore
-                trace_data = trace_payload.get("trace", {})
+            verbose_logger.debug(f"Trace event: {trace_data}")
 
-                if trace_data:
-                    verbose_logger.debug(f"Trace event: {trace_data}")
+            # Extract usage from pre-processing trace
+            self._extract_and_update_preprocessing_usage(
+                trace_data=trace_data,
+                usage_info=usage_info,
+            )
 
-                    # Extract usage from pre-processing trace
-                    pre_processing = trace_data.get("preProcessingTrace", {})
-                    if pre_processing:
-                        model_output = pre_processing.get("modelInvocationOutput", {})
-                        if model_output:
-                            metadata = model_output.get("metadata", {})
-                            if (
-                                metadata
-                            ):  # Fix linter error - check if metadata is not None
-                                usage = metadata.get("usage", {})
-                                if usage:
-                                    usage_info.update(usage)
+            # Extract model from orchestration trace
+            if response_model is None:
+                response_model = self._extract_orchestration_model(trace_data)
 
+        usage_info["model"] = response_model
         return usage_info
+
+    def _is_trace_event(self, event: InvokeAgentEvent) -> bool:
+        """Check if the event is a trace event."""
+        headers = event.get("headers", {})
+        event_type = headers.get("event_type")
+        payload = event.get("payload")
+        return event_type == "trace" and payload is not None
+
+    def _get_trace_data(self, event: InvokeAgentEvent) -> Optional[InvokeAgentTrace]:
+        """Extract trace data from a trace event."""
+        payload = event.get("payload")
+        if not payload:
+            return None
+
+        trace_payload: InvokeAgentTracePayload = payload  # type: ignore
+        return trace_payload.get("trace", {})
+
+    def _extract_and_update_preprocessing_usage(
+        self, trace_data: InvokeAgentTrace, usage_info: InvokeAgentUsage
+    ) -> None:
+        """Extract usage information from preprocessing trace."""
+        pre_processing = trace_data.get("preProcessingTrace", {})
+        if not pre_processing:
+            return
+
+        model_output = pre_processing.get("modelInvocationOutput", {})
+        if not model_output:
+            return
+
+        metadata = model_output.get("metadata", {})
+        if not metadata:
+            return
+
+        usage = metadata.get("usage", {})
+        if not usage:
+            return
+
+        usage_info["inputTokens"] += usage.get("inputTokens", 0)
+        usage_info["outputTokens"] += usage.get("outputTokens", 0)
+
+    def _extract_orchestration_model(
+        self, trace_data: InvokeAgentTrace
+    ) -> Optional[str]:
+        """Extract model information from orchestration trace."""
+        orchestration_trace = trace_data.get("orchestrationTrace", {})
+        if not orchestration_trace:
+            return None
+
+        model_invocation = orchestration_trace.get("modelInvocationInput", {})
+        if not model_invocation:
+            return None
+
+        return model_invocation.get("foundationModel")
 
     def _build_model_response(
         self,
@@ -385,7 +437,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
         # Update model response
         model_response.choices = [choice]
-        model_response.model = model
+        model_response.model = usage_info.get("model", model)
 
         # Add usage information if available
         if usage_info:

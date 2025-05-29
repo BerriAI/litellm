@@ -15,11 +15,12 @@ class InvokeAgentEventHeaders(TypedDict, total=False):
     message_type: str  # 'event', etc.
 
 
-class InvokeAgentUsage(TypedDict, total=False):
+class InvokeAgentUsage(TypedDict):
     """Token usage information from trace events."""
 
     inputTokens: int
     outputTokens: int
+    model: Optional[str]
 
 
 class InvokeAgentMetadata(TypedDict, total=False):
