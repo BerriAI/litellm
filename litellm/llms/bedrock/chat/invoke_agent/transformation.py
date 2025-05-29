@@ -6,7 +6,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 import base64
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -180,10 +180,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 if event_type == "chunk":
                     # Handle chunk events specially - they contain decoded content, not JSON
                     message = self._parse_message_from_event(event, parser)
-
+                    parsed_event: InvokeAgentEvent = InvokeAgentEvent()
                     if message:
                         # For chunk events, create a payload with the decoded content
-                        parsed_event: InvokeAgentEvent = {
+                        parsed_event = {
                             "headers": headers,
                             "payload": {
                                 "bytes": base64.b64encode(
@@ -200,7 +200,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                     if message:
                         try:
                             event_data = json.loads(message)
-                            parsed_event: InvokeAgentEvent = {
+                            parsed_event = {
                                 "headers": headers,
                                 "payload": event_data,
                             }
@@ -399,7 +399,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not metadata:
             return
 
-        usage = metadata.get("usage", {})
+        usage: Optional[Union[InvokeAgentUsage, Dict]] = metadata.get("usage", {})
         if not usage:
             return
 

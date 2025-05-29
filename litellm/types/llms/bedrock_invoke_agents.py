@@ -53,6 +53,13 @@ class InvokeAgentModelInvocationOutput(TypedDict, total=False):
     traceId: Optional[str]
 
 
+class InvokeAgentOrchestrationTrace(TypedDict, total=False):
+    """Orchestration trace information."""
+
+    modelInvocationInput: Optional[InvokeAgentModelInvocationInput]
+    modelInvocationOutput: Optional[InvokeAgentModelInvocationOutput]
+
+
 class InvokeAgentPreProcessingTrace(TypedDict, total=False):
     """Pre-processing trace information."""
 
@@ -63,6 +70,7 @@ class InvokeAgentPreProcessingTrace(TypedDict, total=False):
 class InvokeAgentTrace(TypedDict, total=False):
     """Trace information container."""
 
+    orchestrationTrace: Optional[InvokeAgentOrchestrationTrace]
     preProcessingTrace: Optional[InvokeAgentPreProcessingTrace]
 
 
