@@ -2619,8 +2619,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v18.18.0
+            nvm use v18.18.0
             
             cd ui/litellm-dashboard
             
