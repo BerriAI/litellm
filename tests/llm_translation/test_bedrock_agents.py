@@ -26,8 +26,16 @@ async def test_bedrock_agents():
             messages=[
                 {
                     "role": "user",
-                    "content": "What is the capital of France?"
+                    "content": "Hi just respond with a ping message"
                 }
             ],
         )
+
+    #########################################################
+    #########################################################
+    print("response from agent=", response.model_dump_json(indent=4))
+
+    # assert that the message content has a response with some length
+    assert len(response.choices[0].message.content) > 0
+
     pass
