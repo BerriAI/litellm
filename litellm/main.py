@@ -4733,7 +4733,6 @@ def transcription(
     kwargs.pop("tags", [])
     non_default_params = get_non_default_transcription_params(kwargs)
 
-    drop_params = kwargs.get("drop_params", None)
     client: Optional[
         Union[
             openai.AsyncOpenAI,
@@ -4766,7 +4765,6 @@ def transcription(
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
         custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
         **non_default_params,
     )
     litellm_params_dict = get_litellm_params(**kwargs)
