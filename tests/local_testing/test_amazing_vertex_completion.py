@@ -1532,13 +1532,30 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
 @pytest.mark.asyncio
 async def test_anthropic_message_via_anthropic_messages():
+    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
+    from unittest.mock import MagicMock, AsyncMock
+
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.set_verbose = True
-    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
-    response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100)
-    print(f"response: {response}")
+    client = AsyncHTTPHandler()
+
+    httpx_response = AsyncMock()
+    httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+        response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+        print(f"response: {response}")
+        mock_call.assert_called_once()
+        print(f"mock_call.call_args: {mock_call.call_args}")
+        print(f"mock_call.call_args.kwargs: {mock_call.call_args.kwargs}")
+        json_data = json.loads(mock_call.call_args.kwargs["data"])
+        assert "max_tokens" in json_data
+        assert json_data["max_tokens"] == 100
+
+        # assert mock_call.call_args.kwargs["headers"]["anthropic-version"] == "vertex-2023-10-16"
+        # assert mock_call.call_args.kwargs["headers"]["Authorization"].startswith("Bearer ")
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
