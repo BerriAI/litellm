@@ -361,3 +361,29 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
     </div>
   );
 };
+
+export type AuditLogEntry = {
+  id: string;
+  updated_at: string;
+  changed_by: string;
+  changed_by_api_key: string;
+  action: string;
+  table_name: string;
+  object_id: string;
+  before_value: string;
+  updated_values: string;
+  after_value: string | null;
+}
+
+export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
+  {
+    header: "Time",
+    accessorKey: "startTime",
+    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Action",
+    accessorKey: "action",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+]
