@@ -1530,6 +1530,15 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
             assert resp.model == model.split("/")[1]
 
+@pytest.mark.asyncio
+async def test_anthropic_message_via_anthropic_messages():
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100)
+    print(f"response: {response}")
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
@@ -3781,3 +3790,5 @@ def test_vertex_schema_test():
     )
 
     print(response)
+
+
