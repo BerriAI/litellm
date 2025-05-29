@@ -3,7 +3,7 @@ export const TRANSPORT = {
   HTTP: "http",
 };
 
-export const handleTransport = (transport?: string): string => {
+export const handleTransport = (transport?: string | null): string => {
   console.log(transport)
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
@@ -12,7 +12,7 @@ export const handleTransport = (transport?: string): string => {
   return transport;
 };
 
-export const handleAuth = (authType?: string): string => {
+export const handleAuth = (authType?: string | null): string => {
   if (authType === null || authType === undefined) {
     return "none";
   }
