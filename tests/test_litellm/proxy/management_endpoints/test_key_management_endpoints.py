@@ -217,7 +217,7 @@ async def test_key_generation_with_object_permission(monkeypatch):
     # --- Import objects after monkeypatching ---
     from litellm.proxy._types import (
         GenerateKeyRequest,
-        LiteLLM_ObjectPermissionTable,
+        LiteLLM_ObjectPermissionBase,
         LitellmUserRoles,
     )
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -227,7 +227,7 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
     # --- Call generate_key_fn with object_permission ---
     request_data = GenerateKeyRequest(
-        object_permission=LiteLLM_ObjectPermissionTable(vector_stores=["my-vector"])
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["my-vector"])
     )
 
     await generate_key_fn(
