@@ -1308,6 +1308,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     object_permission_id: Optional[
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
