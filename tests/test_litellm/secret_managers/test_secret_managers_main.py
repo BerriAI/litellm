@@ -87,8 +87,8 @@ def test_oidc_google_failure(mock_oidc_cache):
             get_secret(secret_name)
 
 
-def test_oidc_circleci_success(mock_env):
-    mock_env["CIRCLE_OIDC_TOKEN"] = "circleci_token"
+def test_oidc_circleci_success(monkeypatch):
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN", "circleci_token")
 
     secret_name = "oidc/circleci/test-audience"
     result = get_secret(secret_name)
@@ -96,7 +96,8 @@ def test_oidc_circleci_success(mock_env):
     assert result == "circleci_token"
 
 
-def test_oidc_circleci_failure():
+def test_oidc_circleci_failure(monkeypatch):
+    monkeypatch.delenv("CIRCLE_OIDC_TOKEN", raising=False)
     secret_name = "oidc/circleci/test-audience"
 
     with pytest.raises(ValueError, match="CIRCLE_OIDC_TOKEN not found in environment"):
