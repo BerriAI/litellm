@@ -5235,8 +5235,12 @@ async def moderations(
     response_model=TokenCountResponse,
 )
 async def token_counter(request: TokenCountRequest):
-    """ """
+    """
+    Count tokens for a given model and text/messages.
+    Uses thread pool to avoid blocking the event loop with CPU-intensive tokenization.
+    """
     from litellm import token_counter
+    from litellm.litellm_core_utils.asyncify import asyncify
 
     global llm_router
 
@@ -5277,13 +5281,20 @@ async def token_counter(request: TokenCountRequest):
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
 
-    tokenizer_used = str(_tokenizer_used["type"])
-    total_tokens = token_counter(
-        model=model_to_use,
-        text=prompt,
-        messages=messages,
-        custom_tokenizer=_tokenizer_used,  # type: ignore
-    )
+    # Define a synchronous function to do the tokenization
+    def _count_tokens():
+        tokenizer_used = str(_tokenizer_used["type"])
+        total_tokens = token_counter(
+            model=model_to_use,
+            text=prompt,
+            messages=messages,
+            custom_tokenizer=_tokenizer_used,  # type: ignore
+        )
+        return total_tokens, tokenizer_used
+    
+    # Offload the CPU-intensive tokenization to a thread pool
+    total_tokens, tokenizer_used = await asyncify(_count_tokens)()
+    
     return TokenCountResponse(
         total_tokens=total_tokens,
         request_model=request.model,
