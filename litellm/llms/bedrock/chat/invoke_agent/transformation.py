@@ -4,10 +4,22 @@ Transformation for Bedrock Invoke Agent
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
 
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+import httpx
+
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
@@ -17,11 +29,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         """
-        This is a base invoke model mapping. For Invoke - define a bedrock provider specific config that extends this class.
+        This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
         return [
-            "max_tokens",
-            "max_completion_tokens",
             "stream",
         ]
 
@@ -33,11 +43,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         drop_params: bool,
     ) -> dict:
         """
-        This is a base invoke model mapping. For Invoke - define a bedrock provider specific config that extends this class.
+        This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
         for param, value in non_default_params.items():
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
         return optional_params
@@ -73,3 +81,46 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         endpoint_url = f"{endpoint_url}/agents/{model}/agentAliases/{agentAliasID}/sessions/{sessionID}/text"
 
         return endpoint_url
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return {}
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        return model_response
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return headers
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message)

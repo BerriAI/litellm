@@ -20,7 +20,7 @@ import pytest
 
 async def test_bedrock_agents():
     response = litellm.completion(
-            model="bedrock/agents/<>",
+            model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
             messages=[
                 {
                     "role": "user",
