@@ -7,17 +7,16 @@ from typing import Any, Dict, List, Optional, Union
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
-from litellm._logging import verbose_logger
-
+HAS_ENTERPRISE_DIRECTORY = False
 try:
-    from litellm_enterprise.enterprise_callbacks.session_handler import (
+    from enterprise.enterprise_hooks.session_handler import (
         _ENTERPRISE_ResponsesSessionHandler,
     )
-except Exception as e:
-    verbose_logger.debug(
-        f"[Non-Blocking] Unable to import _ENTERPRISE_ResponsesSessionHandler - LiteLLM Enterprise Feature - {str(e)}"
-    )
-    _ENTERPRISE_ResponsesSessionHandler = None
+
+    HAS_ENTERPRISE_DIRECTORY = True
+except ImportError:
+    _ENTERPRISE_ResponsesSessionHandler = None  # type: ignore
+    HAS_ENTERPRISE_DIRECTORY = False
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -198,7 +197,10 @@ class LiteLLMCompletionResponsesConfig:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
-        if _ENTERPRISE_ResponsesSessionHandler is not None:
+        if (
+            HAS_ENTERPRISE_DIRECTORY is True
+            and _ENTERPRISE_ResponsesSessionHandler is not None
+        ):
             chat_completion_session = ChatCompletionSession(
                 messages=[], litellm_session_id=None
             )
