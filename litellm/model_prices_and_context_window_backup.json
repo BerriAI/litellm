@@ -6073,7 +6073,8 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
@@ -6113,7 +6114,8 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-exp": {
         "max_tokens": 8192,
@@ -6158,7 +6160,8 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_tool_choice": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-001": {
         "max_tokens": 8192,
@@ -6193,7 +6196,8 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "deprecation_date": "2026-02-05",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
@@ -6238,7 +6242,8 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-thinking-exp-01-21": {
         "max_tokens": 65536,
@@ -6283,7 +6288,8 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini/gemini-2.5-pro-exp-03-25": {
         "max_tokens": 65535,
@@ -6485,7 +6491,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65535,
@@ -6525,7 +6532,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash": {
         "max_tokens": 8192,
@@ -6560,7 +6568,8 @@
         ],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
@@ -6592,7 +6601,8 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-lite-001": {
         "max_input_tokens": 1048576,
@@ -6625,7 +6635,8 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
         "deprecation_date": "2026-02-25",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.5-pro-preview-05-06": {
         "max_tokens": 65535,
@@ -6666,7 +6677,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65535,
@@ -6707,7 +6719,8 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.0-flash-preview-image-generation": {
         "max_tokens": 8192,
@@ -6742,7 +6755,8 @@
         ],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini-2.5-pro-preview-tts": {
         "max_tokens": 65535,
@@ -6774,7 +6788,8 @@
             "audio"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "supports_web_search": true
     },
     "gemini/gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
