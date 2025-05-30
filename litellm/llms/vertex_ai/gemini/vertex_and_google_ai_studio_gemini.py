@@ -496,7 +496,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and isinstance(value, list)
                 and value
             ):
-                optional_params["tools"] = self._add_tools_to_optional_params(
+                optional_params = self._add_tools_to_optional_params(
                     optional_params, self._map_function(value=value)
                 )
             elif param == "tool_choice" and (
