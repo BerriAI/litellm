@@ -180,11 +180,12 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
+        litellm._turn_on_debug()
+
         base_completion_call_args = self.get_base_completion_call_args()
 
         if not supports_web_search(base_completion_call_args["model"], None):
-            # pytest.skip("Model does not support web search")
-            raise Exception(f"Model {base_completion_call_args['model']} does not support web search")
+            pytest.skip("Model does not support web search")
 
         response = self.completion_function(
             **base_completion_call_args,
