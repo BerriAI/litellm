@@ -188,7 +188,8 @@ class BaseLLMChatTest(ABC):
         response = self.completion_function(
             **base_completion_call_args,
             messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
-            web_search_options={}
+            web_search_options={},
+            max_tokens=100,
         )
 
         assert response is not None
