@@ -77,3 +77,97 @@ async def test_bedrock_guardrails_content_list():
     assert response["messages"][2]["content"] == "who is the president of the united states?"
     
     
+
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrails_with_streaming():
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    with pytest.raises(Exception):  # Assert that this raises an exception
+        proxy_logging_obj = ProxyLogging(
+            user_api_key_cache=None,
+            premium_user=True,
+        )
+        
+        guardrail = BedrockGuardrail(
+            guardrailIdentifier="wf0hkdb5x07f",
+            guardrailVersion="DRAFT",
+            supported_event_hooks=[GuardrailEventHooks.post_call],
+            guardrail_name="bedrock-post-guard",
+        )
+
+        litellm.callbacks.append(guardrail)
+
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "My name is ishaan@gmail.com"
+                }
+            ],
+            "stream": True,
+            "metadata": {"guardrails": ["bedrock-post-guard"]}
+        }
+
+        response = await litellm.acompletion(
+            **request_data,
+        )
+
+        response = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=response,
+            request_data=request_data,
+        )
+        
+        async for chunk in response:
+            print(chunk)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrails_with_streaming_no_violation():
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=None,
+        premium_user=True,
+    )
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="wf0hkdb5x07f",
+        guardrailVersion="DRAFT",
+        supported_event_hooks=[GuardrailEventHooks.post_call],
+        guardrail_name="bedrock-post-guard",
+    )
+
+    litellm.callbacks.append(guardrail)
+
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {
+                "role": "user",
+                "content": "hi"
+            }
+        ],
+        "stream": True,
+        "metadata": {"guardrails": ["bedrock-post-guard"]}
+    }
+
+    response = await litellm.acompletion(
+        **request_data,
+    )
+
+    response = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+        user_api_key_dict={},
+        response=response,
+        request_data=request_data,
+    )
+    
+    
+    async for chunk in response:
+        print(chunk)
