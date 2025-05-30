@@ -11,6 +11,7 @@ from typing import Optional, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -46,7 +47,7 @@ def create_request_copy(request: Request):
     }
 
 
-async def is_passthrough_request_using_router_model(
+def is_passthrough_request_using_router_model(
     request_body: dict, llm_router: Optional[litellm.Router]
 ) -> bool:
     """
@@ -57,6 +58,13 @@ async def is_passthrough_request_using_router_model(
         return is_known_model(model, llm_router)
     except Exception:
         return False
+
+
+def is_passthrough_request_streaming(request_body: dict) -> bool:
+    """
+    Returns True if the request is streaming
+    """
+    return request_body.get("stream", False)
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -277,9 +285,10 @@ async def vllm_proxy_route(
     from litellm.proxy.proxy_server import llm_router
 
     request_body = await get_request_body(request)
-    is_router_model = await is_passthrough_request_using_router_model(
+    is_router_model = is_passthrough_request_using_router_model(
         request_body, llm_router
     )
+    is_streaming_request = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
         result = cast(
             httpx.Response,
@@ -301,6 +310,16 @@ async def vllm_proxy_route(
                 cookies=None,
             ),
         )
+
+        if is_streaming_request:
+            return StreamingResponse(
+                content=result.aiter_bytes(),
+                status_code=result.status_code,
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=result.headers,
+                    custom_headers=None,
+                ),
+            )
 
         content = await result.aread()
         return Response(

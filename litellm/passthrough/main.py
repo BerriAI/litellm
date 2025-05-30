@@ -170,8 +170,12 @@ def llm_passthrough_route(
     headers = BasePassthroughUtils.forward_headers_from_request(
         request_headers=request_headers or {},
         headers=auth_headers,
-        forward_headers=True,
+        forward_headers=False,
     )
+
+    ## SWAP MODEL IN JSON BODY
+    if json and isinstance(json, dict) and "model" in json:
+        json["model"] = model
 
     request = client.client.build_request(
         method=method,
