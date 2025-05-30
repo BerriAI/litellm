@@ -582,3 +582,46 @@ def is_function_call(optional_params: dict) -> bool:
     if "functions" in optional_params and optional_params.get("functions"):
         return True
     return False
+
+
+def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
+    """
+    Gets file ids from messages
+    """
+    file_ids = []
+    for message in messages:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if content:
+                if isinstance(content, str):
+                    continue
+                for c in content:
+                    if c["type"] == "file":
+                        file_object = cast(ChatCompletionFileObject, c)
+                        file_object_file_field = file_object["file"]
+                        file_id = file_object_file_field.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+    return file_ids
+
+
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+    """
+    Filters a value from a dictionary
+
+    Goes through the nested dict and removes the key if it exists
+    """
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return dictionary
+
+    # Create a copy of keys to avoid modifying dict during iteration
+    keys = list(dictionary.keys())
+    for k in keys:
+        v = dictionary[k]
+        if k == key:
+            del dictionary[k]
+        elif isinstance(v, dict):
+            filter_value_from_dict(v, key, depth + 1)
+    return dictionary
