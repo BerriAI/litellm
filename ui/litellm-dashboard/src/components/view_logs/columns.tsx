@@ -472,7 +472,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     cell: (info: any) => <span>{info.getValue()}</span>,
   },
   {
-    header: "Before Value",
+    header: "Initial Values",
     accessorKey: "before_value",
     cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
   },
