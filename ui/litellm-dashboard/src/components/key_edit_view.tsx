@@ -5,6 +5,8 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -167,10 +169,11 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">
-        <Select
-          mode="tags"
-          style={{ width: "100%" }}
-          placeholder="Select or enter vector stores"
+        <VectorStoreSelector
+          onChange={(values) => form.setFieldValue('vector_stores', values)}
+          value={form.getFieldValue('vector_stores')}
+          accessToken={accessToken || ""}
+          placeholder="Select vector stores"
         />
       </Form.Item>
 

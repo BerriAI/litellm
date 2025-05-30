@@ -266,6 +266,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               <ObjectPermissionsView 
                 objectPermission={keyData.object_permission} 
                 variant="card"
+                accessToken={accessToken}
               />
             </div>
           </TabPanel>
@@ -377,6 +378,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                     objectPermission={keyData.object_permission} 
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
                   />
                 </div>
               )}
