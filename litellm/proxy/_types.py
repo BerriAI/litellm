@@ -1254,6 +1254,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: List[str]
+    vector_stores: List[str]
 
 
 class LiteLLM_TeamTable(TeamBase):
