@@ -1097,7 +1097,10 @@ class BaseLLMHTTPHandler:
             if provider_specific_header
             else {}
         )
-        headers = anthropic_messages_provider_config.validate_environment(
+        (
+            headers,
+            api_base,
+        ) = anthropic_messages_provider_config.validate_anthropic_messages_environment(
             headers=extra_headers or {},
             model=model,
             messages=messages,

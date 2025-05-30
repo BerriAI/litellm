@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
 from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
 
@@ -149,6 +149,74 @@ class VertexBase:
             return f"https://{vertex_location}-aiplatform.googleapis.com"
         else:
             return f"https://{self.get_default_vertex_location()}-aiplatform.googleapis.com"
+
+    @staticmethod
+    def create_vertex_url(
+        vertex_location: str,
+        vertex_project: str,
+        partner: VertexPartnerProvider,
+        stream: Optional[bool],
+        model: str,
+        api_base: Optional[str] = None,
+    ) -> str:
+        """Return the base url for the vertex partner models"""
+
+        api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
+        if partner == VertexPartnerProvider.llama:
+            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+        elif partner == VertexPartnerProvider.mistralai:
+            if stream:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+        elif partner == VertexPartnerProvider.ai21:
+            if stream:
+                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+        elif partner == VertexPartnerProvider.claude:
+            if stream:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+
+    def get_complete_vertex_url(
+        self,
+        custom_api_base: Optional[str],
+        vertex_location: Optional[str],
+        vertex_project: Optional[str],
+        project_id: str,
+        partner: VertexPartnerProvider,
+        stream: Optional[bool],
+        model: str,
+    ) -> str:
+        api_base = self.get_api_base(
+            api_base=custom_api_base, vertex_location=vertex_location
+        )
+        default_api_base = VertexBase.create_vertex_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+            partner=partner,
+            stream=stream,
+            model=model,
+            api_base=api_base,
+        )
+
+        if len(default_api_base.split(":")) > 1:
+            endpoint = default_api_base.split(":")[-1]
+        else:
+            endpoint = ""
+
+        _, api_base = self._check_custom_proxy(
+            api_base=custom_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=None,
+            url=default_api_base,
+        )
+        return api_base
 
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import (
