@@ -524,7 +524,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 async for chunk in mock_response:
                     yield chunk
         else:
-            async for chunk in response:
+            for chunk in all_chunks:
                 yield chunk
 
     def _extract_masked_texts_from_response(
