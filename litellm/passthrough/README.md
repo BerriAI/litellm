@@ -90,3 +90,29 @@ curl -X POST http://localhost:4000/vllm/classify \
 -H "Authorization: Bearer <your-api-key>" \
 -d '{"model": "roberta-base-language-detection", "input": "Hello, world!"}' \
 ```
+
+# How to add a provider for passthrough
+
+See [VLLMModelInfo](https://github.com/BerriAI/litellm/blob/main/litellm/llms/vllm/common_utils.py) for an example.
+
+1. Inherit from BaseModelInfo
+
+```python
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+
+class VLLMModelInfo(BaseLLMModelInfo):
+    pass
+```
+
+2. Register the provider in the ProviderConfigManager.get_provider_model_info
+
+```python
+from litellm.utils import ProviderConfigManager
+from litellm.types.utils import LlmProviders
+
+provider_config = ProviderConfigManager.get_provider_model_info(
+    model="my-test-model", provider=LlmProviders.VLLM
+)
+
+print(provider_config)
+```
