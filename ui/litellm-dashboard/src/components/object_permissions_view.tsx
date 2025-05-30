@@ -62,7 +62,7 @@ export function ObjectPermissionsView({
   };
 
   const content = (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "space-y-4"}>
       {/* Vector Stores Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
@@ -130,7 +130,7 @@ export function ObjectPermissionsView({
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>
             <Text className="text-xs text-gray-500">
-              Access control for vector stores and MCP servers
+              Access control for Vector Stores
             </Text>
           </div>
         </div>
@@ -140,11 +140,8 @@ export function ObjectPermissionsView({
   }
 
   return (
-    <div className={`space-y-4 ${className}`}>
-      <div className="flex items-center gap-2">
-        <Text className="font-medium text-gray-900">Object Permissions</Text>
-        <div className="h-px bg-gray-200 flex-1" />
-      </div>
+    <div className={`${className}`}>
+      <Text className="font-medium text-gray-900 mb-3">Object Permissions</Text>
       {content}
     </div>
   );

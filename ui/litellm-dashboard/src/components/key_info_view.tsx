@@ -260,15 +260,15 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   )}
                 </div>
               </Card>
-            </Grid>
 
-            <div className="mt-6">
-              <ObjectPermissionsView 
-                objectPermission={keyData.object_permission} 
-                variant="card"
-                accessToken={accessToken}
-              />
-            </div>
+              <Card>
+                <ObjectPermissionsView 
+                  objectPermission={keyData.object_permission} 
+                  variant="inline"
+                  accessToken={accessToken}
+                />
+              </Card>
+            </Grid>
           </TabPanel>
 
           {/* Settings Panel */}
