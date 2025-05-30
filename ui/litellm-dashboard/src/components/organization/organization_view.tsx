@@ -29,6 +29,7 @@ import { Member, Organization, organizationInfoCall, organizationMemberAddCall, 
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
 import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -410,10 +411,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Select or enter vector stores"
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
                     />
                   </Form.Item>
 

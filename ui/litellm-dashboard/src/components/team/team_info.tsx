@@ -34,6 +34,7 @@ import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 export interface TeamData {
   team_id: string;
@@ -455,10 +456,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Select or enter vector stores"
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
                     />
                   </Form.Item>
                   
