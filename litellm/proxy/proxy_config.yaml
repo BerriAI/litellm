@@ -1,7 +1,11 @@
 model_list:
-  - model_name: openai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: openai/*
+      model: anthropic/*
+  
+
+general_settings:
+  store_prompts_in_spend_logs: true
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
