@@ -540,11 +540,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """if 'container_upload' in messages, add code_execution tool"""
         add_code_execution_tool = False
         for message in messages:
-            message_type = message.get("type", None)
-
-            if message_type == "container_upload":
-                add_code_execution_tool = True
-                break
+            message_content = message.get("content", None)
+            if message_content and isinstance(message_content, list):
+                for content in message_content:
+                    content_type = content.get("type", None)
+                    if content_type == "container_upload":
+                        add_code_execution_tool = True
+                        break
 
         if add_code_execution_tool:
             ## check if code_execution tool is already in tools
