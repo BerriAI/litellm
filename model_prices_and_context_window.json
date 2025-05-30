@@ -4163,7 +4163,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2-vision-1212": {
         "max_tokens": 32768,
@@ -4176,7 +4177,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2-vision-latest": {
         "max_tokens": 32768,
@@ -4189,7 +4191,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2-vision": {
         "max_tokens": 32768,
@@ -4202,7 +4205,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-3": {
         "max_tokens": 131072,
@@ -4215,7 +4219,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-beta": {
         "max_tokens": 131072,
@@ -4228,7 +4233,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-fast-beta": {
         "max_tokens": 131072,
@@ -4241,7 +4247,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-fast-latest": {
         "max_tokens": 131072,
@@ -4254,7 +4261,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-mini-beta": {
         "max_tokens": 131072,
@@ -4268,7 +4276,8 @@
         "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-mini-fast-beta": {
         "max_tokens": 131072,
@@ -4282,7 +4291,8 @@
         "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-3-mini-fast-latest": {
         "max_tokens": 131072,
@@ -4296,7 +4306,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": false,
-        "source": "https://x.ai/api#pricing"
+        "source": "https://x.ai/api#pricing",
+        "supports_web_search": true
     },
     "xai/grok-vision-beta": {
         "max_tokens": 8192,
@@ -4309,7 +4320,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2-1212": {
         "max_tokens": 131072,
@@ -4320,7 +4332,8 @@
         "litellm_provider": "xai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2": {
         "max_tokens": 131072,
@@ -4331,7 +4344,8 @@
         "litellm_provider": "xai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "xai/grok-2-latest": {
         "max_tokens": 131072,
@@ -4342,7 +4356,8 @@
         "litellm_provider": "xai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_web_search": true
     },
     "deepseek/deepseek-coder": {
         "max_tokens": 4096,
