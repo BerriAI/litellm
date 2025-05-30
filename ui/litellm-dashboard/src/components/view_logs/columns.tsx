@@ -396,14 +396,14 @@ export type AuditLogEntry = {
   action: string;
   table_name: string;
   object_id: string;
-  before_value: {};
-  updated_values: {};
+  before_value: Record<string, any>;
+  updated_values: Record<string, any>;
 }
 
 export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
     header: "Created At",
-    accessorKey: "before_value.created_at", 
+    accessorKey: "before_value.created_at",
     cell: (info: any) => {
       const createdAt = info.row.original.before_value?.created_at;
       return createdAt ? <TimeCell utcTime={createdAt} /> : "-";
@@ -428,6 +428,38 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     header: "Changed By API Key",
     accessorKey: "changed_by_api_key",
     cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    id: "changed_fields",
+    header: "Changed Fields",
+    cell: (info: any) => {
+      const action = info.row.original.action;
+      const before = info.row.original.before_value;
+      const updated = info.row.original.updated_values;
+      const changedKeys: string[] = [];
+
+      // Only compute and show changed fields if the action is 'updated'
+      if (action && action.toLowerCase() === 'updated') {
+        if (updated && typeof updated === 'object') {
+          Object.keys(updated).forEach(key => {
+            if (!before || !(key in before) || JSON.stringify(before[key]) !== JSON.stringify(updated[key])) {
+              changedKeys.push(key);
+            }
+          });
+        }
+        
+        if (changedKeys.length > 0) {
+          return (
+            <Tooltip title={changedKeys.join(", ")}>
+              <span className="max-w-[20ch] truncate block">
+                {changedKeys.join(", ")}
+              </span>
+            </Tooltip>
+          );
+        }
+      }
+      return "-"; // Return "-" if action is not 'updated' or no fields changed
+    },
   },
   {
     header: "Table Name",
