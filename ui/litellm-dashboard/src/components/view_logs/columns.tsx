@@ -362,6 +362,32 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
   );
 };
 
+// New component for collapsible JSON display
+const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const jsonString = JSON.stringify(jsonData, null, 2);
+
+  if (!jsonData || Object.keys(jsonData).length === 0) {
+    return <span>-</span>;
+  }
+
+  return (
+    <div>
+      <button 
+        onClick={() => setIsExpanded(!isExpanded)} 
+        className="text-blue-500 hover:text-blue-700 text-xs"
+      >
+        {isExpanded ? 'Hide JSON' : 'Show JSON'} ({Object.keys(jsonData).length} fields)
+      </button>
+      {isExpanded && (
+        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">
+          {jsonString}
+        </pre>
+      )}
+    </div>
+  );
+};
+
 export type AuditLogEntry = {
   id: string;
   updated_at: string;
@@ -408,11 +434,11 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
     header: "Before Value",
     accessorKey: "before_value",
-    cell: (info: any) => <pre>{JSON.stringify(info.getValue(), null, 2)}</pre>,
+    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
   },
   {
     header: "Updated Values",
     accessorKey: "updated_values",
-    cell: (info: any) => <pre>{JSON.stringify(info.getValue(), null, 2)}</pre>,
+    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
   }
 ]
