@@ -46,6 +46,11 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
+  object_permission?: {
+    object_permission_id: string;
+    mcp_servers: string[];
+    vector_stores: string[];
+  };
 }
 
 export interface CredentialItem {
