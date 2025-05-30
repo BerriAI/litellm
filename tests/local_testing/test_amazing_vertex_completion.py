@@ -1575,7 +1575,16 @@ async def test_anthropic_message_via_anthropic_messages():
     print(f"call_1_kwargs: {call_1_kwargs}")
     print(f"call_2_kwargs: {call_2_kwargs}")
     assert call_1_kwargs["url"] == call_2_kwargs["url"], f"Expected url to be the same, but got {call_1_kwargs['url']} and Expected {call_2_kwargs['url']}"
+    assert "Authorization".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Authorization header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
+    assert "content-type".lower() in [k.lower() for k in call_1_kwargs["headers"].keys()], f"Expected Content-Type header to be present in call_1_kwargs, but got {call_1_kwargs['headers'].keys()}"
 
+    ## validate request body
+    print(f"call 1 kwargs keys: {call_1_kwargs.keys()}")
+    print(f"call_2_kwargs['json']: {type(call_2_kwargs['json'])}")
+    print(f"call_1_kwargs['data']: {type(call_1_kwargs['data'])}")
+    call_1_kwargs_data = json.loads(call_1_kwargs["data"])
+    for k, v in call_2_kwargs["json"].items():
+        assert k in call_1_kwargs_data, f"Expected {k} to be present in call_1_kwargs['data'], but got {call_1_kwargs_data.keys()}"
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",

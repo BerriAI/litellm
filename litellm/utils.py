@@ -6612,11 +6612,12 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.BEDROCK == provider:
             return litellm.AmazonAnthropicClaude3MessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
-                VertexAIPartnerModelsAnthropicMessagesConfig,
-            )
+            if "claude" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                    VertexAIPartnerModelsAnthropicMessagesConfig,
+                )
 
-            return VertexAIPartnerModelsAnthropicMessagesConfig()
+                return VertexAIPartnerModelsAnthropicMessagesConfig()
         return None
 
     @staticmethod
