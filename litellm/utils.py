@@ -1885,6 +1885,22 @@ def supports_tool_choice(model: str, custom_llm_provider: Optional[str] = None) 
     )
 
 
+def _supports_provider_info_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> Optional[Literal[True]]:
+    """
+    Check if the given model supports a provider specific model info and return a boolean value.
+    """
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    if provider_info is not None and provider_info.get(key, False) is True:
+        return True
+    return None
+
+
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -1910,18 +1926,25 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
 
         if model_info.get(key, False) is True:
             return True
+        elif not model_info.get(key):
+            supported_by_provider = _supports_provider_info_factory(
+                model, custom_llm_provider, key
+            )
+            if supported_by_provider is not None:
+                return supported_by_provider
+
         return False
     except Exception as e:
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
-        provider_info = get_provider_info(
-            model=model, custom_llm_provider=custom_llm_provider
+        supported_by_provider = _supports_provider_info_factory(
+            model, custom_llm_provider, key
         )
+        if supported_by_provider is not None:
+            return supported_by_provider
 
-        if provider_info is not None and provider_info.get(key, False) is True:
-            return True
         return False
 
 

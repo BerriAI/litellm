@@ -44,6 +44,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "top_logprobs",
             "top_p",
             "user",
+            "web_search_options",
         ]
         try:
             if litellm.supports_reasoning(
