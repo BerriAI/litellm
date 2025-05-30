@@ -706,7 +706,7 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = budget_duration
 
     if "object_permission" in non_default_values:
-        await _handle_update_object_permission(
+        non_default_values = await _handle_update_object_permission(
             data_json=non_default_values,
             existing_key_row=existing_key_row,
         )
@@ -727,7 +727,7 @@ async def prepare_key_update_data(
 async def _handle_update_object_permission(
     data_json: dict,
     existing_key_row: LiteLLM_VerificationToken,
-):
+) -> dict:
     """
     Handle the update of object permission.
     """
@@ -742,31 +742,40 @@ async def _handle_update_object_permission(
     #########################################################
     new_object_permission = data_json.pop("object_permission")
     if new_object_permission is None:
-        return
+        return data_json
 
     # lookup existing object permission ID and update that entry
     existing_object_permission_id = existing_key_row.object_permission_id
-    if existing_object_permission_id is None:
-        return
-
     existing_object_permission = (
         await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": existing_object_permission_id},
         )
     )
-    if existing_object_permission is None:
-        return
+    existing_object_permissions_dict: dict = {}
+    if existing_object_permission is not None:
+        # update the object permission
+        existing_object_permissions_dict = existing_object_permission.model_dump(
+            exclude_unset=True, exclude_none=True
+        )
+        existing_object_permissions_dict.update(dict(new_object_permission))
 
-    # update the object permission
-    existing_object_permissions_dict = existing_object_permission.model_dump(
-        exclude_unset=True, exclude_none=True
+    #########################################################
+    # Commit the update to the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission_row = (
+        await prisma_client.db.litellm_objectpermissiontable.upsert(
+            where={"object_permission_id": existing_object_permission_id},
+            data={
+                "create": existing_object_permissions_dict,
+                "update": existing_object_permissions_dict,
+            },
+        )
     )
-    existing_object_permissions_dict.update(dict(new_object_permission))
-    await prisma_client.db.litellm_objectpermissiontable.update(
-        where={"object_permission_id": existing_object_permission_id},
-        data=existing_object_permissions_dict,
+    verbose_proxy_logger.debug(
+        f"new_object_permission_row: {new_object_permission_row}"
     )
-    return
+    data_json["object_permission_id"] = new_object_permission_row.object_permission_id
+    return data_json
 
 
 def is_different_team(
