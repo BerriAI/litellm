@@ -673,8 +673,9 @@ async def _set_object_permission(
     return data_json
 
 
-def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+async def prepare_key_update_data(
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest],
+    existing_key_row: LiteLLM_VerificationToken,
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -704,6 +705,12 @@ def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
+    if "object_permission" in non_default_values:
+        await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=existing_key_row,
+        )
+
     _metadata = existing_key_row.metadata or {}
 
     # validate model_max_budget
@@ -715,6 +722,51 @@ def prepare_key_update_data(
     )
 
     return non_default_values
+
+
+async def _handle_update_object_permission(
+    data_json: dict,
+    existing_key_row: LiteLLM_VerificationToken,
+):
+    """
+    Handle the update of object permission.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ValueError("Prisma client not found")
+
+    #########################################################
+    # Ensure `object_permission` is not added to the data_json
+    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission = data_json.pop("object_permission")
+    if new_object_permission is None:
+        return
+
+    # lookup existing object permission ID and update that entry
+    existing_object_permission_id = existing_key_row.object_permission_id
+    if existing_object_permission_id is None:
+        return
+
+    existing_object_permission = (
+        await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_object_permission_id},
+        )
+    )
+    if existing_object_permission is None:
+        return
+
+    # update the object permission
+    existing_object_permissions_dict = existing_object_permission.model_dump(
+        exclude_unset=True, exclude_none=True
+    )
+    existing_object_permissions_dict.update(dict(new_object_permission))
+    await prisma_client.db.litellm_objectpermissiontable.update(
+        where={"object_permission_id": existing_object_permission_id},
+        data=existing_object_permissions_dict,
+    )
+    return
 
 
 def is_different_team(
@@ -853,7 +905,7 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
-        non_default_values = prepare_key_update_data(
+        non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
 
@@ -1945,7 +1997,7 @@ async def regenerate_key_fn(
         non_default_values = {}
         if data is not None:
             # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = prepare_key_update_data(
+            non_default_values = await prepare_key_update_data(
                 data=data, existing_key_row=_key_in_db
             )
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
