@@ -552,7 +552,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ## check if code_execution tool is already in tools
             for tool in tools:
                 tool_type = tool.get("type", None)
-                if tool_type and tool_type.startswith("code_execution"):
+                if (
+                    tool_type
+                    and isinstance(tool_type, str)
+                    and tool_type.startswith("code_execution")
+                ):
                     return tools
             tools.append(
                 AnthropicCodeExecutionTool(
