@@ -414,7 +414,12 @@ async def info_organization(organization_id: str):
         LiteLLM_OrganizationTableWithMembers
     ] = await prisma_client.db.litellm_organizationtable.find_unique(
         where={"organization_id": organization_id},
-        include={"litellm_budget_table": True, "members": True, "teams": True},
+        include={
+            "litellm_budget_table": True,
+            "members": True,
+            "teams": True,
+            "object_permission": True,
+        },
     )
 
     if response is None:
