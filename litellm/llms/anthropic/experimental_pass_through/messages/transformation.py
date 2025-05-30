@@ -60,7 +60,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Tuple[dict, Optional[str]]:
-        if "x-api-key" not in headers:
+        if "x-api-key" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION

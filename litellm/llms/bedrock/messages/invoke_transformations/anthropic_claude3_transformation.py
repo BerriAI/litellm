@@ -38,6 +38,18 @@ class AmazonAnthropicClaude3MessagesConfig(
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
+    def validate_anthropic_messages_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[Any],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Tuple[dict, Optional[str]]:
+        return headers, api_base
+
     def sign_request(
         self,
         headers: dict,
