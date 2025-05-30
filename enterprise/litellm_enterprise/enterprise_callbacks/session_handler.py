@@ -1,11 +1,8 @@
 import json
-from typing import List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsPayload
-from litellm.responses.litellm_completion_transformation.transformation import (
-    ChatCompletionSession,
-)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -14,6 +11,13 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        ChatCompletionSession,
+    )
+else:
+    ChatCompletionSession = Any
 
 
 class _ENTERPRISE_ResponsesSessionHandler:
@@ -25,13 +29,20 @@ class _ENTERPRISE_ResponsesSessionHandler:
         Return the chat completion message history for a previous response id
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
+            ChatCompletionSession,
             LiteLLMCompletionResponsesConfig,
         )
 
+        verbose_proxy_logger.debug(
+            "inside get_chat_completion_message_history_for_previous_response_id"
+        )
         all_spend_logs: List[
             SpendLogsPayload
         ] = await _ENTERPRISE_ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
             previous_response_id
+        )
+        verbose_proxy_logger.debug(
+            "found %s spend logs for this response id", len(all_spend_logs)
         )
 
         litellm_session_id: Optional[str] = None
@@ -112,6 +123,8 @@ class _ENTERPRISE_ResponsesSessionHandler:
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
         """
         from litellm.proxy.proxy_server import prisma_client
+
+        verbose_proxy_logger.debug("decoding response id=", previous_response_id)
 
         decoded_response_id = (
             ResponsesAPIRequestUtils._decode_responses_api_response_id(
