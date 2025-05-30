@@ -10,11 +10,13 @@ import litellm
 
 
 response = litellm.llm_passthrough_route(
+    model="hosted_vllm/papluca/xlm-roberta-base-language-detection",
     method="POST",
-    initial_url="http://localhost:4000/classify",
-    target_api_base="http://localhost:8090",
+    endpoint="classify",
+    api_base="http://localhost:8090",
+    api_key=None,
     json={
-        "model": "papluca/xlm-roberta-base-language-detection",
+        "model": "swapped-for-litellm-model",
         "input": "Hello, world!",
     }
 )
@@ -25,12 +27,13 @@ print(response)
 ## SDK (Router)
 
 ```python
+import asyncio
 from litellm import Router
 
 router = Router(
     model_list=[
         {
-            "model_name": "papluca/xlm-roberta-base-language-detection",
+            "model_name": "roberta-base-language-detection",
             "litellm_params": {
                 "model": "hosted_vllm/papluca/xlm-roberta-base-language-detection",
                 "api_base": "http://localhost:8090", 
@@ -40,20 +43,23 @@ router = Router(
 )
 
 request_data = {
-    "model": "papluca/xlm-roberta-base-language-detection",
-    "request_url": "http://localhost:8090/classify",
-    "request_query_params": {
-        "input": "Hello, world!",
-    },
+    "model": "roberta-base-language-detection",
     "method": "POST",
+    "endpoint": "classify",
+    "api_base": "http://localhost:8090",
+    "api_key": None,
     "json": {
+        "model": "roberta-base-language-detection",
         "input": "Hello, world!",
-    },
+    }
 }
 
-response = router.llm_passthrough_route(**request_data)
+async def main():
+    response = await router.allm_passthrough_route(**request_data)
+    print(response)
 
-print(response)
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ## PROXY 
@@ -62,7 +68,7 @@ print(response)
 
 ```yaml
 model_list:
-  - model_name: papluca/xlm-roberta-base-language-detection
+  - model_name: roberta-base-language-detection
     litellm_params:
       model: hosted_vllm/papluca/xlm-roberta-base-language-detection
       api_base: http://localhost:8090
@@ -72,13 +78,15 @@ model_list:
 
 ```bash
 litellm proxy --config config.yaml
+
+# RUNNING on http://localhost:4000
 ```
 
 3. Use the proxy
 
 ```bash
-curl -X POST http://localhost:8000/vllm/classify \
+curl -X POST http://localhost:4000/vllm/classify \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer <your-api-key>" \
--d '{"model": "papluca/xlm-roberta-base-language-detection", "input": "Hello, world!"}' \
+-d '{"model": "roberta-base-language-detection", "input": "Hello, world!"}' \
 ```
