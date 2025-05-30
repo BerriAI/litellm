@@ -7,7 +7,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
 import os
-from typing import Optional
+from typing import Optional, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -19,10 +19,12 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import get_request_body
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
+from litellm.proxy.utils import is_known_model
 from litellm.secret_managers.main import get_secret_str
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -42,6 +44,19 @@ def create_request_copy(request: Request):
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
+
+
+async def is_passthrough_request_using_router_model(
+    request_body: dict, llm_router: Optional[litellm.Router]
+) -> bool:
+    """
+    Returns True if the model is in the llm_router model names
+    """
+    try:
+        model = request_body.get("model")
+        return is_known_model(model, llm_router)
+    except Exception:
+        return False
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -65,6 +80,7 @@ async def llm_passthrough_factory_proxy_route(
         raise HTTPException(
             status_code=404, detail=f"Provider {custom_llm_provider} not found"
         )
+
     base_target_url = provider_config.get_api_base()
 
     if base_target_url is None:
@@ -255,6 +271,47 @@ async def vllm_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/vllm)
     """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+    from litellm.proxy.proxy_server import llm_router
+
+    request_body = await get_request_body(request)
+    is_router_model = await is_passthrough_request_using_router_model(
+        request_body, llm_router
+    )
+    if is_router_model and llm_router:
+        result = cast(
+            httpx.Response,
+            await llm_router.allm_passthrough_route(
+                model=request_body.get("model"),
+                method=request.method,
+                endpoint=endpoint,
+                request_query_params=request.query_params,
+                request_headers=dict(request.headers),
+                stream=request_body.get("stream", False),
+                content=None,
+                data=None,
+                files=None,
+                json=request_body
+                if request.headers.get("content-type") == "application/json"
+                else None,
+                params=None,
+                headers=None,
+                cookies=None,
+            ),
+        )
+
+        content = await result.aread()
+        return Response(
+            content=content,
+            status_code=result.status_code,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=result.headers,
+                custom_headers=None,
+            ),
+        )
+
     return await llm_passthrough_factory_proxy_route(
         endpoint=endpoint,
         request=request,

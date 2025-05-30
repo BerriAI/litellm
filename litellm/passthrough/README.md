@@ -41,9 +41,14 @@ router = Router(
 
 request_data = {
     "model": "papluca/xlm-roberta-base-language-detection",
-    "input": "Hello, world!",
+    "request_url": "http://localhost:8090/classify",
+    "request_query_params": {
+        "input": "Hello, world!",
+    },
     "method": "POST",
-    "url": "http://localhost:8090/classify",
+    "json": {
+        "input": "Hello, world!",
+    },
 }
 
 response = router.llm_passthrough_route(**request_data)
