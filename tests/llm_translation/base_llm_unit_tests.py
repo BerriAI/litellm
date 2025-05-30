@@ -183,7 +183,8 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
 
         if not supports_web_search(base_completion_call_args["model"], None):
-            pytest.skip("Model does not support web search")
+            # pytest.skip("Model does not support web search")
+            raise Exception(f"Model {base_completion_call_args['model']} does not support web search")
 
         response = self.completion_function(
             **base_completion_call_args,
