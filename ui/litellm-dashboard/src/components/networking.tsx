@@ -62,13 +62,8 @@ export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
-
-const baseUrl = "/"; // Assuming the base URL is the root
-
-
 let lastErrorTime = 0;
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const handleError = async (errorData: string) => {
   const currentTime = Date.now();
@@ -76,9 +71,8 @@ const handleError = async (errorData: string) => {
     if (errorData.includes("Authentication Error - Expired Key")) {
       message.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
-      await sleep(3000); // 5 second sleep
       document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      window.location.href = baseUrl;
+      window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
   } else {
