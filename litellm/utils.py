@@ -2155,15 +2155,17 @@ def _get_non_default_params(
 
 def get_optional_params_transcription(
     model: str,
+    custom_llm_provider: str,
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     response_format: Optional[str] = None,
     temperature: Optional[int] = None,
     timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
-    custom_llm_provider: Optional[str] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
 ):
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider")
@@ -2229,9 +2231,14 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-    for k in passed_params.keys():  # pass additional kwargs without modification
-        if k not in default_params.keys():
-            optional_params[k] = passed_params[k]
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider,
+        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        additional_drop_params=kwargs.get("additional_drop_params", None),
+    )
+
     return optional_params
 
 
@@ -2767,6 +2774,9 @@ def pre_process_non_default_params(
         non_default_params = add_provider_specific_params_to_optional_params(
             optional_params=non_default_params,
             passed_params=passed_params,
+            custom_llm_provider=custom_llm_provider,
+            openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+            additional_drop_params=additional_drop_params,
         )
 
     if remove_sensitive_keys:
@@ -3634,6 +3644,33 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    # if user passed in non-default kwargs for specific providers/models, pass them along
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider,
+        openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+        additional_drop_params=additional_drop_params,
+    )
+    print_verbose(f"Final returned optional params: {optional_params}")
+    optional_params = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+    return optional_params
+
+
+def add_provider_specific_params_to_optional_params(
+    optional_params: dict,
+    passed_params: dict,
+    custom_llm_provider: str,
+    openai_params: List[str],
+    additional_drop_params: Optional[list] = None,
+) -> dict:
+    """
+    Add provider specific params to optional_params
+    """
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
@@ -3648,40 +3685,30 @@ def get_optional_params(  # noqa: PLR0915
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
+                if k not in openai_params:
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
-            optional_params["extra_body"] = {
+            initial_extra_body = {
                 **optional_params["extra_body"],
                 **extra_body,
             }
 
+            if additional_drop_params is not None:
+                processed_extra_body = {
+                    k: v
+                    for k, v in initial_extra_body.items()
+                    if k not in additional_drop_params
+                }
+            else:
+                processed_extra_body = initial_extra_body
+
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
-                extra_body=optional_params["extra_body"]
+                extra_body=processed_extra_body
             )
     else:
-        # if user passed in non-default kwargs for specific providers/models, pass them along
-        optional_params = add_provider_specific_params_to_optional_params(
-            optional_params=optional_params, passed_params=passed_params
-        )
-    print_verbose(f"Final returned optional params: {optional_params}")
-    optional_params = _apply_openai_param_overrides(
-        optional_params=optional_params,
-        non_default_params=non_default_params,
-        allowed_openai_params=allowed_openai_params,
-    )
-    return optional_params
-
-
-def add_provider_specific_params_to_optional_params(
-    optional_params: dict, passed_params: dict
-) -> dict:
-    """
-    Add provider specific params to optional_params
-    """
-    for k in passed_params.keys():
-        if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
-            optional_params[k] = passed_params[k]
+        for k in passed_params.keys():
+            if k not in openai_params:
+                optional_params[k] = passed_params[k]
     return optional_params
 
 
@@ -6497,6 +6524,12 @@ class ProviderConfigManager:
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
+            elif bedrock_route == "agent":
+                from litellm.llms.bedrock.chat.invoke_agent.transformation import (
+                    AmazonInvokeAgentConfig,
+                )
+
+                return AmazonInvokeAgentConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
@@ -6584,6 +6617,13 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             return litellm.AmazonAnthropicClaude3MessagesConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            if "claude" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                    VertexAIPartnerModelsAnthropicMessagesConfig,
+                )
+
+                return VertexAIPartnerModelsAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -6902,6 +6942,14 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
 
+    return non_default_params
+
+
+def get_non_default_transcription_params(kwargs: dict) -> dict:
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+
+    default_params = OPENAI_TRANSCRIPTION_PARAMS + all_litellm_params
+    non_default_params = {k: v for k, v in kwargs.items() if k not in default_params}
     return non_default_params
 
 

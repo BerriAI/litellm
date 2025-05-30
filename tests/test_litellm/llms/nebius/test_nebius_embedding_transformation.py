@@ -1,5 +1,6 @@
-import litellm
 from unittest.mock import patch
+
+import litellm
 
 
 def mock_embedding_response(*args, **kwargs):

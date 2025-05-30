@@ -167,6 +167,8 @@ async def new_team(  # noqa: PLR0915
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
@@ -298,10 +300,17 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
+        ## Handle Object Permission - MCP, Vector Stores etc.
+        object_permission_id = await _set_object_permission(
+            data=data,
+            prisma_client=prisma_client,
+        )
+
         ## ADD TO TEAM TABLE
         complete_team_data = LiteLLM_TeamTable(
             **data.json(),
             model_id=_model_id,
+            object_permission_id=object_permission_id,
         )
 
         # Set Management Endpoint Metadata Fields
@@ -409,6 +418,30 @@ async def _update_model_table(
         _model_id = model_dict.id
 
     return _model_id
+
+
+async def _set_object_permission(
+    data: NewTeamRequest,
+    prisma_client: Optional[PrismaClient],
+) -> Optional[str]:
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the team.
+    - Handles permissions for vector stores and mcp servers.
+
+    Returns the object_permission_id if created, otherwise None.
+    """
+    if prisma_client is None:
+        return None
+
+    if data.object_permission is not None:
+        created_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.create(
+                data=data.object_permission.model_dump(exclude_none=True),
+            )
+        )
+        del data.object_permission
+        return created_object_permission.object_permission_id
+    return None
 
 
 def validate_team_org_change(
@@ -538,6 +571,7 @@ async def update_team(
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Example - update team TPM Limit
 
     ```

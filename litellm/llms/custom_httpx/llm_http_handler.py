@@ -271,7 +271,6 @@ class BaseLLMHTTPHandler:
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
         extra_body: Optional[dict] = optional_params.pop("extra_body", None)
-        fake_stream = fake_stream or optional_params.pop("fake_stream", False)
 
         provider_config = (
             provider_config
@@ -283,6 +282,14 @@ class BaseLLMHTTPHandler:
             raise ValueError(
                 f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
             )
+
+        fake_stream = (
+            fake_stream
+            or optional_params.pop("fake_stream", False)
+            or provider_config.should_fake_stream(
+                model=model, custom_llm_provider=custom_llm_provider, stream=stream
+            )
+        )
 
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -1090,7 +1097,10 @@ class BaseLLMHTTPHandler:
             if provider_specific_header
             else {}
         )
-        headers = anthropic_messages_provider_config.validate_environment(
+        (
+            headers,
+            api_base,
+        ) = anthropic_messages_provider_config.validate_anthropic_messages_environment(
             headers=extra_headers or {},
             model=model,
             messages=messages,

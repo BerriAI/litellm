@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -40,7 +40,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -474,6 +474,56 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return self._apply_masking_to_messages(
             messages=messages, masked_texts=masked_texts
         )
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Process streaming response chunks.
+
+        Collect content from the stream and make a bedrock api request to get the guardrail response.
+        """
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import TextCompletionResponse
+
+        # Collect all chunks to process them together
+        all_chunks: List[ModelResponseStream] = []
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        assembled_model_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = stream_chunk_builder(
+            chunks=all_chunks,
+        )
+        if isinstance(assembled_model_response, ModelResponse):
+            ####################################################################
+            ########## 1. Make the Bedrock Apply Guardrail API request ##########
+
+            # Bedrock will raise an exception if this violates the guardrail policy
+            ###################################################################
+            await self.make_bedrock_api_request(
+                kwargs=request_data, response=assembled_model_response
+            )
+
+            #########################################################################
+            ########## If guardrail passed, then return the collected chunks ##########
+            #########################################################################
+            mock_response = MockResponseIterator(
+                model_response=assembled_model_response
+            )
+
+            # Return the reconstructed stream
+            async for chunk in mock_response:
+                yield chunk
+        else:
+            for chunk in all_chunks:
+                yield chunk
 
     def _extract_masked_texts_from_response(
         self, bedrock_guardrail_response: BedrockGuardrailResponse
