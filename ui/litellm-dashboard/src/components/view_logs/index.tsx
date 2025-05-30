@@ -28,6 +28,7 @@ import {
   TabList,
   TabPanels,
   TabPanel,
+  Text,
 } from "@tremor/react";
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
@@ -38,6 +39,7 @@ interface SpendLogsTableProps {
   userRole: string | null;
   userID: string | null;
   allTeams: Team[];
+  premiumUser: boolean;
 }
 
 export interface PaginatedResponse {
@@ -59,6 +61,7 @@ export default function SpendLogsTable({
   userRole,
   userID,
   allTeams,
+  premiumUser,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -703,6 +706,7 @@ export default function SpendLogsTable({
               token={token}
               accessToken={accessToken}
               isActive={activeTab === "audit logs"}
+              premiumUser={premiumUser}
             />
           </TabPanel>
         </TabPanels>

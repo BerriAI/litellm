@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PaginatedResponse } from ".";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry, auditLogColumns } from "./columns";
+import { Text } from "@tremor/react";
 
 interface AuditLogsProps {
   accessToken: string | null;
@@ -14,6 +15,7 @@ interface AuditLogsProps {
   userRole: string | null;
   userID: string | null;
   isActive: boolean;
+  premiumUser: boolean;
 }
 
 export interface PaginatedAuditLogResponse {
@@ -30,6 +32,7 @@ export default function AuditLogs({
   token,
   accessToken,
   isActive,
+  premiumUser,
 }: AuditLogsProps) {
   const [startTime, setStartTime] = useState<string>(
     moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm")
@@ -90,6 +93,14 @@ export default function AuditLogs({
     logs.refetch();
   };
   
+  if (!premiumUser) {
+    return (
+      <div>
+        <Text>This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://litellm.ai/pricing" target="_blank" rel="noopener noreferrer">here</a>.</Text>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="flex items-center justify-between mb-4">

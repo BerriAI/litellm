@@ -397,6 +397,7 @@ export default function CreateKeyPage() {
                   token={token}
                   accessToken={accessToken}
                   allTeams={teams as Team[] ?? []}
+                  premiumUser={premiumUser}
                 />
               ) : page == "mcp-tools" ? (
                 <MCPToolsViewer
