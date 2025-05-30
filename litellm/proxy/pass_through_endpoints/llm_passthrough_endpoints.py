@@ -19,6 +19,10 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    get_form_data,
+)
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
@@ -354,7 +358,11 @@ async def anthropic_proxy_route(
     is_streaming_request = False
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
+        content_type = request.headers.get("content-type", None)
+        if content_type and "multipart/form-data" in content_type:
+            _request_body = await get_form_data(request)
+        else:
+            _request_body = await _read_request_body(request)
         if _request_body.get("stream"):
             is_streaming_request = True
 
