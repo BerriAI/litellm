@@ -992,7 +992,7 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
-            assert response.choices[0].finish_reason == "tool_calls"
+            assert response.choices[0].finish_reason == "tool_calls", f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes
