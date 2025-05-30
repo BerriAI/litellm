@@ -2691,9 +2691,15 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     if "SENTRY_API_TRACE_RATE" in os.environ
                     else "1.0"
                 )
+                sentry_sample_rate = (
+                    os.environ.get("SENTRY_API_SAMPLE_RATE")
+                    if "SENTRY_API_SAMPLE_RATE" in os.environ
+                    else "1.0"
+                )
                 sentry_sdk_instance.init(
                     dsn=os.environ.get("SENTRY_DSN"),
                     traces_sample_rate=float(sentry_trace_rate),  # type: ignore
+                    sample_rate=float(sentry_sample_rate),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb

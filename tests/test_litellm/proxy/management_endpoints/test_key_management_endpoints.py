@@ -60,7 +60,9 @@ async def test_key_token_handling(monkeypatch):
     """
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
-        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
     )
     mock_prisma_client.insert_data = mock_insert_data
     mock_prisma_client.db = MagicMock()
@@ -73,7 +75,9 @@ async def test_key_token_handling(monkeypatch):
     )
     mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
-        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
     )
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
@@ -167,3 +171,83 @@ async def test_budget_reset_at_first_of_month(monkeypatch):
         response_date.month == expected_month
     ), f"Expected month {expected_month}, got {response_date.month}"
     assert response_date.day == 1, f"Expected day 1, got {response_date.day}"
+
+
+@pytest.mark.asyncio
+async def test_key_generation_with_object_permission(monkeypatch):
+    """Ensure /key/generate correctly handles `object_permission` input by
+    1. Creating a record in litellm_objectpermissiontable
+    2. Passing the returned `object_permission_id` into the key insert payload
+    """
+    # --- Setup mocked prisma client ---
+    mock_prisma_client = AsyncMock()
+
+    # identity helper for jsonify_object (used inside generate_key_helper_fn)
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+
+    # Mock the prisma_client.db.litellm_objectpermissiontable.create call
+    mock_object_permission_create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm123")
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = (
+        mock_object_permission_create
+    )
+
+    # Mock prisma_client.insert_data for both user and key tables
+    async def _insert_data_side_effect(*args, **kwargs):  # type: ignore
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            # minimal attributes accessed later in generate_key_helper_fn
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_456",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+
+    # Attach the mocked prisma client to the proxy_server module
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # --- Import objects after monkeypatching ---
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # --- Call generate_key_fn with object_permission ---
+    request_data = GenerateKeyRequest(
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["my-vector"])
+    )
+
+    await generate_key_fn(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="user-1",
+        ),
+    )
+
+    # --- Assertions ---
+    # 1. Object permission creation was triggered
+    mock_object_permission_create.assert_called_once()
+
+    # 2. Key insert received the generated object_permission_id
+    key_insert_calls = [
+        call.kwargs
+        for call in mock_prisma_client.insert_data.call_args_list
+        if call.kwargs.get("table_name") == "key"
+    ]
+    assert len(key_insert_calls) == 1
+    assert key_insert_calls[0]["data"].get("object_permission_id") == "objperm123"

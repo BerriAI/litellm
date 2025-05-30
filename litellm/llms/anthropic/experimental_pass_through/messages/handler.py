@@ -140,7 +140,7 @@ def anthropic_messages_handler(
     )
     if anthropic_messages_provider_config is None:
         raise ValueError(
-            f"Anthropic messages provider config not found for model: {model}"
+            f"Anthropic messages provider config not found for model: {model}, custom_llm_provider: {custom_llm_provider}"
         )
     if custom_llm_provider is None:
         raise ValueError(

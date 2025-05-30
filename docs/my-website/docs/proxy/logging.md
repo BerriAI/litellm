@@ -2375,6 +2375,9 @@ pip install --upgrade sentry-sdk
 
 ```shell
 export SENTRY_DSN="your-sentry-dsn"
+# Optional: Configure Sentry sampling rates
+export SENTRY_API_SAMPLE_RATE="1.0"  # Controls what percentage of errors are sent (default: 1.0 = 100%)
+export SENTRY_API_TRACE_RATE="1.0"   # Controls what percentage of transactions are sampled for performance monitoring (default: 1.0 = 100%)
 ```
 
 ```yaml 

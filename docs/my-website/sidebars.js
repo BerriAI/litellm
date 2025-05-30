@@ -328,6 +328,7 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
+            "providers/bedrock_agents",
             "providers/bedrock_vector_store",
           ]
         },

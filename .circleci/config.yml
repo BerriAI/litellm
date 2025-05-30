@@ -79,7 +79,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.15.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow

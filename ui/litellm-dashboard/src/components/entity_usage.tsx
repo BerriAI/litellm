@@ -407,7 +407,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <Title>Spend Per {entityType === 'tag' ? 'Tag' : 'Team'}</Title>
                       <div className="flex items-center text-sm text-gray-500">
                         <span>Get Started Tracking cost per {entityType} </span>
-                        <a href="https://docs.litellm.ai/docs/proxy/tags" className="text-blue-500 hover:text-blue-700 ml-1">
+                        <a href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking" className="text-blue-500 hover:text-blue-700 ml-1">
                           here
                         </a>
                       </div>

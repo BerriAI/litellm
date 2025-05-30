@@ -14,6 +14,13 @@ if (isLocal != true) {
   console.log = function() {};
 }
 
+const HTTP_REQUEST = {
+  GET: "GET",
+  POST: "POST",
+  PUT: "PUT",
+  DELETE: "DELETE",
+};
+
 export const DEFAULT_ORGANIZATION = "default_organization";
 
 export interface Model {
@@ -4458,13 +4465,106 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchMCPServers = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
-export const listMCPTools = async (accessToken: string) => {
+    console.log("Fetching MCP servers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP servers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const createMCPServer = async (
+  accessToken: string,
+  formValues: Record<string, any> // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
+    
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPServer = async (
+  accessToken: String,
+  serverId: String
+) => {
+  try {
+    const url =
+      (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
+    console.log("in deleteMCPServer:", serverId);
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+  } catch (error) {
+    console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const listMCPTools = async (accessToken: string, serverId: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/mcp/tools/list`
-      : `/mcp/tools/list`;
+      ? `${proxyBaseUrl}/mcp/tools/list?server_id=${serverId}`
+      : `/mcp/tools/list?server_id=${serverId}`;
 
     console.log("Fetching MCP tools from:", url);
     
