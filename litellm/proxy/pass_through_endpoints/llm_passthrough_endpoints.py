@@ -323,6 +323,18 @@ async def mistral_proxy_route(
     return received_value
 
 
+async def is_streaming_request_fn(request: Request) -> bool:
+    if request.method == "POST":
+        content_type = request.headers.get("content-type", None)
+        if content_type and "multipart/form-data" in content_type:
+            _request_body = await get_form_data(request)
+        else:
+            _request_body = await _read_request_body(request)
+        if _request_body.get("stream"):
+            return True
+    return False
+
+
 @router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -355,16 +367,7 @@ async def anthropic_proxy_route(
     )
 
     ## check for streaming
-    is_streaming_request = False
-    # anthropic is streaming when 'stream' = True is in the body
-    if request.method == "POST":
-        content_type = request.headers.get("content-type", None)
-        if content_type and "multipart/form-data" in content_type:
-            _request_body = await get_form_data(request)
-        else:
-            _request_body = await _read_request_body(request)
-        if _request_body.get("stream"):
-            is_streaming_request = True
+    is_streaming_request = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
