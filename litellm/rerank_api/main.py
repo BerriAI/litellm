@@ -323,6 +323,26 @@ def rerank(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 client=client,
             )
+        elif _custom_llm_provider == "huggingface":
+            api_key = dynamic_api_key or optional_params.api_key or litellm.huggingface_key or get_secret_str("HUGGINGFACE_API_KEY")
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base
+            # Only require API key if no custom api_base is provided
+            if api_key is None and api_base is None:
+                raise ValueError("HuggingFace API key is required. Please set 'HUGGINGFACE_API_KEY' in your environment.")
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
 

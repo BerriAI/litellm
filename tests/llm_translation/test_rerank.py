@@ -521,3 +521,37 @@ def test_rerank_infer_region_from_model_arn(monkeypatch):
         print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
         assert "us-west-2" in mock_post.call_args.kwargs["url"]
         assert "us-east-1" not in mock_post.call_args.kwargs["url"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
+def test_basic_rerank_huggingface(sync_mode):
+    """Test HuggingFace rerank provider basic rerank call."""
+    import os
+    api_key = os.getenv("HUGGINGFACE_API_KEY", "test_hf_api_key")
+    if sync_mode is True:
+        response = litellm.rerank(
+            model="huggingface/BAAI/bge-reranker-base",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=2,
+            api_key=api_key,
+            custom_llm_provider="huggingface",
+        )
+        print("huggingface rerank response:", response)
+        assert response.results is not None
+        assert_response_shape(response, custom_llm_provider="huggingface")
+    else:
+        import asyncio
+        response = asyncio.run(litellm.arerank(
+            model="huggingface/BAAI/bge-reranker-base",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=2,
+            api_key=api_key,
+            custom_llm_provider="huggingface",
+        ))
+        print("huggingface async rerank response:", response)
+        assert response.results is not None
+        assert_response_shape(response, custom_llm_provider="huggingface")
