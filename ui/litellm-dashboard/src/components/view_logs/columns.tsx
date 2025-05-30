@@ -464,7 +464,27 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
     header: "Table Name",
     accessorKey: "table_name",
-    cell: (info: any) => <span>{info.getValue()}</span>,
+    cell: (info: any) => {
+      const tableName = info.getValue();
+      let displayValue = tableName;
+      switch (tableName) {
+        case "LiteLLM_VerificationToken":
+          displayValue = "Keys";
+          break;
+        case "LiteLLM_TeamTable":
+          displayValue = "Teams";
+          break;
+        case "LiteLLM_OrganizationTable":
+          displayValue = "Organizations";
+          break;
+        case "LiteLLM_UserTable":
+          displayValue = "Users";
+          break;
+        default:
+          displayValue = tableName;
+      }
+      return <span>{displayValue}</span>;
+    },
   },
   {
     header: "Object ID",
