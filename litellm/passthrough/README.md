@@ -10,10 +10,13 @@ import litellm
 
 
 response = litellm.llm_passthrough_route(
-    model="papluca/xlm-roberta-base-language-detection",
-    input="Hello, world!",
-    api_base="http://localhost:8090",
-    endpoint="classify",
+    method="POST",
+    initial_url="http://localhost:4000/classify",
+    target_api_base="http://localhost:8090",
+    json={
+        "model": "papluca/xlm-roberta-base-language-detection",
+        "input": "Hello, world!",
+    }
 )
 
 print(response)
@@ -39,7 +42,8 @@ router = Router(
 request_data = {
     "model": "papluca/xlm-roberta-base-language-detection",
     "input": "Hello, world!",
-    "endpoint": "classify",
+    "method": "POST",
+    "url": "http://localhost:8090/classify",
 }
 
 response = router.llm_passthrough_route(**request_data)
