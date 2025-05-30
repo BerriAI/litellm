@@ -4,6 +4,8 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 from typing import Any, Dict, List, Optional, Union
 
+from langfuse.api import ChatMessage
+from openai.types.chat.chat_completion import Choice
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -688,3 +690,51 @@ class LiteLLMCompletionResponsesConfig:
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+
+    @staticmethod
+    def transform_responses_api_response_to_chat_completion_response(
+        responses_api_response: ResponsesAPIResponse,
+    ) -> ModelResponse:
+        """
+        Inverse of transform_chat_completion_response_to_responses_api_response.
+        """
+        # Reconstruct choices from ResponsesAPIResponse.output
+        choices: List[Choice] = []
+        for item in responses_api_response.output:
+            if isinstance(item, GenericResponseOutputItem):
+                msg = ChatMessage(
+                    role=item.role,
+                    content=item.content[0] if item.content else ""
+                )
+                choices.append(Choice(
+                    message=msg,
+                    finish_reason=item.status
+                ))
+            elif isinstance(item, OutputFunctionToolCall):
+                # function/tool calls pass through as-is
+                choices.append(item)
+
+        return ModelResponse(
+            id=responses_api_response.id,
+            created=responses_api_response.created_at,
+            model=responses_api_response.model,
+            object=responses_api_response.object,
+            error=responses_api_response.error,
+            incomplete_details=responses_api_response.incomplete_details,
+            instructions=responses_api_response.instructions,
+            metadata=responses_api_response.metadata,
+            choices=choices,
+            parallel_tool_calls=responses_api_response.parallel_tool_calls,
+            temperature=responses_api_response.temperature,
+            tool_choice=responses_api_response.tool_choice,
+            tools=responses_api_response.tools,
+            top_p=responses_api_response.top_p,
+            max_output_tokens=responses_api_response.max_output_tokens,
+            previous_response_id=responses_api_response.previous_response_id,
+            reasoning=responses_api_response.reasoning,
+            status=responses_api_response.status,
+            truncation=responses_api_response.truncation,
+            usage=responses_api_response.usage,
+            user=responses_api_response.user,
+        )
+

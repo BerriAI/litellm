@@ -231,120 +231,15 @@ class ChatConfig(BaseConfig):
             raise httpx.HTTPError(f"Invalid JSON from responses API: {raw_response.text}")
         
         # Use the existing transformation logic to convert responses API to chat completion
-        input_param = request_data.get("input", [])
-        responses_api_request = ResponsesAPIOptionalRequestParams(
-            instructions=request_data.get("instructions"),
-            tools=request_data.get("tools"),
-            tool_choice=request_data.get("tool_choice"),
-            temperature=request_data.get("temperature"),
-            top_p=request_data.get("top_p"),
-            text=request_data.get("text"),
-            reasoning=request_data.get("reasoning"),
-            store=request_data.get("store"),
-            truncation=request_data.get("truncation"),
-            previous_response_id=request_data.get("previous_response_id"),
-            max_output_tokens=request_data.get("max_output_tokens"),
-            parallel_tool_calls=request_data.get("parallel_tool_calls"),
-            user=request_data.get("user"),
-            metadata=request_data.get("metadata", {})
-        )
-        
+        responses_api_response = ResponsesAPIResponse.model_validate(raw_response.json())
+
         # Transform the responses API response to chat completion format
         print(f"Chat provider: Raw response from openai: {resp_json}")
-        print(f"Chat provider: responses_api_request: {responses_api_request}")
+        print(f"Chat provider: responses_api_request: {responses_api_response}")
 
-        try:
-            chat_completion_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input=input_param,
-                responses_api_request=responses_api_request,
-                chat_completion_response=resp_json
-            )
-            print(f"Chat provider: Transformation successful, output items: {len(getattr(chat_completion_response, 'output', []))}")
-        except Exception as e:
-            print(f"Chat provider: Transformation failed: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-        
-        # Build proper ModelResponse from the responses API response
-        choices = []
-        
-        print(f"Chat provider: Processing {len(chat_completion_response.output)} output items")
-        
-        # Process output items to build choices
-        for i, output_item in enumerate(chat_completion_response.output):
-            print(f"Chat provider: Output item {i}: type={getattr(output_item, 'type', 'unknown')}")
-            
-            if hasattr(output_item, 'type') and output_item.type == "message":
-                # Extract content from the message
-                content = ""
-                if hasattr(output_item, 'content') and output_item.content:
-                    print(f"Chat provider: Processing {len(output_item.content)} content items")
-                    for j, content_item in enumerate(output_item.content):
-                        print(f"Chat provider: Content item {j}: type={getattr(content_item, 'type', 'unknown')}, text={getattr(content_item, 'text', 'N/A')}")
-                        if hasattr(content_item, 'text') and content_item.text is not None:
-                            content += str(content_item.text)
-                        else:
-                            print(f"Chat provider: Skipping content item {j} - text is None or missing")
-                else:
-                    print(f"Chat provider: No content found in output item {i}")
-                
-                print(f"Chat provider: Final extracted content: '{content}'")
-                
-                message = {
-                    "role": getattr(output_item, "role", "assistant"),
-                    "content": content
-                }
-                
-                # Add tool calls if present
-                tool_calls = []
-                for output in chat_completion_response.output:
-                    if hasattr(output, 'type') and output.type == "function_call":
-                        tool_calls.append({
-                            "id": getattr(output, "call_id", getattr(output, "id", "")),
-                            "type": "function",
-                            "function": {
-                                "name": getattr(output, "name", ""),
-                                "arguments": getattr(output, "arguments", "")
-                            }
-                        })
-                
-                if tool_calls:
-                    message["tool_calls"] = tool_calls
-                
-                choices.append({
-                    "index": 0,
-                    "message": message,
-                    "finish_reason": self._map_responses_status_to_finish_reason(chat_completion_response.status)
-                })
-                break  # Only process the first message for now
-        
-        # If no message found, create a default one
-        if not choices:
-            choices.append({
-                "index": 0,
-                "message": {"role": "assistant", "content": ""},
-                "finish_reason": "stop"
-            })
-        
-        # Build usage from the responses API response
-        usage_obj = getattr(chat_completion_response, "usage", None)
-        if usage_obj:
-            usage = Usage(
-                prompt_tokens=getattr(usage_obj, "input_tokens", 0),
-                completion_tokens=getattr(usage_obj, "output_tokens", 0),
-                total_tokens=getattr(usage_obj, "total_tokens", 0),
-            )
-        else:
-            print("Chat provider: No usage data found, using defaults")
-            usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-        
-        return ModelResponse(
-            id=getattr(chat_completion_response, "id", "unknown"),
-            choices=choices,
-            created=getattr(chat_completion_response, "created_at", int(time.time())),
-            model=getattr(chat_completion_response, "model", "unknown"),
-            usage=usage,
+        # Inverse‐transform back to the original ModelResponse
+        return LiteLLMCompletionResponsesConfig.transform_responses_api_response_to_chat_completion_response(
+            responses_api_response=responses_api_response
         )
 
     def transform_streaming_response(
