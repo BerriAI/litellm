@@ -273,6 +273,22 @@ async def update_organization(
     updated_organization_row = prisma_client.jsonify_object(
         data.model_dump(exclude_none=True)
     )
+    existing_organization_row = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": data.organization_id},
+        )
+    )
+
+    if existing_organization_row is None:
+        raise ValueError(
+            f"Organization not found for organization_id={data.organization_id}"
+        )
+
+    if data.object_permission is not None:
+        updated_organization_row = await handle_update_object_permission(
+            data_json=updated_organization_row,
+            existing_organization_row=existing_organization_row,
+        )
 
     response = await prisma_client.db.litellm_organizationtable.update(
         where={"organization_id": data.organization_id},
@@ -281,6 +297,74 @@ async def update_organization(
     )
 
     return response
+
+
+async def handle_update_object_permission(
+    data_json: dict,
+    existing_organization_row: LiteLLM_OrganizationTable,
+) -> dict:
+    """
+    Handle the update of object permission for an organization.
+
+    - Upserts the new object permission into the LiteLLM_ObjectPermissionTable
+    - Adds object_permission_id to data_json (this gets added in the DB)
+    - Pops the object_permission from data_json
+    -
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ValueError("Prisma client not found")
+
+    #########################################################
+    # Ensure `object_permission` is not added to the data_json
+    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission: Union[dict, str] = data_json.pop("object_permission") or {}
+    if new_object_permission is None:
+        return data_json
+
+    # lookup existing object permission ID and update that entry
+    existing_object_permission_id = existing_organization_row.object_permission_id
+    existing_object_permissions_dict = {}
+
+    existing_object_permission = (
+        await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_object_permission_id},
+        )
+    )
+
+    # update the object permission
+    if existing_object_permission is not None:
+        existing_object_permissions_dict = existing_object_permission.model_dump(
+            exclude_unset=True, exclude_none=True
+        )
+
+    if isinstance(new_object_permission, str):
+        new_object_permission = json.loads(new_object_permission)
+
+    if isinstance(new_object_permission, dict):
+        existing_object_permissions_dict.update(new_object_permission)
+
+    #########################################################
+    # Commit the update to the LiteLLM_ObjectPermissionTable
+    #########################################################
+    created_object_permission_row = (
+        await prisma_client.db.litellm_objectpermissiontable.upsert(
+            where={"object_permission_id": existing_object_permission_id},
+            data={
+                "create": existing_object_permissions_dict,
+                "update": existing_object_permissions_dict,
+            },
+        )
+    )
+    data_json[
+        "object_permission_id"
+    ] = created_object_permission_row.object_permission_id
+    verbose_proxy_logger.debug(
+        f"created_object_permission_row: {created_object_permission_row}"
+    )
+    return data_json
 
 
 @router.delete(
