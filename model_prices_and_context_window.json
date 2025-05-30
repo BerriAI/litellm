@@ -331,7 +331,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true
     },
-    "watsonx/mistralai/mistral-large"": {
+    "watsonx/mistralai/mistral-large": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
