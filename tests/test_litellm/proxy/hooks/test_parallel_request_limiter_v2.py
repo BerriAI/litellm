@@ -526,3 +526,66 @@ async def test_bad_router_call_v2(monkeypatch, rate_limit_object):
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_check_key_in_limits_v2_sliding_window():
+    """
+    Test the check_key_in_limits_v2 function with sliding window logic
+    """
+    print("Starting test")
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=2)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    print("Created handler")
+    # Get current time and calculate slots
+    current_time = datetime.now()
+    current_slot = (current_time.minute * 60 + current_time.second) // 15
+    current_slot_key = (
+        f"{current_time.strftime('%Y-%m-%d')}-{current_time.hour:02d}-{current_slot}"
+    )
+    print(f"Current slot key: {current_slot_key}")
+
+    print("Making first request")
+    # Test 1: First request should succeed
+    await parallel_request_handler.check_key_in_limits_v2(
+        user_api_key_dict=user_api_key_dict,
+        data={},
+        max_parallel_requests=None,
+        precise_minute=current_slot_key,
+        tpm_limit=None,
+        rpm_limit=3,
+        rate_limit_type="key",
+    )
+    print("First request completed")
+
+    print("Making second request")
+    # Test 2: Second request should succeed
+    await parallel_request_handler.check_key_in_limits_v2(
+        user_api_key_dict=user_api_key_dict,
+        data={},
+        max_parallel_requests=None,
+        precise_minute=current_slot_key,
+        tpm_limit=None,
+        rpm_limit=3,
+        rate_limit_type="key",
+    )
+    print("Second request completed")
+
+    print("Verifying cache")
+    # Make third request - should fail
+    with pytest.raises(HTTPException):
+        await parallel_request_handler.check_key_in_limits_v2(
+            user_api_key_dict=user_api_key_dict,
+            data={},
+            max_parallel_requests=None,
+            precise_minute=current_slot_key,
+            tpm_limit=None,
+            rpm_limit=2,
+            rate_limit_type="key",
+        )
