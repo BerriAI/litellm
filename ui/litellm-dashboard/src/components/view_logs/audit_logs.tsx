@@ -16,11 +16,11 @@ interface AuditLogsProps {
 }
 
 export interface PaginatedAuditLogResponse {
-  data: AuditLogEntry[];
   total: number;
   page: number;
   page_size: number;
   total_pages: number;
+  audit_logs: AuditLogEntry[];
 }
 
 export default function AuditLogs({
@@ -54,11 +54,11 @@ export default function AuditLogs({
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
         return {
-          data: [],
           total: 0,
           page: 1,
           page_size: pageSize,
           total_pages: 0,
+          audit_logs: [],
         };
       }
 
@@ -76,18 +76,12 @@ export default function AuditLogs({
         pageSize,
       );
 
-      // Update logs with prefetched data if available
-      response.data = response.data.map((log: AuditLogEntry) => {
-        return log;
-      });
-
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID,
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
-
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
@@ -109,7 +103,7 @@ export default function AuditLogs({
 
               <div className="flex items-center gap-2">
                 <div className="relative" ref={quickSelectRef}>
-                  <button
+                  {/* <button
                     onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                     className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
                   >
@@ -127,9 +121,9 @@ export default function AuditLogs({
                       />
                     </svg>
                     {getTimeRangeDisplay(isCustomDate, startTime, endTime)}
-                  </button>
+                  </button> */}
 
-                  {quickSelectOpen && (
+                  {/* {quickSelectOpen && (
                     <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                       <div className="space-y-1">
                         {[
@@ -169,7 +163,7 @@ export default function AuditLogs({
                         </button>
                       </div>
                     </div>
-                  )}
+                  )} */}
                 </div>
                 
                 <button
@@ -286,7 +280,7 @@ export default function AuditLogs({
         </div>
         <DataTable
           columns={auditLogColumns}
-          data={logs.data?.data ?? []}
+          data={logs.data?.audit_logs ?? []}
           renderSubComponent={() => {return <></>}}
           getRowCanExpand={() => true}
         />

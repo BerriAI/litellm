@@ -5224,8 +5224,8 @@ export const uiAuditLogsCall = async (
 
     // Add query parameters if they exist
     const queryParams = new URLSearchParams();
-    if (start_date) queryParams.append('start_date', start_date);
-    if (end_date) queryParams.append('end_date', end_date);
+    // if (start_date) queryParams.append('start_date', start_date);
+    // if (end_date) queryParams.append('end_date', end_date);
     if (page) queryParams.append('page', page.toString());
     if (page_size) queryParams.append('page_size', page_size.toString());
 

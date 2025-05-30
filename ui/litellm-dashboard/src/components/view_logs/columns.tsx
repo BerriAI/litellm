@@ -370,15 +370,14 @@ export type AuditLogEntry = {
   action: string;
   table_name: string;
   object_id: string;
-  before_value: string;
-  updated_values: string;
-  after_value: string | null;
+  before_value: {};
+  updated_values: {};
 }
 
 export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
-    header: "Time",
-    accessorKey: "startTime",
+    header: "Updated At",
+    accessorKey: "updated_at",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
@@ -386,4 +385,33 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     accessorKey: "action",
     cell: (info: any) => <span>{info.getValue()}</span>,
   },
+  {
+    header: "Changed By",
+    accessorKey: "changed_by",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Changed By API Key",
+    accessorKey: "changed_by_api_key",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Table Name",
+    accessorKey: "table_name",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Object ID",
+    accessorKey: "object_id",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Before Value",
+    accessorKey: "before_value",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Updated Values",
+    accessorKey: "updated_values",
+  }
 ]
