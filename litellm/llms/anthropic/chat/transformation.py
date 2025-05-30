@@ -620,7 +620,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or []
         )
         tools = self.add_code_execution_tool(messages=anthropic_messages, tools=_tools)
-        optional_params["tools"] = tools
+        if len(tools) > 1:
+            optional_params["tools"] = tools
 
         ## Load Config
         config = litellm.AnthropicConfig.get_config()
