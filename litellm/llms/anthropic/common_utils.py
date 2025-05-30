@@ -105,6 +105,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         #     betas.add("pdfs-2024-09-25")
         if file_id_used:
             betas.add("files-api-2025-04-14")
+            betas.add("code-execution-2025-05-22")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,

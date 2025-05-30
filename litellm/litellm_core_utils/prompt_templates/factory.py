@@ -1452,11 +1452,7 @@ def anthropic_process_openai_file_message(
             )
         elif content_block_type == "container_upload":
             return_block_param = AnthropicMessagesContainerUploadParam(
-                type="container_upload",
-                source=AnthropicContentParamSourceFileId(
-                    type="file",
-                    file_id=file_id,
-                ),
+                type="container_upload", file_id=file_id
             )
 
         if return_block_param is None:

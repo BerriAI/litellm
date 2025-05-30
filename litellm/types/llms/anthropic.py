@@ -57,11 +57,18 @@ class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_ed
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicCodeExecutionTool(TypedDict, total=False):
+    type: Required[str]
+    name: Required[Literal["code_execution"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicMessagesTool,
     AnthropicWebSearchTool,
+    AnthropicCodeExecutionTool,
 ]
 
 
@@ -114,7 +121,7 @@ class AnthropicContentParamSourceFileId(TypedDict):
 
 class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
     type: Required[Literal["container_upload"]]
-    source: Required[AnthropicContentParamSourceFileId]
+    file_id: str
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
