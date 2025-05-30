@@ -2372,6 +2372,7 @@ async def _list_key_helper(
             {"created_at": "desc"},
             {"token": "desc"},  # fallback sort
         ],
+        include={"object_permission": True},
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
