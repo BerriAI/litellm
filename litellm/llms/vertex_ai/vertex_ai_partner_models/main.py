@@ -1,6 +1,5 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from enum import Enum
 from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
