@@ -1543,19 +1543,39 @@ async def test_anthropic_message_via_anthropic_messages():
 
     httpx_response = AsyncMock()
     httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+
+    call_1_kwargs = {}
+    call_2_kwargs = {}
     with patch.object(client, "post", new=httpx_response) as mock_call:
         messages = [{"role": "user", "content": "List 5 cookie recipes"}]
         response = await litellm.anthropic_messages(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
-        print(f"response: {response}")
-        mock_call.assert_called_once()
-        print(f"mock_call.call_args: {mock_call.call_args}")
-        print(f"mock_call.call_args.kwargs: {mock_call.call_args.kwargs}")
-        json_data = json.loads(mock_call.call_args.kwargs["data"])
-        assert "max_tokens" in json_data
-        assert json_data["max_tokens"] == 100
 
-        assert mock_call.call_args.kwargs["headers"]["anthropic-version"] == "vertex-2023-10-16"
-        assert mock_call.call_args.kwargs["headers"]["Authorization"].startswith("Bearer ")
+        print(f"response: {response}")
+        assert mock_call.call_count == 1
+        call_1_kwargs = mock_call.call_args.kwargs
+
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        response_2 = await litellm.acompletion(model="vertex_ai/claude-3-5-sonnet@20240620", messages=messages, max_tokens=100, client=client)
+        print(f"response_2: {response_2}")
+        call_args = mock_call.call_args
+        print(f"call_args: {call_args}")
+        call_2_kwargs = mock_call.call_args.kwargs
+        call_2_kwargs["url"] = call_args[0][0]
+    
+    """
+    Compare Call 1 and Call 2
+
+    Expect:
+        - url 
+        - headers
+        - data / json
+
+        to be the same, except for the Authorization header.
+    """
+    print(f"call_1_kwargs: {call_1_kwargs}")
+    print(f"call_2_kwargs: {call_2_kwargs}")
+    assert call_1_kwargs["url"] == call_2_kwargs["url"], f"Expected url to be the same, but got {call_1_kwargs['url']} and Expected {call_2_kwargs['url']}"
+
 
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",

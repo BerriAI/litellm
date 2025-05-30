@@ -1,16 +1,17 @@
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 from ....vertex_llm_base import VertexBase
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
-    def validate_environment(
+    def validate_anthropic_messages_environment(
         self,
         headers: dict,
         model: str,
@@ -19,7 +20,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> dict:
+    ) -> Tuple[dict, Optional[str]]:
         """
         OPTIONAL
 
@@ -27,8 +28,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         """
         if "Authorization" not in headers:
             vertex_ai_project = (
-                optional_params.get("vertex_project", None)
-                or optional_params.get("vertex_ai_project", None)
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
                 or litellm.vertex_project
                 or get_secret_str("VERTEXAI_PROJECT")
             )
@@ -45,5 +46,30 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
             headers["Authorization"] = f"Bearer {access_token}"
-            headers["anthropic-version"] = "vertex-2023-10-16"
-        return headers
+
+            api_base = self.get_complete_vertex_url(
+                custom_api_base=api_base,
+                vertex_location=optional_params.pop("vertex_location", None),
+                vertex_project=vertex_ai_project,
+                project_id=project_id,
+                partner=VertexPartnerProvider.claude,
+                stream=optional_params.get("stream", False),
+                model=model,
+            )
+
+        return headers, api_base
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if api_base is None:
+            raise ValueError(
+                "api_base is required. Unable to determine the correct api_base for the request."
+            )
+        return api_base  # no transformation is needed - handled in validate_environment

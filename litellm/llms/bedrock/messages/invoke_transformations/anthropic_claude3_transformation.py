@@ -59,18 +59,6 @@ class AmazonAnthropicClaude3MessagesConfig(
             fake_stream=fake_stream,
         )
 
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: List[Any],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        return headers
-
     def get_complete_url(
         self,
         api_base: Optional[str],
