@@ -515,8 +515,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ########## If guardrail passed, then return the collected chunks ##########
             #########################################################################
             mock_response = MockResponseIterator(
-                model_response=assembled_model_response,
-                json_mode=False,
+                model_response=assembled_model_response
             )
 
             # Return the reconstructed stream
