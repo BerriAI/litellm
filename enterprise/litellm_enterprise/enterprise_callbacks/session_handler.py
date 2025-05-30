@@ -124,7 +124,7 @@ class _ENTERPRISE_ResponsesSessionHandler:
         """
         from litellm.proxy.proxy_server import prisma_client
 
-        verbose_proxy_logger.debug("decoding response id=", previous_response_id)
+        verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
         decoded_response_id = (
             ResponsesAPIRequestUtils._decode_responses_api_response_id(
