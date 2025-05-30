@@ -92,7 +92,8 @@ export function KeyEditView({
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
-    guardrails: keyData.metadata?.guardrails || []
+    guardrails: keyData.metadata?.guardrails || [],
+    vector_stores: keyData.object_permission?.vector_stores || []
   };
 
   return (
@@ -162,6 +163,14 @@ export function KeyEditView({
           mode="tags"
           style={{ width: "100%" }}
           placeholder="Select or enter guardrails"
+        />
+      </Form.Item>
+
+      <Form.Item label="Vector Stores" name="vector_stores">
+        <Select
+          mode="tags"
+          style={{ width: "100%" }}
+          placeholder="Select or enter vector stores"
         />
       </Form.Item>
 
