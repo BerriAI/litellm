@@ -107,9 +107,16 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceFileId(TypedDict):
+    type: Literal["file"]
+    file_id: str
+
+
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -119,7 +126,9 @@ class CitationsObject(TypedDict):
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
     context: str

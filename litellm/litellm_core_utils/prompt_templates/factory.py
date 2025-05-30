@@ -1491,6 +1491,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         elif m.get("type", "") == "file":
                             file_message = cast(ChatCompletionFileObject, m)
                             file_data = file_message["file"].get("file_data")
+                            file_id = file_message["file"].get("file_id")
                             if file_data:
                                 image_chunk = convert_to_anthropic_image_obj(
                                     openai_image_url=file_data,
@@ -1503,6 +1504,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
                                             type="base64",
                                             media_type=image_chunk["media_type"],
                                             data=image_chunk["data"],
+                                        ),
+                                    )
+                                )
+                                user_content.append(anthropic_document_param)
+                            elif file_id:
+                                anthropic_document_param = (
+                                    AnthropicMessagesDocumentParam(
+                                        type="document",
+                                        source=AnthropicContentParamSourceFileId(
+                                            type="file",
+                                            file_id=file_id,
                                         ),
                                     )
                                 )
