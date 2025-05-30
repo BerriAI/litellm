@@ -96,13 +96,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.03,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.05
-        }
+        "supports_native_streaming": true
     },
     "gpt-4.1-2025-04-14": {
         "max_tokens": 32768,
@@ -135,13 +129,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.03,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.05
-        }
+        "supports_native_streaming": true
     },
     "gpt-4.1-mini": {
         "max_tokens": 32768,
@@ -174,13 +162,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275,
-            "search_context_size_high": 0.03
-        }
+        "supports_native_streaming": true
     },
     "gpt-4.1-mini-2025-04-14": {
         "max_tokens": 32768,
@@ -213,13 +195,7 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275,
-            "search_context_size_high": 0.03
-        }
+        "supports_native_streaming": true
     },
     "gpt-4.1-nano": {
         "max_tokens": 32768,
@@ -305,13 +281,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.03,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.05
-        }
+        "supports_tool_choice": true
     },
     "watsonx/ibm/granite-3-8b-instruct": {
         "max_tokens": 8192,
@@ -349,13 +319,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.03,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.05
-        }
+        "supports_tool_choice": true
     },
     "gpt-4o-search-preview": {
         "max_tokens": 16384,
@@ -527,13 +491,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275,
-            "search_context_size_high": 0.03
-        }
+        "supports_tool_choice": true
     },
     "gpt-4o-mini-search-preview-2025-03-11": {
         "max_tokens": 16384,
@@ -553,13 +511,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275,
-            "search_context_size_high": 0.03
-        }
+        "supports_tool_choice": true
     },
     "gpt-4o-mini-search-preview": {
         "max_tokens": 16384,
@@ -954,13 +906,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true,
-        "search_context_cost_per_query": {
-            "search_context_size_low": 0.03,
-            "search_context_size_medium": 0.035,
-            "search_context_size_high": 0.05
-        }
+        "supports_tool_choice": true
     },
     "gpt-4o-2024-11-20": {
         "max_tokens": 16384,

@@ -174,6 +174,25 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
+
+    def test_web_search(self):
+        from litellm.utils import supports_web_search
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_web_search(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support web search")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+            web_search_options={}
+        )
+
+        assert response is not None
+
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_pdf_handling(self, pdf_messages, sync_mode):
