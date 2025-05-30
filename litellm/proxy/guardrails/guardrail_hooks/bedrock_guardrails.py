@@ -502,10 +502,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             chunks=all_chunks,
         )
         if isinstance(assembled_model_response, ModelResponse):
+            ####################################################################
+            ########## 1. Make the Bedrock Apply Guardrail API request ##########
+
+            # Bedrock will raise an exception if this violates the guardrail policy
+            ###################################################################
             await self.make_bedrock_api_request(
                 kwargs=request_data, response=assembled_model_response
             )
 
+            #########################################################################
+            ########## If guardrail passed, then return the collected chunks ##########
+            #########################################################################
             if isinstance(assembled_model_response, ModelResponse):
                 mock_response = MockResponseIterator(
                     model_response=assembled_model_response,
