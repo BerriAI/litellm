@@ -22,6 +22,7 @@ import { Form, Input, InputNumber, message, Select } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
+import ObjectPermissionsView from "./object_permissions_view";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -63,6 +64,16 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
       const currentKey = formValues.token;
       formValues.key = currentKey;
+
+      // Handle object_permission updates
+      if (formValues.vector_stores !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          vector_stores: formValues.vector_stores || []
+        };
+        // Remove vector_stores from the top level as it should be in object_permission
+        delete formValues.vector_stores;
+      }
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -250,6 +261,13 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                 </div>
               </Card>
             </Grid>
+
+            <div className="mt-6">
+              <ObjectPermissionsView 
+                objectPermission={keyData.object_permission} 
+                variant="card"
+              />
+            </div>
           </TabPanel>
 
           {/* Settings Panel */}
@@ -354,6 +372,12 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                       {JSON.stringify(keyData.metadata, null, 2)}
                     </pre>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={keyData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                  />
                 </div>
               )}
             </Card>
