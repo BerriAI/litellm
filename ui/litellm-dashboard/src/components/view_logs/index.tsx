@@ -218,7 +218,7 @@ export default function SpendLogsTable({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID,
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
@@ -702,6 +702,7 @@ export default function SpendLogsTable({
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              isActive={activeTab === "audit logs"}
             />
           </TabPanel>
         </TabPanels>

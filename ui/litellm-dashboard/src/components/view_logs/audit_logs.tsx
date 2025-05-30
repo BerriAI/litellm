@@ -13,6 +13,7 @@ interface AuditLogsProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  isActive: boolean;
 }
 
 export interface PaginatedAuditLogResponse {
@@ -28,6 +29,7 @@ export default function AuditLogs({
   userRole,
   token,
   accessToken,
+  isActive,
 }: AuditLogsProps) {
   const [startTime, setStartTime] = useState<string>(
     moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm")
@@ -78,7 +80,7 @@ export default function AuditLogs({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID,
+    enabled: !!accessToken && !!token && !!userRole && !!userID && isActive,
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });

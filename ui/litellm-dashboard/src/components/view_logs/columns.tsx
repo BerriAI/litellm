@@ -408,10 +408,11 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
     header: "Before Value",
     accessorKey: "before_value",
-    cell: (info: any) => <span>{info.getValue()}</span>,
+    cell: (info: any) => <pre>{JSON.stringify(info.getValue(), null, 2)}</pre>,
   },
   {
     header: "Updated Values",
     accessorKey: "updated_values",
+    cell: (info: any) => <pre>{JSON.stringify(info.getValue(), null, 2)}</pre>,
   }
 ]
