@@ -30,7 +30,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -116,40 +115,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = self.optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = self.optional_params.pop("aws_access_key_id", None)
-        aws_session_token = self.optional_params.pop("aws_session_token", None)
-        aws_region_name = self.optional_params.pop("aws_region_name", None)
-        aws_role_name = self.optional_params.pop("aws_role_name", None)
-        aws_session_name = self.optional_params.pop("aws_session_name", None)
-        aws_profile_name = self.optional_params.pop("aws_profile_name", None)
-        self.optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token = self.optional_params.pop(
+        aws_secret_access_key = self.optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = self.optional_params.get("aws_access_key_id", None)
+        aws_session_token = self.optional_params.get("aws_session_token", None)
+        aws_region_name = self.optional_params.get("aws_region_name", None)
+        aws_role_name = self.optional_params.get("aws_role_name", None)
+        aws_session_name = self.optional_params.get("aws_session_name", None)
+        aws_profile_name = self.optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = self.optional_params.get(
             "aws_web_identity_token", None
         )
-        aws_sts_endpoint = self.optional_params.pop("aws_sts_endpoint", None)
+        aws_sts_endpoint = self.optional_params.get("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
+        aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+            aws_region_name=aws_region_name,
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,

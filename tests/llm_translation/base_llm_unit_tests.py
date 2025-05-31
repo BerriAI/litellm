@@ -8,6 +8,7 @@ import os
 import uuid
 import time
 import base64
+import inspect
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -77,10 +78,19 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
-
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         """Must return the base completion call args with reasoning_effort"""
         return {}
+
+    @pytest.fixture(autouse=True)
+    def _handle_rate_limits(self):
+        """Fixture to handle rate limit errors for all test methods"""
+        try:
+            yield
+        except litellm.RateLimitError:
+            pytest.skip("Rate limit exceeded")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
     def test_developer_role_translation(self):
         """

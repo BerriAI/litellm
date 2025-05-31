@@ -40,7 +40,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
 
     PROD Test
     """
-    litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     router = Router(
         model_list=[

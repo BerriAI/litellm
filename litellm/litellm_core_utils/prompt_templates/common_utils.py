@@ -669,3 +669,4 @@ def migrate_file_to_image_url(
     if format and isinstance(image_url_object["image_url"], dict):
         image_url_object["image_url"]["format"] = format
     return image_url_object
+

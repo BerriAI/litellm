@@ -422,6 +422,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             accessToken={accessToken}
             data={keys}
             addKey={addKey}
+            premiumUser={premiumUser}
           />
 
           <ViewKeyTable

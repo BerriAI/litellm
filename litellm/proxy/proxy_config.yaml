@@ -3,10 +3,6 @@ model_list:
     litellm_params:
       model: anthropic/*
   
-
-general_settings:
-  store_prompts_in_spend_logs: true
-
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
@@ -16,3 +12,7 @@ guardrails:
       guardrailVersion: "DRAFT"         # your guardrail version on bedrock
       default_on: true
   
+
+general_settings:
+  store_prompts_in_spend_logs: true
+
