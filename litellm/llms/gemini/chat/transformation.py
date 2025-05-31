@@ -67,6 +67,20 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    def is_model_gemini_audio_model(self, model: str) -> bool:
+        # Check if model contains "tts" and is a Gemini model
+        if "tts" in model:
+            # Check if it's in the gemini_models list
+            if model in litellm.gemini_models:
+                return True
+            # Also check with gemini/ prefix
+            if f"gemini/{model}" in litellm.gemini_models:
+                return True
+            # Check if it's a known Gemini TTS model pattern
+            if "gemini" in model and "tts" in model:
+                return True
+        return False
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "temperature",
@@ -88,6 +102,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+        if self.is_model_gemini_audio_model(model):
+            supported_params.append("audio")
         return supported_params
 
     def map_openai_params(
@@ -97,6 +113,40 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        # Handle audio parameter for TTS models
+        if self.is_model_gemini_audio_model(model):
+            for param, value in non_default_params.items():
+                if param == "audio" and isinstance(value, dict):
+                    # Validate audio format - Gemini TTS only supports pcm16
+                    audio_format = value.get("format")
+                    if audio_format is not None and audio_format != "pcm16":
+                        raise ValueError(
+                            f"Unsupported audio format for Gemini TTS models: {audio_format}. "
+                            f"Gemini TTS models only support 'pcm16' format as they return audio data in L16 PCM format. "
+                            f"Please set audio format to 'pcm16'."
+                        )
+
+                    # Map OpenAI audio parameter to Gemini speech config
+                    speech_config = {}
+                    voice_config = {}
+
+                    if "voice" in value:
+                        voice_config["prebuiltVoiceConfig"] = {
+                            "voiceName": value["voice"]
+                        }
+
+                    if voice_config:
+                        speech_config["voiceConfig"] = voice_config
+
+                    if speech_config:
+                        optional_params["speechConfig"] = speech_config
+
+                    # Ensure audio modality is set
+                    if "responseModalities" not in optional_params:
+                        optional_params["responseModalities"] = ["AUDIO"]
+                    elif "AUDIO" not in optional_params["responseModalities"]:
+                        optional_params["responseModalities"].append("AUDIO")
+
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(
