@@ -52,15 +52,7 @@ LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
 ## Vector Store Permissions
 
-This release introduces comprehensive vector store access controls, allowing administrators to manage permissions at the Key, Team, and Organization levels. This provides:
-
-- **Granular Access Control**: Control which vector stores users can access based on their permissions
-- **Team-based Management**: Assign vector store permissions to entire teams  
-- **Organization-wide Policies**: Set organization-level vector store access rules
-- **UI Integration**: Full management interface for viewing and editing vector store permissions
-
-Vector store permissions are now enforced across all LiteLLM authentication mechanisms, ensuring secure access to your vector data.
-
+To add
 
 ## Aiohttp Transport used by default
 
