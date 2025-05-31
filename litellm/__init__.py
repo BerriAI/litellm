@@ -1136,3 +1136,6 @@ disable_hf_tokenizer_download: Optional[
     bool
 ] = None  # disable huggingface tokenizer download. Defaults to openai clk100
 global_disable_no_log_param: bool = False
+
+### PASSTHROUGH ###
+from .passthrough import allm_passthrough_route, llm_passthrough_route

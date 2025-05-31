@@ -750,8 +750,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
-                    "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
-                        api_key
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
+                        type(api_key) if api_key is not None else "None"
                     )
                 )
             abbreviated_api_key = abbreviate_api_key(api_key=api_key)
