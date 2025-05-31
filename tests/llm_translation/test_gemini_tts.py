@@ -52,15 +52,15 @@ class TestGeminiTTSTransformation:
     def test_gemini_tts_audio_parameter_mapping(self):
         """Test audio parameter mapping for TTS models"""
         config = GoogleAIStudioGeminiConfig()
-        
+
         non_default_params = {
             "audio": {
                 "voice": "Kore",
-                "format": "wav"
+                "format": "pcm16"
             }
         }
         optional_params = {}
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -188,7 +188,7 @@ def test_gemini_tts_completion_mock():
         response = litellm.completion(
             model="gemini-2.5-flash-preview-tts",
             messages=[{"role": "user", "content": "Say hello"}],
-            audio={"voice": "Kore", "format": "wav"}
+            audio={"voice": "Kore", "format": "pcm16"}
         )
 
         assert response is not None

@@ -669,10 +669,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _content_str = ""
             if "text" in part:
                 text_content = part["text"]
+                # Check if text content is audio data URI - if so, exclude from text content
+                if text_content.startswith("data:audio") and ";base64," in text_content:
+                    try:
+                        if is_base64_encoded(text_content):
+                            media_type, _ = text_content.split("data:")[1].split(";base64,")
+                            if media_type.startswith("audio/"):
+                                continue
+                    except (ValueError, IndexError):
+                        # If parsing fails, treat as regular text
+                        pass
                 _content_str += text_content
             elif "inlineData" in part:
                 mime_type = part["inlineData"]["mimeType"]
                 data = part["inlineData"]["data"]
+                # Check if inline data is audio - if so, exclude from text content
+                if mime_type.startswith("audio/"):
+                    continue
                 _content_str += "data:{};base64,{}".format(mime_type, data)
 
             if len(_content_str) > 0:
