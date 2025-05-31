@@ -27,9 +27,11 @@ def test_llm_passthrough_route():
         return_value=MagicMock(status_code=200, json={"message": "Hello, world!"}),
     ) as mock_post:
         response = llm_passthrough_route(
+            model="gpt-3.5-turbo",
+            endpoint="v1/chat/completions",
             method="POST",
             request_url="http://localhost:8000/v1/chat/completions",
-            target_api_base="http://localhost:8090",
+            api_base="http://localhost:8090",
             json={
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "Hello, world!"}],
