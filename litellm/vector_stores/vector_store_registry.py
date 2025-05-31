@@ -169,10 +169,31 @@ class VectorStoreRegistry:
         Only add the vector store if it is not already in the registry
         """
         vector_store_id = vector_store.get("vector_store_id")
-        for vector_store in self.vector_stores:
-            if vector_store.get("vector_store_id") == vector_store_id:
-                return
+        if vector_store_id is None:
+            raise ValueError(
+                "vector_store_id is required for adding vector store to registry"
+            )
+
+        if self._does_vector_store_already_exist_in_registry(
+            vector_store_id=vector_store_id
+        ):
+            verbose_logger.debug(
+                "vector store already in registry, skipping: %s",
+                vector_store_id,
+            )
+            return
         self.vector_stores.append(vector_store)
+
+    def _does_vector_store_already_exist_in_registry(
+        self, vector_store_id: str
+    ) -> bool:
+        """
+        Check if a vector store already exists in the registry
+        """
+        for _vector_store in self.vector_stores:
+            if _vector_store.get("vector_store_id") == vector_store_id:
+                return True
+        return False
 
     def delete_vector_store_from_registry(self, vector_store_id: str):
         """
