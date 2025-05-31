@@ -152,9 +152,6 @@ print(result)
     - Fix "UI Session Expired. Logging out" - [PR](https://github.com/BerriAI/litellm/pull/11279)
     - Support for forwarding /sso/key/generate to server root path URL - [PR](https://github.com/BerriAI/litellm/pull/11165)
 
-## Authentication & Security
-
-
 
 ## Logging / Guardrails Integrations
 
