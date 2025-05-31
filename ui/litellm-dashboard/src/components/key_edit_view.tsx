@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
@@ -200,13 +200,15 @@ export function KeyEditView({
         <Input />
       </Form.Item>
 
-      <div className="flex justify-end gap-2 mt-6">
-        <Button variant="light" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button>
-          Save Changes
-        </Button>
+      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+        <div className="flex justify-end items-center gap-2">
+          <AntdButton onClick={onCancel}>
+            Cancel
+          </AntdButton>
+          <TremorButton type="submit">
+            Save Changes
+          </TremorButton>
+        </div>
       </div>
     </Form>
   );
