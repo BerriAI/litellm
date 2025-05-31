@@ -132,6 +132,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     ):
         ## INCREMENT CURRENT USAGE
         increment_list: List[Tuple[str, int]] = []
+        decrement_list: List[Tuple[str, int]] = []
         slots_to_check: List[str] = []
         increment_value_by_group = {
             "request_count": 1,
@@ -179,6 +180,9 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
                 # Only increment the current slot
                 if slot_key == slots_to_check[0]:
                     increment_list.append((key, increment_value_by_group[group]))
+                    decrement_list.append(
+                        (key, -1 if increment_value_by_group[group] == 1 else 0)
+                    )
                 slot_cache_keys.append(key)
 
         if (
@@ -200,15 +204,26 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             current_values = [None] * len(slot_cache_keys)
 
         # Calculate totals across all slots, handling None values
-        total_requests = sum(
-            v if v is not None else 0 for v in current_values[::3]
-        )  # Every 3rd value is request_count
-        total_rpm = sum(
-            v if v is not None else 0 for v in current_values[1::3]
-        )  # Every 3rd value is rpm
-        total_tpm = sum(
-            v if v is not None else 0 for v in current_values[2::3]
-        )  # Every 3rd value is tpm
+        # Group values by type (request_count, rpm, tpm)
+        request_counts = []
+        rpm_counts = []
+        tpm_counts = []
+
+        for i in range(0, len(current_values), 3):
+            request_counts.append(
+                current_values[i] if current_values[i] is not None else 0
+            )
+            rpm_counts.append(
+                current_values[i + 1] if current_values[i + 1] is not None else 0
+            )
+            tpm_counts.append(
+                current_values[i + 2] if current_values[i + 2] is not None else 0
+            )
+
+        # Calculate totals across all slots
+        total_requests = sum(request_counts)
+        total_rpm = sum(rpm_counts)
+        total_tpm = sum(tpm_counts)
 
         should_raise_error = False
         if max_parallel_requests is not None:
@@ -219,6 +234,12 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             should_raise_error = should_raise_error or total_tpm > tpm_limit
 
         if should_raise_error:
+            ## DECREMENT CURRENT USAGE - so we don't keep failing subsequent requests
+            await self._increment_value_list_in_current_window(
+                increment_list=decrement_list,
+                ttl=60,
+            )
+
             raise self.raise_rate_limit_error(
                 additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current usage: max_parallel_requests: {total_requests}, current_rpm: {total_rpm}, current_tpm: {total_tpm}. Current limits: max_parallel_requests: {max_parallel_requests}, rpm_limit: {rpm_limit}, tpm_limit: {tpm_limit}."
             )
