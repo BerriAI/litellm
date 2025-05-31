@@ -43,7 +43,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
@@ -64,8 +63,10 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
-    GenericStreamingChunk,
+    Delta,
+    ModelResponseStream,
     PromptTokensDetailsWrapper,
+    StreamingChoices,
     TopLogprob,
     Usage,
 )
@@ -1650,14 +1651,15 @@ class ModelResponseIterator:
         self.accumulated_json = ""
         self.sent_first_chunk = False
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
 
             text = ""
+            reasoning_content = None
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             gemini_chunk: Optional[Candidates] = None
             if _candidates and len(_candidates) > 0:
@@ -1669,7 +1671,11 @@ class ModelResponseIterator:
                 and "parts" in gemini_chunk["content"]
             ):
                 if "text" in gemini_chunk["content"]["parts"][0]:
-                    text = gemini_chunk["content"]["parts"][0]["text"]
+                    if gemini_chunk["content"]["parts"][0].get("thought"):
+                        reasoning_content = gemini_chunk["content"]["parts"][0]["text"]
+                    else:
+                        text = gemini_chunk["content"]["parts"][0]["text"]
+
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
                     function_call = ChatCompletionToolCallFunctionChunk(
                         name=gemini_chunk["content"]["parts"][0]["functionCall"][
@@ -1695,7 +1701,7 @@ class ModelResponseIterator:
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
-                usage = ChatCompletionUsageBlock(
+                usage = Usage(
                     prompt_tokens=processed_chunk["usageMetadata"].get(
                         "promptTokenCount", 0
                     ),
@@ -1705,20 +1711,26 @@ class ModelResponseIterator:
                     total_tokens=processed_chunk["usageMetadata"].get(
                         "totalTokenCount", 0
                     ),
-                    completion_tokens_details={
-                        "reasoning_tokens": processed_chunk["usageMetadata"].get(
+                    completion_tokens_details=CompletionTokensDetailsWrapper(
+                        reasoning_tokens=processed_chunk["usageMetadata"].get(
                             "thoughtsTokenCount", 0
                         )
-                    },
+                    ),
                 )
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=False,
-                finish_reason=finish_reason,
+            returned_chunk = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content=text,
+                            tool_calls=[tool_use] if tool_use is not None else None,
+                            reasoning_content=reasoning_content,
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
-                index=0,
             )
             return returned_chunk
         except json.JSONDecodeError:
@@ -1729,7 +1741,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
-    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_valid_json_chunk(self, chunk: str) -> ModelResponseStream:
         chunk = chunk.strip()
         try:
             json_chunk = json.loads(chunk)
@@ -1747,7 +1759,7 @@ class ModelResponseIterator:
 
         return self.chunk_parser(chunk=json_chunk)
 
-    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def handle_accumulated_json_chunk(self, chunk: str) -> ModelResponseStream:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
@@ -1761,16 +1773,18 @@ class ModelResponseIterator:
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
             # If it's not valid JSON yet, continue to the next event
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=""),
+                        finish_reason="",
+                    )
+                ],
                 usage=None,
-                index=0,
-                tool_use=None,
             )
 
-    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+    def _common_chunk_parsing_logic(self, chunk: str) -> ModelResponseStream:
         try:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
@@ -1784,13 +1798,15 @@ class ModelResponseIterator:
                 elif self.chunk_type == "accumulated_json":
                     return self.handle_accumulated_json_chunk(chunk=chunk)
 
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=""),
+                        finish_reason="",
+                    )
+                ],
                 usage=None,
-                index=0,
-                tool_use=None,
             )
         except Exception:
             raise
