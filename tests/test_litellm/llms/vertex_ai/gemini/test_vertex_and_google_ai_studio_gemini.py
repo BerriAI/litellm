@@ -334,13 +334,50 @@ def test_streaming_chunk_includes_reasoning_tokens():
     }
     iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
     streaming_chunk = iterator.chunk_parser(chunk)
-    assert streaming_chunk["usage"] is not None
-    assert streaming_chunk["usage"]["prompt_tokens"] == 5
-    assert streaming_chunk["usage"]["completion_tokens"] == 7
-    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert streaming_chunk.usage is not None
+    assert streaming_chunk.usage.prompt_tokens == 5
+    assert streaming_chunk.usage.completion_tokens == 7
+    assert streaming_chunk.usage.total_tokens == 12
     assert (
-        streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == 3
+        streaming_chunk.usage.completion_tokens_details.reasoning_tokens == 3
     )
+
+
+def test_streaming_chunk_includes_reasoning_content():
+    """
+    Ensure that when Gemini returns a chunk with `thought=True`, the parser maps it to `reasoning_content`.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Simulate a streaming chunk from Gemini which contains reasoning (thought) content
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "I'm thinking through the problem...",
+                            "thought": True,
+                        }
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {},
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # The text content should be empty and reasoning_content should be populated
+    assert streaming_chunk.choices[0].delta.content == ""
+    assert (
+            streaming_chunk.choices[0].delta.reasoning_content
+            == "I'm thinking through the problem..."
+    )
+
 
 
 def test_check_finish_reason():
@@ -446,4 +483,3 @@ def test_vertex_ai_map_tool_with_anyof():
     ] == {
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
-
