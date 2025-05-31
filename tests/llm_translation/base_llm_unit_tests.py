@@ -8,6 +8,7 @@ import os
 import uuid
 import time
 import base64
+import inspect
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -80,6 +81,26 @@ class BaseLLMChatTest(ABC):
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         """Must return the base completion call args with reasoning_effort"""
         return {}
+
+    def _handle_rate_limit(self, func):
+        """Decorator to handle rate limit errors for all test methods"""
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except litellm.RateLimitError:
+                pytest.skip("Rate limit exceeded")
+            except litellm.InternalServerError:
+                pytest.skip("Model is overloaded")
+        return wrapper
+
+    def __init__(self):
+        """Initialize the test class and wrap all test methods with rate limit handling"""
+        # Get all methods in the class
+        for name, method in inspect.getmembers(self, predicate=inspect.ismethod):
+            # Only wrap test methods
+            if name.startswith('test_'):
+                # Replace the original method with the wrapped version
+                setattr(self, name, self._handle_rate_limit(method))
 
     def test_developer_role_translation(self):
         """
