@@ -3128,7 +3128,7 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
     """
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     # Test input
     input_text = ["good morning from litellm", "this is another item"]
@@ -3197,7 +3197,7 @@ async def test_vertexai_model_garden_model_completion(
 
     Using OpenAI compatible models from Vertex Model Garden
     """
-    litellm.use_aiohttp_transport = False # since this uses respx, we need to set use_aiohttp_transport to False
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
     litellm.module_level_aclient = httpx.AsyncClient()
     load_vertex_ai_credentials()
     litellm.set_verbose = True

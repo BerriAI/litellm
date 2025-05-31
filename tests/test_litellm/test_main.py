@@ -290,7 +290,7 @@ async def test_extra_body_with_fallback(
     """
 
     # since this uses respx, we need to set use_aiohttp_transport to False
-    litellm.use_aiohttp_transport = False
+    litellm.disable_aiohttp_transport = True
     # Set up test parameters
     model = "openrouter/deepseek/deepseek-chat"
     messages = [{"role": "user", "content": "Hello, world!"}]
