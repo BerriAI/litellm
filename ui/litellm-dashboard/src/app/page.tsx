@@ -327,6 +327,7 @@ export default function CreateKeyPage() {
                   userID={userID}
                   userRole={userRole}
                   organizations={organizations}
+                  premiumUser={premiumUser}
                 />
               ) : page == "organizations" ? (
                 <Organizations
