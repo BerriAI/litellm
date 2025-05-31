@@ -6,7 +6,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType
+from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
@@ -68,17 +68,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return super().get_config()
 
     def is_model_gemini_audio_model(self, model: str) -> bool:
-        # Check if model contains "tts" and is a Gemini model
         if "tts" in model:
-            # Check if it's in the gemini_models list
-            if model in litellm.gemini_models:
-                return True
-            # Also check with gemini/ prefix
-            if f"gemini/{model}" in litellm.gemini_models:
-                return True
-            # Check if it's a known Gemini TTS model pattern
-            if "gemini" in model and "tts" in model:
-                return True
+            return True
         return False
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -127,15 +118,15 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         )
 
                     # Map OpenAI audio parameter to Gemini speech config
-                    speech_config = {}
-                    voice_config = {}
+                    speech_config: SpeechConfig = {}
 
                     if "voice" in value:
-                        voice_config["prebuiltVoiceConfig"] = {
+                        prebuilt_voice_config: PrebuiltVoiceConfig = {
                             "voiceName": value["voice"]
                         }
-
-                    if voice_config:
+                        voice_config: VoiceConfig = {
+                            "prebuiltVoiceConfig": prebuilt_voice_config
+                        }
                         speech_config["voiceConfig"] = voice_config
 
                     if speech_config:
