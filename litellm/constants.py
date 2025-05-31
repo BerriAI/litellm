@@ -154,7 +154,7 @@ FIREWORKS_AI_80_B = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
-    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 20)
+    os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
 
 ############### LLM Provider Constants ###############
