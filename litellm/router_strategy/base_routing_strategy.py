@@ -178,8 +178,6 @@ class BaseRoutingStrategy(ABC):
             await self._push_in_memory_increments_to_redis()
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            pattern = self.get_key_pattern_to_sync()
-            cache_keys: Optional[Union[Set[str], List[str]]] = None
             cache_keys = (
                 self.get_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
