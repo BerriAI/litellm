@@ -361,3 +361,144 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
     </div>
   );
 };
+
+// New component for collapsible JSON display
+const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const jsonString = JSON.stringify(jsonData, null, 2);
+
+  if (!jsonData || Object.keys(jsonData).length === 0) {
+    return <span>-</span>;
+  }
+
+  return (
+    <div>
+      <button 
+        onClick={() => setIsExpanded(!isExpanded)} 
+        className="text-blue-500 hover:text-blue-700 text-xs"
+      >
+        {isExpanded ? 'Hide JSON' : 'Show JSON'} ({Object.keys(jsonData).length} fields)
+      </button>
+      {isExpanded && (
+        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">
+          {jsonString}
+        </pre>
+      )}
+    </div>
+  );
+};
+
+export type AuditLogEntry = {
+  id: string;
+  updated_at: string;
+  changed_by: string;
+  changed_by_api_key: string;
+  action: string;
+  table_name: string;
+  object_id: string;
+  before_value: Record<string, any>;
+  updated_values: Record<string, any>;
+}
+
+export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
+  {
+    header: "Created At",
+    accessorKey: "before_value.created_at",
+    cell: (info: any) => {
+      const createdAt = info.row.original.before_value?.created_at;
+      return createdAt ? <TimeCell utcTime={createdAt} /> : "-";
+    },
+  },
+  {
+    header: "Updated At",
+    accessorKey: "updated_at",
+    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Action",
+    accessorKey: "action",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Changed By",
+    accessorKey: "changed_by",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Changed By API Key",
+    accessorKey: "changed_by_api_key",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    id: "changed_fields",
+    header: "Changed Fields",
+    cell: (info: any) => {
+      const action = info.row.original.action;
+      const before = info.row.original.before_value;
+      const updated = info.row.original.updated_values;
+      const changedKeys: string[] = [];
+
+      // Only compute and show changed fields if the action is 'updated'
+      if (action && action.toLowerCase() === 'updated') {
+        if (updated && typeof updated === 'object') {
+          Object.keys(updated).forEach(key => {
+            if (!before || !(key in before) || JSON.stringify(before[key]) !== JSON.stringify(updated[key])) {
+              changedKeys.push(key);
+            }
+          });
+        }
+        
+        if (changedKeys.length > 0) {
+          return (
+            <Tooltip title={changedKeys.join(", ")}>
+              <span className="max-w-[20ch] truncate block">
+                {changedKeys.join(", ")}
+              </span>
+            </Tooltip>
+          );
+        }
+      }
+      return "-"; // Return "-" if action is not 'updated' or no fields changed
+    },
+  },
+  {
+    header: "Table Name",
+    accessorKey: "table_name",
+    cell: (info: any) => {
+      const tableName = info.getValue();
+      let displayValue = tableName;
+      switch (tableName) {
+        case "LiteLLM_VerificationToken":
+          displayValue = "Keys";
+          break;
+        case "LiteLLM_TeamTable":
+          displayValue = "Teams";
+          break;
+        case "LiteLLM_OrganizationTable":
+          displayValue = "Organizations";
+          break;
+        case "LiteLLM_UserTable":
+          displayValue = "Users";
+          break;
+        default:
+          displayValue = tableName;
+      }
+      return <span>{displayValue}</span>;
+    },
+  },
+  {
+    header: "Object ID",
+    accessorKey: "object_id",
+    cell: (info: any) => <span>{info.getValue()}</span>,
+  },
+  {
+    header: "Initial Values",
+    accessorKey: "before_value",
+    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
+  },
+  {
+    header: "Updated Values",
+    accessorKey: "updated_values",
+    cell: (info: any) => <CollapsibleJsonCell jsonData={info.getValue()} />,
+  }
+]
