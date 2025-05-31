@@ -1447,14 +1447,14 @@ files = [
 
 [[package]]
 name = "huggingface-hub"
-version = "0.32.0"
+version = "0.32.2"
 description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
 optional = false
 python-versions = ">=3.8.0"
 groups = ["main"]
 files = [
-    {file = "huggingface_hub-0.32.0-py3-none-any.whl", hash = "sha256:e56e94109649ce6ebdb59b4e393ee3543ec0eca2eab4f41b269e1d885c88d08c"},
-    {file = "huggingface_hub-0.32.0.tar.gz", hash = "sha256:dd66c9365ea43049ec9b939bdcdb21a0051e1bd70026fc50304e4fb1bb6a15ba"},
+    {file = "huggingface_hub-0.32.2-py3-none-any.whl", hash = "sha256:f8fcf14603237eadf96dbe577d30b330f8c27b4a0a31e8f6c94fdc25e021fdb8"},
+    {file = "huggingface_hub-0.32.2.tar.gz", hash = "sha256:64a288b1eadad6b60bbfd50f0e52fd6cfa2ef77ab13c3e8a834a038ae929de54"},
 ]
 
 [package.dependencies]
@@ -1820,28 +1820,26 @@ openai = ["openai (>=0.27.8)"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.6"
+version = "0.1.7"
 description = "Package for LiteLLM Enterprise features"
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_enterprise-0.1.6-py3-none-any.whl", hash = "sha256:21f251cb7c777c94842446bcda88f469dea42461bcf09fd5e4715d1d4b746f2d"},
-    {file = "litellm_enterprise-0.1.6.tar.gz", hash = "sha256:cb5ec15a9a63d3eac964c8957a5a0daa558d322c297661ee05bc57e3b5d6c5bb"},
+    {file = "litellm_enterprise-0.1.7.tar.gz", hash = "sha256:1feb5b799bdbd27df1e02a31fa4d18351b945b6f72e337805cf80a64dd2ec870"},
 ]
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.2.0"
+version = "0.2.2"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.2.0-py3-none-any.whl", hash = "sha256:81c1bde201cad434ccf62a5d0b4993b5d6106008a08be36466cc653ab5197d85"},
-    {file = "litellm_proxy_extras-0.2.0.tar.gz", hash = "sha256:8643f1fd85c85671dc7b6793000121471e64355c5371d40cbc97c27a5182aef4"},
+    {file = "litellm_proxy_extras-0.2.2.tar.gz", hash = "sha256:0ef7f255194c294e0047232afa45bdeb5238c9dec4af3e49ec8411a0edf59554"},
 ]
 
 [[package]]
@@ -3289,14 +3287,14 @@ testing = ["coverage (>=6.2)", "flaky (>=3.5.0)", "hypothesis (>=5.7.1)", "mypy 
 
 [[package]]
 name = "pytest-mock"
-version = "3.14.0"
+version = "3.14.1"
 description = "Thin-wrapper around the mock package for easier use with pytest"
 optional = false
 python-versions = ">=3.8"
 groups = ["dev"]
 files = [
-    {file = "pytest-mock-3.14.0.tar.gz", hash = "sha256:2719255a1efeceadbc056d6bf3df3d1c5015530fb40cf347c0f9afac88410bd0"},
-    {file = "pytest_mock-3.14.0-py3-none-any.whl", hash = "sha256:0b72c38033392a5f4621342fe11e9219ac11ec9d375f8e2a0c164539e0d70f6f"},
+    {file = "pytest_mock-3.14.1-py3-none-any.whl", hash = "sha256:178aefcd11307d874b4cd3100344e7e2d888d9791a6a1d9bfe90fbc1b74fd1d0"},
+    {file = "pytest_mock-3.14.1.tar.gz", hash = "sha256:159e9edac4c451ce77a5cdb9fc5d1100708d2dd4ba3c3df572f14097351af80e"},
 ]
 
 [package.dependencies]
@@ -4981,4 +4979,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "5ae81c1ff914fd9553d846a1dadfc8ed5cad734ee180b35f85abad168c8cf0b5"
+content-hash = "0b84eb714745b61246855fb11308c7ee61fb185fd4b9a6166b55dd1992b2efe7"

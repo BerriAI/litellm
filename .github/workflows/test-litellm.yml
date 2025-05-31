@@ -1,4 +1,4 @@
-name: LiteLLM Mock Tests (folder - tests/litellm)
+name: LiteLLM Mock Tests (folder - tests/test_litellm)
 
 on:
   pull_request:

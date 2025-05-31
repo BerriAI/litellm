@@ -1488,3 +1488,15 @@ def test_cohere_embed_dimensions_param():
         encoding_format="float",
     )
     assert optional_params["embedding_types"] == ["float"]
+
+def test_optional_params_with_additional_drop_params():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        additional_drop_params=["red"],
+        drop_params=True,
+        red="blue"
+    )
+    print(f"optional_params: {optional_params}")
+    assert "red" not in optional_params
+    assert "red" not in optional_params["extra_body"]

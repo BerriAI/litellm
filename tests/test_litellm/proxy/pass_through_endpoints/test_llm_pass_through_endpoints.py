@@ -573,3 +573,16 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
+
+
+@pytest.mark.asyncio
+async def test_is_streaming_request_fn():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        is_streaming_request_fn,
+    )
+
+    mock_request = Mock()
+    mock_request.method = "POST"
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.form = AsyncMock(return_value={"stream": "true"})
+    assert await is_streaming_request_fn(mock_request) is True

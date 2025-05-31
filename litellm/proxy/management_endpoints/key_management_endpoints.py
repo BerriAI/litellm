@@ -376,6 +376,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -571,6 +572,11 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        data_json = await _set_object_permission(
+            data_json=data_json,
+            prisma_client=prisma_client,
+        )
+
         await _enforce_unique_key_alias(
             key_alias=data_json.get("key_alias", None),
             prisma_client=prisma_client,
@@ -641,8 +647,35 @@ def prepare_metadata_fields(
     return non_default_values
 
 
-def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+async def _set_object_permission(
+    data_json: dict,
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the key.
+    - Handles permissions for vector stores and mcp servers.
+    """
+    if prisma_client is None:
+        return data_json
+
+    if "object_permission" in data_json:
+        created_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.create(
+                data=data_json["object_permission"],
+            )
+        )
+        data_json[
+            "object_permission_id"
+        ] = created_object_permission.object_permission_id
+
+        # delete the object_permission from the data_json
+        data_json.pop("object_permission")
+    return data_json
+
+
+async def prepare_key_update_data(
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest],
+    existing_key_row: LiteLLM_VerificationToken,
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -672,6 +705,12 @@ def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
+    if "object_permission" in non_default_values:
+        non_default_values = await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=existing_key_row,
+        )
+
     _metadata = existing_key_row.metadata or {}
 
     # validate model_max_budget
@@ -683,6 +722,60 @@ def prepare_key_update_data(
     )
 
     return non_default_values
+
+
+async def _handle_update_object_permission(
+    data_json: dict,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> dict:
+    """
+    Handle the update of object permission.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ValueError("Prisma client not found")
+
+    #########################################################
+    # Ensure `object_permission` is not added to the data_json
+    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission = data_json.pop("object_permission")
+    if new_object_permission is None:
+        return data_json
+
+    # lookup existing object permission ID and update that entry
+    existing_object_permission_id = existing_key_row.object_permission_id
+    existing_object_permission = (
+        await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_object_permission_id},
+        )
+    )
+    existing_object_permissions_dict: dict = {}
+    if existing_object_permission is not None:
+        # update the object permission
+        existing_object_permissions_dict = existing_object_permission.model_dump(
+            exclude_unset=True, exclude_none=True
+        )
+        existing_object_permissions_dict.update(dict(new_object_permission))
+
+    #########################################################
+    # Commit the update to the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission_row = (
+        await prisma_client.db.litellm_objectpermissiontable.upsert(
+            where={"object_permission_id": existing_object_permission_id},
+            data={
+                "create": existing_object_permissions_dict,
+                "update": existing_object_permissions_dict,
+            },
+        )
+    )
+    verbose_proxy_logger.debug(
+        f"new_object_permission_row: {new_object_permission_row}"
+    )
+    data_json["object_permission_id"] = new_object_permission_row.object_permission_id
+    return data_json
 
 
 def is_different_team(
@@ -742,7 +835,7 @@ async def update_key_fn(
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -821,7 +914,7 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
-        non_default_values = prepare_key_update_data(
+        non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
 
@@ -1273,6 +1366,10 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
     sso_user_id: Optional[str] = None,
+    object_permission_id: Optional[
+        str
+    ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
     from litellm.proxy.proxy_server import (
         litellm_proxy_budget_name,
@@ -1351,6 +1448,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "budget_reset_at": reset_at,
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
+            "object_permission_id": object_permission_id,
         }
         if teams is not None:
             user_data["teams"] = teams
@@ -1379,6 +1477,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "object_permission_id": object_permission_id,
         }
 
         if (
@@ -1821,7 +1920,11 @@ async def regenerate_key_fn(
             user_api_key_cache,
         )
 
-        if premium_user is not True:
+        is_master_key_regeneration = data and data.new_master_key is not None
+
+        if (
+            premium_user is not True and not is_master_key_regeneration
+        ):  # allow master key regeneration for non-premium users
             raise ValueError(
                 f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
             )
@@ -1903,7 +2006,7 @@ async def regenerate_key_fn(
         non_default_values = {}
         if data is not None:
             # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = prepare_key_update_data(
+            non_default_values = await prepare_key_update_data(
                 data=data, existing_key_row=_key_in_db
             )
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
@@ -2330,6 +2433,7 @@ async def _list_key_helper(
             {"created_at": "desc"},
             {"token": "desc"},  # fallback sort
         ],
+        include={"object_permission": True},
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")

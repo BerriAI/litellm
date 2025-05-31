@@ -725,20 +725,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ## Check DB
-        if (
-            isinstance(api_key, str) and valid_token is None
-        ):  # if generated token, make sure it starts with sk-.
-            assert api_key.startswith(
-                "sk-"
-            ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                api_key
-            )  # prevent token hashes from being used
-        else:
-            verbose_logger.warning(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
-                    api_key
-                )
-            )
 
         if (
             prisma_client is None
@@ -752,11 +738,26 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
-        abbreviated_api_key = abbreviate_api_key(api_key=api_key)
-        if api_key.startswith("sk-"):
-            api_key = hash_token(token=api_key)
 
         if valid_token is None:
+            if isinstance(
+                api_key, str
+            ):  # if generated token, make sure it starts with sk-.
+                assert api_key.startswith(
+                    "sk-"
+                ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                    api_key
+                )  # prevent token hashes from being used
+            else:
+                verbose_logger.warning(
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
+                        api_key
+                    )
+                )
+            abbreviated_api_key = abbreviate_api_key(api_key=api_key)
+            if api_key.startswith("sk-"):
+                api_key = hash_token(token=api_key)
+
             try:
                 valid_token = await get_key_object(
                     hashed_token=api_key,

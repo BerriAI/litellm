@@ -1828,6 +1828,7 @@ def supports_response_schema(
         litellm.LlmProviders.PREDIBASE,
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
+        litellm.LlmProviders.NEBIUS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -2154,15 +2155,17 @@ def _get_non_default_params(
 
 def get_optional_params_transcription(
     model: str,
+    custom_llm_provider: str,
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     response_format: Optional[str] = None,
     temperature: Optional[int] = None,
     timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
-    custom_llm_provider: Optional[str] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
 ):
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider")
@@ -2228,9 +2231,14 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-    for k in passed_params.keys():  # pass additional kwargs without modification
-        if k not in default_params.keys():
-            optional_params[k] = passed_params[k]
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider,
+        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        additional_drop_params=kwargs.get("additional_drop_params", None),
+    )
+
     return optional_params
 
 
@@ -2766,6 +2774,9 @@ def pre_process_non_default_params(
         non_default_params = add_provider_specific_params_to_optional_params(
             optional_params=non_default_params,
             passed_params=passed_params,
+            custom_llm_provider=custom_llm_provider,
+            openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+            additional_drop_params=additional_drop_params,
         )
 
     if remove_sensitive_keys:
@@ -2849,6 +2860,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "nebius"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -3564,6 +3576,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "nebius":
+        optional_params = litellm.NebiusConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
@@ -3621,6 +3644,33 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    # if user passed in non-default kwargs for specific providers/models, pass them along
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider,
+        openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+        additional_drop_params=additional_drop_params,
+    )
+    print_verbose(f"Final returned optional params: {optional_params}")
+    optional_params = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=allowed_openai_params,
+    )
+    return optional_params
+
+
+def add_provider_specific_params_to_optional_params(
+    optional_params: dict,
+    passed_params: dict,
+    custom_llm_provider: str,
+    openai_params: List[str],
+    additional_drop_params: Optional[list] = None,
+) -> dict:
+    """
+    Add provider specific params to optional_params
+    """
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
@@ -3635,40 +3685,30 @@ def get_optional_params(  # noqa: PLR0915
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
+                if k not in openai_params:
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
-            optional_params["extra_body"] = {
+            initial_extra_body = {
                 **optional_params["extra_body"],
                 **extra_body,
             }
 
+            if additional_drop_params is not None:
+                processed_extra_body = {
+                    k: v
+                    for k, v in initial_extra_body.items()
+                    if k not in additional_drop_params
+                }
+            else:
+                processed_extra_body = initial_extra_body
+
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
-                extra_body=optional_params["extra_body"]
+                extra_body=processed_extra_body
             )
     else:
-        # if user passed in non-default kwargs for specific providers/models, pass them along
-        optional_params = add_provider_specific_params_to_optional_params(
-            optional_params=optional_params, passed_params=passed_params
-        )
-    print_verbose(f"Final returned optional params: {optional_params}")
-    optional_params = _apply_openai_param_overrides(
-        optional_params=optional_params,
-        non_default_params=non_default_params,
-        allowed_openai_params=allowed_openai_params,
-    )
-    return optional_params
-
-
-def add_provider_specific_params_to_optional_params(
-    optional_params: dict, passed_params: dict
-) -> dict:
-    """
-    Add provider specific params to optional_params
-    """
-    for k in passed_params.keys():
-        if k not in DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys():
-            optional_params[k] = passed_params[k]
+        for k in passed_params.keys():
+            if k not in openai_params:
+                optional_params[k] = passed_params[k]
     return optional_params
 
 
@@ -3979,6 +4019,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
             or get_secret("TOGETHERAI_API_KEY")
             or get_secret("TOGETHER_AI_TOKEN")
         )
+    # nebius
+    elif llm_provider == "nebius":
+        api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
     return api_key
 
 
@@ -5028,6 +5071,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif custom_llm_provider == "nebius":
+            if "NEBIUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NEBIUS_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5115,6 +5163,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif model in litellm.nebius_models:
+            if "NEBIUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NEBIUS_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6460,6 +6513,8 @@ class ProviderConfigManager:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
             return litellm.NovitaConfig()
+        elif litellm.LlmProviders.NEBIUS == provider:
+            return litellm.NebiusConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6469,6 +6524,12 @@ class ProviderConfigManager:
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
+            elif bedrock_route == "agent":
+                from litellm.llms.bedrock.chat.invoke_agent.transformation import (
+                    AmazonInvokeAgentConfig,
+                )
+
+                return AmazonInvokeAgentConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
@@ -6556,6 +6617,13 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             return litellm.AmazonAnthropicClaude3MessagesConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            if "claude" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+                    VertexAIPartnerModelsAnthropicMessagesConfig,
+                )
+
+                return VertexAIPartnerModelsAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -6736,11 +6804,14 @@ def get_end_user_id_for_cost_tracking(
     )
     if litellm.disable_end_user_cost_tracking:
         return None
-    if (
-        service_type == "prometheus"
-        and litellm.disable_end_user_cost_tracking_prometheus_only
-    ):
-        return None
+
+    #######################################
+    # By default we don't track end_user on prometheus since we don't want to increase cardinality
+    # by default litellm.enable_end_user_cost_tracking_prometheus_only is None, so we don't track end_user on prometheus
+    #######################################
+    if service_type == "prometheus":
+        if litellm.enable_end_user_cost_tracking_prometheus_only is not True:
+            return None
     return end_user_id
 
 
@@ -6871,6 +6942,14 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
 
+    return non_default_params
+
+
+def get_non_default_transcription_params(kwargs: dict) -> dict:
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+
+    default_params = OPENAI_TRANSCRIPTION_PARAMS + all_litellm_params
+    non_default_params = {k: v for k, v in kwargs.items() if k not in default_params}
     return non_default_params
 
 

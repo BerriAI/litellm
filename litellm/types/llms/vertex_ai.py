@@ -577,3 +577,10 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
 
 
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
+
+
+class VertexPartnerProvider(str, Enum):
+    mistralai = "mistralai"
+    llama = "llama"
+    ai21 = "ai21"
+    claude = "claude"

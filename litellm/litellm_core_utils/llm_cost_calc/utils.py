@@ -5,7 +5,7 @@ from typing import Literal, Optional, Tuple, cast
 
 import litellm
 from litellm import verbose_logger
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import CallTypes, ModelInfo, PassthroughCallTypes, Usage
 from litellm.utils import get_model_info
 
 
@@ -343,3 +343,28 @@ def generic_cost_per_token(
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
 
     return prompt_cost, completion_cost
+
+
+class CostCalculatorUtils:
+    @staticmethod
+    def _call_type_has_image_response(call_type: str) -> bool:
+        """
+        Returns True if the call type has an image response
+
+        eg calls that have image response:
+        - Image Generation
+        - Image Edit
+        - Passthrough Image Generation
+        """
+        if call_type in [
+            # image generation
+            CallTypes.image_generation.value,
+            CallTypes.aimage_generation.value,
+            # passthrough image generation
+            PassthroughCallTypes.passthrough_image_generation.value,
+            # image edit
+            CallTypes.image_edit.value,
+            CallTypes.aimage_edit.value,
+        ]:
+            return True
+        return False

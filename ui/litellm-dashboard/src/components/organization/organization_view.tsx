@@ -28,6 +28,8 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall, organizationUpdateCall } from "../networking";
 import UserSearchModal from "../common_components/user_search_modal";
 import MemberModal from "../team/edit_membership";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -139,7 +141,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     try {
       if (!accessToken) return;
 
-      const updateData = {
+      const updateData: any = {
         organization_id: organizationId,
         organization_alias: values.organization_alias,
         models: values.models,
@@ -151,6 +153,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         },
         metadata: values.metadata ? JSON.parse(values.metadata) : null,
       };
+
+      // Handle object_permission updates
+      if (values.vector_stores !== undefined) {
+        updateData.object_permission = {
+          ...orgData?.object_permission,
+          vector_stores: values.vector_stores || []
+        };
+      }
       
       const response = await organizationUpdateCall(accessToken, updateData);
 
@@ -226,11 +236,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             <Card>
                 <Text>Models</Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                {orgData.models.map((model, index) => (
+                {orgData.models.length === 0 ? (
+                  <Badge color="red">All proxy models</Badge>
+                ) : (
+                  orgData.models.map((model, index) => (
                     <Badge key={index} color="red">
-                    {model}
+                      {model}
                     </Badge>
-                ))}
+                  ))
+                )}
                 </div>
             </Card>
             <Card>
@@ -243,6 +257,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 ))}
                 </div>
             </Card>
+
+            <ObjectPermissionsView 
+              objectPermission={orgData.object_permission} 
+              variant="card"
+              accessToken={accessToken}
+            />
             </Grid>
           </TabPanel>
 
@@ -342,6 +362,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     max_budget: orgData.litellm_budget_table.max_budget,
                     budget_duration: orgData.litellm_budget_table.budget_duration,
                     metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
+                    vector_stores: orgData.object_permission?.vector_stores || []
                   }}
                   layout="vertical"
                 >
@@ -387,6 +408,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                   <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                     <NumericalInput step={1} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Vector Stores" name="vector_stores">
+                    <VectorStoreSelector
+                      onChange={(values) => form.setFieldValue('vector_stores', values)}
+                      value={form.getFieldValue('vector_stores')}
+                      accessToken={accessToken || ""}
+                      placeholder="Select vector stores"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Metadata" name="metadata">  
@@ -436,6 +466,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${orgData.litellm_budget_table.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {orgData.litellm_budget_table.budget_duration || 'Never'}</div>
                   </div>
+
+                  <ObjectPermissionsView 
+                    objectPermission={orgData.object_permission} 
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
             </Card>
