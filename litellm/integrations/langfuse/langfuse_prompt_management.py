@@ -44,6 +44,7 @@ def langfuse_client_init(
     langfuse_secret=None,
     langfuse_secret_key=None,
     langfuse_host=None,
+    langfuse_environment=None,
     flush_interval=1,
 ) -> LangfuseClass:
     """
@@ -87,6 +88,7 @@ def langfuse_client_init(
 
     langfuse_release = os.getenv("LANGFUSE_RELEASE")
     langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+    environment = langfuse_environment or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
 
     parameters = {
         "public_key": public_key,
@@ -97,8 +99,8 @@ def langfuse_client_init(
         "flush_interval": LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         ),  # flush interval in seconds
+        "environment": environment,
     }
-
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
         parameters["sdk_integration"] = "litellm"
 
@@ -113,6 +115,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment=None,
         flush_interval=1,
     ):
         import langfuse
@@ -122,6 +125,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
             langfuse_host=langfuse_host,
+            langfuse_environment=langfuse_environment,
             flush_interval=flush_interval,
         )
 
@@ -201,6 +205,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
+            langfuse_environment=dynamic_callback_params.get("langfuse_environment")
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
@@ -219,6 +224,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
+            langfuse_environment=dynamic_callback_params.get("langfuse_environment"),
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,

@@ -2035,6 +2035,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: Optional[str]
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
+    langfuse_environment: Optional[str]
 
     # GCS dynamic params
     gcs_bucket_name: Optional[str]

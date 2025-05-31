@@ -23,6 +23,7 @@ async def config_update(session):
             "LANGFUSE_HOST": os.environ["LANGFUSE_HOST"],
             "LANGFUSE_PUBLIC_KEY": os.environ["LANGFUSE_PUBLIC_KEY"],
             "LANGFUSE_SECRET_KEY": os.environ["LANGFUSE_SECRET_KEY"],
+            "LANGFUSE_TRACING_ENVIRONMENT": os.environ["LANGFUSE_TRACING_ENVIRONMENT"],
         },
     }
 
@@ -104,6 +105,7 @@ async def test_team_logging():
                 host=os.getenv("LANGFUSE_HOST"),
                 public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
                 secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+                environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT"),
             )
 
             await asyncio.sleep(10)
