@@ -4,7 +4,7 @@ Base class across routing strategies to abstract commmon functions like batch in
 
 import asyncio
 from abc import ABC
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -116,7 +116,8 @@ class BaseRoutingStrategy(ABC):
         """
         How this works:
         - async_log_success_event collects all provider spend increments in `redis_increment_operation_queue`
-        - This function pushes all increments to Redis in a batched pipeline to optimize performance
+        - This function compresses multiple increments for the same key into a single operation
+        - Then pushes all increments to Redis in a batched pipeline to optimize performance
 
         Only runs if Redis is initialized
         """
@@ -124,13 +125,23 @@ class BaseRoutingStrategy(ABC):
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
-            # verbose_router_logger.debug(
-            #     "Pushing Redis Increment Pipeline for queue: %s",
-            #     self.redis_increment_operation_queue,
-            # )
             if len(self.redis_increment_operation_queue) > 0:
+                # Compress operations for the same key
+                compressed_ops: Dict[str, RedisPipelineIncrementOperation] = {}
+                for op in self.redis_increment_operation_queue:
+                    if op["key"] in compressed_ops:
+                        # Add to existing increment
+                        compressed_ops[op["key"]]["increment_value"] += op[
+                            "increment_value"
+                        ]
+                    else:
+                        compressed_ops[op["key"]] = op
+
+                # Convert back to list
+                compressed_queue = list(compressed_ops.values())
+
                 await self.dual_cache.redis_cache.async_increment_pipeline(
-                    increment_list=self.redis_increment_operation_queue,
+                    increment_list=compressed_queue,
                 )
 
             self.redis_increment_operation_queue = []
