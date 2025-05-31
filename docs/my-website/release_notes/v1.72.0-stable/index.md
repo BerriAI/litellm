@@ -164,7 +164,7 @@ Vector store permissions are now enforced across all LiteLLM authentication mech
     - Support for forwarding /sso/key/generate to server root path URL - [PR](https://github.com/BerriAI/litellm/pull/11165)
     - Prevention of sensitive key leakage to Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11165)
 
-## Logging / Alerting Integrations
+## Logging / Guardrails Integrations
 
 - **[Prometheus](../../docs/proxy/prometheus)**
     - Option to disable end_user tracking by default - [PR](https://github.com/BerriAI/litellm/pull/11192)
@@ -175,7 +175,10 @@ Vector store permissions are now enforced across all LiteLLM authentication mech
 - **[Helicone](../../docs/proxy/logging)**
     - Base URL support - [PR](https://github.com/BerriAI/litellm/pull/11211)
     - Fix for embedding cache hits on string input - [PR](https://github.com/BerriAI/litellm/pull/11211)
-- **[Pangea](../../docs/proxy/guardrails)**
+- **[Bedrock Guardrails](../../docs/proxy/guardrails)**
+    - Streaming support for bedrock post guard - [PR](https://github.com/BerriAI/litellm/pull/11247)
+    - Auth parameter persistence fixes - [PR](https://github.com/BerriAI/litellm/pull/11270)
+- **[Pangea Guardrails](../../docs/proxy/guardrails)**
     - Added Pangea provider to Guardrails hook - [PR](https://github.com/BerriAI/litellm/pull/10775)
 - **[Sentry](../../docs/proxy/logging)**
     - Added sentry sample rate configuration - [PR](https://github.com/BerriAI/litellm/pull/10283)
@@ -193,14 +196,7 @@ Vector store permissions are now enforced across all LiteLLM authentication mech
 - **Parameter Handling**
     - Support for dropping non-OpenAI params via additional_drop_params - [PR](https://github.com/BerriAI/litellm/pull/11246)
     - Fixed frequency_penalty to repeat_penalty parameter mapping - [PR](https://github.com/BerriAI/litellm/pull/11284)
-- **Timeout Management**
-    - Increased timeout configurations - [PR](https://github.com/BerriAI/litellm/pull/11288)
 
-## Guardrails & Security
-
-- **Bedrock Guardrails**
-    - Streaming support for bedrock post guard - [PR](https://github.com/BerriAI/litellm/pull/11247)
-    - Auth parameter persistence fixes - [PR](https://github.com/BerriAI/litellm/pull/11270)
 
 ## Bug Fixes
 
@@ -211,14 +207,6 @@ This release includes numerous bug fixes to improve stability and reliability:
     - Fixed calling Azure O-series models - [PR](https://github.com/BerriAI/litellm/pull/11212)
     - Fixed deprecation_date value for Llama Groq models - [PR](https://github.com/BerriAI/litellm/pull/11151)
 
-- **Documentation & Examples**
-    - Updated Azure OpenAI documentation - [PR](https://github.com/BerriAI/litellm/pull/11161)
-    - Fixed syntax error in Python example code - [PR](https://github.com/BerriAI/litellm/pull/11242)
-    - Updated Docker quick start guide to use gpt-4o instead of gpt-3.5-turbo - [PR](https://github.com/BerriAI/litellm/pull/11223)
-    - Fixed LiteLLM CLA reference - [PR](https://github.com/BerriAI/litellm/pull/11230)
-
-- **GitHub Actions & Testing**
-    - Fixed GitHub action testing issues - [PR](https://github.com/BerriAI/litellm/pull/11163)
 
 ## New Contributors
 * [@agajdosi](https://github.com/agajdosi) made their first contribution in [#9737](https://github.com/BerriAI/litellm/pull/9737)
