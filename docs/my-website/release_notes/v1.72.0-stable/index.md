@@ -45,14 +45,14 @@ pip install litellm==1.72.0
 
 LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
-- **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM. This is a major change from the previous version.
 - **Vector Store Permissions**: Control Vector Store (Knowledge Base) access at Key, Team, and Organization level.
-- **Bedrock Agents**: Call Beedrock Agents with `/chat/completions`, `/response` endpoints.
+- **Bedrock Agents**: Call Bedrock Agents with `/chat/completions`, `/response` endpoints.
+- **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead.
 
 
 ## Aiohttp Transport used by default
 
-This give users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
+Aiohttp transport is now the default transport for LiteLLM networking requests.This give users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
 
 
 If you encounter any issues, you can disable using the aiohttp transport in the following ways:
@@ -151,8 +151,6 @@ Vector store permissions are now enforced across all LiteLLM authentication mech
     - Security fixes for SCIM token exposure on UI - [PR](https://github.com/BerriAI/litellm/pull/11220)
 - **Session Management**
     - Streamlined session expiration in UI - [PR](https://github.com/BerriAI/litellm/pull/11279)
-- **Dependencies**
-    - Updated Next.js from 14.2.26 to 15.2.4 - [PR](https://github.com/BerriAI/litellm/pull/11216)
 
 ## Authentication & Security
 
