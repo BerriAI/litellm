@@ -44,6 +44,12 @@ def setup_vector_store_registry():
             LiteLLM_ManagedVectorStore(
                 vector_store_id="T37J8R4WTM",
                 custom_llm_provider="bedrock"
+            ),
+
+            # this is in us-east-1
+            LiteLLM_ManagedVectorStore(
+                vector_store_id="HNYBPIYVWK",
+                custom_llm_provider="bedrock"
             )
         ]
     )
@@ -56,6 +62,18 @@ async def test_basic_bedrock_knowledgebase_retrieval(setup_vector_store_registry
     response = await bedrock_knowledgebase_hook.make_bedrock_kb_retrieve_request(
         knowledge_base_id="T37J8R4WTM",
         query="what is litellm?",
+    )
+    assert response is not None
+
+@pytest.mark.asyncio
+async def test_basic_bedrock_knowledgebase_retrieval_with_kb_in_aws_region(setup_vector_store_registry):
+    bedrock_knowledgebase_hook = BedrockVectorStore()
+    response = await bedrock_knowledgebase_hook.make_bedrock_kb_retrieve_request(
+        knowledge_base_id="HNYBPIYVWK",
+        query="what is litellm?",
+        non_default_params={
+            "aws_region_name": "us-east-1"
+        }
     )
     assert response is not None
 

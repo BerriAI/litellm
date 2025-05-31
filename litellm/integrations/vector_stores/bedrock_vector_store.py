@@ -258,6 +258,10 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
         from fastapi import HTTPException
 
         non_default_params = non_default_params or {}
+
+        #################################################################################################
+        ########## LOAD LiteLLM CREDENTIALS FROM LIST ##########################################################
+        #################################################################################################
         load_credentials_from_list(kwargs=non_default_params)
         credentials = self.get_credentials(
             aws_access_key_id=non_default_params.get("aws_access_key_id", None),
@@ -272,9 +276,7 @@ class BedrockVectorStore(BaseVectorStore, BaseAWSLLM):
             ),
             aws_sts_endpoint=non_default_params.get("aws_sts_endpoint", None),
         )
-        aws_region_name = self._get_aws_region_name(
-            optional_params=self.optional_params
-        )
+        aws_region_name = self._get_aws_region_name(optional_params=non_default_params)
 
         # Prepare request data
         request_data: BedrockKBRequest = BedrockKBRequest(
