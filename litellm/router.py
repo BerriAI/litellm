@@ -2223,7 +2223,7 @@ class Router:
                     kwargs[k].update(v)
 
             # call via litellm.completion()
-            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
+            return litellm.text_completion(**{"prompt": prompt, "caching": self.cache_responses, **kwargs, **data})  # type: ignore
         except Exception as e:
             raise e
 
