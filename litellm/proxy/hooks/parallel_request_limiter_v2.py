@@ -67,7 +67,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             self,
             dual_cache=internal_usage_cache.dual_cache,
             should_batch_redis_writes=True,
-            default_sync_interval=0.01,
+            default_sync_interval=1,
         )
 
     def print_verbose(self, print_statement):
@@ -183,6 +183,8 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
                     decrement_list.append(
                         (key, -1 if increment_value_by_group[group] == 1 else 0)
                     )
+                else:
+                    self.add_to_in_memory_keys_to_update(key=key)
                 slot_cache_keys.append(key)
 
         if (

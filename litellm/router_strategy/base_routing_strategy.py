@@ -87,6 +87,7 @@ class BaseRoutingStrategy(ABC):
             increment_value=value,
             ttl=ttl,
         )
+
         self.redis_increment_operation_queue.append(increment_op)
         self.add_to_in_memory_keys_to_update(key=key)
         return result
@@ -128,7 +129,8 @@ class BaseRoutingStrategy(ABC):
             if len(self.redis_increment_operation_queue) > 0:
                 # Compress operations for the same key
                 compressed_ops: Dict[str, RedisPipelineIncrementOperation] = {}
-                for op in self.redis_increment_operation_queue:
+                ops_to_remove = []
+                for idx, op in enumerate(self.redis_increment_operation_queue):
                     if op["key"] in compressed_ops:
                         # Add to existing increment
                         compressed_ops[op["key"]]["increment_value"] += op[
@@ -137,14 +139,18 @@ class BaseRoutingStrategy(ABC):
                     else:
                         compressed_ops[op["key"]] = op
 
+                    ops_to_remove.append(idx)
                 # Convert back to list
                 compressed_queue = list(compressed_ops.values())
 
                 await self.dual_cache.redis_cache.async_increment_pipeline(
                     increment_list=compressed_queue,
                 )
-
-            self.redis_increment_operation_queue = []
+                self.redis_increment_operation_queue = [
+                    op
+                    for idx, op in enumerate(self.redis_increment_operation_queue)
+                    if idx not in ops_to_remove
+                ]
 
         except Exception as e:
             verbose_router_logger.error(
@@ -227,10 +233,6 @@ class BaseRoutingStrategy(ABC):
                     await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
                 )
                 delta = after - before
-                if delta > 0:
-                    await self._increment_value_in_current_window(
-                        key=key, value=delta, ttl=60
-                    )
                 merged = redis_val + delta
                 await self.dual_cache.in_memory_cache.async_set_cache(
                     key=key, value=merged
