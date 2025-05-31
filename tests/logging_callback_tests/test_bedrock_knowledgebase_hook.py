@@ -271,6 +271,7 @@ async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
     print("standard_logging_vector_store_request_metadata:", json.dumps(standard_logging_vector_store_request_metadata, indent=4, default=str))
 
     # 1 vector store request was made, expect 1 vector store request metadata object
+    assert standard_logging_vector_store_request_metadata is not None
     assert len(standard_logging_vector_store_request_metadata) == 1
 
     # expect the vector store request metadata object to have the correct values
@@ -280,19 +281,24 @@ async def test_logging_with_knowledge_base_hook(setup_vector_store_registry):
     assert vector_store_request_metadata.get("custom_llm_provider") == "bedrock"
 
 
-    vector_store_search_response: VectorStoreSearchResponse = vector_store_request_metadata.get("vector_store_search_response")
+    vector_store_search_response = vector_store_request_metadata.get("vector_store_search_response")
     assert vector_store_search_response is not None
     assert vector_store_search_response.get("search_query") == "what is litellm?"
-    assert len(vector_store_search_response.get("data", [])) >=0
-    for item in vector_store_search_response.get("data", []):
+    
+    data = vector_store_search_response.get("data", [])
+    assert data is not None
+    assert len(data) >= 0
+    for item in data:
         assert item.get("score") is not None
         assert item.get("content") is not None
-        assert len(item.get("content", [])) >= 0
-        for content_item in item.get("content", []):
+        content_list = item.get("content", [])
+        assert content_list is not None
+        assert len(content_list) >= 0
+        for content_item in content_list:
             text_content = content_item.get("text")
             assert text_content is not None
             assert len(text_content) > 0
-            
+
 
 @pytest.mark.asyncio
 async def test_logging_with_knowledge_base_hook_no_vector_store_registry(setup_vector_store_registry):
@@ -364,7 +370,8 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
     litellm._turn_on_debug()
     client = AsyncHTTPHandler()
 
-    print("Registry iniitalized:", litellm.vector_store_registry.vector_stores)
+    if litellm.vector_store_registry is not None:
+        print("Registry iniitalized:", litellm.vector_store_registry.vector_stores)
 
 
     with patch.object(client, "post") as mock_post:
@@ -402,3 +409,43 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
         assert len(content) == 1
         assert content[0]["type"] == "text"
         
+
+@pytest.mark.asyncio
+async def test_bedrock_knowledgebase_retrieval_uses_correct_region_mock(setup_vector_store_registry):
+    """
+    Mock test to verify that the AWS region name from non_default_params is used correctly
+    """
+    bedrock_knowledgebase_hook = BedrockVectorStore()
+    
+    # Mock the _get_aws_region_name method to capture what parameters are passed
+    with patch.object(bedrock_knowledgebase_hook, '_get_aws_region_name') as mock_get_region:
+        mock_get_region.return_value = "us-gov-1"
+        
+        # Mock the actual bedrock client call to avoid real API calls
+        with patch.object(bedrock_knowledgebase_hook, '_make_bedrock_http_request') as mock_request:
+            mock_request.return_value = {
+                "retrievalResults": [
+                    {
+                        "content": {"text": "LiteLLM is a library"},
+                        "score": 0.95
+                    }
+                ]
+            }
+            
+            # Call with specific region in non_default_params
+            test_region = "us-gov-1"
+            non_default_params = {
+                "aws_region_name": test_region
+            }
+            
+            response = await bedrock_knowledgebase_hook.make_bedrock_kb_retrieve_request(
+                knowledge_base_id="T37J8R4WTM",
+                query="what is litellm?",
+                non_default_params=non_default_params
+            )
+            
+            # Verify that _get_aws_region_name was called with non_default_params
+            mock_get_region.assert_called_once_with(optional_params=non_default_params)
+            
+            # Verify the response is not None
+            assert response is not None
