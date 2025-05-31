@@ -48,7 +48,7 @@ LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 - **Vector Store Permissions**: Control Vector Store (Knowledge Base) access at Key, Team, and Organization level.
 - **Bedrock Agents**: Call Bedrock Agents with `/chat/completions`, `/response` endpoints.
 - **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead.
-- **Prometheus**: End users `end_user` will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. This is done to reduce the cardinality of the metrics from LiteLLM Proxy.
+- **Prometheus**: End users (`end_user`) will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. This is done to reduce the cardinality of the metrics from LiteLLM Proxy. [Read More](../../docs/proxy/prometheus#tracking-end_user-on-prometheus)
 
 ## Vector Store Permissions
 
