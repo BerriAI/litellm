@@ -191,7 +191,7 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             return
 
         # Use the existing atomic increment-and-check functionality
-        results = await self._increment_value_list_in_current_window(
+        await self._increment_value_list_in_current_window(
             increment_list=increment_list,
             ttl=60,
         )
