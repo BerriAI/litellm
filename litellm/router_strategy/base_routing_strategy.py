@@ -164,6 +164,12 @@ class BaseRoutingStrategy(ABC):
     def get_in_memory_keys_to_update(self) -> Set[str]:
         return self.in_memory_keys_to_update
 
+    def get_and_reset_in_memory_keys_to_update(self) -> Set[str]:
+        """Atomic get and reset in-memory keys to update"""
+        keys = self.in_memory_keys_to_update
+        self.in_memory_keys_to_update = set()
+        return keys
+
     def reset_in_memory_keys_to_update(self):
         self.in_memory_keys_to_update = set()
 
@@ -185,12 +191,9 @@ class BaseRoutingStrategy(ABC):
             if self.dual_cache.redis_cache is None:
                 return
 
-            # 1. Push all provider spend increments to Redis
-            await self._push_in_memory_increments_to_redis()
-
             # 2. Fetch all current provider spend from Redis to update in-memory cache
             cache_keys = (
-                self.get_in_memory_keys_to_update()
+                self.get_and_reset_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
 
             if isinstance(cache_keys, set):
@@ -208,26 +211,21 @@ class BaseRoutingStrategy(ABC):
             for k, v in zip(cache_keys_list, in_memory_before):
                 in_memory_before_dict[k] = v
 
+            # 1. Push all provider spend increments to Redis
+            await self._push_in_memory_increments_to_redis()
+
             # 2. Fetch from Redis
             redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
                 key_list=cache_keys_list
             )
 
-            # 3. Snapshot in-memory after
-            in_memory_after = (
-                await self.dual_cache.in_memory_cache.async_batch_get_cache(
-                    keys=cache_keys_list
-                )
-            )
-            in_memory_after_dict = {}
-            for k, v in zip(cache_keys_list, in_memory_after):
-                in_memory_after_dict[k] = v
-
             # 4. Merge
             for key in cache_keys_list:
                 redis_val = float(redis_values.get(key, 0) or 0)
                 before = float(in_memory_before_dict.get(key, 0) or 0)
-                after = float(in_memory_after_dict.get(key, 0) or 0)
+                after = (
+                    await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
+                )
                 delta = after - before
                 if delta > 0:
                     await self._increment_value_in_current_window(
@@ -238,7 +236,6 @@ class BaseRoutingStrategy(ABC):
                     key=key, value=merged
                 )
 
-            self.reset_in_memory_keys_to_update()
         except Exception as e:
             verbose_router_logger.exception(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
