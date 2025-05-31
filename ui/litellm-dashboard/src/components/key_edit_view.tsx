@@ -6,6 +6,7 @@ import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -15,6 +16,7 @@ interface KeyEditViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  premiumUser?: boolean;
 }
 
 // Add this helper function
@@ -43,7 +45,9 @@ export function KeyEditView({
     teams,
     accessToken,
     userID,
-    userRole }: KeyEditViewProps) {
+    userRole,
+    premiumUser = false
+}: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
@@ -169,11 +173,12 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">
-        <VectorStoreSelector
+        <PremiumVectorStoreSelector
           onChange={(values) => form.setFieldValue('vector_stores', values)}
           value={form.getFieldValue('vector_stores')}
           accessToken={accessToken || ""}
           placeholder="Select vector stores"
+          premiumUser={premiumUser}
         />
       </Form.Item>
 
