@@ -1254,8 +1254,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: List[str]
-    vector_stores: List[str]
+    mcp_servers: Optional[List[str]] = []
+    vector_stores: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):

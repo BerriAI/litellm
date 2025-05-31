@@ -1653,6 +1653,7 @@ async def vector_store_access_check(
                 vector_store_ids_to_run=vector_store_ids_to_run,
                 object_permissions=team_object_permission,
             )
+    return True
 
 
 def _can_object_call_vector_stores(
@@ -1664,6 +1665,9 @@ def _can_object_call_vector_stores(
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
     """
     if object_permissions is None:
+        return True
+
+    if object_permissions.vector_stores is None:
         return True
 
     # If length is 0, then the object has access to all vector stores.
