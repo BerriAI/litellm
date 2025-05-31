@@ -68,9 +68,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return super().get_config()
 
     def is_model_gemini_audio_model(self, model: str) -> bool:
-        if "tts" in model:
-            return True
-        return False
+        return "tts" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
