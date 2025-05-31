@@ -49,7 +49,7 @@ async def test_ssl_security_level(monkeypatch):
 async def test_force_ipv4_transport():
     """Test transport creation with force_ipv4 enabled"""
     litellm.force_ipv4 = True
-    litellm.use_aiohttp_transport = False
+    litellm.disable_aiohttp_transport = True
 
     transport = AsyncHTTPHandler._create_async_transport()
 
@@ -86,7 +86,7 @@ async def test_ssl_context_transport():
 @pytest.mark.asyncio
 async def test_aiohttp_disabled_transport():
     """Test transport creation with aiohttp disabled"""
-    litellm.use_aiohttp_transport = False
+    litellm.disable_aiohttp_transport = True
     litellm.force_ipv4 = False
 
     transport = AsyncHTTPHandler._create_async_transport()

@@ -181,7 +181,9 @@ class TestFeatherlessAIConfig:
         """
         import litellm
 
-        litellm.use_aiohttp_transport = False  # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = (
+            True  # since this uses respx, we need to set use_aiohttp_transport to False
+        )
         from litellm import completion
 
         # Set up environment variables for the test
