@@ -50,6 +50,18 @@ LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 - **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead.
 
 
+## Vector Store Permissions
+
+This release introduces comprehensive vector store access controls, allowing administrators to manage permissions at the Key, Team, and Organization levels. This provides:
+
+- **Granular Access Control**: Control which vector stores users can access based on their permissions
+- **Team-based Management**: Assign vector store permissions to entire teams  
+- **Organization-wide Policies**: Set organization-level vector store access rules
+- **UI Integration**: Full management interface for viewing and editing vector store permissions
+
+Vector store permissions are now enforced across all LiteLLM authentication mechanisms, ensuring secure access to your vector data.
+
+
 ## Aiohttp Transport used by default
 
 Aiohttp transport is now the default transport for LiteLLM networking requests.This give users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
@@ -72,7 +84,7 @@ Set the `disable_aiohttp_transport=True` to disable aiohttp transport.
 ```python showLineNumbers title="Python SDK"
 import litellm
 
-litellm.disable_aiohttp_transport = True # default is False, enable this to use aiohttp transport
+litellm.disable_aiohttp_transport = True # default is False, enable this to disable aiohttp transport
 result = litellm.completion(
     model="openai/gpt-4o",
     messages=[{"role": "user", "content": "Hello, world!"}],
@@ -80,17 +92,6 @@ result = litellm.completion(
 print(result)
 ```
 
-
-## Vector Store Permissions
-
-This release introduces comprehensive vector store access controls, allowing administrators to manage permissions at the Key, Team, and Organization levels. This provides:
-
-- **Granular Access Control**: Control which vector stores users can access based on their permissions
-- **Team-based Management**: Assign vector store permissions to entire teams  
-- **Organization-wide Policies**: Set organization-level vector store access rules
-- **UI Integration**: Full management interface for viewing and editing vector store permissions
-
-Vector store permissions are now enforced across all LiteLLM authentication mechanisms, ensuring secure access to your vector data.
 
 
 ## New Models / Updated Models
