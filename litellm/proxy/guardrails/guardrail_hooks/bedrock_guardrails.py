@@ -116,21 +116,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = self.optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = self.optional_params.pop("aws_access_key_id", None)
-        aws_session_token = self.optional_params.pop("aws_session_token", None)
-        aws_region_name = self.optional_params.pop("aws_region_name", None)
-        aws_role_name = self.optional_params.pop("aws_role_name", None)
-        aws_session_name = self.optional_params.pop("aws_session_name", None)
-        aws_profile_name = self.optional_params.pop("aws_profile_name", None)
-        self.optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token = self.optional_params.pop(
+        aws_secret_access_key = self.optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = self.optional_params.get("aws_access_key_id", None)
+        aws_session_token = self.optional_params.get("aws_session_token", None)
+        aws_region_name = self.optional_params.get("aws_region_name", None)
+        aws_role_name = self.optional_params.get("aws_role_name", None)
+        aws_session_name = self.optional_params.get("aws_session_name", None)
+        aws_profile_name = self.optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = self.optional_params.get(
             "aws_web_identity_token", None
         )
-        aws_sts_endpoint = self.optional_params.pop("aws_sts_endpoint", None)
+        aws_sts_endpoint = self.optional_params.get("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
