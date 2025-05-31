@@ -215,7 +215,7 @@ class BaseRoutingStrategy(ABC):
                 )
             )
             for k, v in zip(cache_keys_list, in_memory_before):
-                in_memory_before_dict[k] = v
+                in_memory_before_dict[k] = float(v or 0)
 
             # 1. Push all provider spend increments to Redis
             await self._push_in_memory_increments_to_redis()
@@ -229,7 +229,7 @@ class BaseRoutingStrategy(ABC):
             for key in cache_keys_list:
                 redis_val = float(redis_values.get(key, 0) or 0)
                 before = float(in_memory_before_dict.get(key, 0) or 0)
-                after = (
+                after = float(
                     await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
                 )
                 delta = after - before
