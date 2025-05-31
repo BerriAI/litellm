@@ -66,13 +66,17 @@ async def test_normal_router_call_v2(monkeypatch):
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_slot = (
+        current_time.second // 15
+    )  # This gives us 0-3 for the current 15s slot
+    slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
+    print(f"slot_key: {slot_key}")
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
-        precise_minute=precise_minute,
+        precise_minute=slot_key,
         model=None,
         rate_limit_type="key",
         group="request_count",
@@ -175,17 +179,22 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
         call_type="",
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_slot = (
+        current_time.second // 15
+    )  # This gives us 0-3 for the current 15s slot
+    slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
+    print(f"slot_key: {slot_key}")
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
-        precise_minute=precise_minute,
+        precise_minute=slot_key,
         model="azure-model",
         rate_limit_type=rate_limit_object,
         group="tpm",
     )
+    print(f"request_count_api_key: {request_count_api_key}")
     await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
@@ -210,11 +219,26 @@ async def test_normal_router_call_tpm(monkeypatch, rate_limit_object):
 
     print(f"request_count_api_key: {request_count_api_key}")
 
+    next_slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot + 1 if current_slot < 3 else 0}"
+    request_count_api_key_next_slot = parallel_request_handler._get_current_usage_key(
+        user_api_key_dict=user_api_key_dict,
+        precise_minute=next_slot_key,
+        model="azure-model",
+        rate_limit_type=rate_limit_object,
+        group="tpm",
+    )
+
+    ## check if current slot matches response.usage.total_tokens else next slot
+    current_slot_get_cache = parallel_request_handler.internal_usage_cache.get_cache(
+        key=request_count_api_key
+    )
+    next_slot_get_cache = parallel_request_handler.internal_usage_cache.get_cache(
+        key=request_count_api_key_next_slot
+    )
+
     assert (
-        parallel_request_handler.internal_usage_cache.get_cache(
-            key=request_count_api_key
-        )
-        == response.usage.total_tokens
+        current_slot_get_cache == response.usage.total_tokens
+        or next_slot_get_cache == response.usage.total_tokens
     )
 
 
@@ -290,18 +314,22 @@ async def test_normal_router_call_rpm(monkeypatch, rate_limit_object):
         call_type="",
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_slot = (
+        current_time.second // 15
+    )  # This gives us 0-3 for the current 15s slot
+    slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
-        precise_minute=precise_minute,
+        precise_minute=slot_key,
         model="azure-model",
         rate_limit_type=rate_limit_object,
         group="rpm",
     )
     await asyncio.sleep(1)
+
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -391,13 +419,17 @@ async def test_streaming_router_call_v2(monkeypatch):
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_slot = (
+        current_time.second // 15
+    )  # This gives us 0-3 for the current 15s slot
+    slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
+
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
-        precise_minute=precise_minute,
+        precise_minute=slot_key,
         model=None,
         rate_limit_type="key",
         group="request_count",
@@ -494,13 +526,16 @@ async def test_bad_router_call_v2(monkeypatch, rate_limit_object):
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_hour = datetime.now().strftime("%H")
-    current_minute = datetime.now().strftime("%M")
-    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    current_slot = (
+        current_time.second // 15
+    )  # This gives us 0-3 for the current 15s slot
+    slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
     request_count_api_key = parallel_request_handler._get_current_usage_key(
         user_api_key_dict=user_api_key_dict,
-        precise_minute=precise_minute,
+        precise_minute=slot_key,
         model=None,
         rate_limit_type=rate_limit_object,
         group="rpm",

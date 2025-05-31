@@ -431,8 +431,12 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
 
         rate_limit_types = ["key", "user", "customer", "team", "model_per_key"]
         current_time = datetime.now()
-        current_slot = (current_time.minute * 60 + current_time.second) // 15
-        slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_time.hour:02d}-{current_slot}"
+        current_hour = current_time.hour
+        current_minute = current_time.minute
+        current_slot = (
+            current_time.second // 15
+        )  # This gives us 0-3 for the current 15s slot
+        slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
         for rate_limit_type in rate_limit_types:
             for group in ["request_count", "rpm", "tpm"]:
                 key = self._get_current_usage_key(
