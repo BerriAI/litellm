@@ -158,22 +158,21 @@ print(result)
 
 #### Logging
 - **[Prometheus](../../docs/proxy/prometheus)**
-    - Option to disable end_user tracking by default - [PR](https://github.com/BerriAI/litellm/pull/11192)
-    - Flag to enable end_user tracking on Prometheus - [PR](https://github.com/BerriAI/litellm/pull/11192)
+    - End users will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. [PR](https://github.com/BerriAI/litellm/pull/11192)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
-    - Fixed "Max langfuse clients reached" performance issue - [PR](https://github.com/BerriAI/litellm/pull/11285)
+    - Performance improvements: Fixed "Max langfuse clients reached" issue - [PR](https://github.com/BerriAI/litellm/pull/11285)
     - Debug fixes for langfuse client management - [PR](https://github.com/BerriAI/litellm/pull/11221)
-- **[Helicone](../../docs/proxy/logging)**
+- **[Helicone](../../docs/observability/helicone_integration)**
     - Base URL support - [PR](https://github.com/BerriAI/litellm/pull/11211)
     - Fix for embedding cache hits on string input - [PR](https://github.com/BerriAI/litellm/pull/11211)
-- **[Sentry](../../docs/proxy/logging)**
+- **[Sentry](../../docs/proxy/logging#sentry)**
     - Added sentry sample rate configuration - [PR](https://github.com/BerriAI/litellm/pull/10283)
 
 #### Guardrails
-- **[Bedrock Guardrails](../../docs/proxy/guardrails)**
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
     - Streaming support for bedrock post guard - [PR](https://github.com/BerriAI/litellm/pull/11247)
     - Auth parameter persistence fixes - [PR](https://github.com/BerriAI/litellm/pull/11270)
-- **[Pangea Guardrails](../../docs/proxy/guardrails)**
+- **[Pangea Guardrails](../../docs/proxy/guardrails/pangea)**
     - Added Pangea provider to Guardrails hook - [PR](https://github.com/BerriAI/litellm/pull/10775)
 
 
