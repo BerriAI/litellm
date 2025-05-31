@@ -52,11 +52,11 @@ LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
 ## Vector Store Permissions
 
-This release brings support for managing permissions for vector stores by entities (Keys, Teams, Organizations) on LiteLLM. Now when a request is trying to query a vector store, LiteLLM will block the request if the entity doesn't have access to the vector store.
+This release brings support for managing permissions for vector stores by entities (Keys, Teams, Organizations) on LiteLLM. When a request attempts to query a vector store, LiteLLM will automatically block it if the requesting entity lacks the proper permissions.
 
-This is great for use cases that require access to restricted data that you don't want everyone to use. 
+This is great for use cases that require access to restricted data that you don't want everyone to use.
 
-Over the next week we plan on adding permission management for MCP Servers. 
+Over the next week we plan on adding permission management for MCP Servers.
 
 ## Aiohttp Transport used by default
 
