@@ -187,6 +187,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         Add 'transform=inline' to the url of the image_url
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
             migrate_file_to_image_url,
         )
 
@@ -214,6 +215,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 model=model,
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
+            filter_value_from_dict(cast(dict, message), "cache_control")
+
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:

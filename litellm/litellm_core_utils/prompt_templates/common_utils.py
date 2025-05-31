@@ -637,6 +637,10 @@ def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
             del dictionary[k]
         elif isinstance(v, dict):
             filter_value_from_dict(v, key, depth + 1)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    filter_value_from_dict(item, key, depth + 1)
     return dictionary
 
 

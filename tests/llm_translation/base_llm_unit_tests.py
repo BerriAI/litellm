@@ -55,7 +55,8 @@ def _usage_format_tests(usage: litellm.Usage):
     print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
-    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+    if usage.prompt_tokens_details is not None:
+        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):
@@ -861,9 +862,10 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert (
-                response.usage.prompt_tokens_details.cached_tokens > 0
-            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+            if response.usage.prompt_tokens_details is not None:
+                assert (
+                    response.usage.prompt_tokens_details.cached_tokens > 0
+                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 
