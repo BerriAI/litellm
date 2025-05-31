@@ -356,9 +356,7 @@ async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
-    litellm.use_aiohttp_transport = (
-        False  # since this uses respx, we need to set use_aiohttp_transport to False
-    )
+    litellm.disable_aiohttp_transport = True
 
     expected_base_url = "http://localhost:12345/v1"
 
