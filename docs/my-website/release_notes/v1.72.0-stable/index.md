@@ -45,22 +45,22 @@ pip install litellm==1.72.0
 
 LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
-- **Vector Store Permissions**: Control Vector Store (Knowledge Base) access at Key, Team, and Organization level.
+- **Vector Store Permissions**: Control Vector Store access at the Key, Team, and Organization level.
 - **Bedrock Agents**: Call Bedrock Agents with `/chat/completions`, `/response` endpoints.
 - **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead.
 - **Prometheus**: End users (`end_user`) will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. This is done to reduce the cardinality of the metrics from LiteLLM Proxy. [Read More](../../docs/proxy/prometheus#tracking-end_user-on-prometheus)
 
 ## Vector Store Permissions
 
-This release brings support for managing permissions for vector stores by entities (Keys, Teams, Organizations) on LiteLLM. When a request attempts to query a vector store, LiteLLM will automatically block it if the requesting entity lacks the proper permissions.
+This release brings support for managing permissions for vector stores by Keys, Teams, Organizations (entities) on LiteLLM. When a request attempts to query a vector store, LiteLLM will block it if the requesting entity lacks the proper permissions.
 
-This is great for use cases that require access to restricted data that you don't want everyone to use.
+This is great for use cases that require access to restricted data that you don't want everyone to use. 
 
 Over the next week we plan on adding permission management for MCP Servers.
 
 ## Aiohttp Transport used by default
 
-Aiohttp transport is now the default transport for LiteLLM networking requests.This give users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
+Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
 
 
 If you encounter any issues, you can disable using the aiohttp transport in the following ways:
@@ -92,31 +92,35 @@ print(result)
 
 ## New Models / Updated Models
 
-- **[Gemini](https://docs.litellm.ai/docs/providers/gemini)**
-    - Parallel tool calling support with `parallel_tool_calls` parameter - [PR](https://github.com/BerriAI/litellm/pull/11125)
-    - All Gemini models now support parallel function calling - [PR](https://github.com/BerriAI/litellm/pull/11225)
-    - Stream thinking as reasoning_content support - [PR](https://github.com/BerriAI/litellm/pull/11290)
-- **[Nebius AI Studio](../../docs/providers/nebius)**
-    - New provider integration - [PR](https://github.com/BerriAI/litellm/pull/11143)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Video support for Bedrock Converse - [PR](https://github.com/BerriAI/litellm/pull/11166)
     - InvokeAgents support as /chat/completions route - [PR](https://github.com/BerriAI/litellm/pull/11239), [Get Started](../../docs/providers/bedrock_agents)
     - AI21 Jamba models compatibility fixes - [PR](https://github.com/BerriAI/litellm/pull/11233)
     - Fixed duplicate maxTokens parameter for Claude with thinking - [PR](https://github.com/BerriAI/litellm/pull/11181)
+- **[Gemini (Google AI Studio + Vertex AI)](https://docs.litellm.ai/docs/providers/gemini)**
+    - Parallel tool calling support with `parallel_tool_calls` parameter - [PR](https://github.com/BerriAI/litellm/pull/11125)
+    - All Gemini models now support parallel function calling - [PR](https://github.com/BerriAI/litellm/pull/11225)
 - **[VertexAI](../../docs/providers/vertex)**
     - codeExecution tool support and anyOf handling - [PR](https://github.com/BerriAI/litellm/pull/11195)
     - Vertex AI Anthropic support on /v1/messages - [PR](https://github.com/BerriAI/litellm/pull/11246)
     - Thinking, global regions, and parallel tool calling improvements - [PR](https://github.com/BerriAI/litellm/pull/11194)
+    - Web Search Support [PR](https://github.com/BerriAI/litellm/commit/06484f6e5a7a2f4e45c490266782ed28b51b7db6)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Thinking blocks on streaming support - [PR](https://github.com/BerriAI/litellm/pull/11194)
     - Files API with form-data support on passthrough - [PR](https://github.com/BerriAI/litellm/pull/11256)
     - File ID support on /chat/completion - [PR](https://github.com/BerriAI/litellm/pull/11256)
+- **[xAI](../../docs/providers/xai)**
+    - Web Search Support [PR](https://github.com/BerriAI/litellm/commit/06484f6e5a7a2f4e45c490266782ed28b51b7db6)
+- **[Google AI Studio](../../docs/providers/gemini)**
+    - Web Search Support [PR](https://github.com/BerriAI/litellm/commit/06484f6e5a7a2f4e45c490266782ed28b51b7db6)
 - **[Mistral](../../docs/providers/mistral)**
     - Updated mistral-medium prices and context sizes - [PR](https://github.com/BerriAI/litellm/pull/10729)
 - **[Ollama](../../docs/providers/ollama)**
     - Tool calls parsing on streaming - [PR](https://github.com/BerriAI/litellm/pull/11171)
 - **[Cohere](../../docs/providers/cohere)**
     - Swapped Cohere and Cohere Chat provider positioning - [PR](https://github.com/BerriAI/litellm/pull/11173)
+- **[Nebius AI Studio](../../docs/providers/nebius)**
+    - New provider integration - [PR](https://github.com/BerriAI/litellm/pull/11143)
 
 ## LLM API Endpoints
 
@@ -150,12 +154,7 @@ print(result)
 
 ## Authentication & Security
 
-- **[Azure OIDC](../../docs/proxy/token_auth)**
-    - OIDC provider improvements and audience bug fix - [PR](https://github.com/BerriAI/litellm/pull/10054)
-- **Secret Managers**
-    - Removed AzureCredentialType restriction on AZURE_CREDENTIAL - [PR](https://github.com/BerriAI/litellm/pull/11272)
-- **SSO/Key Management**
-    - Prevention of sensitive key leakage to Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11165)
+
 
 ## Logging / Guardrails Integrations
 
@@ -164,10 +163,8 @@ print(result)
     - End users will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. [PR](https://github.com/BerriAI/litellm/pull/11192)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Performance improvements: Fixed "Max langfuse clients reached" issue - [PR](https://github.com/BerriAI/litellm/pull/11285)
-    - Debug fixes for langfuse client management - [PR](https://github.com/BerriAI/litellm/pull/11221)
 - **[Helicone](../../docs/observability/helicone_integration)**
     - Base URL support - [PR](https://github.com/BerriAI/litellm/pull/11211)
-    - Fix for embedding cache hits on string input - [PR](https://github.com/BerriAI/litellm/pull/11211)
 - **[Sentry](../../docs/proxy/logging#sentry)**
     - Added sentry sample rate configuration - [PR](https://github.com/BerriAI/litellm/pull/10283)
 
@@ -186,18 +183,21 @@ print(result)
     - Rollback to httpx==0.27.0 for stability - [PR](https://github.com/BerriAI/litellm/pull/11146)
 - **Request Limiting**
     - Sliding window logic for parallel request limiter v2 - [PR](https://github.com/BerriAI/litellm/pull/11283)
-- **Docker**
-    - Fixed healthcheck test using curl when curl not in image - [PR](https://github.com/BerriAI/litellm/pull/9737)
-- **Parameter Handling**
-    - Support for dropping non-OpenAI params via additional_drop_params - [PR](https://github.com/BerriAI/litellm/pull/11246)
-    - Fixed frequency_penalty to repeat_penalty parameter mapping - [PR](https://github.com/BerriAI/litellm/pull/11284)
 
 
 ## Bug Fixes
 
-- **Model Deployment Fixes**
+- **LLM API Fixes**
     - Added missing request_kwargs to get_available_deployment call - [PR](https://github.com/BerriAI/litellm/pull/11202)
     - Fixed calling Azure O-series models - [PR](https://github.com/BerriAI/litellm/pull/11212)
+    - Support for dropping non-OpenAI params via additional_drop_params - [PR](https://github.com/BerriAI/litellm/pull/11246)
+    - Fixed frequency_penalty to repeat_penalty parameter mapping - [PR](https://github.com/BerriAI/litellm/pull/11284)
+    - Fix for embedding cache hits on string input - [PR](https://github.com/BerriAI/litellm/pull/11211)
+- **General**
+    - OIDC provider improvements and audience bug fix - [PR](https://github.com/BerriAI/litellm/pull/10054)
+    - Removed AzureCredentialType restriction on AZURE_CREDENTIAL - [PR](https://github.com/BerriAI/litellm/pull/11272)
+    - Prevention of sensitive key leakage to Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11165)
+    - Fixed healthcheck test using curl when curl not in image - [PR](https://github.com/BerriAI/litellm/pull/9737)
 
 ## New Contributors
 * [@agajdosi](https://github.com/agajdosi) made their first contribution in [#9737](https://github.com/BerriAI/litellm/pull/9737)
