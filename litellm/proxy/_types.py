@@ -1157,6 +1157,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1254,6 +1255,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 
     object_permission_id: str
     mcp_servers: List[str]
+    vector_stores: List[str]
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -1636,6 +1638,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1757,6 +1760,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
