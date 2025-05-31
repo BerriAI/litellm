@@ -5,11 +5,11 @@ This module is used to pass through requests to the LLM APIs.
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union
+from typing import Any, Coroutine, Optional, Union
 from urllib.parse import urlencode
 
 import httpx
-from httpx._types import CookieTypes, HeaderTypes, QueryParamTypes, RequestFiles
+from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider

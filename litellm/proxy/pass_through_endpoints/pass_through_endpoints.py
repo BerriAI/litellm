@@ -5,8 +5,8 @@ import traceback
 import uuid
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import List, Optional, Tuple, Union
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import (
