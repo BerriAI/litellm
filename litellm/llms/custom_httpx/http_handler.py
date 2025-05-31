@@ -218,16 +218,29 @@ class AsyncHTTPHandler:
             if timeout is None:
                 timeout = self.timeout
 
-            req = self.client.build_request(
-                "POST",
-                url,
-                data=data,  # type: ignore
-                json=json,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-                files=files,
-            )
+            # Use content parameter for raw bytes/text to avoid httpx deprecation warning
+            if isinstance(data, (str, bytes)):
+                req = self.client.build_request(
+                    "POST",
+                    url,
+                    content=data,  # type: ignore
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    files=files,
+                )
+            else:
+                req = self.client.build_request(
+                    "POST",
+                    url,
+                    data=data,  # type: ignore
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    files=files,
+                )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
@@ -458,9 +471,15 @@ class AsyncHTTPHandler:
 
         Used for retrying connection client errors.
         """
-        req = client.build_request(
-            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
-        )
+        # Use content parameter for raw bytes/text to avoid httpx deprecation warning
+        if isinstance(data, (str, bytes)):
+            req = client.build_request(
+                "POST", url, content=data, json=json, params=params, headers=headers  # type: ignore
+            )
+        else:
+            req = client.build_request(
+                "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+            )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
         return response
@@ -656,6 +675,11 @@ class HTTPHandler:
         logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
+            # Use content parameter for raw bytes/text to avoid httpx deprecation warning
+            if isinstance(data, (str, bytes)) and content is None:
+                content = data
+                data = None
+
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",
