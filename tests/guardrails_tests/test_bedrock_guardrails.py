@@ -8,6 +8,7 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockG
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, patch
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrails():
@@ -290,4 +291,47 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
         
         # Assert the request body matches exactly
         assert actual_body == expected_body, f"Request body mismatch. Expected: {expected_body}, Got: {actual_body}"
+        
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_aws_param_persistence():
+    """Test that AWS auth params set on init are used for every request and not popped out."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="wf0hkdb5x07f",
+        guardrailVersion="DRAFT",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        supported_event_hooks=[GuardrailEventHooks.post_call],
+        guardrail_name="bedrock-post-guard",
+    )
+
+    with patch.object(guardrail, "get_credentials", wraps=guardrail.get_credentials) as mock_get_creds:
+        for i in range(3):
+            request_data = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "user", "content": f"request {i}"}
+                ],
+                "stream": False,
+                "metadata": {"guardrails": ["bedrock-post-guard"]}
+            }
+            with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+                # Configure the mock response properly
+                mock_response = AsyncMock()
+                mock_response.status_code = 200
+                mock_response.json = MagicMock(return_value={"action": "NONE", "outputs": []})
+                mock_post.return_value = mock_response
+                await guardrail.make_bedrock_api_request(kwargs=request_data, response=None)
+
+        assert mock_get_creds.call_count == 3
+        for call in mock_get_creds.call_args_list:
+            kwargs = call.kwargs
+            print("used the following kwargs to get credentials=", kwargs)
+            assert kwargs["aws_access_key_id"] == "test-access-key"
+            assert kwargs["aws_secret_access_key"] == "test-secret-key"
+            assert kwargs["aws_region_name"] == "us-east-1"
         
