@@ -6,7 +6,6 @@ import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -173,12 +172,11 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">
-        <PremiumVectorStoreSelector
+        <VectorStoreSelector
           onChange={(values) => form.setFieldValue('vector_stores', values)}
           value={form.getFieldValue('vector_stores')}
           accessToken={accessToken || ""}
           placeholder="Select vector stores"
-          premiumUser={premiumUser}
         />
       </Form.Item>
 
