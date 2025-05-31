@@ -465,7 +465,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "anthropic/claude-3-5-sonnet-20240620"}
+        return {"model": "anthropic/claude-3-5-sonnet-latest"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {

@@ -1885,6 +1885,22 @@ def supports_tool_choice(model: str, custom_llm_provider: Optional[str] = None) 
     )
 
 
+def _supports_provider_info_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> Optional[Literal[True]]:
+    """
+    Check if the given model supports a provider specific model info and return a boolean value.
+    """
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    if provider_info is not None and provider_info.get(key, False) is True:
+        return True
+    return None
+
+
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -1910,18 +1926,25 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
 
         if model_info.get(key, False) is True:
             return True
+        elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+            supported_by_provider = _supports_provider_info_factory(
+                model, custom_llm_provider, key
+            )
+            if supported_by_provider is not None:
+                return supported_by_provider
+
         return False
     except Exception as e:
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
-        provider_info = get_provider_info(
-            model=model, custom_llm_provider=custom_llm_provider
+        supported_by_provider = _supports_provider_info_factory(
+            model, custom_llm_provider, key
         )
+        if supported_by_provider is not None:
+            return supported_by_provider
 
-        if provider_info is not None and provider_info.get(key, False) is True:
-            return True
         return False
 
 
@@ -4504,29 +4527,29 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
                 ),
-                supports_vision=_model_info.get("supports_vision", False),
+                supports_vision=_model_info.get("supports_vision", None),
                 supports_function_calling=_model_info.get(
-                    "supports_function_calling", False
+                    "supports_function_calling", None
                 ),
-                supports_tool_choice=_model_info.get("supports_tool_choice", False),
+                supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get(
-                    "supports_assistant_prefill", False
+                    "supports_assistant_prefill", None
                 ),
                 supports_prompt_caching=_model_info.get(
-                    "supports_prompt_caching", False
+                    "supports_prompt_caching", None
                 ),
-                supports_audio_input=_model_info.get("supports_audio_input", False),
-                supports_audio_output=_model_info.get("supports_audio_output", False),
-                supports_pdf_input=_model_info.get("supports_pdf_input", False),
+                supports_audio_input=_model_info.get("supports_audio_input", None),
+                supports_audio_output=_model_info.get("supports_audio_output", None),
+                supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get(
-                    "supports_embedding_image_input", False
+                    "supports_embedding_image_input", None
                 ),
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
                 ),
-                supports_web_search=_model_info.get("supports_web_search", False),
-                supports_reasoning=_model_info.get("supports_reasoning", False),
-                supports_computer_use=_model_info.get("supports_computer_use", False),
+                supports_web_search=_model_info.get("supports_web_search", None),
+                supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
                 ),

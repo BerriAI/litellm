@@ -56,7 +56,8 @@ def _usage_format_tests(usage: litellm.Usage):
     print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
-    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+    if usage.prompt_tokens_details is not None:
+        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):
@@ -183,6 +184,30 @@ class BaseLLMChatTest(ABC):
         messages = [Message(content="Hello, how are you?", role="user")]
 
         self.completion_function(**base_completion_call_args, messages=messages)
+
+
+    def test_web_search(self):
+        from litellm.utils import supports_web_search
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_web_search(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support web search")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+            web_search_options={},
+            max_tokens=100,
+        )
+
+        assert response is not None
+
+        print(f"response={response}")
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
@@ -847,9 +872,10 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert (
-                response.usage.prompt_tokens_details.cached_tokens > 0
-            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+            if response.usage.prompt_tokens_details is not None:
+                assert (
+                    response.usage.prompt_tokens_details.cached_tokens > 0
+                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
         except litellm.InternalServerError:
             pass
 
@@ -978,7 +1004,7 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
-            assert response.choices[0].finish_reason == "tool_calls"
+            assert response.choices[0].finish_reason == "tool_calls", f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes

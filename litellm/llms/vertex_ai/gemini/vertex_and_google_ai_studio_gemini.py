@@ -220,6 +220,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "top_logprobs",
             "modalities",
             "parallel_tool_calls",
+            "web_search_options",
         ]
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
@@ -250,6 +251,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ),
                 status_code=400,
             )
+
+    def _map_web_search_options(self, value: dict) -> Tools:
+        """
+        Base Case: empty dict
+
+        Google doesn't support user_location or search_context_size params
+        """
+        return Tools(googleSearch={})
 
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
@@ -445,6 +454,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_modalities.append("MODALITY_UNSPECIFIED")
         return response_modalities
 
+    def validate_parallel_tool_calls(self, value: bool, non_default_params: dict):
+        tools = non_default_params.get("tools", non_default_params.get("functions"))
+        num_function_declarations = len(tools) if isinstance(tools, list) else 0
+        if num_function_declarations > 1:
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are "
+                    "provided. Specify a single tool, or set "
+                    "`parallel_tool_calls=True`. If you want to drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` in the requst - https://docs.litellm.ai/docs/completion/drop_params"
+                ),
+                status_code=400,
+            )
+
     def map_openai_params(
         self,
         non_default_params: Dict,
@@ -487,7 +509,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and isinstance(value, list)
                 and value
             ):
-                optional_params["tools"] = self._map_function(value=value)
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params, self._map_function(value=value)
+                )
             elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -500,21 +524,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if value is False and not (
                     drop_params or litellm.drop_params
                 ):  # if drop params is True, then we should just ignore this
-                    tools = non_default_params.get(
-                        "tools", non_default_params.get("functions")
-                    )
-                    num_function_declarations = (
-                        len(tools) if isinstance(tools, list) else 0
-                    )
-                    if num_function_declarations > 1:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message=(
-                                "`parallel_tool_calls=False` is not supported when multiple tools are "
-                                "provided for Gemini. Specify a single tool, or set "
-                                "`parallel_tool_calls=True`. If you want to drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` in the requst - https://docs.litellm.ai/docs/completion/drop_params"
-                            ),
-                            status_code=400,
-                        )
+                    self.validate_parallel_tool_calls(value, non_default_params)
                 else:
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
@@ -532,7 +542,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
-
+            elif param == "web_search_options" and value and isinstance(value, dict):
+                _tools = self._map_web_search_options(value)
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params, [_tools]
+                )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return optional_params
