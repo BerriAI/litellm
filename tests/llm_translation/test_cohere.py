@@ -164,6 +164,7 @@ def test_completion_cohere():
 # FYI - cohere_chat looks quite unstable, even when testing locally
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_chat_completion_cohere(sync_mode):
     try:
         litellm.set_verbose = True
