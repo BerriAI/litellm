@@ -195,21 +195,57 @@ class BaseRoutingStrategy(ABC):
             else:
                 cache_keys_list = cache_keys
 
-            # Batch fetch current spend values from Redis
+            # 1. Snapshot in-memory before
+            in_memory_before_dict = {}
+            in_memory_before = (
+                await self.dual_cache.in_memory_cache.async_batch_get_cache(
+                    keys=cache_keys_list
+                )
+            )
+            for k, v in zip(cache_keys_list, in_memory_before):
+                in_memory_before_dict[k] = v
+
+            # 2. Fetch from Redis
             redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
                 key_list=cache_keys_list
             )
 
-            # Update in-memory cache with Redis values
-            if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
-                for key, value in redis_values.items():
-                    if value is not None:
-                        await self.dual_cache.in_memory_cache.async_set_cache(
-                            key=key, value=float(value)
-                        )
-                        # verbose_router_logger.debug(
-                        #     f"Updated in-memory cache for {key}: {value}"
-                        # )
+            # 3. Snapshot in-memory after
+            in_memory_after = (
+                await self.dual_cache.in_memory_cache.async_batch_get_cache(
+                    keys=cache_keys_list
+                )
+            )
+            in_memory_after_dict = {}
+            for k, v in zip(cache_keys_list, in_memory_after):
+                in_memory_after_dict[k] = v
+
+            # 4. Merge
+            for key in cache_keys_list:
+                redis_val = float(redis_values.get(key, 0) or 0)
+                before = float(in_memory_before_dict.get(key, 0) or 0)
+                after = float(in_memory_after_dict.get(key, 0) or 0)
+                delta = after - before
+                merged = redis_val + delta
+                await self.dual_cache.in_memory_cache.async_set_cache(
+                    key=key, value=merged
+                )
+
+            # # Batch fetch current spend values from Redis
+            # redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
+            #     key_list=cache_keys_list
+            # )
+
+            # # Update in-memory cache with Redis values
+            # if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
+            #     for key, value in redis_values.items():
+            #         if value is not None:
+            #             await self.dual_cache.in_memory_cache.async_set_cache(
+            #                 key=key, value=float(value)
+            #             )
+            #             # verbose_router_logger.debug(
+            #             #     f"Updated in-memory cache for {key}: {value}"
+            #             # )
 
             self.reset_in_memory_keys_to_update()
         except Exception as e:
