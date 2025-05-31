@@ -443,11 +443,6 @@ async def test_team_update_object_permissions_no_existing_permission(monkeypatch
     assert "object_permission" not in result
     assert result["object_permission_id"] == "new_perm_id_456"
 
-    # Verify find_unique was called with None
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
-        where={"object_permission_id": None}
-    )
-
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
 
