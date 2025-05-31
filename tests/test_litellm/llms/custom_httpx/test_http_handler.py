@@ -20,7 +20,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 @pytest.mark.asyncio
 async def test_ssl_security_level(monkeypatch):
     # Set environment variable for SSL security level
-    litellm.use_aiohttp_transport = True
     monkeypatch.setenv("SSL_SECURITY_LEVEL", "DEFAULT@SECLEVEL=1")
 
     # Create async client with SSL verification disabled to isolate SSL context testing
@@ -68,7 +67,6 @@ async def test_force_ipv4_transport():
 async def test_ssl_context_transport():
     """Test transport creation with SSL context"""
     # Create a test SSL context
-    litellm.use_aiohttp_transport = True
     ssl_context = ssl.create_default_context()
 
     transport = AsyncHTTPHandler._create_async_transport(ssl_context=ssl_context)
@@ -106,7 +104,6 @@ async def test_ssl_verification_with_aiohttp_transport():
     import aiohttp
 
     # Create a test SSL context
-    litellm.use_aiohttp_transport = True
     litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
 
     transport_connector = (
