@@ -338,7 +338,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Organization Settings</Title>
                 {(canEditOrg && !isEditing) && (
@@ -423,13 +423,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <Input.TextArea rows={4} />
                   </Form.Item>
 
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton type="submit">
-                      Save Changes
-                    </TremorButton>
+                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="flex justify-end items-center gap-2">
+                      <Button onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </Button>
+                      <TremorButton type="submit">
+                        Save Changes
+                      </TremorButton>
+                    </div>
                   </div>
                 </Form>
               ) : (

@@ -134,7 +134,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
   };
 
   return (
-    <div className="p-4">
+    <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button 
@@ -273,7 +273,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
