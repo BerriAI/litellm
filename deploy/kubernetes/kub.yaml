@@ -4,6 +4,11 @@ metadata:
   name: litellm-deployment
 spec:
   replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: litellm
@@ -12,11 +17,32 @@ spec:
       labels:
         app: litellm
     spec:
+      volumes:
+        - name: config-volume
+          emptyDir: {}
+      initContainers:
+        - name: init-config
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /config && cat <<EOF > /config/proxy_config.yaml
+              litellm_settings:
+                cache: true 
+                cache_params:
+                  type: redis
+                  namespace: "litellm.caching.caching"
+              EOF
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+    spec:
       containers:
         - name: litellm-container
-          image: ghcr.io/berriai/litellm:main-latest
+          image: ghcr.io/berriai/litellm:main-latest # recommended to lock it to a version in prod (like ghcr.io/berriai/litellm:main-v1.67.0-stable)
           imagePullPolicy: Always
-          env:
+          env: # Recommended to use secrets and mount them here
             - name: AZURE_API_KEY
               value: "d6f****"
             - name: AZURE_API_BASE
@@ -25,13 +51,23 @@ spec:
               value: "sk-1234"
             - name: DATABASE_URL
               value: "postgresql://ishaan*********"
+          # envFrom:
+          #   - secretRef:
+          #       name: litellm-secrets
           args:
             - "--config"
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
           volumeMounts:                 # Define volume mount for proxy_config.yaml
-            - name: config-volume
+            - name: config-volume       # Here, init container creates the config file, and can store the configs 
               mountPath: /app
               readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
           livenessProbe:
             httpGet:
               path: /health/liveliness
@@ -50,7 +86,3 @@ spec:
             successThreshold: 1
             failureThreshold: 3
             timeoutSeconds: 10
-      volumes:  # Define volume to mount proxy_config.yaml
-        - name: config-volume
-          configMap:
-            name: litellm-config  
