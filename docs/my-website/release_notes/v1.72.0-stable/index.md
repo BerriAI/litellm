@@ -96,12 +96,12 @@ print(result)
     - New provider integration - [PR](https://github.com/BerriAI/litellm/pull/11143)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Video support for Bedrock Converse - [PR](https://github.com/BerriAI/litellm/pull/11166)
-    - InvokeAgents support as /chat/completions route - [PR](https://github.com/BerriAI/litellm/pull/11239)
+    - InvokeAgents support as /chat/completions route - [PR](https://github.com/BerriAI/litellm/pull/11239), [Get Started](../../docs/providers/bedrock_agents)
     - AI21 Jamba models compatibility fixes - [PR](https://github.com/BerriAI/litellm/pull/11233)
     - Fixed duplicate maxTokens parameter for Claude with thinking - [PR](https://github.com/BerriAI/litellm/pull/11181)
 - **[VertexAI](../../docs/providers/vertex)**
     - codeExecution tool support and anyOf handling - [PR](https://github.com/BerriAI/litellm/pull/11195)
-    - Anthropic support on /v1/messages - [PR](https://github.com/BerriAI/litellm/pull/11246)
+    - Vertex AI Anthropic support on /v1/messages - [PR](https://github.com/BerriAI/litellm/pull/11246)
     - Thinking, global regions, and parallel tool calling improvements - [PR](https://github.com/BerriAI/litellm/pull/11194)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Thinking blocks on streaming support - [PR](https://github.com/BerriAI/litellm/pull/11194)
@@ -116,13 +116,12 @@ print(result)
 
 ## LLM API Endpoints
 
-- **[Image Edits](../../docs/image_generation)**
+- **[Image Edits API](../../docs/image_generation)**
     - Azure support for /v1/images/edits - [PR](https://github.com/BerriAI/litellm/pull/11160)
     - Cost tracking for image edits endpoint (OpenAI, Azure) - [PR](https://github.com/BerriAI/litellm/pull/11186)
-- **[Completions](../../docs/completion/chat)**
+- **[Completions API](../../docs/completion/chat)**
     - Codestral latency overhead tracking on /v1/completions - [PR](https://github.com/BerriAI/litellm/pull/10879)
-    - 'contains' support for ChatCompletionDeltaToolCall - [PR](https://github.com/BerriAI/litellm/pull/10879)
-- **[Audio](../../docs/audio/speech)**
+- **[Audio Transcriptions API](../../docs/audio/speech)**
     - GPT-4o mini audio preview pricing without date - [PR](https://github.com/BerriAI/litellm/pull/11207)
     - Non-default params support for audio transcription - [PR](https://github.com/BerriAI/litellm/pull/11212)
 - **[Responses API](../../docs/response_api)**
@@ -195,8 +194,6 @@ print(result)
 - **Model Deployment Fixes**
     - Added missing request_kwargs to get_available_deployment call - [PR](https://github.com/BerriAI/litellm/pull/11202)
     - Fixed calling Azure O-series models - [PR](https://github.com/BerriAI/litellm/pull/11212)
-    - Fixed deprecation_date value for Llama Groq models - [PR](https://github.com/BerriAI/litellm/pull/11151)
-
 
 ## New Contributors
 * [@agajdosi](https://github.com/agajdosi) made their first contribution in [#9737](https://github.com/BerriAI/litellm/pull/9737)
