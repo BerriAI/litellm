@@ -139,11 +139,11 @@ print(result)
     - "All proxy models" display when no models selected - [PR](https://github.com/BerriAI/litellm/pull/11187)
     - Removed redundant teamInfo call, using existing teamsList - [PR](https://github.com/BerriAI/litellm/pull/11051)
     - Improved model tags display on Keys, Teams and Org pages - [PR](https://github.com/BerriAI/litellm/pull/11022)
-    - Fixed duplicate object_permission field in LiteLLM_TeamTable - [PR](https://github.com/BerriAI/litellm/pull/11219)
-- **SCIM**
-    - Security fixes for SCIM token exposure on UI - [PR](https://github.com/BerriAI/litellm/pull/11220)
-- **Session Management**
-    - Streamlined session expiration in UI - [PR](https://github.com/BerriAI/litellm/pull/11279)
+- **SSO/SCIM**
+    - Bug fixes for showing SCIM token on UI - [PR](https://github.com/BerriAI/litellm/pull/11220)
+- **General UI**
+    - Fix "UI Session Expired. Logging out" - [PR](https://github.com/BerriAI/litellm/pull/11279)
+    - Support for forwarding /sso/key/generate to server root path URL - [PR](https://github.com/BerriAI/litellm/pull/11165)
 
 ## Authentication & Security
 
@@ -152,11 +152,11 @@ print(result)
 - **Secret Managers**
     - Removed AzureCredentialType restriction on AZURE_CREDENTIAL - [PR](https://github.com/BerriAI/litellm/pull/11272)
 - **SSO/Key Management**
-    - Support for forwarding /sso/key/generate to server root path URL - [PR](https://github.com/BerriAI/litellm/pull/11165)
     - Prevention of sensitive key leakage to Langfuse - [PR](https://github.com/BerriAI/litellm/pull/11165)
 
 ## Logging / Guardrails Integrations
 
+#### Logging
 - **[Prometheus](../../docs/proxy/prometheus)**
     - Option to disable end_user tracking by default - [PR](https://github.com/BerriAI/litellm/pull/11192)
     - Flag to enable end_user tracking on Prometheus - [PR](https://github.com/BerriAI/litellm/pull/11192)
@@ -166,16 +166,18 @@ print(result)
 - **[Helicone](../../docs/proxy/logging)**
     - Base URL support - [PR](https://github.com/BerriAI/litellm/pull/11211)
     - Fix for embedding cache hits on string input - [PR](https://github.com/BerriAI/litellm/pull/11211)
+- **[Sentry](../../docs/proxy/logging)**
+    - Added sentry sample rate configuration - [PR](https://github.com/BerriAI/litellm/pull/10283)
+
+#### Guardrails
 - **[Bedrock Guardrails](../../docs/proxy/guardrails)**
     - Streaming support for bedrock post guard - [PR](https://github.com/BerriAI/litellm/pull/11247)
     - Auth parameter persistence fixes - [PR](https://github.com/BerriAI/litellm/pull/11270)
 - **[Pangea Guardrails](../../docs/proxy/guardrails)**
     - Added Pangea provider to Guardrails hook - [PR](https://github.com/BerriAI/litellm/pull/10775)
-- **[Sentry](../../docs/proxy/logging)**
-    - Added sentry sample rate configuration - [PR](https://github.com/BerriAI/litellm/pull/10283)
+
 
 ## Performance / Reliability Improvements
-
 - **aiohttp Transport**
     - Handling for aiohttp.ClientPayloadError - [PR](https://github.com/BerriAI/litellm/pull/11162)
     - SSL verification settings support - [PR](https://github.com/BerriAI/litellm/pull/11162)
@@ -190,8 +192,6 @@ print(result)
 
 
 ## Bug Fixes
-
-This release includes numerous bug fixes to improve stability and reliability:
 
 - **Model Deployment Fixes**
     - Added missing request_kwargs to get_available_deployment call - [PR](https://github.com/BerriAI/litellm/pull/11202)
