@@ -193,7 +193,7 @@ class BaseRoutingStrategy(ABC):
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
             cache_keys = (
-                self.get_and_reset_in_memory_keys_to_update()
+                self.get_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
 
             if isinstance(cache_keys, set):
