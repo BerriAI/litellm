@@ -3084,7 +3084,6 @@ def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
             == """<｜begin▁of▁sentence｜>You are a good assistant<｜User｜>What is the weather in Copenhagen?<｜Assistant｜><think>"""
         )
 
-
 # test_replicate_custom_prompt_dict()
 
 # commenthing this out since we won't be always testing a custom, replicate deployment
