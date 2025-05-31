@@ -1627,7 +1627,7 @@ async def vector_store_access_check(
     # Check if the object (key, team, org) has access to the vector store
     #########################################################
     # Check if the key can access the vector store
-    if valid_token is not None:
+    if valid_token is not None and valid_token.object_permission_id is not None:
         key_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.find_unique(
                 where={"object_permission_id": valid_token.object_permission_id},
@@ -1641,7 +1641,7 @@ async def vector_store_access_check(
             )
 
     # Check if the team can access the vector store
-    if team_object is not None:
+    if team_object is not None and team_object.object_permission_id is not None:
         team_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.find_unique(
                 where={"object_permission_id": team_object.object_permission_id},
