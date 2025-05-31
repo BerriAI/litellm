@@ -74,7 +74,7 @@ class XAIChatConfig(OpenAIGPTConfig):
                     tool = filter_value_from_dict(tool, "strict")
                     if tool is not None:
                         tools.append(tool)
-                if len(tools) > 1:
+                if len(tools) > 0:
                     optional_params["tools"] = tools
             elif param in supported_openai_params:
                 if value is not None:
