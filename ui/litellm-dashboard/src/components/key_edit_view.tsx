@@ -5,6 +5,8 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -92,7 +94,8 @@ export function KeyEditView({
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
-    guardrails: keyData.metadata?.guardrails || []
+    guardrails: keyData.metadata?.guardrails || [],
+    vector_stores: keyData.object_permission?.vector_stores || []
   };
 
   return (
@@ -162,6 +165,15 @@ export function KeyEditView({
           mode="tags"
           style={{ width: "100%" }}
           placeholder="Select or enter guardrails"
+        />
+      </Form.Item>
+
+      <Form.Item label="Vector Stores" name="vector_stores">
+        <VectorStoreSelector
+          onChange={(values) => form.setFieldValue('vector_stores', values)}
+          value={form.getFieldValue('vector_stores')}
+          accessToken={accessToken || ""}
+          placeholder="Select vector stores"
         />
       </Form.Item>
 

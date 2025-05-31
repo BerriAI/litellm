@@ -663,6 +663,13 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
+    # Check object permission
+    if data.object_permission is not None:
+        updated_kv = await handle_update_object_permission(
+            data_json=updated_kv,
+            existing_team_row=existing_team_row,
+        )
+
     # update team metadata fields
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
@@ -732,6 +739,62 @@ async def update_team(
         )
 
     return {"team_id": team_row.team_id, "data": team_row}
+
+
+async def handle_update_object_permission(
+    data_json: dict, existing_team_row: LiteLLM_TeamTable
+) -> dict:
+    """
+    Handle the update of object permission for a team.
+
+    - IF there's no object_permission_id, then create a new entry in LiteLLM_ObjectPermissionTable
+    - IF there's an object_permission_id, then update the entry in LiteLLM_ObjectPermissionTable
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ValueError("Prisma client not found")
+
+    #########################################################
+    # Ensure `object_permission` is not added to the data_json
+    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
+    #########################################################
+    new_object_permission = data_json.pop("object_permission")
+    if new_object_permission is None:
+        return data_json
+
+    # lookup existing object permission ID and update that entry
+    existing_object_permission_id = existing_team_row.object_permission_id
+    existing_object_permission = (
+        await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_object_permission_id},
+        )
+    )
+
+    existing_object_permissions_dict: Dict = {}
+
+    # update the object permission
+    if existing_object_permission is not None:
+        existing_object_permissions_dict = existing_object_permission.model_dump(
+            exclude_unset=True, exclude_none=True
+        )
+    existing_object_permissions_dict.update(dict(new_object_permission))
+    created_object_permission_row = (
+        await prisma_client.db.litellm_objectpermissiontable.upsert(
+            where={"object_permission_id": existing_object_permission_id},
+            data={
+                "create": existing_object_permissions_dict,
+                "update": existing_object_permissions_dict,
+            },
+        )
+    )
+    data_json[
+        "object_permission_id"
+    ] = created_object_permission_row.object_permission_id
+    verbose_proxy_logger.debug(
+        f"created_object_permission_row: {created_object_permission_row}"
+    )
+    return data_json
 
 
 def _check_team_member_admin_add(
@@ -1486,7 +1549,8 @@ async def team_info(
             team_info: Optional[
                 BaseModel
             ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception
