@@ -1254,8 +1254,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: List[str]
-    vector_stores: List[str]
+    mcp_servers: Optional[List[str]] = []
+    vector_stores: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -2364,6 +2364,21 @@ class ProxyErrorTypes(str, enum.Enum):
     Team member permission error
     """
 
+    key_vector_store_access_denied = "key_vector_store_access_denied"
+    """
+    Key does not have access to the vector store
+    """
+
+    team_vector_store_access_denied = "team_vector_store_access_denied"
+    """
+    Team does not have access to the vector store
+    """
+
+    org_vector_store_access_denied = "org_vector_store_access_denied"
+    """
+    Organization does not have access to the vector store
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org"]
@@ -2379,6 +2394,20 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.user_model_access_denied
         elif object_type == "org":
             return cls.org_model_access_denied
+
+    @classmethod
+    def get_vector_store_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "org"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the vector store access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_vector_store_access_denied
+        elif object_type == "team":
+            return cls.team_vector_store_access_denied
+        elif object_type == "org":
+            return cls.org_vector_store_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (
