@@ -759,8 +759,8 @@ def test_get_model_info_shows_supports_computer_use():
     info_gpt = litellm.get_model_info(model_known_not_to_support_computer_use)
     print(f"Info for {model_known_not_to_support_computer_use}: {info_gpt}")
     assert (
-        info_gpt.get("supports_computer_use") is False
-    )  # Expecting False due to the default in ModelInfoBase
+        info_gpt.get("supports_computer_use") is None
+    )  # Expecting None due to the default in ModelInfoBase
 
 
 @pytest.mark.parametrize(
