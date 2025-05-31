@@ -6688,7 +6688,7 @@ class ProviderConfigManager:
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider:
+        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.common_utils import (
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
             )
