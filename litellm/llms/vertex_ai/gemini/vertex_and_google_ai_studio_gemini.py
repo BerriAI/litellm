@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import time
 import uuid
 from copy import deepcopy
 from functools import partial
@@ -61,6 +62,7 @@ from litellm.types.llms.vertex_ai import (
     UsageMetadata,
 )
 from litellm.types.utils import (
+    ChatCompletionAudioResponse,
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
@@ -69,7 +71,7 @@ from litellm.types.utils import (
     TopLogprob,
     Usage,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, supports_reasoning
+from litellm.utils import CustomStreamWrapper, ModelResponse, is_base64_encoded, supports_reasoning
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import VertexAIError, _build_vertex_schema
@@ -676,14 +678,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         content_str: Optional[str] = None
         reasoning_content_str: Optional[str] = None
+
         for part in parts:
             _content_str = ""
             if "text" in part:
-                _content_str += part["text"]
-            elif "inlineData" in part:  # base64 encoded image
-                _content_str += "data:{};base64,{}".format(
-                    part["inlineData"]["mimeType"], part["inlineData"]["data"]
-                )
+                text_content = part["text"]
+                # Check if text content is audio data URI - if so, exclude from text content
+                if text_content.startswith("data:audio") and ";base64," in text_content:
+                    try:
+                        if is_base64_encoded(text_content):
+                            media_type, _ = text_content.split("data:")[1].split(";base64,")
+                            if media_type.startswith("audio/"):
+                                continue
+                    except (ValueError, IndexError):
+                        # If parsing fails, treat as regular text
+                        pass
+                _content_str += text_content
+            elif "inlineData" in part:
+                mime_type = part["inlineData"]["mimeType"]
+                data = part["inlineData"]["data"]
+                # Check if inline data is audio - if so, exclude from text content
+                if mime_type.startswith("audio/"):
+                    continue
+                _content_str += "data:{};base64,{}".format(mime_type, data)
+
             if len(_content_str) > 0:
                 if part.get("thought") is True:
                     if reasoning_content_str is None:
@@ -695,6 +713,47 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     content_str += _content_str
 
         return content_str, reasoning_content_str
+
+    def _extract_audio_response_from_parts(
+        self, parts: List[HttpxPartType]
+    ) -> Optional[ChatCompletionAudioResponse]:
+        """Extract audio response from parts if present"""
+        for part in parts:
+            if "text" in part:
+                text_content = part["text"]
+                # Check if text content contains audio data URI
+                if text_content.startswith("data:audio") and ";base64," in text_content:
+                    try:
+                        if is_base64_encoded(text_content):
+                            media_type, audio_data = text_content.split("data:")[1].split(";base64,")
+
+                            if media_type.startswith("audio/"):
+                                expires_at = int(time.time()) + (24 * 60 * 60)
+                                transcript = ""  # Gemini doesn't provide transcript
+
+                                return ChatCompletionAudioResponse(
+                                    data=audio_data,
+                                    expires_at=expires_at,
+                                    transcript=transcript
+                                )
+                    except (ValueError, IndexError):
+                        pass
+
+            elif "inlineData" in part:
+                mime_type = part["inlineData"]["mimeType"]
+                data = part["inlineData"]["data"]
+
+                if mime_type.startswith("audio/"):
+                    expires_at = int(time.time()) + (24 * 60 * 60)
+                    transcript = ""  # Gemini doesn't provide transcript
+
+                    return ChatCompletionAudioResponse(
+                        data=data,
+                        expires_at=expires_at,
+                        transcript=transcript
+                    )
+
+        return None
 
     def _transform_parts(
         self,
@@ -981,8 +1040,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = VertexGeminiConfig().get_assistant_content_message(
                     parts=candidate["content"]["parts"]
                 )
-                if content is not None:
+
+                audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
+                    parts=candidate["content"]["parts"]
+                )
+
+                if audio_response is not None:
+                    cast(Dict[str, Any], chat_completion_message)["audio"] = audio_response
+                    chat_completion_message["content"] = None  # OpenAI spec
+                elif content is not None:
                     chat_completion_message["content"] = content
+
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
