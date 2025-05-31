@@ -34,6 +34,7 @@ import {
   userFilterUICall,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -55,6 +56,7 @@ interface CreateKeyProps {
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  premiumUser?: boolean;
 }
 
 interface User {
@@ -152,6 +154,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   accessToken,
   data,
   addKey,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -699,11 +702,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       className="mt-4"
                       help="Select vector stores this key can access. Leave empty for access to all vector stores"
                     >
-                      <VectorStoreSelector
+                      <PremiumVectorStoreSelector
                         onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
                         value={form.getFieldValue('allowed_vector_store_ids')}
                         accessToken={accessToken}
                         placeholder="Select vector stores (optional)"
+                        premiumUser={premiumUser}
                       />
                     </Form.Item>
 

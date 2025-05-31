@@ -35,6 +35,7 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
 export interface TeamData {
   team_id: string;
@@ -79,6 +80,7 @@ export interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  premiumUser?: boolean;
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -88,7 +90,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  premiumUser = false
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -326,6 +329,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 objectPermission={info.object_permission} 
                 variant="card"
                 accessToken={accessToken}
+                premiumUser={premiumUser}
               />
             </Grid>
           </TabPanel>
@@ -456,11 +460,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
-                    <VectorStoreSelector
+                    <PremiumVectorStoreSelector
                       onChange={(values) => form.setFieldValue('vector_stores', values)}
                       value={form.getFieldValue('vector_stores')}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
+                      premiumUser={premiumUser}
                     />
                   </Form.Item>
                   
@@ -532,6 +537,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                     accessToken={accessToken}
+                    premiumUser={premiumUser}
                   />
                 </div>
               )}
