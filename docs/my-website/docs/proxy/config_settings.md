@@ -411,6 +411,7 @@ router_settings:
 | DEFAULT_TRIM_RATIO | Default ratio of tokens to trim from prompt end. Default is 0.75
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
+| DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
 | DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
 | DOCS_DESCRIPTION | Description text for documentation pages
 | DOCS_FILTERED | Flag indicating filtered documentation
@@ -642,7 +643,6 @@ router_settings:
 | UPSTREAM_LANGFUSE_PUBLIC_KEY | Public key for upstream Langfuse authentication
 | UPSTREAM_LANGFUSE_RELEASE | Release version identifier for upstream Langfuse
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
-| USE_AIOHTTP_TRANSPORT | Flag to enable aiohttp transport. This is a feature flag for the new aiohttp transport. **Default is False**
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
 | WEBHOOK_URL | URL for receiving webhooks from external services
