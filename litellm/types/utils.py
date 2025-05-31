@@ -2207,6 +2207,7 @@ class LlmProviders(str, Enum):
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
+    DATAROBOT = "datarobot"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
