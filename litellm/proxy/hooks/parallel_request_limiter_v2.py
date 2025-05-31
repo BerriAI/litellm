@@ -388,6 +388,15 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
+            if (
+                "litellm_params" not in kwargs
+                or "metadata" not in kwargs["litellm_params"]
+            ):
+                verbose_proxy_logger.debug(
+                    "No litellm_params or metadata found in kwargs, skipping parallel request limiter"
+                )
+                return
+
             # ------------
             # Setup values
             # ------------
@@ -395,7 +404,10 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
             global_max_parallel_requests = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
             )
-            user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
+            user_api_key = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key",
+                kwargs["litellm_params"]["metadata"].get("user_api_key_hash"),
+            )
             user_api_key_user_id = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_user_id", None
             )
