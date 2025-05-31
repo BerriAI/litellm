@@ -40,13 +40,46 @@ pip install litellm==1.72.0
 </TabItem>
 </Tabs>
 
+
 ## Key Highlights
 
 LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
-- **Vector Store Permissions**: Complete access control system for vector stores across Keys, Teams, and Organizations.
-- **MCP Server Integration**: Native support for MCP servers with easy configuration through the LiteLLM UI.
-- **Enhanced Provider Support**: New Nebius AI Studio integration, improved Gemini parallel tool calling, and Azure image edits support.
+- **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM. This is a major change from the previous version.
+- **Vector Store Permissions**: Control Vector Store (Knowledge Base) access at Key, Team, and Organization level.
+- **Bedrock Agents**: Call Beedrock Agents with `/chat/completions`, `/response` endpoints.
+
+
+## Aiohttp Transport used by default
+
+This give users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
+
+
+If you encounter any issues, you can disable using the aiohttp transport in the following ways:
+
+**On LiteLLM Proxy**
+
+Set the `DISABLE_AIOHTTP_TRANSPORT=True` in the environment variables. 
+
+```yaml showLineNumbers title="Environment Variable"
+export DISABLE_AIOHTTP_TRANSPORT="True"
+```
+
+**On LiteLLM Python SDK**
+
+Set the `disable_aiohttp_transport=True` to disable aiohttp transport. 
+
+```python showLineNumbers title="Python SDK"
+import litellm
+
+litellm.disable_aiohttp_transport = True # default is False, enable this to use aiohttp transport
+result = litellm.completion(
+    model="openai/gpt-4o",
+    messages=[{"role": "user", "content": "Hello, world!"}],
+)
+print(result)
+```
+
 
 ## Vector Store Permissions
 
@@ -59,14 +92,6 @@ This release introduces comprehensive vector store access controls, allowing adm
 
 Vector store permissions are now enforced across all LiteLLM authentication mechanisms, ensuring secure access to your vector data.
 
-## MCP Server Integration
-
-This release brings native Model Context Protocol (MCP) server support to LiteLLM:
-
-- **Well-known MCP Servers**: Pre-configured access to popular MCP servers
-- **UI Configuration**: Add and manage MCP servers directly through the LiteLLM dashboard  
-- **Automatic Initialization**: MCP servers are automatically initialized when the MCP package is available
-- **Seamless Integration**: Works with existing LiteLLM authentication and routing
 
 ## New Models / Updated Models
 
