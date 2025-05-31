@@ -6,7 +6,17 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    cast,
+)
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -24,6 +34,9 @@ from litellm.types.utils import (
     SpecialEnums,
     StreamingChoices,
 )
+
+if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
+    from litellm.types.llms.openai import ChatCompletionImageObject
 
 DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
     content="Please continue.", role="user"
@@ -625,3 +638,30 @@ def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
         elif isinstance(v, dict):
             filter_value_from_dict(v, key, depth + 1)
     return dictionary
+
+
+def migrate_file_to_image_url(
+    message: "ChatCompletionFileObject",
+) -> "ChatCompletionImageObject":
+    """
+    Migrate file to image_url
+    """
+    from litellm.types.llms.openai import (
+        ChatCompletionImageObject,
+        ChatCompletionImageUrlObject,
+    )
+
+    file_id = message["file"].get("file_id")
+    file_data = message["file"].get("file_data")
+    format = message["file"].get("format")
+    if not file_id and not file_data:
+        raise ValueError("file_id and file_data are both None")
+    image_url_object = ChatCompletionImageObject(
+        type="image_url",
+        image_url=ChatCompletionImageUrlObject(
+            url=cast(str, file_id or file_data),
+        ),
+    )
+    if format and isinstance(image_url_object["image_url"], dict):
+        image_url_object["image_url"]["format"] = format
+    return image_url_object
