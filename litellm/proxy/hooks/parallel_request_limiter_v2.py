@@ -132,42 +132,116 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
     ):
         ## INCREMENT CURRENT USAGE
         increment_list: List[Tuple[str, int]] = []
+        decrement_list: List[Tuple[str, int]] = []
+        slots_to_check: List[str] = []
         increment_value_by_group = {
             "request_count": 1,
             "tpm": 0,
             "rpm": 1,
         }
-        for group in ["request_count", "rpm", "tpm"]:
-            key = self._get_current_usage_key(
-                user_api_key_dict=user_api_key_dict,
-                precise_minute=precise_minute,
-                model=data.get("model", None),
-                rate_limit_type=rate_limit_type,
-                group=cast(RateLimitGroups, group),
-            )
-            if key is None:
-                continue
-            increment_list.append((key, increment_value_by_group[group]))
+
+        # Get current time and calculate the last 4 15s slots
+        current_time = datetime.now()
+        current_slot = (
+            current_time.second // 15
+        )  # This gives us 0-3 for the current 15s slot
+        slots_to_check = []
+        slot_cache_keys = []
+        # Calculate the last 4 slots, handling minute boundaries
+        for i in range(4):
+            slot_number = (current_slot - i) % 4  # This ensures we wrap around properly
+            minute = current_time.minute
+            hour = current_time.hour
+
+            # If we need to look at previous minute
+            if current_slot - i < 0:
+                if minute == 0:
+                    # If we're at minute 0, go to previous hour
+                    hour = (current_time.hour - 1) % 24
+                    minute = 59
+                else:
+                    minute = current_time.minute - 1
+
+            slot_key = f"{current_time.strftime('%Y-%m-%d')}-{hour:02d}-{minute:02d}-{slot_number}"
+            slots_to_check.append(slot_key)
+
+        # For each slot, create keys for all rate limit groups
+        for slot_key in slots_to_check:
+            for group in ["request_count", "rpm", "tpm"]:
+                key = self._get_current_usage_key(
+                    user_api_key_dict=user_api_key_dict,
+                    precise_minute=slot_key,
+                    model=data.get("model", None),
+                    rate_limit_type=rate_limit_type,
+                    group=cast(RateLimitGroups, group),
+                )
+                if key is None:
+                    continue
+                # Only increment the current slot
+                if slot_key == slots_to_check[0]:
+                    increment_list.append((key, increment_value_by_group[group]))
+                    decrement_list.append(
+                        (key, -1 if increment_value_by_group[group] == 1 else 0)
+                    )
+                slot_cache_keys.append(key)
 
         if (
             not max_parallel_requests and not rpm_limit and not tpm_limit
         ):  # no rate limits
             return
 
-        results = await self._increment_value_list_in_current_window(
+        # Use the existing atomic increment-and-check functionality
+        await self._increment_value_list_in_current_window(
             increment_list=increment_list,
             ttl=60,
         )
+
+        # Get the current values for all slots to check limits
+        current_values = await self.internal_usage_cache.async_batch_get_cache(
+            slot_cache_keys
+        )
+        if current_values is None:
+            current_values = [None] * len(slot_cache_keys)
+
+        # Calculate totals across all slots, handling None values
+        # Group values by type (request_count, rpm, tpm)
+        request_counts = []
+        rpm_counts = []
+        tpm_counts = []
+
+        for i in range(0, len(current_values), 3):
+            request_counts.append(
+                current_values[i] if current_values[i] is not None else 0
+            )
+            rpm_counts.append(
+                current_values[i + 1] if current_values[i + 1] is not None else 0
+            )
+            tpm_counts.append(
+                current_values[i + 2] if current_values[i + 2] is not None else 0
+            )
+
+        # Calculate totals across all slots
+        total_requests = sum(request_counts)
+        total_rpm = sum(rpm_counts)
+        total_tpm = sum(tpm_counts)
+
         should_raise_error = False
         if max_parallel_requests is not None:
-            should_raise_error = results[0] > max_parallel_requests
+            should_raise_error = total_requests > max_parallel_requests
         if rpm_limit is not None:
-            should_raise_error = should_raise_error or results[1] > rpm_limit
+            should_raise_error = should_raise_error or total_rpm > rpm_limit
         if tpm_limit is not None:
-            should_raise_error = should_raise_error or results[2] > tpm_limit
+            should_raise_error = should_raise_error or total_tpm > tpm_limit
+
         if should_raise_error:
+            ## DECREMENT CURRENT USAGE - so we don't keep failing subsequent requests
+            await self._increment_value_list_in_current_window(
+                increment_list=decrement_list,
+                ttl=60,
+            )
+
             raise self.raise_rate_limit_error(
-                additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current usage: max_parallel_requests: {results[0]}, current_rpm: {results[1]}, current_tpm: {results[2]}. Current limits: max_parallel_requests: {max_parallel_requests}, rpm_limit: {rpm_limit}, tpm_limit: {tpm_limit}."
+                additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current usage: max_parallel_requests: {total_requests}, current_rpm: {total_rpm}, current_tpm: {total_tpm}. Current limits: max_parallel_requests: {max_parallel_requests}, rpm_limit: {rpm_limit}, tpm_limit: {tpm_limit}."
             )
 
     def time_to_next_minute(self) -> float:
@@ -356,11 +430,18 @@ class _PROXY_MaxParallelRequestsHandler_v2(BaseRoutingStrategy, CustomLogger):
         }
 
         rate_limit_types = ["key", "user", "customer", "team", "model_per_key"]
+        current_time = datetime.now()
+        current_hour = current_time.hour
+        current_minute = current_time.minute
+        current_slot = (
+            current_time.second // 15
+        )  # This gives us 0-3 for the current 15s slot
+        slot_key = f"{current_time.strftime('%Y-%m-%d')}-{current_hour:02d}-{current_minute:02d}-{current_slot}"
         for rate_limit_type in rate_limit_types:
             for group in ["request_count", "rpm", "tpm"]:
                 key = self._get_current_usage_key(
                     user_api_key_dict=user_api_key_dict,
-                    precise_minute=precise_minute,
+                    precise_minute=slot_key,
                     model=model,
                     rate_limit_type=cast(RateLimitTypes, rate_limit_type),
                     group=cast(RateLimitGroups, group),
