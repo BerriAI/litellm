@@ -99,7 +99,7 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
     # Setup test data
     base_strategy.in_memory_keys_to_update = {"key1"}
 
-    # Mock the in-memory cache batch get responses
+    # Mock the in-memory cache batch get responses for before snapshot
     in_memory_before_future: asyncio.Future[List[str]] = asyncio.Future()
     in_memory_before_future.set_result(["5.0"])  # Initial values
     mock_dual_cache.in_memory_cache.async_batch_get_cache.return_value = (
@@ -111,13 +111,12 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
     redis_future.set_result({"key1": "15.0"})  # Redis values
     mock_dual_cache.redis_cache.async_batch_get_cache.return_value = redis_future
 
-    # Mock in-memory after snapshot
-    in_memory_after_future: asyncio.Future[List[str]] = asyncio.Future()
-    in_memory_after_future.set_result(["8.0"])  # Values after potential updates
-    mock_dual_cache.in_memory_cache.async_batch_get_cache.side_effect = [
-        in_memory_before_future,  # First call for before snapshot
-        in_memory_after_future,  # Second call for after snapshot
-    ]
+    # Mock in-memory get for after snapshot
+    in_memory_after_future: asyncio.Future[Optional[str]] = asyncio.Future()
+    in_memory_after_future.set_result("8.0")  # Value after potential updates
+    mock_dual_cache.in_memory_cache.async_get_cache.return_value = (
+        in_memory_after_future
+    )
 
     await base_strategy._sync_in_memory_spend_with_redis()
 
@@ -129,19 +128,17 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
 
     # Verify in-memory cache was updated with merged values
     # For key1: redis_val(15.0) + delta(8.0 - 5.0) = 18.0
-    # For key2: redis_val(20.0) + delta(12.0 - 10.0) = 22.0
     assert mock_dual_cache.in_memory_cache.async_set_cache.call_count == 1
 
     # Verify the final merged values
     set_cache_calls = mock_dual_cache.in_memory_cache.async_set_cache.call_args_list
-    print(f"set_cache_calls: {set_cache_calls}")
     assert any(
-        call.kwargs["key"] == "key1" and call.kwargs["value"] == 18.0
+        call.kwargs["key"] == "key1" and float(call.kwargs["value"]) == 18.0
         for call in set_cache_calls
     )
 
-    # Verify cache keys were reset
-    assert len(base_strategy.in_memory_keys_to_update) == 0
+    # Verify cache keys still exist
+    assert len(base_strategy.in_memory_keys_to_update) == 1
 
 
 def test_cache_keys_management(base_strategy):
