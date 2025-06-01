@@ -35,6 +35,7 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 
 export interface TeamData {
   team_id: string;
@@ -79,6 +80,7 @@ export interface TeamInfoProps {
   is_proxy_admin: boolean;
   userModels: string[];
   editTeam: boolean;
+  premiumUser?: boolean;
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -88,7 +90,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_team_admin, 
   is_proxy_admin,
   userModels,
-  editTeam
+  editTeam,
+  premiumUser = false
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);

@@ -169,8 +169,8 @@ class VectorStoreRegistry:
         Only add the vector store if it is not already in the registry
         """
         vector_store_id = vector_store.get("vector_store_id")
-        for vector_store in self.vector_stores:
-            if vector_store.get("vector_store_id") == vector_store_id:
+        for _vector_store in self.vector_stores:
+            if _vector_store.get("vector_store_id") == vector_store_id:
                 return
         self.vector_stores.append(vector_store)
 
@@ -209,3 +209,18 @@ class VectorStoreRegistry:
                 )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
+
+    def get_credentials_for_vector_store(self, vector_store_id: str) -> Dict[str, Any]:
+        """
+        Get the credentials for a vector store
+
+        Returns a dictionary of unpacked credentials for the vector store to use for the request
+        """
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+        for vector_store in self.vector_stores:
+            if vector_store.get("vector_store_id") == vector_store_id:
+                credentials = vector_store.get("litellm_credential_name")
+                if credentials:
+                    return CredentialAccessor.get_credential_values(credentials)
+        return {}

@@ -10,5 +10,6 @@ sys.path.insert(
 
 from litellm.proxy._experimental.mcp_server.db import get_mcp_servers_by_team
 
+
 def test_fetch_mcp_servers_by_team():
     assert True == True

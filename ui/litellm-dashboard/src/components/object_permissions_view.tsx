@@ -25,7 +25,7 @@ export function ObjectPermissionsView({
   objectPermission, 
   variant = "card",
   className = "",
-  accessToken
+  accessToken,
 }: ObjectPermissionsViewProps) {
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];

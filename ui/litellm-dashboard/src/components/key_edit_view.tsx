@@ -15,6 +15,7 @@ interface KeyEditViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  premiumUser?: boolean;
 }
 
 // Add this helper function
@@ -43,7 +44,9 @@ export function KeyEditView({
     teams,
     accessToken,
     userID,
-    userRole }: KeyEditViewProps) {
+    userRole,
+    premiumUser = false
+}: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);

@@ -7,8 +7,7 @@ import litellm
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
-from unittest.mock import MagicMock
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrails():
@@ -334,4 +333,5 @@ async def test_bedrock_guardrail_aws_param_persistence():
             assert kwargs["aws_access_key_id"] == "test-access-key"
             assert kwargs["aws_secret_access_key"] == "test-secret-key"
             assert kwargs["aws_region_name"] == "us-east-1"
+
         

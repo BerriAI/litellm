@@ -45,6 +45,9 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_helpers.object_permission_utils import (
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
@@ -733,48 +736,20 @@ async def _handle_update_object_permission(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise ValueError("Prisma client not found")
-
-    #########################################################
-    # Ensure `object_permission` is not added to the data_json
-    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
-    #########################################################
-    new_object_permission = data_json.pop("object_permission")
-    if new_object_permission is None:
-        return data_json
-
-    # lookup existing object permission ID and update that entry
-    existing_object_permission_id = existing_key_row.object_permission_id
-    existing_object_permission = (
-        await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": existing_object_permission_id},
-        )
+    # Use the common helper to handle the object permission update
+    object_permission_id = await handle_update_object_permission_common(
+        data_json=data_json,
+        existing_object_permission_id=existing_key_row.object_permission_id,
+        prisma_client=prisma_client,
     )
-    existing_object_permissions_dict: dict = {}
-    if existing_object_permission is not None:
-        # update the object permission
-        existing_object_permissions_dict = existing_object_permission.model_dump(
-            exclude_unset=True, exclude_none=True
-        )
-        existing_object_permissions_dict.update(dict(new_object_permission))
 
-    #########################################################
-    # Commit the update to the LiteLLM_ObjectPermissionTable
-    #########################################################
-    new_object_permission_row = (
-        await prisma_client.db.litellm_objectpermissiontable.upsert(
-            where={"object_permission_id": existing_object_permission_id},
-            data={
-                "create": existing_object_permissions_dict,
-                "update": existing_object_permissions_dict,
-            },
+    # Add the object_permission_id to data_json if one was created/updated
+    if object_permission_id is not None:
+        data_json["object_permission_id"] = object_permission_id
+        verbose_proxy_logger.debug(
+            f"updated object_permission_id: {object_permission_id}"
         )
-    )
-    verbose_proxy_logger.debug(
-        f"new_object_permission_row: {new_object_permission_row}"
-    )
-    data_json["object_permission_id"] = new_object_permission_row.object_permission_id
+
     return data_json
 
 
