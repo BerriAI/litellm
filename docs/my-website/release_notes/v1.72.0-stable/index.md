@@ -46,9 +46,14 @@ pip install litellm==1.72.0
 LiteLLM v1.72.0-stable is live now. Here are the key highlights of this release:
 
 - **Vector Store Permissions**: Control Vector Store access at the Key, Team, and Organization level.
-- **Bedrock Agents**: Call Bedrock Agents with `/chat/completions`, `/response` endpoints.
+- **Rate Limiting Sliding Window support**: Improved accuracy for Key/Team/User rate limits with request tracking across minutes.
 - **Aiohttp Transport used by default**: Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead.
-- **Prometheus**: End users (`end_user`) will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. This is done to reduce the cardinality of the metrics from LiteLLM Proxy. [Read More](../../docs/proxy/prometheus#tracking-end_user-on-prometheus)
+- **Bedrock Agents**: Call Bedrock Agents with `/chat/completions`, `/response` endpoints.
+- **Anthropic File API**: Upload and analyze CSV files with Claude-4 on Anthropic via LiteLLM.
+- **Prometheus**: End users (`end_user`) will no longer be tracked by default on Prometheus. Tracking end_users on prometheus is now opt-in. This is done to prevent the response from `/metrics` from  becoming too large. [Read More](../../docs/proxy/prometheus#tracking-end_user-on-prometheus)
+
+
+---
 
 ## Vector Store Permissions
 
@@ -58,6 +63,7 @@ This is great for use cases that require access to restricted data that you don'
 
 Over the next week we plan on adding permission management for MCP Servers.
 
+---
 ## Aiohttp Transport used by default
 
 Aiohttp transport is now the default transport for LiteLLM networking requests. This gives users 2x higher RPS per instance with a 40ms median latency overhead. This has been live on LiteLLM Cloud for a week + gone through alpha users testing for a week.
@@ -88,6 +94,7 @@ result = litellm.completion(
 print(result)
 ```
 
+---
 
 
 ## New Models / Updated Models
