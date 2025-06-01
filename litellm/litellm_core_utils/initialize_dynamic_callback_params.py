@@ -33,5 +33,5 @@ def initialize_standard_callback_dynamic_params(
             
             if param in kwargs.get("metadata", {}):
                 _param_value = kwargs.get("metadata", {}).pop(param)
-                standard_callback_dynamic_params[param] = _param_value # type: ignore
+                standard_callback_dynamic_params[param] = _param_value  # type: ignore
     return standard_callback_dynamic_params
