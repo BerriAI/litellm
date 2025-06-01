@@ -1186,7 +1186,9 @@ async def make_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_lines(), sync_stream=False
+        streaming_response=response.aiter_lines(),
+        sync_stream=False,
+        logging_obj=logging_obj,
     )
     # LOGGING
     logging_obj.post_call(
@@ -1224,7 +1226,9 @@ def make_sync_call(
         )
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True
+        streaming_response=response.iter_lines(),
+        sync_stream=True,
+        logging_obj=logging_obj,
     )
 
     # LOGGING
@@ -1645,11 +1649,19 @@ class VertexLLM(VertexBase):
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool):
+    def __init__(
+        self, streaming_response, sync_stream: bool, logging_obj: LoggingClass
+    ):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            check_is_function_call,
+        )
+
         self.streaming_response = streaming_response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
+        self.logging_obj = logging_obj
+        self.is_function_call = check_is_function_call(logging_obj)
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
@@ -1718,15 +1730,20 @@ class ModelResponseIterator:
                     ),
                 )
 
+            args: Dict[str, Any] = {
+                "content": text or None,
+                "reasoning_content": reasoning_content,
+            }
+            if self.is_function_call and tool_use is not None:
+                args["function_call"] = tool_use["function"]
+            elif tool_use is not None:
+                args["tool_calls"] = [tool_use]
+
             returned_chunk = ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         index=0,
-                        delta=Delta(
-                            content=text,
-                            tool_calls=[tool_use] if tool_use is not None else None,
-                            reasoning_content=reasoning_content,
-                        ),
+                        delta=Delta(**args),
                         finish_reason=finish_reason,
                     )
                 ],

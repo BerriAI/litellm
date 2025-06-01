@@ -6,7 +6,17 @@ import io
 import mimetypes
 import re
 from os import PathLike
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    cast,
+)
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -32,6 +42,9 @@ DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     content="Please continue.", role="assistant"
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
 
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
@@ -603,3 +616,17 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                         if file_id:
                             file_ids.append(file_id)
     return file_ids
+
+
+def check_is_function_call(logging_obj: "LoggingClass") -> bool:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        is_function_call,
+    )
+
+    if hasattr(logging_obj, "optional_params") and isinstance(
+        logging_obj.optional_params, dict
+    ):
+        if is_function_call(logging_obj.optional_params):
+            return True
+
+    return False
