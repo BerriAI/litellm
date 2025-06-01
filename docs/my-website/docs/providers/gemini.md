@@ -209,12 +209,7 @@ LiteLLM supports Gemini TTS models that can generate audio responses using the O
 
 ### Supported Models
 
-For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-| Model | Description |
-|-------|-------------|
-| `gemini-2.5-flash-preview-tts` | Fast TTS model with audio output capabilities |
-| `gemini-2.5-pro-preview-tts` | High-quality TTS model with audio output capabilities |
+LiteLLM supports Gemini TTS models with audio capabilities (e.g. `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
 
 ### Limitations
 
